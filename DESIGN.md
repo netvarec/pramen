@@ -1,0 +1,66 @@
+# mrak — design
+
+**the prior runtime, re-architected onto Cloudflare primitives.** The TypeScript SDK (schema,
+handlers, ACL, ORM) is the portable product; the substrate changes from
+Rust + Turso + a hand-built single-writer/replication stack to **Workers +
+Durable Objects**, where the platform already provides most of that stack.
+
+## Core insight
+
+the prior runtime builds from scratch what Cloudflare hands you as primitives:
+
+| the prior runtime (Rust) | mrak (Cloudflare) | Status in v0 |
+|---|---|---|
+| V8 workers (deno_core, !Send) | Workers isolates | platform |
+| Single-writer serialization (manual invariant) | Durable Object (one request at a time) | ✅ free |
+| In-process Turso | DO SQLite storage (`ctx.storage.sql`) | ✅ wired |
+| `the platform sync layer` (WAL repl, snapshots, archiving, failover) | DO point-in-time recovery + platform durability | platform |
+| axum + flume dispatch | Worker `fetch` → DO stub | ✅ wired |
+| Rust ReadEngine (zero-JS SQL compile) | `src/runtime/read-engine.ts` (→ WASM later) | ✅ TS now |
+| ACL resolver, schema, ORM, handlers | TS SDK (`src/sdk/`) | partial (schema + handlers) |
+| KV | Workers KV | not yet |
+
+## What the platform gives us for free
+
+- **Single-writer** — a DO processes one request at a time. the prior runtime's hardest-won
+  invariant is the default here, and it's *per-tenant* instead of global: writes
+  serialize within a tenant and parallelize across tenants.
+- **Durability / failover / replication** — DO storage has point-in-time
+  recovery and platform-managed durability. Most of the prior runtime's chaos/failover test
+  surface (T01–T34, RPO/RTO drills) becomes "trust the platform."
+- **Multi-tenancy** — one DO per tenant is a cleaner sharding model than a single
+  Turso instance with global single-writer contention.
+
+## The real tensions (tracked, not yet solved)
+
+1. **Zero-JS read path.** the prior runtime's Rust ReadEngine keeps JS out of the hot path.
+   In a DO we're in JS-land. Plan: compile `read-engine.ts` (+ the where-AST
+   compiler) to **WASM** so SQL compilation leaves JS. Until then, TS + cached
+   prepared statements.
+2. **CPU/memory limits.** DOs relax the Worker CPU cap but aren't a dedicated OS
+   thread. Heavy eager-loading needs budgeting.
+3. **D1's role.** D1 is *not* the write path (it's over-RPC, not in-process). It
+   fits read-replicas / cross-tenant analytics. The trap is "use D1 as the DB" —
+   the DO's SQLite is the database.
+
+## v0 architecture (this skeleton)
+
+```
+Worker (src/index.ts)            stateless HTTP front door
+  └─ /rpc/<name> ──► MrakDO       per-tenant DO, idFromName(tenant)
+        ├─ boot: schemaDDL(app.schema) under blockConcurrencyWhile
+        ├─ dispatch(name, input)  query → run; mutation → BEGIN/COMMIT/ROLLBACK
+        └─ Db over ctx.storage.sql (read-engine compiles SELECTs)
+```
+
+Request: `POST /rpc/createNote` with `{ "title": "...", "body": "..." }`,
+header `X-Mrak-Tenant` selects the store (default `main`).
+
+## Roadmap
+
+- [ ] ACL: port the prior runtime's `policy()`/`allow()`/`deny()` + identity resolution into the dispatcher.
+- [ ] Reactivity: live queries over Hibernatable WebSockets on the DO.
+- [ ] Dynamic deploy: ship the app bundle to the DO instead of static import (cf. the prior runtime `/deploy`).
+- [ ] ReadEngine → WASM.
+- [ ] Deploy via **oblaka** (CF IaC DSL); local dev via **lopata**.
+- [ ] Typed query/insert inference in the SDK (mirror the schema layer `WhereInput`/`InferInsert`).

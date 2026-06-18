@@ -1,0 +1,17 @@
+{
+  // mrak — Worker (HTTP router) + Durable Object (single-writer SQLite store).
+  "name": "mrak",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-18",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+
+  // The DO is the database. SQLite storage lives in-process inside the isolate,
+  // which is the Cloudflare analog of the prior runtime's in-process Turso + single-writer.
+  "durable_objects": {
+    "bindings": [{ "name": "MRAK", "class_name": "MrakDO" }]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["MrakDO"] }
+  ]
+}
