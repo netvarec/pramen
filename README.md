@@ -280,6 +280,46 @@ so each project sets a unique `PROJECT` in `oblaka.ts` — it names the Worker, 
 DO, and the KV namespace, so projects never collide. Within a project, one KV
 namespace holds both the registry (`tenant:`) and app (`app:`) keys.
 
+### Client (frontend)
+
+`@mrak/client` is a typed client — `call()` is RPC over HTTP, `subscribe()` is a
+live query over a reconnecting WebSocket. It's generic over your server's handler
+map, so calls are fully typed with no runtime dependency on the server (import the
+type only):
+
+```ts
+import { createClient } from "@mrak/client";
+import type { app } from "../server/app"; // type-only, erased at build
+
+const mrak = createClient<typeof app.handlers>({ url, token, tenant: "acme" });
+
+const note = await mrak.call("createNote", { title: "hi", body: "..." }); // typed
+const stop = mrak.subscribe("listNotes", undefined, { onData: (notes) => render(notes) });
+```
+
+`@mrak/react` adds hooks that re-render on every server push:
+
+```tsx
+const { data, loading } = useLiveQuery(mrak, "listNotes");
+const createNote = useMutation(mrak, "createNote");
+```
+
+### CLI
+
+```bash
+bun run mrak help
+bun run mrak init my-app                 # scaffold app.ts + oblaka.ts
+bun run mrak token alice author --tenant acme   # mint a dev JWT
+bun run mrak schema sql                  # CREATE TABLE for the schema
+bun run mrak schema snapshot             # baseline in .mrak/schema.json
+bun run mrak schema diff                 # safe (additive) vs unsafe changes
+bun run mrak schema status --tenant acme # is a deployed tenant caught up?
+```
+
+`schema diff` understands mrak's additive migrations: added tables/columns are
+safe (applied automatically on the next DO boot); drops and type changes are
+flagged as not auto-applied.
+
 ### Migrations
 
 The schema is reconciled with the store on every DO boot — new tables are created

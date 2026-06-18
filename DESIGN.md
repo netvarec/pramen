@@ -128,6 +128,16 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
       account; within a project's single KV namespace, key prefixes separate internal (`tenant:`) from
       app (`app:`) data. Next: per-tenant KV scope option; let handlers throw clean HTTP errors (e.g.
       forbidden) so KV/app-level auth checks don't surface as 500s.
+- [x] Monorepo + client libraries: Bun workspaces. `@mrak/client` (`packages/client`) — typed
+      `call()` (HTTP RPC) + `subscribe()` (live queries over a multiplexed, auto-reconnecting
+      WebSocket), generic over `typeof app.handlers` with no runtime dep on the server. Browser
+      WebSockets can't set headers, so /live also accepts token+tenant via the query string.
+      `@mrak/react` (`packages/react`) — `useLiveQuery` (re-renders on each push) + `useMutation`.
+- [x] CLI (`mrak`): help, init (scaffold), token (dev JWT), and schema sql/hash/snapshot/diff/status.
+      `schema diff` classifies changes safe (additive) vs unsafe; `schema status` compares a deployed
+      tenant's applied schema (admin `GET /admin/schema` → DO introspection) to the local schema.
+- [ ] Package the server runtime itself (`createMrak(app)` factory) so a project is just
+      `app.ts` + `oblaka.ts` + a 3-line entry — currently the DO statically imports the example app.
 - [ ] Dynamic deploy: ship the app bundle to the DO instead of static import (cf. the prior runtime `/deploy`).
 - [ ] ReadEngine → WASM.
 - [x] Deploy via **oblaka** (CF IaC DSL): `oblaka.ts` declares the Worker + `MRAK` Durable Object

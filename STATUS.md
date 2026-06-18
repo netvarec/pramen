@@ -6,8 +6,10 @@ Worker + Durable Object. Sibling of the prior runtime (Rust + Turso),
 re-architected onto Cloudflare primitives — see [DESIGN.md](./DESIGN.md) for the
 mapping and rationale.
 
-Status: **working end-to-end, fully tested** (~1.9k LOC of `src`, 19 commits).
-Active development; WIP; no backward-compat constraints.
+Status: **working end-to-end, fully tested**, now a Bun-workspace **monorepo**:
+the server/runtime (root `src/`) plus publishable client libraries
+(`@mrak/client`, `@mrak/react`) and a `mrak` CLI. Active development; WIP; no
+backward-compat constraints.
 
 ## The spine — one request
 
@@ -55,7 +57,10 @@ live-query invalidation is exact).
 | **Tenancy** | Worker authorizes `x-mrak-tenant` against the identity (`authorizeTenant`). DOs aren't enumerable, so each tenant self-registers in a KV registry on first touch; admin `GET /tenants` lists them. | `src/auth.ts`, `src/durable-object.ts`, `src/index.ts` |
 | **Recovery** | 30-day point-in-time recovery (platform). Admin `POST /admin/recover {tenant,timestamp}` arms a restore, returns the `undo` bookmark. Local dev → 501 (PITR is platform-only). | `src/durable-object.ts`, `src/index.ts` |
 | **Deploy (IaC)** | `oblaka.ts` is source of truth → generates `wrangler.jsonc`; `oblaka --remote` provisions, `wrangler deploy` ships code. | `oblaka.ts` |
-| **Tests/CI** | `bun test` boots one `wrangler dev`, runs all suites on isolated tenants + a SQLite migrate unit test. CI on push/PR. | `test/**`, `.github/workflows/ci.yml` |
+| **Client** | `@mrak/client` — typed `call()` (RPC/HTTP) + `subscribe()` (live queries over a reconnecting WS). Generic over `typeof app.handlers`; no runtime dep on the server. | `packages/client` |
+| **React** | `@mrak/react` — `useLiveQuery` (re-renders on every push) + `useMutation`. | `packages/react` |
+| **CLI** | `mrak` — help, init, token, and schema sql/hash/snapshot/diff/status (additive-aware diff; status vs a deployed tenant). | `scripts/cli.ts`, `src/runtime/schema-diff.ts` |
+| **Tests/CI** | `bun test` boots one `wrangler dev`, runs all e2e suites on isolated tenants + the client lib + CLI/migrate/diff units. CI on push/PR. | `test/**`, `.github/workflows/ci.yml` |
 
 ## What's done (17 commits)
 
@@ -65,7 +70,8 @@ dynamic resolvers → typed inference → verified JWT auth → relations + nest
 CI → query operators/OR-AND/pagination → schema migrations → hardening (safe
 errors, input validation, batched relations, WS limits) → cursor pagination →
 count + aggregates → operators in ACL where rules → tenant registry → tenant
-authorization + admin point-in-time recovery → ctx.kv + per-project naming.
+authorization + admin point-in-time recovery → ctx.kv + per-project naming →
+monorepo + @mrak/client + @mrak/react + mrak CLI.
 
 Every feature is verified by an e2e suite (`test/suites/*`) and, where it's
 type-level, by `example/inference-check.ts` (`@ts-expect-error` cases). All green.
@@ -97,9 +103,22 @@ ReadEngine → WASM · local dev via **lopata**.
 ## Commands
 
 ```bash
-bun install
+bun install        # links workspace packages (@mrak/client, @mrak/react)
 bun run dev        # oblaka generates wrangler.jsonc, then wrangler dev
-bun test           # boot one server, run every suite (no CF creds; miniflare)
-bun run typecheck
+bun test           # boot one server, run every suite + units (no CF creds; miniflare)
+bun run typecheck  # server + @mrak/client + @mrak/react
 bun run deploy     # oblaka --remote (provision) + wrangler deploy (code)
+bun run mrak help  # the CLI (init / token / schema sql|diff|status …)
+```
+
+## Layout
+
+```
+src/                server runtime + SDK (the deployable Worker)
+example/            demo app (schema + handlers + ACL)
+scripts/cli.ts      the `mrak` CLI
+packages/client/    @mrak/client   (typed RPC + live queries)
+packages/react/     @mrak/react    (useLiveQuery / useMutation)
+test/               e2e suites + units (bun test)
+oblaka.ts           IaC source of truth → wrangler.jsonc
 ```

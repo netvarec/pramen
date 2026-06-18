@@ -13,10 +13,11 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-      - run: bun install --frozen-lockfile
-      - name: Typecheck
+      - name: Install (workspaces)
+        run: bun install --frozen-lockfile
+      - name: Typecheck (server + @mrak/client + @mrak/react)
         run: bun run typecheck
-      - name: E2E tests (wrangler dev + all suites)
+      - name: Tests (e2e + client + cli + units)
         run: bun test
         env:
           # wrangler runs fully local (miniflare); no Cloudflare credentials needed.
