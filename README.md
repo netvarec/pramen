@@ -231,6 +231,21 @@ const perOwner = ctx.db.aggregate({
 });                              // [{ ownerId, count, lastId }, ...]
 ```
 
+### Tenants
+
+Each tenant is a Durable Object addressed by `X-Mrak-Tenant` (default `main`).
+Durable Objects can't be enumerated, so on a tenant's first touch its name is
+recorded in the `TENANTS` KV registry (once, from the DO itself). Admins can list
+them:
+
+```bash
+curl -s http://localhost:8787/tenants -H "authorization: Bearer $ADMIN_TOKEN"
+# { "ok": true, "result": ["main", "acme", ...] }
+```
+
+> Note: tenant names aren't yet checked against the caller's identity — in
+> production, gate `X-Mrak-Tenant` against what the authenticated user may access.
+
 ### Migrations
 
 The schema is reconciled with the store on every DO boot — new tables are created

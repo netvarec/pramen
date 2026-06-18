@@ -8,7 +8,7 @@
 // + Durable Object (and the SQLite DO migration) on Cloudflare; it uploads only a
 // placeholder module, so `wrangler deploy` does the actual code bundle + upload.
 
-import { define, DurableObject, Worker } from "oblaka-iac";
+import { define, DurableObject, KVNamespace, Worker } from "oblaka-iac";
 
 export default define(({ env }) => {
   // AUTH_SECRET: a dev value locally; in real envs set it as a secret with
@@ -26,6 +26,9 @@ export default define(({ env }) => {
       // The DO is the database. oblaka emits the binding + the SQLite migration
       // (new_sqlite_classes: ["MrakDO"]) into wrangler.jsonc automatically.
       MRAK: new DurableObject({ name: "mrak-store", className: "MrakDO" }),
+      // Tenant registry — DOs aren't enumerable, so each tenant records its name
+      // here (once, from its DO's first touch) to stay discoverable.
+      TENANTS: new KVNamespace({ name: "mrak-tenants" }),
     },
     vars,
   });

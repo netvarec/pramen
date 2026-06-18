@@ -28,14 +28,20 @@ interface SocketState {
   subs: Subscription[];
 }
 
+export interface DoEnv {
+  /** Tenant registry — DOs aren't enumerable, so we record each tenant here. */
+  TENANTS: KVNamespace;
+}
+
 /** Per-socket subscription cap — bounds memory and per-mutation re-run cost. */
 const MAX_SUBSCRIPTIONS = 64;
 
-export class MrakDO extends DurableObject {
+export class MrakDO extends DurableObject<DoEnv> {
   private readonly acl: CompiledAcl;
+  private registered = false;
 
-  constructor(ctx: DurableObjectState, env: unknown) {
-    super(ctx, env as never);
+  constructor(ctx: DurableObjectState, env: DoEnv) {
+    super(ctx, env);
     this.acl = compileAcl(app.acl ?? []);
 
     // Reconcile the SQLite store with the schema before any request is served
@@ -46,6 +52,7 @@ export class MrakDO extends DurableObject {
   }
 
   override async fetch(request: Request): Promise<Response> {
+    await this.ensureRegistered(request);
     const identity = this.identityOf(request);
 
     if (request.headers.get("Upgrade") === "websocket") {
@@ -167,6 +174,25 @@ export class MrakDO extends DurableObject {
   }
 
   // --- helpers ---
+
+  // A DO addressed by idFromName(tenant) doesn't know its own name — the Worker
+  // forwards it. On the first touch ever (guarded by a persisted meta flag), the
+  // tenant records itself in the registry KV so it stays discoverable. Exactly
+  // one KV write per tenant across its whole lifetime.
+  private async ensureRegistered(request: Request): Promise<void> {
+    if (this.registered) return;
+    const name = request.headers.get("x-mrak-tenant");
+    if (!name) return;
+
+    const seen = this.ctx.storage.sql.exec(`SELECT 1 FROM _mrak_meta WHERE key = 'registered'`).toArray();
+    if (seen.length > 0) {
+      this.registered = true;
+      return;
+    }
+    await this.env.TENANTS.put(`tenant:${name}`, JSON.stringify({ firstSeen: Date.now() }));
+    this.ctx.storage.sql.exec(`INSERT OR REPLACE INTO _mrak_meta (key, value) VALUES ('registered', ?)`, name);
+    this.registered = true;
+  }
 
   private ctxFor(identity: Identity | null): AclContext {
     return { acl: this.acl, identity };

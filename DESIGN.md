@@ -109,6 +109,12 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
       are batched with a single `IN` query (no N+1). WebSockets gain `webSocketError` handling and a
       per-socket subscription cap (64). NOT changed: ACL field permissions union across OR'd policies
       (row-agnostic at the root) — intentional, matches the prior runtime v1; per-row field coupling is future work.
+- [x] Tenant registry: Durable Objects aren't enumerable, so a forgotten tenant name = orphaned
+      (still durable, but unreachable). Each tenant now records its name in a `TENANTS` KV namespace on
+      its DO's first touch — once, guarded by a `_mrak_meta` flag (no per-request writes; the DO learns
+      its name from the Worker-forwarded `x-mrak-tenant` header). Admin `GET /tenants` lists them.
+      Caveat: tenant names aren't yet authorized against the identity — any caller can register an
+      arbitrary tenant; production should gate the tenant against the authenticated identity at the Worker.
 - [ ] Dynamic deploy: ship the app bundle to the DO instead of static import (cf. the prior runtime `/deploy`).
 - [ ] ReadEngine → WASM.
 - [x] Deploy via **oblaka** (CF IaC DSL): `oblaka.ts` declares the Worker + `MRAK` Durable Object

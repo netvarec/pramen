@@ -7,6 +7,8 @@ import { resolveIdentity } from "./auth";
 
 export interface Env {
   MRAK: DurableObjectNamespace;
+  /** Tenant registry — lets admins enumerate tenants (DOs aren't enumerable). */
+  TENANTS: KVNamespace;
   /** HMAC secret for verifying bearer JWTs. Dev value in wrangler.jsonc;
    * production via `wrangler secret put AUTH_SECRET`. */
   AUTH_SECRET: string;
@@ -19,10 +21,21 @@ export default {
     const isRpc = url.pathname.startsWith("/rpc/");
     const isLive = url.pathname === "/live";
 
+    // Admin: list known tenants from the registry (admin role required).
+    if (url.pathname === "/tenants") {
+      const identity = await resolveIdentity(request, env.AUTH_SECRET);
+      if (!identity?.roles?.includes("admin")) {
+        return Response.json({ ok: false, error: "access denied: tenants", code: "forbidden" }, { status: 403 });
+      }
+      const list = await env.TENANTS.list({ prefix: "tenant:" });
+      const tenants = list.keys.map((k) => k.name.slice("tenant:".length));
+      return Response.json({ ok: true, result: tenants });
+    }
+
     if (!isRpc && !(isLive && isWs)) {
       return new Response(
         "mrak — POST /rpc/<handler> (JSON body), or WebSocket /live for live queries. " +
-          "Header X-Mrak-Tenant selects the store (default: main).\n",
+          "Header X-Mrak-Tenant selects the store (default: main). GET /tenants (admin) lists tenants.\n",
         { headers: { "content-type": "text/plain" } },
       );
     }
