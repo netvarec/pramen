@@ -13,6 +13,7 @@ const DEMO_TOKENS: Record<string, Identity> = {
   alice: { roles: ["author"], userId: "alice" },
   bob: { roles: ["author"], userId: "bob" },
   reader: { roles: ["reader"], userId: "anon" },
+  mia: { roles: ["member"], userId: "mia" },
 };
 
 export function resolveIdentity(request: Request): Identity | null {

@@ -9,7 +9,7 @@
 // layer can match a mutation's writes against each subscription's reads.
 
 import { Db } from "./db";
-import type { AclContext } from "./acl";
+import { warmup, type AclContext } from "./acl";
 import type { HandlerContext, HandlerKind, HandlerMap } from "../sdk/handlers";
 
 export interface DispatchResult {
@@ -28,7 +28,12 @@ export async function dispatch(
   const handler = handlers[name];
   if (!handler) throw new Error(`unknown handler: ${name}`);
 
-  const db = new Db(storage.sql, acl);
+  // Warmup: evaluate dynamic resolvers once, reading through a SYSTEM-mode db
+  // (separate from the handler's db, so its reads don't pollute `touched`).
+  const systemDb = new Db(storage.sql, { acl: acl.acl, identity: acl.identity, system: true });
+  const resolved = await warmup(acl.acl, acl.identity, systemDb);
+
+  const db = new Db(storage.sql, { acl: acl.acl, identity: acl.identity, resolved });
   const ctx: HandlerContext = { db, identity: acl.identity };
 
   const result =

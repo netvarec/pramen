@@ -12,6 +12,7 @@ import {
   projectRow,
   resolveScope,
   type AclContext,
+  type Scope,
 } from "./acl";
 import {
   and,
@@ -44,10 +45,16 @@ export class Db {
     private readonly acl: AclContext,
   ) {}
 
+  /** Resolve the ACL scope for an operation, or grant everything in SYSTEM mode. */
+  private scopeFor(entity: string, action: "read" | "create" | "update" | "delete"): Scope {
+    if (this.acl.system) return { allowed: true, where: null, fields: null };
+    return resolveScope(this.acl, entity, action);
+  }
+
   /** Structured read; ACL row-scope is AND-ed in, permitted fields projected. */
   find(spec: FindSpec): Row[] {
     this.touched.add(spec.from);
-    const scope = resolveScope(this.acl.acl, this.acl.identity, spec.from, "read");
+    const scope = this.scopeFor(spec.from, "read");
     if (!scope.allowed) throw new AclDenied(spec.from, "read");
 
     const userExpr: SqlExpr = spec.where ? mapToExpr(spec.where) : TRUE;
@@ -60,7 +67,7 @@ export class Db {
   /** Insert a single row, returning the persisted row. */
   insert(table: string, values: Row): Row {
     this.touched.add(table);
-    const scope = resolveScope(this.acl.acl, this.acl.identity, table, "create");
+    const scope = this.scopeFor(table, "create");
     if (!scope.allowed) throw new AclDenied(table, "create");
     if (scope.fields) {
       for (const c of Object.keys(values)) if (!scope.fields.includes(c)) throw new AclDenied(table, "create", c);
@@ -77,7 +84,7 @@ export class Db {
    * only update rows within scope; returns undefined if none matched. */
   update(table: string, id: unknown, patch: Row): Row | undefined {
     this.touched.add(table);
-    const scope = resolveScope(this.acl.acl, this.acl.identity, table, "update");
+    const scope = this.scopeFor(table, "update");
     if (!scope.allowed) throw new AclDenied(table, "update");
     const cols = Object.keys(patch);
     if (scope.fields) {
@@ -96,7 +103,7 @@ export class Db {
   /** Delete a row by id within scope. Returns whether a row was deleted. */
   delete(table: string, id: unknown): boolean {
     this.touched.add(table);
-    const scope = resolveScope(this.acl.acl, this.acl.identity, table, "delete");
+    const scope = this.scopeFor(table, "delete");
     if (!scope.allowed) throw new AclDenied(table, "delete");
     const params: unknown[] = [bind(id)];
     let sql = `DELETE FROM ${table} WHERE id = ?`;

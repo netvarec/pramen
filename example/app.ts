@@ -4,7 +4,7 @@
 
 import { Entity, defineSchema } from "../src/sdk/schema";
 import { mutation, query } from "../src/sdk/handlers";
-import { $identity, allow, policy, role } from "../src/sdk/acl";
+import { $identity, allow, deny, policy, resolve, role } from "../src/sdk/acl";
 
 const schema = defineSchema({
   notes: Entity((t) => ({
@@ -62,6 +62,21 @@ const acl = [
   ]),
   role("reader", [
     policy("reader:read", "notes", "read", { fields: ["id", "title", "ownerId", "createdAt"] }),
+  ]),
+  // member: read access is computed per request from DB state — you may read
+  // everything only once you've authored at least one note; otherwise nothing.
+  role("member", [
+    policy("member:create", "notes", "create", allow()),
+    policy(
+      "member:read",
+      "notes",
+      "read",
+      resolve(({ identity, db }) => {
+        if (!identity?.userId) return deny();
+        const owned = db.find({ from: "notes", where: { ownerId: identity.userId }, limit: 1 });
+        return owned.length > 0 ? allow() : deny();
+      }),
+    ),
   ]),
 ];
 

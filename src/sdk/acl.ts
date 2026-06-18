@@ -62,7 +62,39 @@ export interface PolicyRules {
   fields?: string[];
 }
 
-export type PolicyRule = AllowMarker | DenyMarker | PolicyRules;
+// --- dynamic resolvers: a policy whose rule is computed per request ---
+
+/** Read surface given to a resolver — runs in SYSTEM mode (bypasses ACL), so a
+ * resolver can consult the DB to decide access without recursing into itself. */
+export interface ResolverDb {
+  find(spec: {
+    from: string;
+    where?: Record<string, unknown>;
+    orderBy?: { column: string; dir?: "asc" | "desc" };
+    limit?: number;
+  }): Array<Record<string, unknown>>;
+}
+
+export interface ResolverContext {
+  readonly identity: Identity | null;
+  readonly db: ResolverDb;
+}
+
+export type ResolverFn = (ctx: ResolverContext) => PolicyRule | Promise<PolicyRule>;
+
+export interface ResolverMarker {
+  readonly kind: "resolver";
+  readonly id: number;
+  readonly fn: ResolverFn;
+}
+
+let resolverCounter = 0;
+/** A policy rule evaluated once per request during warmup; returns allow/deny/rules. */
+export function resolve(fn: ResolverFn): ResolverMarker {
+  return { kind: "resolver", id: resolverCounter++, fn };
+}
+
+export type PolicyRule = AllowMarker | DenyMarker | PolicyRules | ResolverMarker;
 
 export interface Policy {
   readonly name: string;
@@ -89,4 +121,7 @@ export function isAllow(r: PolicyRule): r is AllowMarker {
 }
 export function isDeny(r: PolicyRule): r is DenyMarker {
   return (r as DenyMarker).kind === "deny";
+}
+export function isResolver(r: PolicyRule): r is ResolverMarker {
+  return (r as ResolverMarker).kind === "resolver";
 }
