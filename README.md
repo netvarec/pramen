@@ -47,6 +47,14 @@ role("author", [
 ]);
 ```
 
+ACL `where` rules accept the same operators and `AND`/`OR` as queries, with
+`$identity` markers usable anywhere (including inside `in`):
+
+```ts
+// reads notes owned by anyone on the caller's team; no `team` claim -> sees none
+policy("manager:read", "notes", "read", { where: { ownerId: { in: $identity("team") } } });
+```
+
 The example roles (`example/app.ts`): `admin` (full access), `author` (own notes
 only — mint a token with `sub` = the owner), `reader` (reads all, no `body`),
 `member` (read unlocked dynamically once you've authored a note). Live

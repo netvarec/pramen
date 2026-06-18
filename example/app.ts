@@ -155,6 +155,12 @@ const acl = [
   role("reader", [
     policy("reader:read", "notes", "read", { fields: ["id", "title", "ownerId", "createdAt"] }),
   ]),
+  // manager: reads notes owned by anyone on the caller's team — an ACL `where`
+  // using an operator (`in`) whose value is an $identity marker resolving to an
+  // array. No `team` claim -> the rule matches nothing (safe deny).
+  role("manager", [
+    policy("manager:read", "notes", "read", { where: { ownerId: { in: $identity("team") } } }),
+  ]),
   // member: read access is computed per request from DB state — you may read
   // everything only once you've authored at least one note; otherwise nothing.
   role("member", [

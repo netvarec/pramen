@@ -143,5 +143,11 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
 - [x] Aggregates: `db.count({ from, where })` and `db.aggregate({ from, where, groupBy, aggregations })`
       (count/sum/avg/min/max), compiled in `runtime/read-engine.ts`. ACL read scope is AND-ed in; every
       aggregated/grouped column must be readable under field permissions (else 403) — counting rows you
-      can see is always allowed. Aggregate result rows are loosely typed (dynamic keys). Next: operators
-      inside ACL `where` rules; `having`/ordered aggregates.
+      can see is always allowed. Aggregate result rows are loosely typed (dynamic keys). Next:
+      `having`/ordered aggregates.
+- [x] Operators in ACL `where` rules: policy `where` now supports the full user query surface
+      (operators, `AND`/`OR`) in addition to equality, with `$identity` markers usable anywhere —
+      bare values, operator-object values, and `in`/`notIn` lists (a marker can resolve to the whole
+      array). `resolveMarkers` substitutes markers then reuses `compileWhere`; any unresolvable marker
+      makes the rule match nothing (safe deny). Example: a `manager` role reads notes whose `ownerId`
+      is `in $identity("team")`.

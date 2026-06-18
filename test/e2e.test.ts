@@ -12,6 +12,7 @@ import { runLive } from "./suites/live";
 import { runQuery } from "./suites/query";
 import { runPagination } from "./suites/pagination";
 import { runAggregate } from "./suites/aggregate";
+import { runAclOperators } from "./suites/acl-operators";
 import { runHardening } from "./suites/hardening";
 
 const ROOT = join(import.meta.dir, "..");
@@ -60,6 +61,7 @@ describe("mrak e2e", () => {
   test("query expressiveness (operators, OR/AND, offset)", () => runQuery(BASE), 30_000);
   test("cursor pagination", () => runPagination(BASE), 30_000);
   test("count + aggregates", () => runAggregate(BASE), 30_000);
+  test("operators in ACL where rules", () => runAclOperators(BASE), 30_000);
   test("live queries + row-level invalidation", () => runLive(BASE, WS), 30_000);
   test("hardening: input validation + safe errors", () => runHardening(BASE), 30_000);
 });
