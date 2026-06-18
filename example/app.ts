@@ -84,6 +84,11 @@ const handlers = {
 
   listUsers: query((ctx) => ctx.db.find({ from: "users" })),
 
+  // Cursor pagination: pass the previous page's `cursor` back as `after`.
+  pageNotes: query((ctx, input: { after?: string; limit?: number; dir?: "asc" | "desc" }) =>
+    ctx.db.page({ from: "notes", orderBy: { column: "id", dir: input.dir ?? "asc" }, limit: input.limit ?? 2, after: input.after }),
+  ),
+
   // Passthrough that exercises the full query surface (operators, OR/AND,
   // multi-column orderBy, limit/offset). ACL row-scope still applies on top.
   queryNotes: query(

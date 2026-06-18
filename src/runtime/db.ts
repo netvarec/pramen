@@ -22,24 +22,35 @@ import {
 } from "./acl";
 import {
   and,
+  cmp,
   compileExpr,
   compileSelect,
   compileWhere,
+  eq,
   inList,
+  or,
   TRUE,
   type OrderBy,
   type SqlExpr,
 } from "./read-engine";
 import { BadRequest } from "./errors";
-import type { RelationDef, SchemaDef } from "../sdk/schema";
+import type { FieldDef, RelationDef, SchemaDef } from "../sdk/schema";
 import type { FieldsOf, InferInsert, InferRow, InferUpdate, RelationsOf, RelationsResult, WhereInput } from "../sdk/infer";
 
 type Row = Record<string, unknown>;
 type Action = "read" | "create" | "update" | "delete";
 type Id = string | number | bigint;
+type Selected = Partial<Record<string, true>> | undefined;
+
+const DEFAULT_PAGE_SIZE = 50;
 
 function bind(v: unknown): unknown {
   return typeof v === "boolean" ? (v ? 1 : 0) : v;
+}
+
+function normalizeOrder(orderBy: unknown): OrderBy[] | undefined {
+  if (!orderBy) return undefined;
+  return (Array.isArray(orderBy) ? orderBy : [orderBy]) as OrderBy[];
 }
 
 type OrderSpec<S extends SchemaDef, T extends keyof S> = {
@@ -55,6 +66,52 @@ export interface FindSpec<S extends SchemaDef, T extends keyof S> {
   offset?: number;
   /** Eager-load relations. Each loaded relation is independently ACL-checked. */
   with?: Partial<Record<keyof RelationsOf<S[T]> & string, true>>;
+}
+
+/** Cursor (keyset) pagination input — `after` is an opaque cursor from a prior page. */
+export interface PageSpec<S extends SchemaDef, T extends keyof S> {
+  from: T;
+  where?: WhereInput<FieldsOf<S[T]>>;
+  orderBy?: OrderSpec<S, T> | OrderSpec<S, T>[];
+  limit?: number;
+  after?: string;
+  with?: Partial<Record<keyof RelationsOf<S[T]> & string, true>>;
+}
+
+export interface Page<R> {
+  items: R[];
+  /** Opaque cursor for the last item — pass as `after` to fetch the next page. */
+  cursor: string | null;
+  hasMore: boolean;
+}
+
+function encodeCursor(order: OrderBy[], row: Row): string {
+  const vals = order.map((o) => row[o.column]);
+  return btoa(JSON.stringify(vals)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function decodeCursor(s: string): unknown[] {
+  try {
+    const arr = JSON.parse(atob(s.replace(/-/g, "+").replace(/_/g, "/")));
+    if (!Array.isArray(arr)) throw new Error("not an array");
+    return arr;
+  } catch {
+    throw new BadRequest("invalid cursor");
+  }
+}
+
+// Strictly-after predicate for a composite key: lexicographic comparison,
+// e.g. (a,b) after (a0,b0) => a>a0 OR (a=a0 AND b>b0); DESC columns flip to <.
+function keysetAfter(order: OrderBy[], values: unknown[]): SqlExpr {
+  const ors: SqlExpr[] = [];
+  for (let i = 0; i < order.length; i++) {
+    const parts: SqlExpr[] = [];
+    for (let j = 0; j < i; j++) parts.push(eq(order[j]!.column, values[j]));
+    const o = order[i]!;
+    parts.push(o.dir === "desc" ? cmp("<", o.column, values[i]) : cmp(">", o.column, values[i]));
+    ors.push(parts.length === 1 ? parts[0]! : and(...parts));
+  }
+  return ors.length === 1 ? ors[0]! : or(...ors);
 }
 
 export class Db<S extends SchemaDef = SchemaDef> {
@@ -99,26 +156,74 @@ export class Db<S extends SchemaDef = SchemaDef> {
     const scope = this.scopeFor(from, "read");
     if (!scope.allowed) throw new AclDenied(from, "read");
 
-    const userExpr: SqlExpr = spec.where ? compileWhere(spec.where as Row) : TRUE;
-    const where = scope.where ? and(userExpr, scope.where) : userExpr;
-    const orderBy: OrderBy[] | undefined = spec.orderBy
-      ? Array.isArray(spec.orderBy)
-        ? spec.orderBy
-        : [spec.orderBy]
-      : undefined;
-    const { sql, params } = compileSelect({ from, where, orderBy, limit: spec.limit, offset: spec.offset });
-    // Keep raw rows (with all columns) for relation FKs; project for the result.
-    const raw = this.sql.exec(sql, ...params).toArray() as Row[];
+    const where = this.readWhere(spec.where, scope);
+    const orderBy = normalizeOrder(spec.orderBy);
+    const raw = this.selectRaw(from, where, orderBy, spec.limit, spec.offset);
+    return this.finishRows(from, raw, scope.fields, spec.with as Selected) as (InferRow<FieldsOf<S[T]>> &
+      RelationsResult<S, T>)[];
+  }
 
-    const relNames = spec.with ? Object.keys(spec.with).filter((k) => (spec.with as Row)[k]) : [];
+  /** Cursor (keyset) pagination. Stable under inserts/deletes; the PK is appended
+   * to `orderBy` as a tiebreaker so the keyset is unique. Returns the page plus an
+   * opaque `cursor` (pass back as `after`) and whether more rows remain. */
+  page<T extends keyof S & string>(
+    spec: PageSpec<S, T>,
+  ): Page<InferRow<FieldsOf<S[T]>> & RelationsResult<S, T>> {
+    const from = spec.from as string;
+    this.touched.add(from);
+    const scope = this.scopeFor(from, "read");
+    if (!scope.allowed) throw new AclDenied(from, "read");
+
+    const order = this.orderWithPk(from, spec.orderBy);
+    let where = this.readWhere(spec.where, scope);
+    if (spec.after != null) where = and(where, keysetAfter(order, decodeCursor(spec.after)));
+
+    const limit = spec.limit ?? DEFAULT_PAGE_SIZE;
+    const raw = this.selectRaw(from, where, order, limit + 1); // +1 to detect a next page
+    const hasMore = raw.length > limit;
+    if (hasMore) raw.length = limit;
+
+    const last = raw[raw.length - 1];
+    const cursor = last ? encodeCursor(order, last) : null; // from raw row (has all order cols)
+    const items = this.finishRows(from, raw, scope.fields, spec.with as Selected) as (InferRow<FieldsOf<S[T]>> &
+      RelationsResult<S, T>)[];
+    return { items, cursor, hasMore };
+  }
+
+  // --- read internals shared by find/page ---
+
+  private readWhere(userWhere: unknown, scope: Scope): SqlExpr {
+    const userExpr: SqlExpr = userWhere ? compileWhere(userWhere as Row) : TRUE;
+    return scope.where ? and(userExpr, scope.where) : userExpr;
+  }
+
+  private selectRaw(from: string, where: SqlExpr, orderBy?: OrderBy[], limit?: number, offset?: number): Row[] {
+    const { sql, params } = compileSelect({ from, where, orderBy, limit, offset });
+    return this.sql.exec(sql, ...params).toArray() as Row[];
+  }
+
+  private finishRows(from: string, raw: Row[], fields: string[] | null, withSel: Selected): Row[] {
+    const relNames = withSel ? Object.keys(withSel).filter((k) => withSel[k]) : [];
     for (const relName of relNames) this.loadRelation(from, raw, relName);
-
-    if (!scope.fields) return raw as (InferRow<FieldsOf<S[T]>> & RelationsResult<S, T>)[];
+    if (!fields) return raw;
     return raw.map((r) => {
-      const projected = projectRow(r, scope.fields);
+      const projected = projectRow(r, fields);
       for (const relName of relNames) projected[relName] = r[relName]; // relations survive projection
       return projected;
-    }) as (InferRow<FieldsOf<S[T]>> & RelationsResult<S, T>)[];
+    });
+  }
+
+  private orderWithPk(from: string, orderBy: unknown): OrderBy[] {
+    const out = (normalizeOrder(orderBy) ?? []).map((o) => ({ column: o.column, dir: o.dir }));
+    const pk = this.pkOf(from);
+    if (!out.some((o) => o.column === pk)) out.push({ column: pk, dir: out[out.length - 1]?.dir ?? "asc" });
+    return out;
+  }
+
+  private pkOf(from: string): string {
+    const fields = this.schema[from]?.fields;
+    if (fields) for (const [name, f] of Object.entries(fields)) if ((f as FieldDef).primaryKey) return name;
+    return "id";
   }
 
   /** Eager-load one relation onto `rows` (mutates them). Traversal is ACL-checked

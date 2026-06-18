@@ -187,6 +187,26 @@ ctx.db.find({
 });
 ```
 
+For large or changing datasets, prefer **cursor (keyset) pagination** — stable
+under concurrent inserts/deletes. `db.page()` returns `{ items, cursor, hasMore }`;
+pass the previous `cursor` back as `after`. The primary key is auto-appended to
+`orderBy` as a tiebreaker, so the cursor is unambiguous.
+
+```ts
+let after: string | undefined;
+do {
+  const { items, cursor, hasMore } = ctx.db.page({
+    from: "notes",
+    orderBy: { column: "createdAt", dir: "desc" },
+    limit: 50,
+    after,
+  });
+  // ... process items ...
+  after = cursor ?? undefined;
+  if (!hasMore) break;
+} while (after);
+```
+
 ### Migrations
 
 The schema is reconciled with the store on every DO boot — new tables are created

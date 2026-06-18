@@ -59,6 +59,15 @@ export const readChecks = query((ctx) => {
   // @ts-expect-error wrong operator value type
   ctx.db.find({ from: "notes", where: { views: { gt: "big" } } });
 
+  // cursor pagination: typed page with items + cursor + hasMore
+  const page = ctx.db.page({ from: "notes", orderBy: { column: "id", dir: "asc" }, limit: 10, after: undefined });
+  const more: boolean = page.hasMore;
+  const next: string | null = page.cursor;
+  const firstViews: number | null | undefined = page.items[0]?.views;
+  void more;
+  void next;
+  void firstViews;
+
   return { id, title, pinned };
 });
 

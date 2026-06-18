@@ -134,5 +134,10 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
 - [x] Query expressiveness: operators (`eq`/`ne`/`gt`/`gte`/`lt`/`lte`/`in`/`notIn`/`like`/`isNull`),
       nestable `AND`/`OR` groups, multi-column `orderBy`, and `limit`/`offset` pagination. The `SqlExpr`
       AST + `compileWhere` (`runtime/read-engine.ts`) handle it; `WhereInput<F>` types operators per
-      column (`like` is string-only); column identifiers are validated against injection. Next: cursor
-      pagination, typed `count`/aggregates, operators inside ACL `where` rules.
+      column (`like` is string-only); column identifiers are validated against injection.
+- [x] Cursor (keyset) pagination: `db.page({ ..., after })` returns `{ items, cursor, hasMore }`. A
+      lexicographic keyset predicate (`keysetAfter`) starts strictly after the cursor; the PK is
+      auto-appended to `orderBy` as a unique tiebreaker, so pagination stays stable under concurrent
+      inserts/deletes (unlike offset). Cursors are opaque base64url of the order-key values, read from
+      the raw row (survives field projection); a bad cursor is a 400. Next: typed `count`/aggregates,
+      operators inside ACL `where` rules.

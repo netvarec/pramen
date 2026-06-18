@@ -10,6 +10,7 @@ import { runResolver } from "./suites/resolver";
 import { runRelation } from "./suites/relation";
 import { runLive } from "./suites/live";
 import { runQuery } from "./suites/query";
+import { runPagination } from "./suites/pagination";
 import { runHardening } from "./suites/hardening";
 
 const ROOT = join(import.meta.dir, "..");
@@ -55,7 +56,8 @@ describe("mrak e2e", () => {
   test("acl + write rules + per-identity live", () => runAcl(BASE, WS), 30_000);
   test("dynamic resolvers", () => runResolver(BASE), 30_000);
   test("relations + nested ACL", () => runRelation(BASE), 30_000);
-  test("query expressiveness (operators, OR/AND, pagination)", () => runQuery(BASE), 30_000);
+  test("query expressiveness (operators, OR/AND, offset)", () => runQuery(BASE), 30_000);
+  test("cursor pagination", () => runPagination(BASE), 30_000);
   test("live queries + row-level invalidation", () => runLive(BASE, WS), 30_000);
   test("hardening: input validation + safe errors", () => runHardening(BASE), 30_000);
 });
