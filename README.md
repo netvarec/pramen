@@ -11,9 +11,10 @@ instead of a Rust + Turso runtime. See [DESIGN.md](./DESIGN.md).
 bun install
 bun run dev            # wrangler dev (local, miniflare) on http://localhost:8787
 
-# Requests need a signed bearer JWT (deny-by-default; see Auth/ACL below).
-# Mint one with the dev secret:
-TOKEN=$(bun -e 'import {token} from "./scripts/jwt"; console.log(await token("alice",["author"]))')
+# Requests need a signed bearer JWT (deny-by-default; see Auth/ACL below). The
+# token must be authorized for the tenant (here the default "main") via a
+# `tenants` claim — admins may access any tenant.
+TOKEN=$(bun -e 'import {token} from "./scripts/jwt"; console.log(await token("alice",["author"],{tenants:["main"]}))')
 
 # create a note
 curl -s -X POST http://localhost:8787/rpc/createNote \
@@ -243,8 +244,22 @@ curl -s http://localhost:8787/tenants -H "authorization: Bearer $ADMIN_TOKEN"
 # { "ok": true, "result": ["main", "acme", ...] }
 ```
 
-> Note: tenant names aren't yet checked against the caller's identity — in
-> production, gate `X-Mrak-Tenant` against what the authenticated user may access.
+The Worker **authorizes the tenant** against the caller before reaching the DO
+(`authorizeTenant` in `src/auth.ts`): admins may access any tenant; everyone else
+only tenants listed in their `tenants` claim. Customize for your tenancy model.
+
+**Recovery.** SQLite-backed DOs have 30-day point-in-time recovery. An admin can
+restore a tenant to a past moment; the response includes an `undo` bookmark so the
+operation is reversible:
+
+```bash
+curl -s -X POST http://localhost:8787/admin/recover -H "authorization: Bearer $ADMIN_TOKEN" \
+  -H 'content-type: application/json' -d '{"tenant":"acme","timestamp":1718000000000}'
+```
+
+> PITR is platform-only — unavailable in local dev (`wrangler dev` returns 501).
+> mrak arms the restore and returns the `undo` bookmark; it completes on the DO's
+> next restart (we don't auto-`abort()`, so the call can return the bookmark).
 
 ### Migrations
 

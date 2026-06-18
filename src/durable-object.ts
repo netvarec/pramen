@@ -53,6 +53,9 @@ export class MrakDO extends DurableObject<DoEnv> {
 
   override async fetch(request: Request): Promise<Response> {
     await this.ensureRegistered(request);
+
+    if (new URL(request.url).pathname === "/__recover") return this.handleRecover(request);
+
     const identity = this.identityOf(request);
 
     if (request.headers.get("Upgrade") === "websocket") {
@@ -192,6 +195,38 @@ export class MrakDO extends DurableObject<DoEnv> {
     await this.env.TENANTS.put(`tenant:${name}`, JSON.stringify({ firstSeen: Date.now() }));
     this.ctx.storage.sql.exec(`INSERT OR REPLACE INTO _mrak_meta (key, value) VALUES ('registered', ?)`, name);
     this.registered = true;
+  }
+
+  // Point-in-time recovery (admin-gated at the Worker). Arms a restore to the
+  // given time and returns the `undo` bookmark (the point just before recovery,
+  // so the operation is reversible). We intentionally do NOT call ctx.abort()
+  // here, so this response can return the undo bookmark — the restore completes
+  // when the DO next restarts. PITR is unavailable in local dev (no change-log).
+  private async handleRecover(request: Request): Promise<Response> {
+    const body = (await request.json().catch(() => ({}))) as { timestamp?: unknown };
+    const ts = typeof body.timestamp === "number" ? body.timestamp : Date.parse(String(body.timestamp));
+    if (!Number.isFinite(ts)) {
+      return Response.json({ ok: false, error: "invalid timestamp", code: "bad_request" }, { status: 400 });
+    }
+
+    const storage = this.ctx.storage as unknown as {
+      getBookmarkForTime?: (t: number) => Promise<string>;
+      onNextSessionRestoreBookmark?: (b: string) => Promise<string>;
+    };
+
+    try {
+      const bookmark = await storage.getBookmarkForTime!(ts);
+      const undo = await storage.onNextSessionRestoreBookmark!(bookmark);
+      return Response.json({ ok: true, result: { restoredTo: ts, bookmark, undo, applied: false } });
+    } catch (err) {
+      // PITR is a platform feature — unavailable in local dev, and can otherwise
+      // fail operationally. Report 501 (not a generic 500); log the real reason.
+      console.error("mrak: recovery unavailable", err);
+      return Response.json(
+        { ok: false, error: "point-in-time recovery is unavailable in this environment", code: "unavailable" },
+        { status: 501 },
+      );
+    }
   }
 
   private ctxFor(identity: Identity | null): AclContext {

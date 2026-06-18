@@ -79,3 +79,18 @@ export async function resolveIdentity(request: Request, secret: string): Promise
   const claims = await verifyJwt(token, secret);
   return claims ? toIdentity(claims) : null;
 }
+
+/** May this identity address the given tenant? Gates `X-Mrak-Tenant` so a caller
+ * can't reach (or register) arbitrary tenants. Default policy: admins → any
+ * tenant; everyone else → only tenants listed in their `tenants` claim. Customize
+ * for your tenancy model (e.g. tenant === identity.org, or a lookup). */
+export function authorizeTenant(identity: Identity | null, tenant: string): boolean {
+  if (!identity) return false;
+  if (identity.roles?.includes("admin")) return true;
+  const allowed = Array.isArray(identity.tenants) ? (identity.tenants as string[]) : [];
+  return allowed.includes(tenant);
+}
+
+export function isAdmin(identity: Identity | null): boolean {
+  return identity?.roles?.includes("admin") ?? false;
+}

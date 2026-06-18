@@ -14,6 +14,7 @@ import { runPagination } from "./suites/pagination";
 import { runAggregate } from "./suites/aggregate";
 import { runAclOperators } from "./suites/acl-operators";
 import { runRegistry } from "./suites/registry";
+import { runRecovery } from "./suites/recovery";
 import { runHardening } from "./suites/hardening";
 
 const ROOT = join(import.meta.dir, "..");
@@ -64,6 +65,7 @@ describe("mrak e2e", () => {
   test("count + aggregates", () => runAggregate(BASE), 30_000);
   test("operators in ACL where rules", () => runAclOperators(BASE), 30_000);
   test("tenant registry", () => runRegistry(BASE), 30_000);
+  test("admin recovery endpoint (auth + validation)", () => runRecovery(BASE), 30_000);
   test("live queries + row-level invalidation", () => runLive(BASE, WS), 30_000);
   test("hardening: input validation + safe errors", () => runHardening(BASE), 30_000);
 });

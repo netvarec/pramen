@@ -8,9 +8,9 @@ export async function runAcl(base: string, wsUrl: string): Promise<void> {
   const post = http(base, TENANT);
   const T = {
     admin: await token("admin", ["admin"]),
-    alice: await token("alice", ["author"]),
-    bob: await token("bob", ["author"]),
-    reader: await token("reader-user", ["reader"]),
+    alice: await token("alice", ["author"], { tenants: [TENANT] }),
+    bob: await token("bob", ["author"], { tenants: [TENANT] }),
+    reader: await token("reader-user", ["reader"], { tenants: [TENANT] }),
   };
 
   // --- auth ---

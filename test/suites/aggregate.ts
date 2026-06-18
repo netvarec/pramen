@@ -7,9 +7,9 @@ export async function runAggregate(base: string): Promise<void> {
   const TENANT = "agg-demo";
   const post = http(base, TENANT);
   const admin = await token("admin", ["admin"]);
-  const alice = await token("alice", ["author"]);
-  const bob = await token("bob", ["author"]);
-  const reader = await token("reader-user", ["reader"]);
+  const alice = await token("alice", ["author"], { tenants: [TENANT] });
+  const bob = await token("bob", ["author"], { tenants: [TENANT] });
+  const reader = await token("reader-user", ["reader"], { tenants: [TENANT] });
 
   // ownerId is forced to the caller by policy `set`.
   await post("createNote", { title: "a1", body: "x" }, alice);

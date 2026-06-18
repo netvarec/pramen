@@ -8,8 +8,8 @@ export async function runRelation(base: string): Promise<void> {
   const TENANT = "relation-demo";
   const post = http(base, TENANT);
   const admin = await token("admin", ["admin"]);
-  const alice = await token("alice", ["author"]);
-  const reader = await token("reader-user", ["reader"]);
+  const alice = await token("alice", ["author"], { tenants: [TENANT] });
+  const reader = await token("reader-user", ["reader"], { tenants: [TENANT] });
 
   const u = await post("createUser", { id: "alice", name: "Alice", email: "alice@secret.example" }, admin);
   assert(u.body.ok, "admin created the alice user row");

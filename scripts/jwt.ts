@@ -27,5 +27,7 @@ export async function sign(payload: Record<string, unknown>, secret = DEV_SECRET
   return `${data}.${bytesToB64url(new Uint8Array(sig))}`;
 }
 
-/** A signed token for the given subject and roles. */
-export const token = (sub: string, roles: string[]) => sign({ sub, roles });
+/** A signed token for the given subject and roles, plus any extra claims
+ * (e.g. `{ tenants: ["acme"] }` for tenant authorization). */
+export const token = (sub: string, roles: string[], extra: Record<string, unknown> = {}) =>
+  sign({ sub, roles, ...extra });

@@ -113,8 +113,14 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
       (still durable, but unreachable). Each tenant now records its name in a `TENANTS` KV namespace on
       its DO's first touch — once, guarded by a `_mrak_meta` flag (no per-request writes; the DO learns
       its name from the Worker-forwarded `x-mrak-tenant` header). Admin `GET /tenants` lists them.
-      Caveat: tenant names aren't yet authorized against the identity — any caller can register an
-      arbitrary tenant; production should gate the tenant against the authenticated identity at the Worker.
+- [x] Tenant authorization: the Worker gates `x-mrak-tenant` against the caller (`authorizeTenant` in
+      `auth.ts`) before reaching the DO — admins → any tenant; others → only tenants in their `tenants`
+      claim. Closes the arbitrary-tenant addressing/registration hole. Pluggable for other tenancy models.
+- [x] Point-in-time recovery: SQLite-backed DOs have 30-day PITR (`getBookmarkForTime` →
+      `onNextSessionRestoreBookmark`), per-tenant. Admin `POST /admin/recover {tenant,timestamp}` arms a
+      restore and returns the `undo` bookmark (reversible); it does NOT auto-`abort()`, so the call can
+      return the bookmark — the restore completes on the DO's next restart. PITR is platform-only
+      (local dev → 501 `unavailable`); the happy path is verified only against a deployed DO.
 - [ ] Dynamic deploy: ship the app bundle to the DO instead of static import (cf. the prior runtime `/deploy`).
 - [ ] ReadEngine → WASM.
 - [x] Deploy via **oblaka** (CF IaC DSL): `oblaka.ts` declares the Worker + `MRAK` Durable Object

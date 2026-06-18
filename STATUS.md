@@ -51,7 +51,8 @@ live-query invalidation is exact).
 | **Migrations** | On DO boot: create tables + additive `ADD COLUMN`, gated by a schema hash in `_mrak_meta`. No data loss. | `src/runtime/{migrate,ddl}.ts` |
 | **Errors** | Typed envelope `{ ok, error, code }` + status; internal errors logged, returned as generic 500. | `src/runtime/errors.ts` |
 | **Dispatch** | Resolve handler, optional input validator (→400), warmup, run, report `touched` tables. | `src/runtime/dispatch.ts` |
-| **Tenant registry** | DOs aren't enumerable, so each tenant records its name in a KV registry on its DO's first touch (once, meta-guarded); admin `GET /tenants` lists them. | `src/durable-object.ts`, `src/index.ts` |
+| **Tenancy** | Worker authorizes `x-mrak-tenant` against the identity (`authorizeTenant`). DOs aren't enumerable, so each tenant self-registers in a KV registry on first touch; admin `GET /tenants` lists them. | `src/auth.ts`, `src/durable-object.ts`, `src/index.ts` |
+| **Recovery** | 30-day point-in-time recovery (platform). Admin `POST /admin/recover {tenant,timestamp}` arms a restore, returns the `undo` bookmark. Local dev → 501 (PITR is platform-only). | `src/durable-object.ts`, `src/index.ts` |
 | **Deploy (IaC)** | `oblaka.ts` is source of truth → generates `wrangler.jsonc`; `oblaka --remote` provisions, `wrangler deploy` ships code. | `oblaka.ts` |
 | **Tests/CI** | `bun test` boots one `wrangler dev`, runs all suites on isolated tenants + a SQLite migrate unit test. CI on push/PR. | `test/**`, `.github/workflows/ci.yml` |
 
@@ -62,7 +63,8 @@ dynamic resolvers → typed inference → verified JWT auth → relations + nest
 (directAccess) → write-side ACL (set/validate) → oblaka deploy → test harness +
 CI → query operators/OR-AND/pagination → schema migrations → hardening (safe
 errors, input validation, batched relations, WS limits) → cursor pagination →
-count + aggregates → operators in ACL where rules → tenant registry.
+count + aggregates → operators in ACL where rules → tenant registry → tenant
+authorization + admin point-in-time recovery.
 
 Every feature is verified by an e2e suite (`test/suites/*`) and, where it's
 type-level, by `example/inference-check.ts` (`@ts-expect-error` cases). All green.
@@ -81,9 +83,9 @@ type-level, by `example/inference-check.ts` (`@ts-expect-error` cases). All gree
 - **Read engine is TS, not WASM** — fine (no perf problem), but not the prior runtime's
   zero-JS read path.
 - **Auth is HS256 shared-secret** — RS256/EdDSA + JWKS is a localized swap.
-- **Tenant names aren't authorized against identity** — any caller can address (and
-  thus register) an arbitrary `x-mrak-tenant`. Real deployments should check the
-  tenant is one the authenticated identity may access (at the Worker).
+- **PITR can't be tested locally** — point-in-time recovery is platform-only, so
+  `bun test` covers only the recovery endpoint's auth/validation; the actual
+  restore is verifiable only against a deployed DO.
 
 ## Roadmap (none pressing)
 

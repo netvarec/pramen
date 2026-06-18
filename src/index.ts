@@ -1,9 +1,11 @@
-// Worker entry — the stateless HTTP front door. Routes /rpc/<handler> to the
-// per-tenant Durable Object. This is the axum layer of the prior runtime, except routing
-// and dispatch to the single writer are handled by the DO namespace.
+// Worker entry — the stateless HTTP front door. Authenticates the request,
+// authorizes the tenant, and routes /rpc/<handler> and /live to the per-tenant
+// Durable Object. Also serves admin endpoints (/tenants, /admin/recover) that
+// aren't tenant-data operations.
 
 import { MrakDO } from "./durable-object";
-import { resolveIdentity } from "./auth";
+import { authorizeTenant, isAdmin, resolveIdentity } from "./auth";
+import type { Identity } from "./sdk/acl";
 
 export interface Env {
   MRAK: DurableObjectNamespace;
@@ -14,45 +16,62 @@ export interface Env {
   AUTH_SECRET: string;
 }
 
+const json = (body: unknown, status = 200) => Response.json(body, { status });
+const forbidden = (what: string) => json({ ok: false, error: `access denied: ${what}`, code: "forbidden" }, 403);
+const badRequest = (msg: string) => json({ ok: false, error: msg, code: "bad_request" }, 400);
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    const identity = await resolveIdentity(request, env.AUTH_SECRET);
+
+    // --- admin: list known tenants ---
+    if (url.pathname === "/tenants") {
+      if (!isAdmin(identity)) return forbidden("tenants");
+      const list = await env.TENANTS.list({ prefix: "tenant:" });
+      return json({ ok: true, result: list.keys.map((k) => k.name.slice("tenant:".length)) });
+    }
+
+    // --- admin: point-in-time recovery for a tenant ---
+    if (url.pathname === "/admin/recover" && request.method === "POST") {
+      if (!isAdmin(identity)) return forbidden("recover");
+      const body = (await request.json().catch(() => ({}))) as { tenant?: unknown; timestamp?: unknown };
+      if (typeof body.tenant !== "string" || !body.tenant) return badRequest("tenant required");
+      if (typeof body.timestamp !== "number" && typeof body.timestamp !== "string") return badRequest("timestamp required");
+      const stub = env.MRAK.get(env.MRAK.idFromName(body.tenant));
+      const internal = new Request("https://do/__recover", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-mrak-tenant": body.tenant },
+        body: JSON.stringify({ timestamp: body.timestamp }),
+      });
+      return stub.fetch(internal);
+    }
+
     const isWs = request.headers.get("Upgrade") === "websocket";
     const isRpc = url.pathname.startsWith("/rpc/");
     const isLive = url.pathname === "/live";
 
-    // Admin: list known tenants from the registry (admin role required).
-    if (url.pathname === "/tenants") {
-      const identity = await resolveIdentity(request, env.AUTH_SECRET);
-      if (!identity?.roles?.includes("admin")) {
-        return Response.json({ ok: false, error: "access denied: tenants", code: "forbidden" }, { status: 403 });
-      }
-      const list = await env.TENANTS.list({ prefix: "tenant:" });
-      const tenants = list.keys.map((k) => k.name.slice("tenant:".length));
-      return Response.json({ ok: true, result: tenants });
-    }
-
     if (!isRpc && !(isLive && isWs)) {
       return new Response(
         "mrak — POST /rpc/<handler> (JSON body), or WebSocket /live for live queries. " +
-          "Header X-Mrak-Tenant selects the store (default: main). GET /tenants (admin) lists tenants.\n",
+          "Header X-Mrak-Tenant selects the store (default: main). " +
+          "Admin: GET /tenants, POST /admin/recover {tenant,timestamp}.\n",
         { headers: { "content-type": "text/plain" } },
       );
     }
 
-    // Authenticate at the edge, then forward a trusted identity to the DO.
-    const identity = await resolveIdentity(request, env.AUTH_SECRET);
-    const headers = new Headers(request.headers);
-    if (identity) headers.set("x-mrak-identity", JSON.stringify(identity));
-    else headers.delete("x-mrak-identity");
-    const forwarded = new Request(request, { headers });
-
-    // One DO instance per tenant => writes serialize within a tenant and
-    // parallelize across tenants, for free. Both HTTP RPC and the live-query
-    // socket route to the same per-tenant DO, so a mutation can push to sockets.
+    // Authorize the tenant against the identity before reaching the DO, so a
+    // caller can't address (or register) tenants they have no claim to.
     const tenant = request.headers.get("x-mrak-tenant") ?? "main";
+    if (!authorizeTenant(identity, tenant)) return forbidden(`tenant '${tenant}'`);
+
+    // Forward a trusted identity to the DO (the DO never re-derives it).
+    const headers = new Headers(request.headers);
+    if (identity) headers.set("x-mrak-identity", JSON.stringify(identity as Identity));
+    else headers.delete("x-mrak-identity");
+
     const stub = env.MRAK.get(env.MRAK.idFromName(tenant));
-    return stub.fetch(forwarded);
+    return stub.fetch(new Request(request, { headers }));
   },
 };
 

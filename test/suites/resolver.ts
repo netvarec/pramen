@@ -7,7 +7,7 @@ export async function runResolver(base: string): Promise<void> {
   const TENANT = "resolver-demo";
   const post = http(base, TENANT);
   const admin = await token("admin", ["admin"]);
-  const mia = await token("mia", ["member"]);
+  const mia = await token("mia", ["member"], { tenants: [TENANT] });
 
   const seed = await post("createNote", { title: "admin-only", body: "x" }, admin);
   assert(seed.body.ok, "admin seeded a note");
