@@ -117,6 +117,13 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
       names, where columns/values, row results, insert/patch shapes. Compile-time proof in
       `example/inference-check.ts` (`@ts-expect-error` cases). Note: ACL field projection can drop
       columns at runtime, so a projected row is narrower than its static type — known unsoundness.
+- [x] Schema migrations (additive): on DO boot, `runtime/migrate.ts` reconciles the SQLite store
+      with the schema — creates missing tables and `ALTER TABLE ADD COLUMN`s new fields (nullable),
+      with no data loss. A schema hash in the internal `_mrak_meta` table short-circuits unchanged
+      schemas on warm boots. Additive only — drops/renames/type changes are not applied (orphan
+      columns remain). Unit-tested against real SQLite (`test/migrate.test.ts`); create+PRAGMA path
+      exercised on the real DO by the e2e boot. Next: destructive/explicit migrations, column rename
+      detection, a `_mrak_meta` schema-version log.
 - [x] Query expressiveness: operators (`eq`/`ne`/`gt`/`gte`/`lt`/`lte`/`in`/`notIn`/`like`/`isNull`),
       nestable `AND`/`OR` groups, multi-column `orderBy`, and `limit`/`offset` pagination. The `SqlExpr`
       AST + `compileWhere` (`runtime/read-engine.ts`) handle it; `WhereInput<F>` types operators per

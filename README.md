@@ -107,7 +107,8 @@ src/
     handlers.ts       query() / mutation() (untyped, schema-agnostic)
     acl.ts            role/policy/allow/deny/$identity/resolve + set/validate
   runtime/            substrate glue
-    ddl.ts            SchemaDef -> CREATE TABLE
+    ddl.ts            CREATE TABLE / ADD COLUMN fragments
+    migrate.ts        additive schema migration on DO boot (create + add column)
     read-engine.ts    structured query + SqlExpr -> parameterized SQL (TS; WASM later)
     acl.ts            scope resolution, relation scopes, warmup, write rules
     db.ts             ACL-enforcing repository over ctx.storage.sql (+ eager loading)
@@ -166,6 +167,14 @@ ctx.db.find({
   offset: 40,
 });
 ```
+
+### Migrations
+
+The schema is reconciled with the store on every DO boot — new tables are created
+and new fields are added (`ALTER TABLE ADD COLUMN`, nullable) **without data
+loss**. A schema hash in `_mrak_meta` skips the work when nothing changed. Just
+edit the schema and redeploy; existing rows are preserved. (Additive only —
+column drops/renames/type changes aren't auto-applied.)
 
 ## Deploy
 

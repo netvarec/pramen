@@ -1,22 +1,27 @@
-// DDL generation — turns a SchemaDef into CREATE TABLE statements applied to the
-// DO's SQLite store on boot. Idempotent (IF NOT EXISTS). The the prior runtime analog lives
-// in the Rust the schema layer crate; here it runs in TS inside the isolate.
+// DDL generation — CREATE TABLE for a new entity and the additive ALTER fragment
+// for a new column. The the prior runtime analog lives in the Rust the schema layer crate; here it
+// runs in TS inside the isolate. See runtime/migrate.ts for how these are applied.
 
-import type { FieldDef, SchemaDef } from "../sdk/schema";
+import type { EntityFields, FieldDef } from "../sdk/schema";
+
+// SQLite has no boolean type; store as INTEGER 0/1.
+const colType = (f: FieldDef): string => (f.type === "boolean" ? "INTEGER" : f.type.toUpperCase());
 
 function columnSql(name: string, f: FieldDef): string {
-  // SQLite has no boolean type; store as INTEGER 0/1.
-  const sqlType = f.type === "boolean" ? "INTEGER" : f.type.toUpperCase();
-  let s = `${name} ${sqlType}`;
+  let s = `${name} ${colType(f)}`;
   if (f.primaryKey) s += " PRIMARY KEY";
   if (f.autoIncrement) s += " AUTOINCREMENT";
   if (f.notNull && !f.primaryKey) s += " NOT NULL";
   return s;
 }
 
-export function schemaDDL(schema: SchemaDef): string[] {
-  return Object.entries(schema).map(([table, def]) => {
-    const cols = Object.entries(def.fields).map(([n, f]) => columnSql(n, f));
-    return `CREATE TABLE IF NOT EXISTS ${table} (${cols.join(", ")})`;
-  });
+export function createTableSql(table: string, def: { fields: EntityFields }): string {
+  const cols = Object.entries(def.fields).map(([n, f]) => columnSql(n, f));
+  return `CREATE TABLE IF NOT EXISTS ${table} (${cols.join(", ")})`;
+}
+
+/** Column definition for ALTER TABLE ADD COLUMN — always nullable, with no
+ * PRIMARY KEY / AUTOINCREMENT / NOT NULL (those can't be added to existing rows). */
+export function addColumnSql(name: string, f: FieldDef): string {
+  return `${name} ${colType(f)}`;
 }

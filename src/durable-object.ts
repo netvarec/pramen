@@ -15,7 +15,7 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { app } from "../example/app";
-import { schemaDDL } from "./runtime/ddl";
+import { migrate } from "./runtime/migrate";
 import { dispatch } from "./runtime/dispatch";
 import { digest } from "./runtime/digest";
 import { AclDenied, compileAcl, type AclContext, type CompiledAcl } from "./runtime/acl";
@@ -34,10 +34,10 @@ export class MrakDO extends DurableObject {
     super(ctx, env as never);
     this.acl = compileAcl(app.acl ?? []);
 
+    // Reconcile the SQLite store with the schema before any request is served
+    // (create tables, add new columns; no data loss).
     ctx.blockConcurrencyWhile(async () => {
-      for (const stmt of schemaDDL(app.schema)) {
-        ctx.storage.sql.exec(stmt);
-      }
+      migrate(ctx.storage.sql, app.schema);
     });
   }
 
