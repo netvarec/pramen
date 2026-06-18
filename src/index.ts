@@ -3,6 +3,7 @@
 // and dispatch to the single writer are handled by the DO namespace.
 
 import { MrakDO } from "./durable-object";
+import { resolveIdentity } from "./auth";
 
 export interface Env {
   MRAK: DurableObjectNamespace;
@@ -23,12 +24,19 @@ export default {
       );
     }
 
+    // Authenticate at the edge, then forward a trusted identity to the DO.
+    const identity = resolveIdentity(request);
+    const headers = new Headers(request.headers);
+    if (identity) headers.set("x-mrak-identity", JSON.stringify(identity));
+    else headers.delete("x-mrak-identity");
+    const forwarded = new Request(request, { headers });
+
     // One DO instance per tenant => writes serialize within a tenant and
     // parallelize across tenants, for free. Both HTTP RPC and the live-query
     // socket route to the same per-tenant DO, so a mutation can push to sockets.
     const tenant = request.headers.get("x-mrak-tenant") ?? "main";
     const stub = env.MRAK.get(env.MRAK.idFromName(tenant));
-    return stub.fetch(request);
+    return stub.fetch(forwarded);
   },
 };
 

@@ -11,6 +11,8 @@
 const port = process.argv[2] ?? "8799";
 const httpBase = `http://localhost:${port}`;
 const wsUrl = `ws://localhost:${port}/live`;
+const TENANT = "live-demo";
+const AUTH = "Bearer admin"; // full access — this test isn't about ACL
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -21,7 +23,9 @@ function deadline<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   ]);
 }
 
-const ws = new WebSocket(wsUrl);
+const ws = new WebSocket(wsUrl, {
+  headers: { authorization: AUTH, "x-mrak-tenant": TENANT },
+} as any);
 const inbox: any[] = [];
 let notify: (() => void) | null = null;
 ws.addEventListener("message", (e) => {
@@ -57,7 +61,7 @@ const dataFor = (id: string) => (m: any) => m.type === "data" && m.id === id;
 const post = (name: string, input?: unknown) =>
   fetch(`${httpBase}/rpc/${name}`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", authorization: AUTH, "x-mrak-tenant": TENANT },
     body: JSON.stringify(input ?? {}),
   }).then((r) => r.json());
 

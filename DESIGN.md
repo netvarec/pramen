@@ -58,7 +58,13 @@ header `X-Mrak-Tenant` selects the store (default `main`).
 
 ## Roadmap
 
-- [ ] ACL: port the prior runtime's `policy()`/`allow()`/`deny()` + identity resolution into the dispatcher.
+- [x] ACL: `role()`/`policy()`/`allow()`/`deny()`/`$identity()` in `sdk/acl.ts`; resolution in
+      `runtime/acl.ts`. Deny-by-default; grants OR-merge across an identity's roles. Enforced at the
+      `Db` chokepoint — row-level `where` scopes AND-merge into find/update/delete, `fields` restrict
+      read projection and writable columns. Identity is resolved at the edge (`auth.ts`, bearer-token
+      demo map) and forwarded to the DO; for a WebSocket it's fixed at connect time, so live queries
+      are per-identity. Next: dynamic policy resolvers (`resolve()`), relation/nested ACL, cell-level
+      (conditional per-field), `set`/`validate` on writes, hard-deny override, verified-token auth.
 - [x] Reactivity: live queries over Hibernatable WebSockets on the DO. Subscriptions
       declare a table-level read-set (tracked in `runtime/db.ts`); a committed
       mutation re-runs only the subscriptions whose read-set intersects its writes.

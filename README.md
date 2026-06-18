@@ -11,13 +11,36 @@ instead of a Rust + Turso runtime. See [DESIGN.md](./DESIGN.md).
 bun install
 bun run dev            # wrangler dev (local, miniflare) on http://localhost:8787
 
-# create a note
+# create a note (ACL is deny-by-default — a token is required; see ACL below)
 curl -s -X POST http://localhost:8787/rpc/createNote \
-  -H 'content-type: application/json' \
+  -H 'content-type: application/json' -H 'authorization: Bearer alice' \
   -d '{"title":"hello","body":"from mrak"}'
 
 # list notes
-curl -s -X POST http://localhost:8787/rpc/listNotes
+curl -s -X POST http://localhost:8787/rpc/listNotes -H 'authorization: Bearer alice'
+```
+
+### ACL
+
+Access is **deny-by-default**; roles grant it. Define roles/policies on the app
+(`example/app.ts`) and resolve identity at the edge (`src/auth.ts`). Grants
+OR-merge across an identity's roles; row-level `where` scopes are AND-merged into
+queries, and `fields` restrict read projection / writable columns.
+
+```ts
+role("author", [
+  policy("author:read",   "notes", "read",   { where: { ownerId: $identity("userId") } }),
+  policy("author:create", "notes", "create", allow()),
+  policy("author:update", "notes", "update", { where: { ownerId: $identity("userId") } }),
+]);
+```
+
+The demo bearer tokens (`src/auth.ts`): `admin` (full access), `alice`/`bob`
+(authors, own notes only), `reader` (reads all, no `body`). Live subscriptions
+inherit the connecting identity, so pushes respect row-level scope too.
+
+```bash
+bun run scripts/acl-smoke.ts    # ACL + per-identity live-query test
 ```
 
 ### Live queries (WebSocket)

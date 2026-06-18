@@ -1,15 +1,17 @@
-// Example app — the entire user-facing surface: a schema plus handlers.
+// Example app — schema, handlers, and ACL. The entire user-facing surface.
 // In a finished mrak this would be deployed as a bundle (cf. the prior runtime's /deploy);
 // for the v0 skeleton the DO imports it statically.
 
 import { Entity, defineSchema } from "../src/sdk/schema";
 import { mutation, query } from "../src/sdk/handlers";
+import { $identity, allow, policy, role } from "../src/sdk/acl";
 
 const schema = defineSchema({
   notes: Entity((t) => ({
     id: t.id(),
     title: t.text(),
     body: t.text(),
+    ownerId: t.text(),
     createdAt: t.int(),
   })),
 });
@@ -28,14 +30,39 @@ const handlers = {
     ctx.db.insert("notes", {
       title: input.title,
       body: input.body,
+      ownerId: ctx.identity?.userId ?? null,
       createdAt: Date.now(),
     }),
   ),
 
   updateNote: mutation((ctx, input: { id: number; title?: string; body?: string }) => {
     const { id, ...patch } = input;
-    return ctx.db.update("notes", id, patch);
+    return ctx.db.update("notes", id, patch) ?? null;
   }),
+
+  deleteNote: mutation((ctx, input: { id: number }) => ctx.db.delete("notes", input.id)),
 };
 
-export const app = { schema, handlers };
+// ACL — deny-by-default; roles only grant.
+//  admin   : full access to notes.
+//  author  : reads/updates/deletes only their own notes; may create.
+//  reader  : reads every note, but not the body field.
+const acl = [
+  role("admin", [
+    policy("admin:read", "notes", "read", allow()),
+    policy("admin:create", "notes", "create", allow()),
+    policy("admin:update", "notes", "update", allow()),
+    policy("admin:delete", "notes", "delete", allow()),
+  ]),
+  role("author", [
+    policy("author:read", "notes", "read", { where: { ownerId: $identity("userId") } }),
+    policy("author:create", "notes", "create", allow()),
+    policy("author:update", "notes", "update", { where: { ownerId: $identity("userId") } }),
+    policy("author:delete", "notes", "delete", { where: { ownerId: $identity("userId") } }),
+  ]),
+  role("reader", [
+    policy("reader:read", "notes", "read", { fields: ["id", "title", "ownerId", "createdAt"] }),
+  ]),
+];
+
+export const app = { schema, handlers, acl };

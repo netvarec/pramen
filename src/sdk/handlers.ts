@@ -3,11 +3,12 @@
 // rolls back on throw (see runtime/dispatch.ts).
 
 import type { Db } from "../runtime/db";
+import type { Identity } from "./acl";
 
 export interface HandlerContext {
   readonly db: Db;
-  /** Resolved identity — wired to ACL later; null for now. */
-  readonly identity: Record<string, unknown> | null;
+  /** Resolved identity for this request (null = anonymous). */
+  readonly identity: Identity | null;
 }
 
 export type HandlerKind = "query" | "mutation";
