@@ -124,6 +124,40 @@ export interface QuerySpec {
   readonly offset?: number;
 }
 
+export type AggFn = "count" | "sum" | "avg" | "min" | "max";
+const AGG_SQL: Record<AggFn, string> = { count: "COUNT", sum: "SUM", avg: "AVG", min: "MIN", max: "MAX" };
+
+export function compileCount(from: string, where?: SqlExpr): CompiledSql {
+  const params: unknown[] = [];
+  let sql = `SELECT COUNT(*) AS n FROM ${ident(from)}`;
+  if (where && where.t !== "true") sql += ` WHERE ${compileExpr(where, params).sql}`;
+  return { sql, params };
+}
+
+export interface Aggregation {
+  fn: AggFn;
+  column?: string;
+}
+
+export function compileAggregate(spec: {
+  from: string;
+  where?: SqlExpr;
+  groupBy?: string[];
+  aggregations: Record<string, Aggregation>;
+}): CompiledSql {
+  const params: unknown[] = [];
+  const cols: string[] = [];
+  for (const g of spec.groupBy ?? []) cols.push(ident(g));
+  for (const [key, agg] of Object.entries(spec.aggregations)) {
+    const target = agg.column != null ? ident(agg.column) : "*";
+    cols.push(`${AGG_SQL[agg.fn]}(${target}) AS ${ident(key)}`);
+  }
+  let sql = `SELECT ${cols.join(", ")} FROM ${ident(spec.from)}`;
+  if (spec.where && spec.where.t !== "true") sql += ` WHERE ${compileExpr(spec.where, params).sql}`;
+  if (spec.groupBy && spec.groupBy.length > 0) sql += ` GROUP BY ${spec.groupBy.map(ident).join(", ")}`;
+  return { sql, params };
+}
+
 export function compileSelect(spec: QuerySpec): CompiledSql {
   const params: unknown[] = [];
   let sql = `SELECT * FROM ${ident(spec.from)}`;

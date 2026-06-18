@@ -89,6 +89,22 @@ const handlers = {
     ctx.db.page({ from: "notes", orderBy: { column: "id", dir: input.dir ?? "asc" }, limit: input.limit ?? 2, after: input.after }),
   ),
 
+  // count + aggregates (ACL read scope applies; field access is enforced).
+  countNotes: query((ctx, input: { ownerId?: string }) =>
+    ctx.db.count({ from: "notes", where: input.ownerId ? { ownerId: input.ownerId } : undefined }),
+  ),
+
+  statsByOwner: query((ctx) =>
+    ctx.db.aggregate({
+      from: "notes",
+      groupBy: "ownerId",
+      aggregations: { count: { fn: "count" }, firstId: { fn: "min", column: "id" }, lastId: { fn: "max", column: "id" } },
+    }),
+  ),
+
+  // References the `body` column — denied for roles that can't read it.
+  maxBody: query((ctx) => ctx.db.aggregate({ from: "notes", aggregations: { m: { fn: "max", column: "body" } } })),
+
   // Passthrough that exercises the full query surface (operators, OR/AND,
   // multi-column orderBy, limit/offset). ACL row-scope still applies on top.
   queryNotes: query(

@@ -23,6 +23,8 @@ import {
 import {
   and,
   cmp,
+  compileAggregate,
+  compileCount,
   compileExpr,
   compileSelect,
   compileWhere,
@@ -30,6 +32,7 @@ import {
   inList,
   or,
   TRUE,
+  type AggFn,
   type OrderBy,
   type SqlExpr,
 } from "./read-engine";
@@ -84,6 +87,16 @@ export interface Page<R> {
   cursor: string | null;
   hasMore: boolean;
 }
+
+export interface AggregateSpec<S extends SchemaDef, T extends keyof S> {
+  from: T;
+  where?: WhereInput<FieldsOf<S[T]>>;
+  groupBy?: (keyof FieldsOf<S[T]> & string) | (keyof FieldsOf<S[T]> & string)[];
+  aggregations: Record<string, { fn: AggFn; column?: keyof FieldsOf<S[T]> & string }>;
+}
+
+/** One aggregate result row: group columns + the aggregated values. */
+export type AggregateRow = Record<string, number | string | null>;
 
 function encodeCursor(order: OrderBy[], row: Row): string {
   const vals = order.map((o) => row[o.column]);
@@ -188,6 +201,38 @@ export class Db<S extends SchemaDef = SchemaDef> {
     const items = this.finishRows(from, raw, scope.fields, spec.with as Selected) as (InferRow<FieldsOf<S[T]>> &
       RelationsResult<S, T>)[];
     return { items, cursor, hasMore };
+  }
+
+  /** Count rows visible to the caller (ACL read scope applied). */
+  count<T extends keyof S & string>(spec: { from: T; where?: WhereInput<FieldsOf<S[T]>> }): number {
+    const from = spec.from as string;
+    this.touched.add(from);
+    const scope = this.scopeFor(from, "read");
+    if (!scope.allowed) throw new AclDenied(from, "read");
+    const where = this.readWhere(spec.where, scope);
+    const { sql, params } = compileCount(from, where);
+    const rows = this.sql.exec(sql, ...params).toArray() as { n: number }[];
+    return Number(rows[0]?.n ?? 0);
+  }
+
+  /** Grouped aggregation (count/sum/avg/min/max). ACL read scope is applied, and
+   * every referenced column must be readable under field permissions. */
+  aggregate<T extends keyof S & string>(spec: AggregateSpec<S, T>): AggregateRow[] {
+    const from = spec.from as string;
+    this.touched.add(from);
+    const scope = this.scopeFor(from, "read");
+    if (!scope.allowed) throw new AclDenied(from, "read");
+
+    const groupBy = (spec.groupBy ? (Array.isArray(spec.groupBy) ? spec.groupBy : [spec.groupBy]) : []) as string[];
+    if (scope.fields) {
+      const refs = new Set<string>(groupBy);
+      for (const agg of Object.values(spec.aggregations)) if (agg.column) refs.add(agg.column as string);
+      for (const c of refs) if (!scope.fields.includes(c)) throw new AclDenied(from, "read", c);
+    }
+
+    const where = this.readWhere(spec.where, scope);
+    const { sql, params } = compileAggregate({ from, where, groupBy, aggregations: spec.aggregations });
+    return this.sql.exec(sql, ...params).toArray() as AggregateRow[];
   }
 
   // --- read internals shared by find/page ---

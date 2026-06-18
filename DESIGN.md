@@ -139,5 +139,9 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
       lexicographic keyset predicate (`keysetAfter`) starts strictly after the cursor; the PK is
       auto-appended to `orderBy` as a unique tiebreaker, so pagination stays stable under concurrent
       inserts/deletes (unlike offset). Cursors are opaque base64url of the order-key values, read from
-      the raw row (survives field projection); a bad cursor is a 400. Next: typed `count`/aggregates,
-      operators inside ACL `where` rules.
+      the raw row (survives field projection); a bad cursor is a 400.
+- [x] Aggregates: `db.count({ from, where })` and `db.aggregate({ from, where, groupBy, aggregations })`
+      (count/sum/avg/min/max), compiled in `runtime/read-engine.ts`. ACL read scope is AND-ed in; every
+      aggregated/grouped column must be readable under field permissions (else 403) — counting rows you
+      can see is always allowed. Aggregate result rows are loosely typed (dynamic keys). Next: operators
+      inside ACL `where` rules; `having`/ordered aggregates.

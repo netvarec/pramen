@@ -68,6 +68,15 @@ export const readChecks = query((ctx) => {
   void next;
   void firstViews;
 
+  // count + aggregate
+  const n: number = ctx.db.count({ from: "notes", where: { pinned: true } });
+  const stats = ctx.db.aggregate({ from: "notes", groupBy: "ownerId", aggregations: { c: { fn: "count" }, hi: { fn: "max", column: "views" } } });
+  const owner: string | number | null = stats[0]?.ownerId ?? null;
+  // @ts-expect-error unknown aggregate column
+  ctx.db.aggregate({ from: "notes", aggregations: { x: { fn: "sum", column: "nope" } } });
+  void n;
+  void owner;
+
   return { id, title, pinned };
 });
 

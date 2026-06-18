@@ -207,6 +207,22 @@ do {
 } while (after);
 ```
 
+### Count & aggregates
+
+`db.count()` and `db.aggregate()` (count/sum/avg/min/max, optional `groupBy`) are
+ACL-scoped — the read `where` is applied, and aggregating a column you can't read
+is denied (counting rows you *can* see is always allowed).
+
+```ts
+const open = ctx.db.count({ from: "tickets", where: { status: "open" } });
+
+const perOwner = ctx.db.aggregate({
+  from: "notes",
+  groupBy: "ownerId",
+  aggregations: { count: { fn: "count" }, lastId: { fn: "max", column: "id" } },
+});                              // [{ ownerId, count, lastId }, ...]
+```
+
 ### Migrations
 
 The schema is reconciled with the store on every DO boot — new tables are created
