@@ -52,7 +52,15 @@ const adminNote = await post("createNote", { title: "by-admin", body: "secret" }
 const aliceNote = await post("createNote", { title: "by-alice", body: "alice-body" }, "alice");
 const bobNote = await post("createNote", { title: "by-bob", body: "bob-body" }, "bob");
 assert(adminNote.body.ok && aliceNote.body.ok && bobNote.body.ok, "admin/alice/bob can create");
-assert(aliceNote.body.result.ownerId === "alice", "createNote stamps ownerId from identity");
+assert(aliceNote.body.result.ownerId === "alice", "policy `set` stamps ownerId from identity");
+
+// `set` is authoritative: a forged ownerId in the body is overridden.
+const forge = await post("createNote", { title: "forge", body: "x", ownerId: "bob" }, "alice");
+assert(forge.body.result.ownerId === "alice", "policy `set` overrides a forged ownerId");
+
+// `validate` rejects bad input (empty title) before the row is written.
+const bad = await post("createNote", { title: "", body: "x" }, "alice");
+assert(bad.status === 400 && bad.body.ok === false, "policy `validate` rejects an empty title (400)");
 
 // row-level read scope: author sees only their own
 const aliceList = await post("listNotes", {}, "alice");

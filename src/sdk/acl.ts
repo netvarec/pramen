@@ -66,6 +66,12 @@ export interface RelationAclRule {
   fields?: string[];
 }
 
+/** A forced column value on write: a literal, or computed from the identity. */
+export type SetValue = unknown | ((identity: Identity | null) => unknown);
+
+/** Server-side validation on write; throw to reject. Runs on the final values. */
+export type Validator = (args: { identity: Identity | null; values: Record<string, unknown> }) => void;
+
 export interface PolicyRules {
   /** Row-level predicate (AND of equalities). Omit/empty = all rows. */
   where?: WhereRule;
@@ -73,6 +79,11 @@ export interface PolicyRules {
   fields?: string[];
   /** Per-relation traversal rules (see RelationAclRule). */
   relations?: Record<string, RelationAclRule>;
+  /** Columns forced to server-controlled values on write (override client input,
+   * bypass field restriction). E.g. `{ ownerId: (i) => i?.userId }`. */
+  set?: Record<string, SetValue>;
+  /** Server-side validation; throw to reject. Sees the final (post-`set`) values. */
+  validate?: Validator;
 }
 
 // --- dynamic resolvers: a policy whose rule is computed per request ---

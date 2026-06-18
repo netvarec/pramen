@@ -4,7 +4,11 @@
 
 import { Entity, defineSchema } from "../src/sdk/schema";
 import { createApp } from "../src/sdk/app";
-import { $identity, allow, deny, policy, resolve, role } from "../src/sdk/acl";
+import { $identity, allow, deny, policy, resolve, role, type Identity } from "../src/sdk/acl";
+
+// Reusable write rule: force ownerId to the authenticated caller (a client cannot
+// forge it), even if the request body tries to set a different owner.
+const ownedByCaller = { set: { ownerId: (i: Identity | null) => i?.userId ?? null } };
 
 const schema = defineSchema({
   users: Entity(
@@ -40,11 +44,13 @@ const handlers = {
     return rows[0] ?? null;
   }),
 
-  createNote: mutation((ctx, input: { title: string; body: string }) =>
+  // ownerId is accepted here but the create policy's `set` forces it to the
+  // caller — so a forged ownerId in the request body is ignored.
+  createNote: mutation((ctx, input: { title: string; body: string; ownerId?: string }) =>
     ctx.db.insert("notes", {
       title: input.title,
       body: input.body,
-      ownerId: (ctx.identity?.userId as string | undefined) ?? null,
+      ownerId: input.ownerId ?? null,
       createdAt: Date.now(),
     }),
   ),
@@ -81,7 +87,7 @@ const handlers = {
 const acl = [
   role("admin", [
     policy("admin:read", "notes", "read", allow()),
-    policy("admin:create", "notes", "create", allow()),
+    policy("admin:create", "notes", "create", ownedByCaller), // notes admin creates are owned by admin
     policy("admin:update", "notes", "update", allow()),
     policy("admin:delete", "notes", "delete", allow()),
     policy("admin:users:read", "users", "read", allow()),
@@ -92,7 +98,12 @@ const acl = [
       where: { ownerId: $identity("userId") },
       relations: { owner: { directAccess: true, fields: ["id", "name"] } },
     }),
-    policy("author:create", "notes", "create", allow()),
+    policy("author:create", "notes", "create", {
+      ...ownedByCaller,
+      validate: ({ values }) => {
+        if (!values.title) throw new Error("title is required");
+      },
+    }),
     policy("author:update", "notes", "update", { where: { ownerId: $identity("userId") } }),
     policy("author:delete", "notes", "delete", { where: { ownerId: $identity("userId") } }),
   ]),
@@ -102,7 +113,7 @@ const acl = [
   // member: read access is computed per request from DB state — you may read
   // everything only once you've authored at least one note; otherwise nothing.
   role("member", [
-    policy("member:create", "notes", "create", allow()),
+    policy("member:create", "notes", "create", ownedByCaller),
     policy(
       "member:read",
       "notes",

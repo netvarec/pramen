@@ -60,6 +60,17 @@ access to an otherwise unreadable entity, optionally field-restricted). So an
 author can see `note.owner` (id + name) without being able to list users or see
 their email. Run `bun run scripts/relation-smoke.ts`.
 
+**Write-side ACL.** A write policy may `set` server-controlled columns (forced,
+overriding client input — e.g. `set: { ownerId: (i) => i?.userId }` so a note's
+owner can't be forged) and `validate` the final values (throw to reject):
+
+```ts
+policy("author:create", "notes", "create", {
+  set: { ownerId: (i) => i?.userId },
+  validate: ({ values }) => { if (!values.title) throw new Error("title required"); },
+});
+```
+
 ```bash
 bun run scripts/acl-smoke.ts    # ACL + per-identity live-query test
 ```

@@ -71,8 +71,12 @@ header `X-Mrak-Tenant` selects the store (default `main`).
       loaded via `find({ with: { rel: true } })`. Each traversal is independently ACL-checked by
       `resolveRelationScope`: the related entity's own read scope OR a parent read policy's relation
       rule with `directAccess` (the prior runtime's traversal-only grant), with per-relation `where`/`fields`.
-      Typed `with` + nested row inference. Next: cell-level (conditional per-field), `set`/`validate`
-      on writes, hard-deny override, path-aware resolvers; perf: batch relation loads (avoid N+1).
+      Typed `with` + nested row inference.
+- [x] Write-side ACL — `set` and `validate`: a write policy may force server-controlled column values
+      (`set: { ownerId: (i) => i?.userId }`, overrides client input and bypasses field restriction) and
+      run server-side validation (`validate: ({ identity, values }) => { … throw … }`) on the final
+      values. Resolved in `resolveWriteRules` and applied by `Db` on insert/update. Next: cell-level
+      (conditional per-field), hard-deny override, path-aware resolvers; perf: batch relation loads (avoid N+1).
 - [x] Verified-token auth: the Worker verifies an HS256 bearer JWT (WebCrypto) against
       `env.AUTH_SECRET`, checks exp/nbf, and maps claims (`sub`->userId, `roles`/`role`->roles, custom
       claims pass through) to an Identity forwarded to the DO. The client-supplied X-Mrak-Identity

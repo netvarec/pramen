@@ -16,6 +16,7 @@ import {
   projectRow,
   resolveRelationScope,
   resolveScope,
+  resolveWriteRules,
   type AclContext,
   type Scope,
 } from "./acl";
@@ -62,6 +63,15 @@ export class Db<S extends SchemaDef = SchemaDef> {
   private scopeFor(entity: string, action: Action): Scope {
     if (this.acl.system) return { allowed: true, where: null, fields: null };
     return resolveScope(this.acl, entity, action);
+  }
+
+  /** Apply policy `set` (forced, server-controlled column values) and run `validate`
+   * on the final values. Mutates `values`. Skipped in SYSTEM mode. */
+  private applyWriteRules(entity: string, action: "create" | "update", values: Row): void {
+    if (this.acl.system) return;
+    const { set, validators } = resolveWriteRules(this.acl, entity, action);
+    Object.assign(values, set); // forced values override client input
+    for (const validate of validators) validate({ identity: this.acl.identity, values });
   }
 
   /** Structured read; ACL row-scope is AND-ed in, permitted fields projected.
@@ -135,10 +145,11 @@ export class Db<S extends SchemaDef = SchemaDef> {
     this.touched.add(table);
     const scope = this.scopeFor(table, "create");
     if (!scope.allowed) throw new AclDenied(table, "create");
-    const vals = values as Row;
+    const vals = { ...(values as Row) };
     if (scope.fields) {
       for (const c of Object.keys(vals)) if (!scope.fields.includes(c)) throw new AclDenied(table, "create", c);
     }
+    this.applyWriteRules(table, "create", vals); // forced `set` values + `validate`
 
     const cols = Object.keys(vals);
     const placeholders = cols.map(() => "?").join(", ");
@@ -157,11 +168,12 @@ export class Db<S extends SchemaDef = SchemaDef> {
     this.touched.add(table);
     const scope = this.scopeFor(table, "update");
     if (!scope.allowed) throw new AclDenied(table, "update");
-    const p = patch as Row;
-    const cols = Object.keys(p);
+    const p = { ...(patch as Row) };
     if (scope.fields) {
-      for (const c of cols) if (!scope.fields.includes(c)) throw new AclDenied(table, "update", c);
+      for (const c of Object.keys(p)) if (!scope.fields.includes(c)) throw new AclDenied(table, "update", c);
     }
+    this.applyWriteRules(table, "update", p); // forced `set` values + `validate`
+    const cols = Object.keys(p);
     if (cols.length === 0) return undefined;
 
     const assignments = cols.map((c) => `${c} = ?`).join(", ");
