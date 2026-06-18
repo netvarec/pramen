@@ -24,9 +24,10 @@ import {
   and,
   compileExpr,
   compileSelect,
+  compileWhere,
   eq,
-  mapToExpr,
   TRUE,
+  type OrderBy,
   type SqlExpr,
 } from "./read-engine";
 import type { RelationDef, SchemaDef } from "../sdk/schema";
@@ -40,11 +41,17 @@ function bind(v: unknown): unknown {
   return typeof v === "boolean" ? (v ? 1 : 0) : v;
 }
 
+type OrderSpec<S extends SchemaDef, T extends keyof S> = {
+  column: keyof FieldsOf<S[T]> & string;
+  dir?: "asc" | "desc";
+};
+
 export interface FindSpec<S extends SchemaDef, T extends keyof S> {
   from: T;
   where?: WhereInput<FieldsOf<S[T]>>;
-  orderBy?: { column: keyof FieldsOf<S[T]> & string; dir?: "asc" | "desc" };
+  orderBy?: OrderSpec<S, T> | OrderSpec<S, T>[];
   limit?: number;
+  offset?: number;
   /** Eager-load relations. Each loaded relation is independently ACL-checked. */
   with?: Partial<Record<keyof RelationsOf<S[T]> & string, true>>;
 }
@@ -84,9 +91,14 @@ export class Db<S extends SchemaDef = SchemaDef> {
     const scope = this.scopeFor(from, "read");
     if (!scope.allowed) throw new AclDenied(from, "read");
 
-    const userExpr: SqlExpr = spec.where ? mapToExpr(spec.where as Row) : TRUE;
+    const userExpr: SqlExpr = spec.where ? compileWhere(spec.where as Row) : TRUE;
     const where = scope.where ? and(userExpr, scope.where) : userExpr;
-    const { sql, params } = compileSelect({ from, where, orderBy: spec.orderBy, limit: spec.limit });
+    const orderBy: OrderBy[] | undefined = spec.orderBy
+      ? Array.isArray(spec.orderBy)
+        ? spec.orderBy
+        : [spec.orderBy]
+      : undefined;
+    const { sql, params } = compileSelect({ from, where, orderBy, limit: spec.limit, offset: spec.offset });
     // Keep raw rows (with all columns) for relation FKs; project for the result.
     const raw = this.sql.exec(sql, ...params).toArray() as Row[];
 

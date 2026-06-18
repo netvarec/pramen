@@ -115,5 +115,10 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
       derives `InferRow`/`WhereInput`/`InferInsert`/`InferUpdate` (mirroring the schema layer). `Db<S>` is
       generic, and `createApp(schema)` binds the handler factories so `ctx.db` is fully typed — table
       names, where columns/values, row results, insert/patch shapes. Compile-time proof in
-      `example/inference-check.ts` (9 `@ts-expect-error` cases). Note: ACL field projection can drop
+      `example/inference-check.ts` (`@ts-expect-error` cases). Note: ACL field projection can drop
       columns at runtime, so a projected row is narrower than its static type — known unsoundness.
+- [x] Query expressiveness: operators (`eq`/`ne`/`gt`/`gte`/`lt`/`lte`/`in`/`notIn`/`like`/`isNull`),
+      nestable `AND`/`OR` groups, multi-column `orderBy`, and `limit`/`offset` pagination. The `SqlExpr`
+      AST + `compileWhere` (`runtime/read-engine.ts`) handle it; `WhereInput<F>` types operators per
+      column (`like` is string-only); column identifiers are validated against injection. Next: cursor
+      pagination, typed `count`/aggregates, operators inside ACL `where` rules.

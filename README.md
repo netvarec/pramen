@@ -145,6 +145,28 @@ const listNotes = query((ctx) =>
 // ctx.db.find({ where: { title: 123 } })   -> type error: title is string
 ```
 
+### Queries
+
+`where` supports equality shorthand, per-column operators, and nestable
+`AND`/`OR`; plus multi-column `orderBy` and `limit`/`offset` pagination. All
+values are parameterized; column names are validated against injection.
+
+```ts
+ctx.db.find({
+  from: "notes",
+  where: {
+    ownerId: "alice",                       // eq shorthand
+    createdAt: { gte: cutoff },             // gt / gte / lt / lte / ne
+    title: { like: "report-%" },            // like (string columns only)
+    id: { in: [1, 2, 3] },                  // in / notIn
+    OR: [{ pinned: true }, { archivedAt: { isNull: true } }],
+  },
+  orderBy: [{ column: "createdAt", dir: "desc" }, { column: "id" }],
+  limit: 20,
+  offset: 40,
+});
+```
+
 ## Deploy
 
 Cloudflare topology is declared in **`oblaka.ts`** (the source of truth) — the

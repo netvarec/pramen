@@ -74,6 +74,20 @@ const handlers = {
 
   listUsers: query((ctx) => ctx.db.find({ from: "users" })),
 
+  // Passthrough that exercises the full query surface (operators, OR/AND,
+  // multi-column orderBy, limit/offset). ACL row-scope still applies on top.
+  queryNotes: query(
+    (
+      ctx,
+      input: {
+        where?: Parameters<typeof ctx.db.find>[0]["where"];
+        orderBy?: Parameters<typeof ctx.db.find>[0]["orderBy"];
+        limit?: number;
+        offset?: number;
+      },
+    ) => ctx.db.find({ from: "notes", where: input.where, orderBy: input.orderBy, limit: input.limit, offset: input.offset }),
+  ),
+
   createUser: mutation((ctx, input: { id: string; name: string; email: string }) =>
     ctx.db.insert("users", input),
   ),

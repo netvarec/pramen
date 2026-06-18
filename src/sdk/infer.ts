@@ -24,8 +24,28 @@ type Cell<D extends FieldDef> = IsNotNull<D> extends true ? FieldTsType<D> : Fie
 /** Row shape returned from reads. */
 export type InferRow<F extends EntityFields> = { [K in keyof F]: Cell<F[K]> };
 
-/** Equality predicate input: every column optional, value typed (nullable). */
-export type WhereInput<F extends EntityFields> = Partial<{ [K in keyof F]: FieldTsType<F[K]> | null }>;
+/** Operators available on a column predicate. `like` is string-only. */
+export interface WhereOps<V> {
+  eq?: V | null;
+  ne?: V | null;
+  gt?: V;
+  gte?: V;
+  lt?: V;
+  lte?: V;
+  in?: V[];
+  notIn?: V[];
+  like?: V extends string ? string : never;
+  isNull?: boolean;
+}
+
+/** Predicate input: per-column equality shorthand or an operator object, plus
+ * nestable AND/OR groups. */
+export type WhereInput<F extends EntityFields> = {
+  [K in keyof F]?: FieldTsType<F[K]> | null | WhereOps<FieldTsType<F[K]>>;
+} & {
+  AND?: WhereInput<F>[];
+  OR?: WhereInput<F>[];
+};
 
 /** Patch input for updates: every column optional, value typed (nullable). */
 export type InferUpdate<F extends EntityFields> = Partial<{ [K in keyof F]: FieldTsType<F[K]> | null }>;

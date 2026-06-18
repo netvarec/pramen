@@ -9,6 +9,7 @@ import { runAcl } from "./suites/acl";
 import { runResolver } from "./suites/resolver";
 import { runRelation } from "./suites/relation";
 import { runLive } from "./suites/live";
+import { runQuery } from "./suites/query";
 
 const ROOT = join(import.meta.dir, "..");
 const PORT = 8788;
@@ -53,6 +54,7 @@ describe("mrak e2e", () => {
   test("acl + write rules + per-identity live", () => runAcl(BASE, WS), 30_000);
   test("dynamic resolvers", () => runResolver(BASE), 30_000);
   test("relations + nested ACL", () => runRelation(BASE), 30_000);
+  test("query expressiveness (operators, OR/AND, pagination)", () => runQuery(BASE), 30_000);
   test("live queries + row-level invalidation", () => runLive(BASE, WS), 30_000);
 
   test("unknown handler -> 400", async () => {

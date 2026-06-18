@@ -46,6 +46,19 @@ export const readChecks = query((ctx) => {
   // @ts-expect-error unknown orderBy column
   ctx.db.find({ from: "notes", orderBy: { column: "nope" } });
 
+  // operators, OR/AND groups, multi-column orderBy, pagination all type-check
+  ctx.db.find({
+    from: "notes",
+    where: { views: { gte: 1, lt: 100 }, title: { like: "a%" }, OR: [{ pinned: true }, { id: { in: [1, 2] } }] },
+    orderBy: [{ column: "views", dir: "desc" }, { column: "id" }],
+    limit: 10,
+    offset: 20,
+  });
+  // @ts-expect-error like is string-only (views is a number)
+  ctx.db.find({ from: "notes", where: { views: { like: "x" } } });
+  // @ts-expect-error wrong operator value type
+  ctx.db.find({ from: "notes", where: { views: { gt: "big" } } });
+
   return { id, title, pinned };
 });
 
