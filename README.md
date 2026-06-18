@@ -58,7 +58,7 @@ relation loads under the related entity's own read scope, or via a parent policy
 `relations: { owner: { directAccess: true, fields: [...] } }` grant (traversal-only
 access to an otherwise unreadable entity, optionally field-restricted). So an
 author can see `note.owner` (id + name) without being able to list users or see
-their email. Run `bun run scripts/relation-smoke.ts`.
+their email. Covered by `bun test`.
 
 **Write-side ACL.** A write policy may `set` server-controlled columns (forced,
 overriding client input — e.g. `set: { ownerId: (i) => i?.userId }` so a note's
@@ -72,7 +72,7 @@ policy("author:create", "notes", "create", {
 ```
 
 ```bash
-bun run scripts/acl-smoke.ts    # ACL + per-identity live-query test
+bun test    # boots wrangler dev once and runs all e2e suites
 ```
 
 ### Live queries (WebSocket)
@@ -90,10 +90,6 @@ over the socket. Single-writer DOs see every write, so invalidation is exact.
 { "type": "data",   "id": "s1", "result": [ /* ... */ ] }  // initial + every update
 { "type": "result", "id": "c1", "result": { /* ... */ } }  // reply to a call
 { "type": "error",  "id": "s1", "error": "..." }
-```
-
-```bash
-bun run scripts/live-smoke.ts   # end-to-end live-query test against a running dev server
 ```
 
 ## Layout
@@ -118,7 +114,19 @@ src/
     dispatch.ts       handler resolution + storage.transaction() for mutations
 example/
   app.ts              the demo schema + handlers + ACL
+test/
+  e2e.test.ts         boots one wrangler-dev server, runs every suite (bun test)
+  suites/             acl · resolver · relation · live (reusable suite fns)
+  lib.ts              assert + HTTP/WS helpers + JWT minting
 ```
+
+## Tests
+
+`bun test` generates the config from `oblaka.ts`, boots a single `wrangler dev`
+against fresh local state, and runs all suites (each on its own tenant) — ACL +
+write rules + per-identity live queries, dynamic resolvers, relations/nested ACL,
+and live-query row-level invalidation. CI runs typecheck + `bun test` on every
+push/PR (`.github/workflows/ci.yml`); no Cloudflare credentials needed (miniflare).
 
 ### Typed handlers
 

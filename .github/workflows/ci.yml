@@ -1,0 +1,23 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - name: Typecheck
+        run: bun run typecheck
+      - name: E2E tests (wrangler dev + all suites)
+        run: bun test
+        env:
+          # wrangler runs fully local (miniflare); no Cloudflare credentials needed.
+          WRANGLER_SEND_METRICS: "false"

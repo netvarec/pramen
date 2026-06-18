@@ -1,0 +1,66 @@
+// End-to-end suite. Generates wrangler.jsonc from oblaka, boots one wrangler-dev
+// server against fresh local state, and runs every suite against it (each on its
+// own tenant). Run with `bun test`.
+
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { rmSync } from "node:fs";
+import { join } from "node:path";
+import { runAcl } from "./suites/acl";
+import { runResolver } from "./suites/resolver";
+import { runRelation } from "./suites/relation";
+import { runLive } from "./suites/live";
+
+const ROOT = join(import.meta.dir, "..");
+const PORT = 8788;
+const BASE = `http://localhost:${PORT}`;
+const WS = `ws://localhost:${PORT}/live`;
+
+let server: ReturnType<typeof Bun.spawn> | undefined;
+
+async function waitForReady(timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const r = await fetch(BASE, { signal: AbortSignal.timeout(1000) });
+      if (r.ok) return;
+    } catch {
+      /* not up yet */
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  throw new Error("wrangler dev did not become ready in time");
+}
+
+beforeAll(async () => {
+  // Generate wrangler.jsonc from the oblaka source of truth.
+  Bun.spawnSync(["bunx", "oblaka", "oblaka.ts"], { cwd: ROOT });
+  // Fresh local DO state so suites are deterministic (e.g. resolver "before authoring").
+  rmSync(join(ROOT, ".wrangler"), { recursive: true, force: true });
+
+  server = Bun.spawn(["bunx", "wrangler", "dev", "--port", String(PORT)], {
+    cwd: ROOT,
+    stdout: "ignore",
+    stderr: "ignore",
+  });
+  await waitForReady(60_000);
+}, 90_000);
+
+afterAll(() => {
+  server?.kill();
+});
+
+describe("mrak e2e", () => {
+  test("acl + write rules + per-identity live", () => runAcl(BASE, WS), 30_000);
+  test("dynamic resolvers", () => runResolver(BASE), 30_000);
+  test("relations + nested ACL", () => runRelation(BASE), 30_000);
+  test("live queries + row-level invalidation", () => runLive(BASE, WS), 30_000);
+
+  test("unknown handler -> 400", async () => {
+    const r = await fetch(`${BASE}/rpc/nope`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${await (await import("../scripts/jwt")).token("admin", ["admin"])}` },
+      body: "{}",
+    });
+    expect(r.status).toBe(400);
+  });
+});

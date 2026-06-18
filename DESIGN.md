@@ -56,6 +56,16 @@ Worker (src/index.ts)            stateless HTTP front door
 Request: `POST /rpc/createNote` with `{ "title": "...", "body": "..." }`,
 header `X-Mrak-Tenant` selects the store (default `main`).
 
+## Testing
+
+`bun test` (`test/e2e.test.ts`) generates the config from `oblaka.ts`, boots one
+`wrangler dev` against fresh local state, and runs every suite (`test/suites/*`)
+against it, each on its own tenant: ACL + write rules + per-identity live queries,
+dynamic resolvers, relations/nested ACL, and live-query row-level invalidation.
+CI (`.github/workflows/ci.yml`) runs typecheck + `bun test` on push/PR — fully
+local (miniflare), no Cloudflare credentials. Compile-time inference is proven
+separately in `example/inference-check.ts` via `@ts-expect-error` cases.
+
 ## Roadmap
 
 - [x] ACL: `role()`/`policy()`/`allow()`/`deny()`/`$identity()` in `sdk/acl.ts`; resolution in
