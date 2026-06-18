@@ -47,6 +47,7 @@ live-query invalidation is exact).
 | **ACL** | Deny-by-default; roles/policies; row-level `where` scopes (with operators + `$identity`), field projection, relation/`directAccess` traversal, dynamic `resolve()`, write-side `set`/`validate`. Per-identity. | `src/sdk/acl.ts`, `src/runtime/acl.ts` |
 | **Read engine** | `SqlExpr` AST + `compileWhere/compileSelect/compileCount/compileAggregate`. Operators, AND/OR, multi-orderBy, limit/offset, keyset cursor, count/aggregates. Identifiers validated; values parameterized. | `src/runtime/read-engine.ts` |
 | **Repository** | The single ACL chokepoint: `find/page/count/aggregate/insert/update/delete`, eager relation loads (batched `IN`), field projection. | `src/runtime/db.ts` |
+| **KV (ctx.kv)** | Handlers get a prefixed (`app:`) KV wrapper for GLOBAL (cross-tenant) config/flags/cache — not per-tenant, not transactional. | `src/runtime/kv.ts` |
 | **Reactivity** | Live queries over Hibernatable WebSockets; per-socket identity + subscriptions in `serializeAttachment`; table-prefilter + per-subscription result digest for row-level pushes; sub cap. | `src/durable-object.ts`, `src/runtime/{protocol,digest}.ts` |
 | **Migrations** | On DO boot: create tables + additive `ADD COLUMN`, gated by a schema hash in `_mrak_meta`. No data loss. | `src/runtime/{migrate,ddl}.ts` |
 | **Errors** | Typed envelope `{ ok, error, code }` + status; internal errors logged, returned as generic 500. | `src/runtime/errors.ts` |
@@ -64,7 +65,7 @@ dynamic resolvers → typed inference → verified JWT auth → relations + nest
 CI → query operators/OR-AND/pagination → schema migrations → hardening (safe
 errors, input validation, batched relations, WS limits) → cursor pagination →
 count + aggregates → operators in ACL where rules → tenant registry → tenant
-authorization + admin point-in-time recovery.
+authorization + admin point-in-time recovery → ctx.kv + per-project naming.
 
 Every feature is verified by an e2e suite (`test/suites/*`) and, where it's
 type-level, by `example/inference-check.ts` (`@ts-expect-error` cases). All green.

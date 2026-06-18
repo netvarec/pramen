@@ -11,6 +11,7 @@
 import { Db } from "./db";
 import { warmup, type AclContext } from "./acl";
 import { BadRequest } from "./errors";
+import type { Kv } from "./kv";
 import type { ResolverDb } from "../sdk/acl";
 import type { SchemaDef } from "../sdk/schema";
 import type { HandlerContext, HandlerKind, HandlerMap } from "../sdk/handlers";
@@ -25,6 +26,7 @@ export async function dispatch(
   handlers: HandlerMap,
   schema: SchemaDef,
   storage: DurableObjectStorage,
+  kv: Kv,
   acl: AclContext,
   name: string,
   input: unknown,
@@ -48,7 +50,7 @@ export async function dispatch(
   const resolved = await warmup(acl.acl, acl.identity, systemDb as unknown as ResolverDb);
 
   const db = new Db(storage.sql, { acl: acl.acl, identity: acl.identity, resolved }, schema);
-  const ctx: HandlerContext = { db, identity: acl.identity };
+  const ctx: HandlerContext = { db, kv, identity: acl.identity };
 
   const result =
     handler.kind === "query"

@@ -261,6 +261,25 @@ curl -s -X POST http://localhost:8787/admin/recover -H "authorization: Bearer $A
 > mrak arms the restore and returns the `undo` bookmark; it completes on the DO's
 > next restart (we don't auto-`abort()`, so the call can return the bookmark).
 
+### KV (ctx.kv)
+
+Handlers get `ctx.kv` — the project's KV namespace for **global, cross-tenant**
+config / feature flags / caches (per-tenant data belongs in `ctx.db`). It's keyed
+under an `app:` prefix so it never collides with mrak-internal keys, and it is
+**not** part of a mutation's transaction.
+
+```ts
+getFlag: query((ctx, input: { key: string }) => ctx.kv.get(`flag:${input.key}`, "json")),
+setFlag: mutation((ctx, input: { key: string; value: string }) =>
+  ctx.kv.put(`flag:${input.key}`, input.value),
+);
+```
+
+**Multiple projects in one account:** Cloudflare resource names are account-global,
+so each project sets a unique `PROJECT` in `oblaka.ts` — it names the Worker, the
+DO, and the KV namespace, so projects never collide. Within a project, one KV
+namespace holds both the registry (`tenant:`) and app (`app:`) keys.
+
 ### Migrations
 
 The schema is reconciled with the store on every DO boot — new tables are created

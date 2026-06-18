@@ -3,12 +3,16 @@
 // rolls back on throw (see runtime/dispatch.ts).
 
 import type { Db } from "../runtime/db";
+import type { Kv } from "../runtime/kv";
 import type { Identity } from "./acl";
 import type { SchemaDef } from "./schema";
 
 export interface HandlerContext<S extends SchemaDef = SchemaDef> {
   /** Schema-typed repository: find/insert/update/delete inferred from S. */
   readonly db: Db<S>;
+  /** Project KV — global (cross-tenant) config/flags/cache. Not per-tenant
+   * (that's db) and not transactional. */
+  readonly kv: Kv;
   /** Resolved identity for this request (null = anonymous). */
   readonly identity: Identity | null;
 }

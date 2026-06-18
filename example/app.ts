@@ -105,6 +105,12 @@ const handlers = {
   // References the `body` column — denied for roles that can't read it.
   maxBody: query((ctx) => ctx.db.aggregate({ from: "notes", aggregations: { m: { fn: "max", column: "body" } } })),
 
+  // ctx.kv — GLOBAL (cross-tenant) config/cache, not per-tenant data (use db for that).
+  getConfig: query((ctx, input: { key: string }) => ctx.kv.get(`config:${input.key}`)),
+  setConfig: mutation((ctx, input: { key: string; value: string }) =>
+    ctx.kv.put(`config:${input.key}`, input.value).then(() => ({ key: input.key, value: input.value })),
+  ),
+
   // Passthrough that exercises the full query surface (operators, OR/AND,
   // multi-column orderBy, limit/offset). ACL row-scope still applies on top.
   queryNotes: query(

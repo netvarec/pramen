@@ -9,8 +9,8 @@ import type { Identity } from "./sdk/acl";
 
 export interface Env {
   MRAK: DurableObjectNamespace;
-  /** Tenant registry — lets admins enumerate tenants (DOs aren't enumerable). */
-  TENANTS: KVNamespace;
+  /** Project KV — tenant registry (`tenant:` keys) + handler ctx.kv (`app:` keys). */
+  KV: KVNamespace;
   /** HMAC secret for verifying bearer JWTs. Dev value in wrangler.jsonc;
    * production via `wrangler secret put AUTH_SECRET`. */
   AUTH_SECRET: string;
@@ -28,7 +28,7 @@ export default {
     // --- admin: list known tenants ---
     if (url.pathname === "/tenants") {
       if (!isAdmin(identity)) return forbidden("tenants");
-      const list = await env.TENANTS.list({ prefix: "tenant:" });
+      const list = await env.KV.list({ prefix: "tenant:" });
       return json({ ok: true, result: list.keys.map((k) => k.name.slice("tenant:".length)) });
     }
 

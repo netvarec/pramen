@@ -121,6 +121,13 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
       restore and returns the `undo` bookmark (reversible); it does NOT auto-`abort()`, so the call can
       return the bookmark — the restore completes on the DO's next restart. PITR is platform-only
       (local dev → 501 `unavailable`); the happy path is verified only against a deployed DO.
+- [x] ctx.kv + multi-project naming: handlers get `ctx.kv`, a prefixed (`app:`) wrapper over the
+      project's KV namespace, for GLOBAL (cross-tenant) config/flags/cache — distinct from per-tenant
+      `ctx.db`, and not part of mutation transactions. Two-level namespacing: across projects, a
+      `PROJECT` constant in `oblaka.ts` names every resource (Worker/DO/KV) so projects coexist in one
+      account; within a project's single KV namespace, key prefixes separate internal (`tenant:`) from
+      app (`app:`) data. Next: per-tenant KV scope option; let handlers throw clean HTTP errors (e.g.
+      forbidden) so KV/app-level auth checks don't surface as 500s.
 - [ ] Dynamic deploy: ship the app bundle to the DO instead of static import (cf. the prior runtime `/deploy`).
 - [ ] ReadEngine → WASM.
 - [x] Deploy via **oblaka** (CF IaC DSL): `oblaka.ts` declares the Worker + `MRAK` Durable Object

@@ -20,6 +20,7 @@ import { dispatch } from "./runtime/dispatch";
 import { digest } from "./runtime/digest";
 import { compileAcl, type AclContext, type CompiledAcl } from "./runtime/acl";
 import { BadRequest, toResponse, toWsError } from "./runtime/errors";
+import { Kv } from "./runtime/kv";
 import type { Identity } from "./sdk/acl";
 import type { ClientMsg, ServerMsg, Subscription } from "./runtime/protocol";
 
@@ -29,8 +30,8 @@ interface SocketState {
 }
 
 export interface DoEnv {
-  /** Tenant registry — DOs aren't enumerable, so we record each tenant here. */
-  TENANTS: KVNamespace;
+  /** Project KV — tenant registry (`tenant:`) + handler ctx.kv (`app:`). */
+  KV: KVNamespace;
 }
 
 /** Per-socket subscription cap — bounds memory and per-mutation re-run cost. */
@@ -38,11 +39,13 @@ const MAX_SUBSCRIPTIONS = 64;
 
 export class MrakDO extends DurableObject<DoEnv> {
   private readonly acl: CompiledAcl;
+  private readonly kv: Kv;
   private registered = false;
 
   constructor(ctx: DurableObjectState, env: DoEnv) {
     super(ctx, env);
     this.acl = compileAcl(app.acl ?? []);
+    this.kv = new Kv(env.KV); // app:-prefixed, handed to handlers as ctx.kv
 
     // Reconcile the SQLite store with the schema before any request is served
     // (create tables, add new columns; no data loss).
@@ -72,7 +75,7 @@ export class MrakDO extends DurableObject<DoEnv> {
     }
 
     try {
-      const { result, kind, touched } = await dispatch(app.handlers, app.schema, this.ctx.storage, this.ctxFor(identity), name, input);
+      const { result, kind, touched } = await dispatch(app.handlers, app.schema, this.ctx.storage, this.kv, this.ctxFor(identity), name, input);
       if (kind === "mutation" && touched.length > 0) await this.broadcast(touched);
       return Response.json({ ok: true, result });
     } catch (err) {
@@ -128,7 +131,7 @@ export class MrakDO extends DurableObject<DoEnv> {
       if (!replacing && state.subs.length >= MAX_SUBSCRIPTIONS) {
         return this.send(ws, toWsError(id, new BadRequest("subscription limit reached")));
       }
-      const { result, kind, touched } = await dispatch(app.handlers, app.schema, this.ctx.storage, this.ctxFor(state.identity), name, input);
+      const { result, kind, touched } = await dispatch(app.handlers, app.schema, this.ctx.storage, this.kv, this.ctxFor(state.identity), name, input);
       if (kind !== "query") {
         return this.send(ws, toWsError(id, new BadRequest(`${name} is not a query`)));
       }
@@ -144,7 +147,7 @@ export class MrakDO extends DurableObject<DoEnv> {
   private async onCall(ws: WebSocket, id: string, name: string, input: unknown): Promise<void> {
     const state = this.getState(ws);
     try {
-      const { result, kind, touched } = await dispatch(app.handlers, app.schema, this.ctx.storage, this.ctxFor(state.identity), name, input);
+      const { result, kind, touched } = await dispatch(app.handlers, app.schema, this.ctx.storage, this.kv, this.ctxFor(state.identity), name, input);
       this.send(ws, { type: "result", id, result });
       if (kind === "mutation" && touched.length > 0) await this.broadcast(touched);
     } catch (err) {
@@ -162,7 +165,7 @@ export class MrakDO extends DurableObject<DoEnv> {
       for (const sub of state.subs) {
         if (!sub.tables.some((t) => written.has(t))) continue;
         try {
-          const { result } = await dispatch(app.handlers, app.schema, this.ctx.storage, this.ctxFor(state.identity), sub.name, sub.input);
+          const { result } = await dispatch(app.handlers, app.schema, this.ctx.storage, this.kv, this.ctxFor(state.identity), sub.name, sub.input);
           const next = digest(result);
           if (next === sub.digest) continue; // result unchanged for this subscription
           sub.digest = next;
@@ -192,7 +195,7 @@ export class MrakDO extends DurableObject<DoEnv> {
       this.registered = true;
       return;
     }
-    await this.env.TENANTS.put(`tenant:${name}`, JSON.stringify({ firstSeen: Date.now() }));
+    await this.env.KV.put(`tenant:${name}`, JSON.stringify({ firstSeen: Date.now() }));
     this.ctx.storage.sql.exec(`INSERT OR REPLACE INTO _mrak_meta (key, value) VALUES ('registered', ?)`, name);
     this.registered = true;
   }

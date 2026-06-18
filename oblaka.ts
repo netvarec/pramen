@@ -10,6 +10,11 @@
 
 import { define, DurableObject, KVNamespace, Worker } from "oblaka-iac";
 
+// One name to namespace every resource this project owns. Cloudflare resource
+// names are account-global, so set a unique PROJECT per app and all its resources
+// (Worker, DO, KV) get distinct names — many mrak projects coexist in one account.
+const PROJECT = "mrak";
+
 export default define(({ env }) => {
   // AUTH_SECRET: a dev value locally; in real envs set it as a secret with
   // `wrangler secret put AUTH_SECRET` (a secret overrides this var at runtime).
@@ -17,7 +22,7 @@ export default define(({ env }) => {
 
   return new Worker({
     dir: ".",
-    name: "mrak",
+    name: PROJECT,
     main: "./src/index.ts",
     compatibility_date: "2026-06-18",
     compatibility_flags: ["nodejs_compat"],
@@ -25,10 +30,10 @@ export default define(({ env }) => {
     bindings: {
       // The DO is the database. oblaka emits the binding + the SQLite migration
       // (new_sqlite_classes: ["MrakDO"]) into wrangler.jsonc automatically.
-      MRAK: new DurableObject({ name: "mrak-store", className: "MrakDO" }),
-      // Tenant registry — DOs aren't enumerable, so each tenant records its name
-      // here (once, from its DO's first touch) to stay discoverable.
-      TENANTS: new KVNamespace({ name: "mrak-tenants" }),
+      MRAK: new DurableObject({ name: `${PROJECT}-store`, className: "MrakDO" }),
+      // One KV namespace per project. Holds the tenant registry (`tenant:` keys)
+      // and handler-facing ctx.kv data (`app:` keys); see src/runtime/kv.ts.
+      KV: new KVNamespace({ name: `${PROJECT}-kv` }),
     },
     vars,
   });
