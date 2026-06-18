@@ -80,4 +80,9 @@ header `X-Mrak-Tenant` selects the store (default `main`).
 - [ ] Dynamic deploy: ship the app bundle to the DO instead of static import (cf. the prior runtime `/deploy`).
 - [ ] ReadEngine → WASM.
 - [ ] Deploy via **oblaka** (CF IaC DSL); local dev via **lopata**.
-- [ ] Typed query/insert inference in the SDK (mirror the schema layer `WhereInput`/`InferInsert`).
+- [x] Typed query/insert inference: field builders preserve literals (`as const`); `sdk/infer.ts`
+      derives `InferRow`/`WhereInput`/`InferInsert`/`InferUpdate` (mirroring the schema layer). `Db<S>` is
+      generic, and `createApp(schema)` binds the handler factories so `ctx.db` is fully typed — table
+      names, where columns/values, row results, insert/patch shapes. Compile-time proof in
+      `example/inference-check.ts` (9 `@ts-expect-error` cases). Note: ACL field projection can drop
+      columns at runtime, so a projected row is narrower than its static type — known unsoundness.

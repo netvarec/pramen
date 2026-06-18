@@ -3,7 +3,7 @@
 // for the v0 skeleton the DO imports it statically.
 
 import { Entity, defineSchema } from "../src/sdk/schema";
-import { mutation, query } from "../src/sdk/handlers";
+import { createApp } from "../src/sdk/app";
 import { $identity, allow, deny, policy, resolve, role } from "../src/sdk/acl";
 
 const schema = defineSchema({
@@ -15,6 +15,9 @@ const schema = defineSchema({
     createdAt: t.int(),
   })),
 });
+
+// Handlers bound to this schema — ctx.db is fully typed against it.
+const { query, mutation } = createApp(schema);
 
 const handlers = {
   listNotes: query((ctx) =>
@@ -30,7 +33,7 @@ const handlers = {
     ctx.db.insert("notes", {
       title: input.title,
       body: input.body,
-      ownerId: ctx.identity?.userId ?? null,
+      ownerId: (ctx.identity?.userId as string | undefined) ?? null,
       createdAt: Date.now(),
     }),
   ),

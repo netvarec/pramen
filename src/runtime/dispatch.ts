@@ -10,6 +10,7 @@
 
 import { Db } from "./db";
 import { warmup, type AclContext } from "./acl";
+import type { ResolverDb } from "../sdk/acl";
 import type { HandlerContext, HandlerKind, HandlerMap } from "../sdk/handlers";
 
 export interface DispatchResult {
@@ -31,7 +32,7 @@ export async function dispatch(
   // Warmup: evaluate dynamic resolvers once, reading through a SYSTEM-mode db
   // (separate from the handler's db, so its reads don't pollute `touched`).
   const systemDb = new Db(storage.sql, { acl: acl.acl, identity: acl.identity, system: true });
-  const resolved = await warmup(acl.acl, acl.identity, systemDb);
+  const resolved = await warmup(acl.acl, acl.identity, systemDb as unknown as ResolverDb);
 
   const db = new Db(storage.sql, { acl: acl.acl, identity: acl.identity, resolved });
   const ctx: HandlerContext = { db, identity: acl.identity };

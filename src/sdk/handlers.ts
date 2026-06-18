@@ -4,9 +4,11 @@
 
 import type { Db } from "../runtime/db";
 import type { Identity } from "./acl";
+import type { SchemaDef } from "./schema";
 
-export interface HandlerContext {
-  readonly db: Db;
+export interface HandlerContext<S extends SchemaDef = SchemaDef> {
+  /** Schema-typed repository: find/insert/update/delete inferred from S. */
+  readonly db: Db<S>;
   /** Resolved identity for this request (null = anonymous). */
   readonly identity: Identity | null;
 }
@@ -15,9 +17,13 @@ export type HandlerKind = "query" | "mutation";
 
 export interface Handler<I = unknown, O = unknown> {
   readonly kind: HandlerKind;
-  readonly run: (ctx: HandlerContext, input: I) => O | Promise<O>;
+  // Stored handlers are schema-agnostic; createApp() binds the typed surface.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  readonly run: (ctx: HandlerContext<any>, input: I) => O | Promise<O>;
 }
 
+// Standalone (schema-agnostic) handler factories. Prefer createApp(schema) for a
+// typed ctx.db; these remain for untyped/ad-hoc use.
 export function query<I = unknown, O = unknown>(
   run: (ctx: HandlerContext, input: I) => O | Promise<O>,
 ): Handler<I, O> {

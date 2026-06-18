@@ -71,8 +71,11 @@ src/
   index.ts            Worker entry — routes /rpc/<name> to the per-tenant DO
   durable-object.ts   MrakDO — in-process SQLite store, schema boot, dispatch
   sdk/                portable SDK (no platform dep)
-    schema.ts         Entity() + defineSchema()
-    handlers.ts       query() / mutation()
+    schema.ts         Entity() + defineSchema() (field literals preserved)
+    infer.ts          InferRow / WhereInput / InferInsert / InferUpdate
+    app.ts            createApp(schema) -> typed query() / mutation()
+    handlers.ts       query() / mutation() (untyped, schema-agnostic)
+    acl.ts            role() / policy() / allow() / deny() / $identity() / resolve()
   runtime/            substrate glue
     ddl.ts            SchemaDef -> CREATE TABLE
     read-engine.ts    structured query -> parameterized SQL (TS; WASM later)
@@ -80,6 +83,23 @@ src/
     dispatch.ts       handler resolution + BEGIN/COMMIT for mutations
 example/
   app.ts              the demo schema + handlers
+```
+
+### Typed handlers
+
+`createApp(schema)` returns `query`/`mutation` whose `ctx.db` is fully inferred
+from the schema — table names, `where` columns and value types, row results, and
+insert/patch shapes are all checked at compile time.
+
+```ts
+const { query, mutation } = createApp(schema);
+
+const listNotes = query((ctx) =>
+  ctx.db.find({ from: "notes", orderBy: { column: "createdAt", dir: "desc" } }),
+);                              // rows typed: { id: number; title: string | null; ... }
+
+// ctx.db.find({ from: "nope" })            -> type error: unknown table
+// ctx.db.find({ where: { title: 123 } })   -> type error: title is string
 ```
 
 ## Deploy

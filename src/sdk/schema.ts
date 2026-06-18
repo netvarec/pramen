@@ -1,6 +1,7 @@
 // Schema definition — the portable layer. Mirrors the prior runtime's `Entity(it => ({...}))`
-// factory and `defineSchema({...})`. No platform dependency; this is what stays
-// identical whether the substrate is Rust+Turso or Worker+Durable Object.
+// factory and `defineSchema({...})`. Field builders return `as const` literals so
+// the exact field shape survives into the type system; sdk/infer.ts turns that
+// shape into row/where/insert types.
 
 export type FieldType = "text" | "integer" | "real" | "boolean";
 
@@ -12,21 +13,21 @@ export interface FieldDef {
 }
 
 const builders = {
-  id: (): FieldDef => ({ type: "integer", primaryKey: true, autoIncrement: true, notNull: true }),
-  text: (): FieldDef => ({ type: "text" }),
-  int: (): FieldDef => ({ type: "integer" }),
-  real: (): FieldDef => ({ type: "real" }),
-  bool: (): FieldDef => ({ type: "boolean" }),
+  id: () => ({ type: "integer", primaryKey: true, autoIncrement: true, notNull: true }) as const,
+  text: () => ({ type: "text" }) as const,
+  int: () => ({ type: "integer" }) as const,
+  real: () => ({ type: "real" }) as const,
+  bool: () => ({ type: "boolean" }) as const,
 };
 
 export type FieldBuilders = typeof builders;
 export type EntityFields = Record<string, FieldDef>;
 
-export interface EntityDef {
-  readonly fields: EntityFields;
+export interface EntityDef<F extends EntityFields = EntityFields> {
+  readonly fields: F;
 }
 
-export function Entity(build: (t: FieldBuilders) => EntityFields): EntityDef {
+export function Entity<F extends EntityFields>(build: (t: FieldBuilders) => F): EntityDef<F> {
   return { fields: build(builders) };
 }
 
