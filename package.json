@@ -5,12 +5,15 @@
   "description": "Reactive backend runtime for TypeScript on Cloudflare — schema + handlers, deployed as Workers + Durable Objects.",
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "config": "oblaka oblaka.ts",
+    "dev": "oblaka oblaka.ts && wrangler dev",
+    "deploy": "oblaka oblaka.ts --remote && wrangler deploy",
+    "plan": "oblaka oblaka.ts --remote --dry-run",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250101.0",
+    "oblaka-iac": "^0.0.14",
     "typescript": "^5.7.0",
     "wrangler": "^4.101.0"
   }

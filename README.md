@@ -99,22 +99,25 @@ bun run scripts/live-smoke.ts   # end-to-end live-query test against a running d
 ## Layout
 
 ```
+oblaka.ts             IaC source of truth -> generates wrangler.jsonc
 src/
-  index.ts            Worker entry — routes /rpc/<name> to the per-tenant DO
-  durable-object.ts   MrakDO — in-process SQLite store, schema boot, dispatch
+  index.ts            Worker entry — verifies JWT, routes to the per-tenant DO
+  auth.ts             HS256 JWT verification (claims -> Identity)
+  durable-object.ts   MrakDO — in-process SQLite, schema boot, dispatch, live queries
   sdk/                portable SDK (no platform dep)
     schema.ts         Entity() + defineSchema() + relations (belongsTo/hasMany)
-    infer.ts          InferRow / WhereInput / InferInsert / InferUpdate
+    infer.ts          InferRow / WhereInput / InferInsert / InferUpdate / relations
     app.ts            createApp(schema) -> typed query() / mutation()
     handlers.ts       query() / mutation() (untyped, schema-agnostic)
-    acl.ts            role() / policy() / allow() / deny() / $identity() / resolve()
+    acl.ts            role/policy/allow/deny/$identity/resolve + set/validate
   runtime/            substrate glue
     ddl.ts            SchemaDef -> CREATE TABLE
-    read-engine.ts    structured query -> parameterized SQL (TS; WASM later)
-    db.ts             repository over ctx.storage.sql
-    dispatch.ts       handler resolution + BEGIN/COMMIT for mutations
+    read-engine.ts    structured query + SqlExpr -> parameterized SQL (TS; WASM later)
+    acl.ts            scope resolution, relation scopes, warmup, write rules
+    db.ts             ACL-enforcing repository over ctx.storage.sql (+ eager loading)
+    dispatch.ts       handler resolution + storage.transaction() for mutations
 example/
-  app.ts              the demo schema + handlers
+  app.ts              the demo schema + handlers + ACL
 ```
 
 ### Typed handlers
@@ -136,6 +139,21 @@ const listNotes = query((ctx) =>
 
 ## Deploy
 
+Cloudflare topology is declared in **`oblaka.ts`** (the source of truth) — the
+Worker, the `MRAK` Durable Object, its SQLite migration, vars, and observability.
+`oblaka` generates `wrangler.jsonc` from it (git-ignored; never edit by hand).
+
 ```bash
-bun run deploy         # wrangler deploy
+bun run config         # oblaka oblaka.ts        -> generate wrangler.jsonc (local)
+bun run dev            # regenerate + wrangler dev
+bun run plan           # oblaka --remote --dry-run -> preview the remote changes
+
+# Real deploy: provision resources via oblaka, then ship the code via wrangler.
+export CLOUDFLARE_ACCOUNT_ID=... CLOUDFLARE_API_TOKEN=...
+wrangler secret put AUTH_SECRET   # production auth secret (overrides the dev var)
+bun run deploy --env production    # oblaka --remote (provision + config) && wrangler deploy
 ```
+
+`oblaka --remote` provisions the Worker + Durable Object (and the SQLite DO
+migration) on Cloudflare and writes the config; `wrangler deploy` bundles and
+uploads `src/index.ts`.

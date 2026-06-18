@@ -94,7 +94,13 @@ header `X-Mrak-Tenant` selects the store (default `main`).
       delta payloads (send changed rows, not the whole result).
 - [ ] Dynamic deploy: ship the app bundle to the DO instead of static import (cf. the prior runtime `/deploy`).
 - [ ] ReadEngine → WASM.
-- [ ] Deploy via **oblaka** (CF IaC DSL); local dev via **lopata**.
+- [x] Deploy via **oblaka** (CF IaC DSL): `oblaka.ts` declares the Worker + `MRAK` Durable Object
+      (oblaka auto-emits the SQLite migration), vars, and observability, and is the source of truth —
+      it generates `wrangler.jsonc` (git-ignored). `bun run config` generates locally; `bun run deploy`
+      runs `oblaka --remote` (provision resources + config) then `wrangler deploy` (bundle + upload
+      code). Verified the generated config runs the full suite under `wrangler dev`. Next: local dev
+      via **lopata**; mark AUTH_SECRET as a managed secret (oblaka has no secret DSL yet — uses
+      `wrangler secret put`).
 - [x] Typed query/insert inference: field builders preserve literals (`as const`); `sdk/infer.ts`
       derives `InferRow`/`WhereInput`/`InferInsert`/`InferUpdate` (mirroring the schema layer). `Db<S>` is
       generic, and `createApp(schema)` binds the handler factories so `ctx.db` is fully typed — table
