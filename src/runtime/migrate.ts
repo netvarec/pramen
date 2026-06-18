@@ -26,7 +26,7 @@ function ident(name: string): string {
   return name;
 }
 
-function schemaHash(schema: SchemaDef): string {
+export function schemaHash(schema: SchemaDef): string {
   const canon: Record<string, unknown> = {};
   for (const [table, def] of Object.entries(schema)) canon[table] = def.fields;
   return digest(canon);

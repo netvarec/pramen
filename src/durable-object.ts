@@ -57,7 +57,9 @@ export class MrakDO extends DurableObject<DoEnv> {
   override async fetch(request: Request): Promise<Response> {
     await this.ensureRegistered(request);
 
-    if (new URL(request.url).pathname === "/__recover") return this.handleRecover(request);
+    const path = new URL(request.url).pathname;
+    if (path === "/__recover") return this.handleRecover(request);
+    if (path === "/__schema") return this.handleSchema();
 
     const identity = this.identityOf(request);
 
@@ -230,6 +232,21 @@ export class MrakDO extends DurableObject<DoEnv> {
         { status: 501 },
       );
     }
+  }
+
+  // Introspection: this tenant's applied schema hash + live table/column shape
+  // (admin-gated at the Worker). Powers the CLI's `schema status`.
+  private handleSchema(): Response {
+    const sql = this.ctx.storage.sql;
+    const hashRow = sql.exec(`SELECT value FROM _mrak_meta WHERE key = 'schema_hash'`).toArray() as { value: string }[];
+    const tableRows = sql
+      .exec(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name <> '_mrak_meta'`)
+      .toArray() as { name: string }[];
+    const tables: Record<string, string[]> = {};
+    for (const { name } of tableRows) {
+      tables[name] = (sql.exec(`PRAGMA table_info(${name})`).toArray() as { name: string }[]).map((r) => r.name);
+    }
+    return Response.json({ ok: true, result: { hash: hashRow[0]?.value ?? null, tables } });
   }
 
   private ctxFor(identity: Identity | null): AclContext {

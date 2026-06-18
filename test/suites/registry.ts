@@ -29,4 +29,12 @@ export async function runRegistry(base: string): Promise<void> {
 
   const asAnon = await listTenants();
   assert(asAnon.status === 403, "anonymous cannot list tenants");
+
+  // admin schema introspection (powers `mrak schema status`)
+  const schema = await fetch(`${base}/admin/schema?tenant=${probe}`, { headers: { authorization: `Bearer ${admin}` } });
+  const schemaBody = await schema.json();
+  assert(schema.status === 200 && typeof schemaBody.result?.hash === "string", "admin can read a tenant's applied schema");
+  assert(Array.isArray(schemaBody.result.tables?.notes), "schema introspection lists tables/columns");
+  const schemaDenied = await fetch(`${base}/admin/schema?tenant=${probe}`, { headers: { authorization: `Bearer ${reader}` } });
+  assert(schemaDenied.status === 403, "non-admin cannot read schema");
 }
