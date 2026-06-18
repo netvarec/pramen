@@ -52,6 +52,14 @@ only — mint a token with `sub` = the owner), `reader` (reads all, no `body`),
 `member` (read unlocked dynamically once you've authored a note). Live
 subscriptions inherit the connecting identity, so pushes respect row-level scope.
 
+**Relations & nested ACL.** Entities declare `belongsTo`/`hasMany`; eager-load via
+`find({ with: { owner: true } })`. Each traversal is independently ACL-checked: a
+relation loads under the related entity's own read scope, or via a parent policy's
+`relations: { owner: { directAccess: true, fields: [...] } }` grant (traversal-only
+access to an otherwise unreadable entity, optionally field-restricted). So an
+author can see `note.owner` (id + name) without being able to list users or see
+their email. Run `bun run scripts/relation-smoke.ts`.
+
 ```bash
 bun run scripts/acl-smoke.ts    # ACL + per-identity live-query test
 ```
@@ -84,7 +92,7 @@ src/
   index.ts            Worker entry — routes /rpc/<name> to the per-tenant DO
   durable-object.ts   MrakDO — in-process SQLite store, schema boot, dispatch
   sdk/                portable SDK (no platform dep)
-    schema.ts         Entity() + defineSchema() (field literals preserved)
+    schema.ts         Entity() + defineSchema() + relations (belongsTo/hasMany)
     infer.ts          InferRow / WhereInput / InferInsert / InferUpdate
     app.ts            createApp(schema) -> typed query() / mutation()
     handlers.ts       query() / mutation() (untyped, schema-agnostic)

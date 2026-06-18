@@ -6,12 +6,20 @@ import { Entity, defineSchema } from "../src/sdk/schema";
 import { createApp } from "../src/sdk/app";
 
 const schema = defineSchema({
-  notes: Entity((t) => ({
-    id: t.id(),
-    title: t.text(),
-    views: t.int(),
-    pinned: t.bool(),
-  })),
+  users: Entity(
+    (t) => ({ id: t.textId(), name: t.text() }),
+    (r) => ({ notes: r.hasMany("notes", "ownerId") }),
+  ),
+  notes: Entity(
+    (t) => ({
+      id: t.id(),
+      title: t.text(),
+      views: t.int(),
+      pinned: t.bool(),
+      ownerId: t.text(),
+    }),
+    (r) => ({ owner: r.belongsTo("users", "ownerId") }),
+  ),
 });
 
 const { query, mutation } = createApp(schema);
@@ -39,6 +47,21 @@ export const readChecks = query((ctx) => {
   ctx.db.find({ from: "notes", orderBy: { column: "nope" } });
 
   return { id, title, pinned };
+});
+
+export const relationChecks = query((ctx) => {
+  // belongsTo: owner is the users row (or null).
+  const notes = ctx.db.find({ from: "notes", with: { owner: true } });
+  const ownerName: string | null | undefined = notes[0]?.owner?.name;
+
+  // hasMany: notes is an array of note rows.
+  const users = ctx.db.find({ from: "users", with: { notes: true } });
+  const firstTitle: string | null | undefined = users[0]?.notes?.[0]?.title;
+
+  // @ts-expect-error unknown relation
+  ctx.db.find({ from: "notes", with: { author: true } });
+
+  return { ownerName, firstTitle };
 });
 
 export const writeChecks = mutation((ctx) => {

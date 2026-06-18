@@ -55,11 +55,24 @@ export function deny(): DenyMarker {
 /** A where rule: column -> value, where value may be a literal or an $identity marker. */
 export type WhereRule = Record<string, unknown | IdentityMarker>;
 
+/** Per-relation ACL inside a parent read policy. */
+export interface RelationAclRule {
+  /** Permit traversal to the related entity via this relation even if it has no
+   * flat read grant (the prior runtime's directAccess). */
+  directAccess?: boolean;
+  /** Extra row-level predicate applied when traversing. */
+  where?: WhereRule;
+  /** Restrict fields visible through the relation. */
+  fields?: string[];
+}
+
 export interface PolicyRules {
   /** Row-level predicate (AND of equalities). Omit/empty = all rows. */
   where?: WhereRule;
   /** Permitted fields. Omit = all fields. On read = projection; on write = settable columns. */
   fields?: string[];
+  /** Per-relation traversal rules (see RelationAclRule). */
+  relations?: Record<string, RelationAclRule>;
 }
 
 // --- dynamic resolvers: a policy whose rule is computed per request ---

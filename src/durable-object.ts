@@ -58,7 +58,7 @@ export class MrakDO extends DurableObject {
     }
 
     try {
-      const { result, kind, touched } = await dispatch(app.handlers, this.ctx.storage, this.ctxFor(identity), name, input);
+      const { result, kind, touched } = await dispatch(app.handlers, app.schema, this.ctx.storage, this.ctxFor(identity), name, input);
       if (kind === "mutation" && touched.length > 0) await this.broadcast(touched);
       return Response.json({ ok: true, result });
     } catch (err) {
@@ -101,7 +101,7 @@ export class MrakDO extends DurableObject {
   private async onSubscribe(ws: WebSocket, id: string, name: string, input: unknown): Promise<void> {
     const state = this.getState(ws);
     try {
-      const { result, kind, touched } = await dispatch(app.handlers, this.ctx.storage, this.ctxFor(state.identity), name, input);
+      const { result, kind, touched } = await dispatch(app.handlers, app.schema, this.ctx.storage, this.ctxFor(state.identity), name, input);
       if (kind !== "query") {
         return this.send(ws, { type: "error", id, error: `${name} is not a query` });
       }
@@ -117,7 +117,7 @@ export class MrakDO extends DurableObject {
   private async onCall(ws: WebSocket, id: string, name: string, input: unknown): Promise<void> {
     const state = this.getState(ws);
     try {
-      const { result, kind, touched } = await dispatch(app.handlers, this.ctx.storage, this.ctxFor(state.identity), name, input);
+      const { result, kind, touched } = await dispatch(app.handlers, app.schema, this.ctx.storage, this.ctxFor(state.identity), name, input);
       this.send(ws, { type: "result", id, result });
       if (kind === "mutation" && touched.length > 0) await this.broadcast(touched);
     } catch (err) {
@@ -135,7 +135,7 @@ export class MrakDO extends DurableObject {
       for (const sub of state.subs) {
         if (!sub.tables.some((t) => written.has(t))) continue;
         try {
-          const { result } = await dispatch(app.handlers, this.ctx.storage, this.ctxFor(state.identity), sub.name, sub.input);
+          const { result } = await dispatch(app.handlers, app.schema, this.ctx.storage, this.ctxFor(state.identity), sub.name, sub.input);
           const next = digest(result);
           if (next === sub.digest) continue; // result unchanged for this subscription
           sub.digest = next;

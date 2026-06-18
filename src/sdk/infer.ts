@@ -3,7 +3,7 @@
 // runtime. Relies on field builders preserving literals (`as const`), so e.g.
 // `t.id()` is `{ type: "integer"; primaryKey: true; autoIncrement: true; notNull: true }`.
 
-import type { EntityDef, EntityFields, FieldDef } from "./schema";
+import type { EntityDef, EntityFields, FieldDef, RelationDefs, SchemaDef } from "./schema";
 
 /** SQL field type -> TypeScript value type. */
 export type FieldTsType<D extends FieldDef> = D["type"] extends "text"
@@ -41,4 +41,23 @@ export type InferInsert<F extends EntityFields> = { [K in RequiredInsertKeys<F>]
 };
 
 /** Extract a schema entry's fields, e.g. FieldsOf<S["notes"]>. */
-export type FieldsOf<E> = E extends EntityDef<infer F> ? F : never;
+export type FieldsOf<E> = E extends EntityDef<infer F, RelationDefs> ? F : never;
+
+/** Extract a schema entry's relations. */
+export type RelationsOf<E> = E extends EntityDef<EntityFields, infer R> ? R : Record<string, never>;
+
+type RelValue<S extends SchemaDef, Rel> = Rel extends { kind: "belongsTo"; target: infer Tg }
+  ? Tg extends keyof S
+    ? InferRow<FieldsOf<S[Tg]>> | null
+    : never
+  : Rel extends { kind: "hasMany"; target: infer Tg }
+    ? Tg extends keyof S
+      ? InferRow<FieldsOf<S[Tg]>>[]
+      : never
+    : never;
+
+/** The relation properties added to a row by `with`. Optional (present only when selected). */
+export type RelationsResult<S extends SchemaDef, T extends keyof S> = Partial<{
+  [K in keyof RelationsOf<S[T]>]: RelValue<S, RelationsOf<S[T]>[K]>;
+}>;
+

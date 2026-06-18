@@ -14,6 +14,7 @@
 import {
   AclDenied,
   projectRow,
+  resolveRelationScope,
   resolveScope,
   type AclContext,
   type Scope,
@@ -22,12 +23,13 @@ import {
   and,
   compileExpr,
   compileSelect,
+  eq,
   mapToExpr,
   TRUE,
   type SqlExpr,
 } from "./read-engine";
-import type { SchemaDef } from "../sdk/schema";
-import type { FieldsOf, InferInsert, InferRow, InferUpdate, WhereInput } from "../sdk/infer";
+import type { RelationDef, SchemaDef } from "../sdk/schema";
+import type { FieldsOf, InferInsert, InferRow, InferUpdate, RelationsOf, RelationsResult, WhereInput } from "../sdk/infer";
 
 type Row = Record<string, unknown>;
 type Action = "read" | "create" | "update" | "delete";
@@ -42,6 +44,8 @@ export interface FindSpec<S extends SchemaDef, T extends keyof S> {
   where?: WhereInput<FieldsOf<S[T]>>;
   orderBy?: { column: keyof FieldsOf<S[T]> & string; dir?: "asc" | "desc" };
   limit?: number;
+  /** Eager-load relations. Each loaded relation is independently ACL-checked. */
+  with?: Partial<Record<keyof RelationsOf<S[T]> & string, true>>;
 }
 
 export class Db<S extends SchemaDef = SchemaDef> {
@@ -51,6 +55,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
   constructor(
     private readonly sql: SqlStorage,
     private readonly acl: AclContext,
+    private readonly schema: SchemaDef,
   ) {}
 
   /** Resolve the ACL scope for an operation, or grant everything in SYSTEM mode. */
@@ -59,8 +64,11 @@ export class Db<S extends SchemaDef = SchemaDef> {
     return resolveScope(this.acl, entity, action);
   }
 
-  /** Structured read; ACL row-scope is AND-ed in, permitted fields projected. */
-  find<T extends keyof S & string>(spec: FindSpec<S, T>): InferRow<FieldsOf<S[T]>>[] {
+  /** Structured read; ACL row-scope is AND-ed in, permitted fields projected.
+   * Selected relations are eager-loaded, each independently ACL-checked. */
+  find<T extends keyof S & string>(
+    spec: FindSpec<S, T>,
+  ): (InferRow<FieldsOf<S[T]>> & RelationsResult<S, T>)[] {
     const from = spec.from as string;
     this.touched.add(from);
     const scope = this.scopeFor(from, "read");
@@ -69,8 +77,57 @@ export class Db<S extends SchemaDef = SchemaDef> {
     const userExpr: SqlExpr = spec.where ? mapToExpr(spec.where as Row) : TRUE;
     const where = scope.where ? and(userExpr, scope.where) : userExpr;
     const { sql, params } = compileSelect({ from, where, orderBy: spec.orderBy, limit: spec.limit });
-    const rows = this.sql.exec(sql, ...params).toArray() as Row[];
-    return (scope.fields ? rows.map((r) => projectRow(r, scope.fields)) : rows) as InferRow<FieldsOf<S[T]>>[];
+    // Keep raw rows (with all columns) for relation FKs; project for the result.
+    const raw = this.sql.exec(sql, ...params).toArray() as Row[];
+
+    const relNames = spec.with ? Object.keys(spec.with).filter((k) => (spec.with as Row)[k]) : [];
+    for (const relName of relNames) this.loadRelation(from, raw, relName);
+
+    if (!scope.fields) return raw as (InferRow<FieldsOf<S[T]>> & RelationsResult<S, T>)[];
+    return raw.map((r) => {
+      const projected = projectRow(r, scope.fields);
+      for (const relName of relNames) projected[relName] = r[relName]; // relations survive projection
+      return projected;
+    }) as (InferRow<FieldsOf<S[T]>> & RelationsResult<S, T>)[];
+  }
+
+  /** Eager-load one relation onto `rows` (mutates them). Traversal is ACL-checked
+   * via resolveRelationScope: the related read scope OR a parent directAccess grant. */
+  private loadRelation(parentEntity: string, rows: Row[], relName: string): void {
+    const rel = this.schema[parentEntity]?.relations?.[relName] as RelationDef | undefined;
+    if (!rel) throw new Error(`unknown relation: ${parentEntity}.${relName}`);
+
+    this.touched.add(rel.target);
+    const scope = this.acl.system
+      ? ({ allowed: true, where: null, fields: null } as Scope)
+      : resolveRelationScope(this.acl, parentEntity, relName, rel.target);
+    if (!scope.allowed) throw new AclDenied(rel.target, "read");
+
+    const project = (row: Row | undefined) => (row && scope.fields ? projectRow(row, scope.fields) : row);
+    const query = (col: string, value: unknown): Row[] => {
+      const where = scope.where ? and(eq(col, value), scope.where) : eq(col, value);
+      const { sql, params } = compileSelect({ from: rel.target, where });
+      return this.sql.exec(sql, ...params).toArray() as Row[];
+    };
+
+    if (rel.kind === "belongsTo") {
+      // parent[column] -> target.id
+      const byKey = new Map<unknown, Row | null>();
+      for (const r of rows) {
+        const key = r[rel.column];
+        if (key == null) {
+          r[relName] = null;
+          continue;
+        }
+        if (!byKey.has(key)) byKey.set(key, (project(query("id", key)[0]) as Row) ?? null);
+        r[relName] = byKey.get(key) ?? null;
+      }
+    } else {
+      // hasMany: target[column] -> parent.id
+      for (const r of rows) {
+        r[relName] = query(rel.column, r.id).map((x) => project(x) as Row);
+      }
+    }
   }
 
   /** Insert a single row, returning the persisted row. */

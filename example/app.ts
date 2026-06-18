@@ -7,13 +7,24 @@ import { createApp } from "../src/sdk/app";
 import { $identity, allow, deny, policy, resolve, role } from "../src/sdk/acl";
 
 const schema = defineSchema({
-  notes: Entity((t) => ({
-    id: t.id(),
-    title: t.text(),
-    body: t.text(),
-    ownerId: t.text(),
-    createdAt: t.int(),
-  })),
+  users: Entity(
+    (t) => ({
+      id: t.textId(), // PK = the JWT subject (e.g. "alice")
+      name: t.text(),
+      email: t.text(), // sensitive — not exposed via relation traversal
+    }),
+    (r) => ({ notes: r.hasMany("notes", "ownerId") }),
+  ),
+  notes: Entity(
+    (t) => ({
+      id: t.id(),
+      title: t.text(),
+      body: t.text(),
+      ownerId: t.text(),
+      createdAt: t.int(),
+    }),
+    (r) => ({ owner: r.belongsTo("users", "ownerId") }),
+  ),
 });
 
 // Handlers bound to this schema — ctx.db is fully typed against it.
@@ -44,21 +55,43 @@ const handlers = {
   }),
 
   deleteNote: mutation((ctx, input: { id: number }) => ctx.db.delete("notes", input.id)),
+
+  // Relations: notes with their owner; a user with their notes.
+  listNotesWithOwner: query((ctx) =>
+    ctx.db.find({ from: "notes", with: { owner: true }, orderBy: { column: "id", dir: "desc" } }),
+  ),
+
+  getUserWithNotes: query((ctx, input: { id: string }) => {
+    const rows = ctx.db.find({ from: "users", where: { id: input.id }, with: { notes: true }, limit: 1 });
+    return rows[0] ?? null;
+  }),
+
+  listUsers: query((ctx) => ctx.db.find({ from: "users" })),
+
+  createUser: mutation((ctx, input: { id: string; name: string; email: string }) =>
+    ctx.db.insert("users", input),
+  ),
 };
 
 // ACL — deny-by-default; roles only grant.
-//  admin   : full access to notes.
-//  author  : reads/updates/deletes only their own notes; may create.
-//  reader  : reads every note, but not the body field.
+//  admin   : full access to notes and users.
+//  author  : own notes only; may create; may traverse note.owner (id+name, no
+//            email) via directAccess, but has NO flat users read.
+//  reader  : reads every note (no body); cannot traverse to owner.
 const acl = [
   role("admin", [
     policy("admin:read", "notes", "read", allow()),
     policy("admin:create", "notes", "create", allow()),
     policy("admin:update", "notes", "update", allow()),
     policy("admin:delete", "notes", "delete", allow()),
+    policy("admin:users:read", "users", "read", allow()),
+    policy("admin:users:create", "users", "create", allow()),
   ]),
   role("author", [
-    policy("author:read", "notes", "read", { where: { ownerId: $identity("userId") } }),
+    policy("author:read", "notes", "read", {
+      where: { ownerId: $identity("userId") },
+      relations: { owner: { directAccess: true, fields: ["id", "name"] } },
+    }),
     policy("author:create", "notes", "create", allow()),
     policy("author:update", "notes", "update", { where: { ownerId: $identity("userId") } }),
     policy("author:delete", "notes", "delete", { where: { ownerId: $identity("userId") } }),

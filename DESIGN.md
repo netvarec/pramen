@@ -66,8 +66,13 @@ header `X-Mrak-Tenant` selects the store (default `main`).
       are per-identity.
 - [x] Dynamic policy resolvers: `resolve(fn)` rules computed once per request in a `warmup()` pass,
       reading through a SYSTEM-mode db (ACL bypassed, so no recursion) and returning allow/deny/rules.
-      Lets access flip on live DB state. Next: relation/nested ACL, cell-level (conditional per-field),
-      `set`/`validate` on writes, hard-deny override, path-aware resolvers.
+      Lets access flip on live DB state.
+- [x] Relations + nested ACL: `belongsTo`/`hasMany` on entities (`Entity(fields, relations)`), eager
+      loaded via `find({ with: { rel: true } })`. Each traversal is independently ACL-checked by
+      `resolveRelationScope`: the related entity's own read scope OR a parent read policy's relation
+      rule with `directAccess` (the prior runtime's traversal-only grant), with per-relation `where`/`fields`.
+      Typed `with` + nested row inference. Next: cell-level (conditional per-field), `set`/`validate`
+      on writes, hard-deny override, path-aware resolvers; perf: batch relation loads (avoid N+1).
 - [x] Verified-token auth: the Worker verifies an HS256 bearer JWT (WebCrypto) against
       `env.AUTH_SECRET`, checks exp/nbf, and maps claims (`sub`->userId, `roles`/`role`->roles, custom
       claims pass through) to an Identity forwarded to the DO. The client-supplied X-Mrak-Identity
