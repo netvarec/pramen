@@ -59,7 +59,10 @@ header `X-Mrak-Tenant` selects the store (default `main`).
 ## Roadmap
 
 - [ ] ACL: port the prior runtime's `policy()`/`allow()`/`deny()` + identity resolution into the dispatcher.
-- [ ] Reactivity: live queries over Hibernatable WebSockets on the DO.
+- [x] Reactivity: live queries over Hibernatable WebSockets on the DO. Subscriptions
+      declare a table-level read-set (tracked in `runtime/db.ts`); a committed
+      mutation re-runs only the subscriptions whose read-set intersects its writes.
+      Next: column/row-level granularity instead of whole-table invalidation.
 - [ ] Dynamic deploy: ship the app bundle to the DO instead of static import (cf. the prior runtime `/deploy`).
 - [ ] ReadEngine → WASM.
 - [ ] Deploy via **oblaka** (CF IaC DSL); local dev via **lopata**.

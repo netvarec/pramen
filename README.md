@@ -20,6 +20,27 @@ curl -s -X POST http://localhost:8787/rpc/createNote \
 curl -s -X POST http://localhost:8787/rpc/listNotes
 ```
 
+### Live queries (WebSocket)
+
+Connect to `ws://localhost:8787/live` and subscribe to a query. The server pushes
+fresh results whenever a mutation writes a table the query reads — over HTTP *or*
+over the socket. Single-writer DOs see every write, so invalidation is exact.
+
+```jsonc
+// client -> server
+{ "type": "subscribe",   "id": "s1", "name": "listNotes" }
+{ "type": "call",        "id": "c1", "name": "createNote", "input": { "title": "hi", "body": "x" } }
+{ "type": "unsubscribe", "id": "s1" }
+// server -> client
+{ "type": "data",   "id": "s1", "result": [ /* ... */ ] }  // initial + every update
+{ "type": "result", "id": "c1", "result": { /* ... */ } }  // reply to a call
+{ "type": "error",  "id": "s1", "error": "..." }
+```
+
+```bash
+bun run scripts/live-smoke.ts   # end-to-end live-query test against a running dev server
+```
+
 ## Layout
 
 ```

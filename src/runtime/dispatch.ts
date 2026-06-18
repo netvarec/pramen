@@ -1,28 +1,38 @@
-// Dispatch — resolves a handler by name and runs it. Mutations run inside
-// storage.transaction(), which commits on success and rolls back on throw —
-// the platform-correct expression of the prior runtime's "mutations auto-wrap in
-// BEGIN/COMMIT" invariant. (DO SQLite rejects raw BEGIN/COMMIT precisely
-// because it does atomic write coalescing under this API.) Single-writer
-// serialization is free: a Durable Object processes one request at a time.
+// Dispatch — resolves a handler by name and runs it with a fresh, scoped Db.
+// Mutations run inside storage.transaction(), which commits on success and rolls
+// back on throw — the platform-correct expression of the prior runtime's "mutations auto-wrap
+// in BEGIN/COMMIT" invariant. (DO SQLite rejects raw BEGIN/COMMIT because it does
+// atomic write coalescing under this API.) Single-writer serialization is free:
+// a Durable Object processes one request at a time.
+//
+// The result reports `touched` (tables the run read or wrote) so the live-query
+// layer can match a mutation's writes against each subscription's reads.
 
-import type { Db } from "./db";
-import type { HandlerContext, HandlerMap } from "../sdk/handlers";
+import { Db } from "./db";
+import type { HandlerContext, HandlerKind, HandlerMap } from "../sdk/handlers";
+
+export interface DispatchResult {
+  readonly result: unknown;
+  readonly kind: HandlerKind;
+  readonly touched: string[];
+}
 
 export async function dispatch(
   handlers: HandlerMap,
-  db: Db,
   storage: DurableObjectStorage,
   name: string,
   input: unknown,
-): Promise<unknown> {
+): Promise<DispatchResult> {
   const handler = handlers[name];
   if (!handler) throw new Error(`unknown handler: ${name}`);
 
+  const db = new Db(storage.sql);
   const ctx: HandlerContext = { db, identity: null };
 
-  if (handler.kind === "query") {
-    return await handler.run(ctx, input);
-  }
+  const result =
+    handler.kind === "query"
+      ? await handler.run(ctx, input)
+      : await storage.transaction(async () => handler.run(ctx, input));
 
-  return await storage.transaction(async () => handler.run(ctx, input));
+  return { result, kind: handler.kind, touched: [...db.touched] };
 }
