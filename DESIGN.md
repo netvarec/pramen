@@ -62,7 +62,12 @@ header `X-Mrak-Tenant` selects the store (default `main`).
 - [x] Reactivity: live queries over Hibernatable WebSockets on the DO. Subscriptions
       declare a table-level read-set (tracked in `runtime/db.ts`); a committed
       mutation re-runs only the subscriptions whose read-set intersects its writes.
-      Next: column/row-level granularity instead of whole-table invalidation.
+- [x] Row-level invalidation: re-run is gated by a per-subscription result digest
+      (`runtime/digest.ts`), so a write pushes only to subscriptions whose visible
+      rows actually changed — inserting a note wakes `listNotes` but not a
+      `getNote({id})` view of another row. Correct under arbitrary where/orderBy/limit.
+      Next: avoid the re-run for provably-independent subs (predicate/row-key analysis);
+      delta payloads (send changed rows, not the whole result).
 - [ ] Dynamic deploy: ship the app bundle to the DO instead of static import (cf. the prior runtime `/deploy`).
 - [ ] ReadEngine → WASM.
 - [ ] Deploy via **oblaka** (CF IaC DSL); local dev via **lopata**.

@@ -12,6 +12,7 @@ import { DurableObject } from "cloudflare:workers";
 import { app } from "../example/app";
 import { schemaDDL } from "./runtime/ddl";
 import { dispatch } from "./runtime/dispatch";
+import { digest } from "./runtime/digest";
 import type { ClientMsg, ServerMsg, Subscription } from "./runtime/protocol";
 
 export class MrakDO extends DurableObject {
@@ -87,7 +88,7 @@ export class MrakDO extends DurableObject {
         return this.send(ws, { type: "error", id, error: `${name} is not a query` });
       }
       const subs = this.getSubs(ws).filter((s) => s.id !== id);
-      subs.push({ id, name, input, tables: touched });
+      subs.push({ id, name, input, tables: touched, digest: digest(result) });
       this.setSubs(ws, subs);
       this.send(ws, { type: "data", id, result });
     } catch (err) {
@@ -105,19 +106,31 @@ export class MrakDO extends DurableObject {
     }
   }
 
-  /** Re-run and push every subscription whose read-set intersects the written tables. */
+  // Re-run every subscription whose read-set intersects the written tables, but
+  // push only when that subscription's *result* actually changed (digest diff).
+  // This is the row-level guarantee: a write notifies a subscription only when
+  // its visible rows change — e.g. inserting a note wakes listNotes but not a
+  // getNote({id}) view of a different row. Table intersection is just a cheap
+  // prefilter to skip re-running queries on untouched tables entirely.
   private async broadcast(touched: string[]): Promise<void> {
     const written = new Set(touched);
     for (const ws of this.ctx.getWebSockets()) {
-      for (const sub of this.getSubs(ws)) {
+      const subs = this.getSubs(ws);
+      let dirty = false;
+      for (const sub of subs) {
         if (!sub.tables.some((t) => written.has(t))) continue;
         try {
           const { result } = await dispatch(app.handlers, this.ctx.storage, sub.name, sub.input);
+          const next = digest(result);
+          if (next === sub.digest) continue; // result unchanged for this subscription — no push
+          sub.digest = next;
+          dirty = true;
           this.send(ws, { type: "data", id: sub.id, result });
         } catch (err) {
           this.send(ws, { type: "error", id: sub.id, error: String(err) });
         }
       }
+      if (dirty) this.setSubs(ws, subs); // persist updated digests (hibernation-safe)
     }
   }
 

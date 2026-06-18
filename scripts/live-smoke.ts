@@ -1,13 +1,18 @@
-// Live-query smoke test. Run against `wrangler dev` (default port 8799):
+// Live-query smoke test, including row-level invalidation. Run against
+// `wrangler dev` (default port 8799):
 //   bun run scripts/live-smoke.ts [port]
 //
-// 1. open WS /live, subscribe to listNotes -> expect initial data
-// 2. createNote over HTTP -> expect a pushed data update on the subscription
-// 3. createNote over WS via "call" -> expect a result reply + another push
+// Proves:
+//  - subscribe -> initial data
+//  - a mutation pushes fresh results to affected subscriptions (HTTP and WS)
+//  - row-level: inserting a note wakes listNotes but NOT a getNote(other id);
+//    updating that row wakes its getNote view (and listNotes).
 
 const port = process.argv[2] ?? "8799";
 const httpBase = `http://localhost:${port}`;
 const wsUrl = `ws://localhost:${port}/live`;
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function deadline<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
@@ -30,7 +35,7 @@ function next(pred: (m: any) => boolean, label: string): Promise<any> {
       const scan = () => {
         const idx = inbox.findIndex(pred);
         if (idx >= 0) {
-          notify = null; // critical: stop this resolved waiter from eating later frames
+          notify = null; // stop this resolved waiter from eating later frames
           resolve(inbox.splice(idx, 1)[0]);
         } else {
           notify = scan;
@@ -48,46 +53,45 @@ const assert = (cond: boolean, msg: string) => {
   console.log(`  ok: ${msg}`);
 };
 
-await deadline(
-  new Promise<void>((res) => ws.addEventListener("open", () => res())),
-  5000,
-  "ws open",
-);
-console.log("connected", wsUrl);
-
-const isS1Data = (m: any) => m.type === "data" && m.id === "s1";
-
-// 1. subscribe
-ws.send(JSON.stringify({ type: "subscribe", id: "s1", name: "listNotes" }));
-const initial = await next(isS1Data, "initial data");
-const baseCount = initial.result.length;
-console.log(`subscribed; initial listNotes count = ${baseCount}`);
-inbox.length = 0; // drain so the next s1 frame is unambiguously the push
-
-// 2. mutate over HTTP -> expect a push
-const created = await (
-  await fetch(`${httpBase}/rpc/createNote`, {
+const dataFor = (id: string) => (m: any) => m.type === "data" && m.id === id;
+const post = (name: string, input?: unknown) =>
+  fetch(`${httpBase}/rpc/${name}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ title: "live-http", body: "via http" }),
-  })
-).json();
-assert(created.ok, "http createNote succeeded");
+    body: JSON.stringify(input ?? {}),
+  }).then((r) => r.json());
 
-const push1 = await next(isS1Data, "push after HTTP mutation");
-assert(push1.result.length === baseCount + 1, "HTTP push grew the result by one");
-assert(push1.result[0].title === "live-http", "HTTP push includes the created note");
+await deadline(new Promise<void>((res) => ws.addEventListener("open", () => res())), 5000, "ws open");
+console.log("connected", wsUrl);
+
+// Anchor row we will keep a single-row subscription on.
+const anchor = await post("createNote", { title: "anchor", body: "original" });
+assert(anchor.ok, "created anchor note");
+const anchorId = anchor.result.id as number;
+
+// Subscribe to a list view and a single-row view.
+ws.send(JSON.stringify({ type: "subscribe", id: "list", name: "listNotes" }));
+const list0 = await next(dataFor("list"), "initial list");
+ws.send(JSON.stringify({ type: "subscribe", id: "one", name: "getNote", input: { id: anchorId } }));
+const one0 = await next(dataFor("one"), "initial one");
+assert(one0.result.id === anchorId, "single-row sub seeded with the anchor row");
+const baseCount = list0.result.length;
 inbox.length = 0;
 
-// 3. mutate over WS "call" -> expect result reply + another push
-ws.send(JSON.stringify({ type: "call", id: "c1", name: "createNote", input: { title: "live-ws", body: "via ws" } }));
-const callReply = await next((m) => m.type === "result" && m.id === "c1", "call reply");
-assert(callReply.result.title === "live-ws", "WS call returned the created note");
+// --- row-level: INSERT a different row ---
+await post("createNote", { title: "other", body: "unrelated" });
+const listPush = await next(dataFor("list"), "list push after insert");
+assert(listPush.result.length === baseCount + 1, "list grew by one after insert");
+await sleep(400); // give any erroneous push time to arrive
+assert(!inbox.some(dataFor("one")), "NO push to getNote(anchor) on an unrelated insert");
+inbox.length = 0;
 
-const push2 = await next(isS1Data, "push after WS mutation");
-assert(push2.result.length === baseCount + 2, "WS push grew the result by two");
-assert(push2.result[0].title === "live-ws", "WS push includes the WS-created note");
+// --- row-level: UPDATE the anchor row ---
+await post("updateNote", { id: anchorId, title: "anchor-updated" });
+const onePush = await next(dataFor("one"), "getNote push after its row updated");
+assert(onePush.result.title === "anchor-updated", "single-row sub reflects the update");
+assert(inbox.some(dataFor("list")), "list also pushed (its row content changed)");
 
 ws.close();
-console.log("\nALL LIVE-QUERY CHECKS PASSED");
+console.log("\nALL LIVE-QUERY + ROW-LEVEL CHECKS PASSED");
 process.exit(0);

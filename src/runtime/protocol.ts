@@ -39,6 +39,8 @@ export interface Subscription {
   id: string;
   name: string;
   input: unknown;
-  /** Tables the query read — its invalidation dependency set. */
+  /** Tables the query read — the coarse prefilter for which writes might matter. */
   tables: string[];
+  /** Digest of the last result pushed — used to suppress no-op (row-level) pushes. */
+  digest: string;
 }

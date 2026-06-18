@@ -31,6 +31,11 @@ const handlers = {
       createdAt: Date.now(),
     }),
   ),
+
+  updateNote: mutation((ctx, input: { id: number; title?: string; body?: string }) => {
+    const { id, ...patch } = input;
+    return ctx.db.update("notes", id, patch);
+  }),
 };
 
 export const app = { schema, handlers };

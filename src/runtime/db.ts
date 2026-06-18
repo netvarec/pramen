@@ -40,6 +40,19 @@ export class Db {
     return rows[0]!;
   }
 
+  /** Update a row by id, returning the persisted row. Empty patch is a no-op read. */
+  update(table: string, id: unknown, patch: Row): Row {
+    this.touched.add(table);
+    const cols = Object.keys(patch);
+    if (cols.length === 0) {
+      return this.find({ from: table, where: { id }, limit: 1 })[0]!;
+    }
+    const assignments = cols.map((c) => `${c} = ?`).join(", ");
+    const sql = `UPDATE ${table} SET ${assignments} WHERE id = ? RETURNING *`;
+    const rows = this.sql.exec(sql, ...cols.map((c) => bind(patch[c])), bind(id)).toArray() as Row[];
+    return rows[0]!;
+  }
+
   /** Escape hatch for raw SQL. Tables are inferred best-effort for invalidation. */
   exec(sql: string, ...params: unknown[]): Row[] {
     for (const m of sql.matchAll(TABLE_RE)) this.touched.add(m[1]!);
