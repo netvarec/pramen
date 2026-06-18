@@ -5,21 +5,21 @@
 //   const { query, mutation } = createApp(schema);
 //   const listNotes = query((ctx) => ctx.db.find({ from: "notes" })); // typed!
 
-import type { Handler, HandlerContext } from "./handlers";
+import type { Handler, HandlerContext, HandlerOpts } from "./handlers";
 import type { SchemaDef } from "./schema";
 
 export function createApp<S extends SchemaDef>(schema: S) {
   type Ctx = HandlerContext<S>;
 
-  const query = <I = unknown, O = unknown>(run: (ctx: Ctx, input: I) => O | Promise<O>): Handler<I, O> => ({
-    kind: "query",
-    run: run as Handler<I, O>["run"],
-  });
+  const query = <I = unknown, O = unknown>(
+    run: (ctx: Ctx, input: I) => O | Promise<O>,
+    opts?: HandlerOpts<I>,
+  ): Handler<I, O> => ({ kind: "query", run: run as Handler<I, O>["run"], input: opts?.input });
 
-  const mutation = <I = unknown, O = unknown>(run: (ctx: Ctx, input: I) => O | Promise<O>): Handler<I, O> => ({
-    kind: "mutation",
-    run: run as Handler<I, O>["run"],
-  });
+  const mutation = <I = unknown, O = unknown>(
+    run: (ctx: Ctx, input: I) => O | Promise<O>,
+    opts?: HandlerOpts<I>,
+  ): Handler<I, O> => ({ kind: "mutation", run: run as Handler<I, O>["run"], input: opts?.input });
 
   return { schema, query, mutation };
 }

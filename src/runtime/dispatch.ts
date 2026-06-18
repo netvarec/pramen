@@ -10,6 +10,7 @@
 
 import { Db } from "./db";
 import { warmup, type AclContext } from "./acl";
+import { BadRequest } from "./errors";
 import type { ResolverDb } from "../sdk/acl";
 import type { SchemaDef } from "../sdk/schema";
 import type { HandlerContext, HandlerKind, HandlerMap } from "../sdk/handlers";
@@ -29,7 +30,17 @@ export async function dispatch(
   input: unknown,
 ): Promise<DispatchResult> {
   const handler = handlers[name];
-  if (!handler) throw new Error(`unknown handler: ${name}`);
+  if (!handler) throw new BadRequest(`unknown handler: ${name}`);
+
+  // Validate/parse the request input at the boundary, if the handler declares it.
+  let parsed = input;
+  if (handler.input) {
+    try {
+      parsed = handler.input(input);
+    } catch (e) {
+      throw new BadRequest(e instanceof Error ? e.message : "invalid input");
+    }
+  }
 
   // Warmup: evaluate dynamic resolvers once, reading through a SYSTEM-mode db
   // (separate from the handler's db, so its reads don't pollute `touched`).
@@ -41,8 +52,8 @@ export async function dispatch(
 
   const result =
     handler.kind === "query"
-      ? await handler.run(ctx, input)
-      : await storage.transaction(async () => handler.run(ctx, input));
+      ? await handler.run(ctx, parsed)
+      : await storage.transaction(async () => handler.run(ctx, parsed));
 
   return { result, kind: handler.kind, touched: [...db.touched] };
 }

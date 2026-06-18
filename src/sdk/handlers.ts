@@ -20,20 +20,29 @@ export interface Handler<I = unknown, O = unknown> {
   // Stored handlers are schema-agnostic; createApp() binds the typed surface.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   readonly run: (ctx: HandlerContext<any>, input: I) => O | Promise<O>;
+  /** Optional boundary validator: parse/validate the raw request input, throwing
+   * to reject (surfaced as a 400). Its return type fixes the handler's input. */
+  readonly input?: (raw: unknown) => unknown;
+}
+
+export interface HandlerOpts<I> {
+  input?: (raw: unknown) => I;
 }
 
 // Standalone (schema-agnostic) handler factories. Prefer createApp(schema) for a
 // typed ctx.db; these remain for untyped/ad-hoc use.
 export function query<I = unknown, O = unknown>(
   run: (ctx: HandlerContext, input: I) => O | Promise<O>,
+  opts?: HandlerOpts<I>,
 ): Handler<I, O> {
-  return { kind: "query", run };
+  return { kind: "query", run, input: opts?.input };
 }
 
 export function mutation<I = unknown, O = unknown>(
   run: (ctx: HandlerContext, input: I) => O | Promise<O>,
+  opts?: HandlerOpts<I>,
 ): Handler<I, O> {
-  return { kind: "mutation", run };
+  return { kind: "mutation", run, input: opts?.input };
 }
 
 // Registry of handlers keyed by RPC name. Uses `any` for the per-handler input/

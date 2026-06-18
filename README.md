@@ -107,6 +107,7 @@ src/
     handlers.ts       query() / mutation() (untyped, schema-agnostic)
     acl.ts            role/policy/allow/deny/$identity/resolve + set/validate
   runtime/            substrate glue
+    errors.ts         typed error envelope (status + code; no internal leakage)
     ddl.ts            CREATE TABLE / ADD COLUMN fragments
     migrate.ts        additive schema migration on DO boot (create + add column)
     read-engine.ts    structured query + SqlExpr -> parameterized SQL (TS; WASM later)
@@ -144,6 +145,24 @@ const listNotes = query((ctx) =>
 
 // ctx.db.find({ from: "nope" })            -> type error: unknown table
 // ctx.db.find({ where: { title: 123 } })   -> type error: title is string
+```
+
+### Errors & input validation
+
+Responses are `{ ok: false, error, code }` with a real status: ACL denial → `403
+forbidden`, bad input / unknown handler / failed `validate` → `400 bad_request`.
+Anything unexpected is logged server-side and returned as a generic `500` — stack
+traces and internal messages never reach the client. A handler may declare an
+`input` validator that parses the raw body and throws to reject:
+
+```ts
+createNote: mutation(run, {
+  input: (raw) => {
+    const o = raw as any;
+    if (typeof o?.title !== "string") throw new Error("title must be a string");
+    return { title: o.title, body: String(o.body ?? "") };
+  },
+});
 ```
 
 ### Queries

@@ -102,6 +102,13 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
       `getNote({id})` view of another row. Correct under arbitrary where/orderBy/limit.
       Next: avoid the re-run for provably-independent subs (predicate/row-key analysis);
       delta payloads (send changed rows, not the whole result).
+- [x] Hardening pass: a typed error envelope (`runtime/errors.ts`) — client-fault errors carry
+      `{ status, code, message }` (`AclDenied` -> 403 `forbidden`, `BadRequest` -> 400), everything
+      else is logged and returned as a generic 500 (no internal leakage). Optional per-handler `input`
+      validator runs at the boundary (400 on reject); `validate` throws become 400s. Relation loads
+      are batched with a single `IN` query (no N+1). WebSockets gain `webSocketError` handling and a
+      per-socket subscription cap (64). NOT changed: ACL field permissions union across OR'd policies
+      (row-agnostic at the root) — intentional, matches the prior runtime v1; per-row field coupling is future work.
 - [ ] Dynamic deploy: ship the app bundle to the DO instead of static import (cf. the prior runtime `/deploy`).
 - [ ] ReadEngine → WASM.
 - [x] Deploy via **oblaka** (CF IaC DSL): `oblaka.ts` declares the Worker + `MRAK` Durable Object

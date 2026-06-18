@@ -2,7 +2,7 @@
 // server against fresh local state, and runs every suite against it (each on its
 // own tenant). Run with `bun test`.
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, test } from "bun:test";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { runAcl } from "./suites/acl";
@@ -10,6 +10,7 @@ import { runResolver } from "./suites/resolver";
 import { runRelation } from "./suites/relation";
 import { runLive } from "./suites/live";
 import { runQuery } from "./suites/query";
+import { runHardening } from "./suites/hardening";
 
 const ROOT = join(import.meta.dir, "..");
 const PORT = 8788;
@@ -56,13 +57,5 @@ describe("mrak e2e", () => {
   test("relations + nested ACL", () => runRelation(BASE), 30_000);
   test("query expressiveness (operators, OR/AND, pagination)", () => runQuery(BASE), 30_000);
   test("live queries + row-level invalidation", () => runLive(BASE, WS), 30_000);
-
-  test("unknown handler -> 400", async () => {
-    const r = await fetch(`${BASE}/rpc/nope`, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${await (await import("../scripts/jwt")).token("admin", ["admin"])}` },
-      body: "{}",
-    });
-    expect(r.status).toBe(400);
-  });
+  test("hardening: input validation + safe errors", () => runHardening(BASE), 30_000);
 });

@@ -25,11 +25,12 @@ import {
   compileExpr,
   compileSelect,
   compileWhere,
-  eq,
+  inList,
   TRUE,
   type OrderBy,
   type SqlExpr,
 } from "./read-engine";
+import { BadRequest } from "./errors";
 import type { RelationDef, SchemaDef } from "../sdk/schema";
 import type { FieldsOf, InferInsert, InferRow, InferUpdate, RelationsOf, RelationsResult, WhereInput } from "../sdk/infer";
 
@@ -78,7 +79,14 @@ export class Db<S extends SchemaDef = SchemaDef> {
     if (this.acl.system) return;
     const { set, validators } = resolveWriteRules(this.acl, entity, action);
     Object.assign(values, set); // forced values override client input
-    for (const validate of validators) validate({ identity: this.acl.identity, values });
+    for (const validate of validators) {
+      try {
+        validate({ identity: this.acl.identity, values });
+      } catch (e) {
+        // validators are authored for end users -> surface as a 400.
+        throw new BadRequest(e instanceof Error ? e.message : "validation failed");
+      }
+    }
   }
 
   /** Structured read; ACL row-scope is AND-ed in, permitted fields projected.
@@ -125,30 +133,31 @@ export class Db<S extends SchemaDef = SchemaDef> {
       : resolveRelationScope(this.acl, parentEntity, relName, rel.target);
     if (!scope.allowed) throw new AclDenied(rel.target, "read");
 
-    const project = (row: Row | undefined) => (row && scope.fields ? projectRow(row, scope.fields) : row);
-    const query = (col: string, value: unknown): Row[] => {
-      const where = scope.where ? and(eq(col, value), scope.where) : eq(col, value);
+    const project = (row: Row): Row => (scope.fields ? projectRow(row, scope.fields) : row);
+    // One IN query per relation (no N+1). Match column before projecting (which
+    // may drop the join column).
+    const fetchBy = (col: string, values: unknown[]): Array<{ key: unknown; row: Row }> => {
+      if (values.length === 0) return [];
+      const where = scope.where ? and(inList(col, values), scope.where) : inList(col, values);
       const { sql, params } = compileSelect({ from: rel.target, where });
-      return this.sql.exec(sql, ...params).toArray() as Row[];
+      return (this.sql.exec(sql, ...params).toArray() as Row[]).map((row) => ({ key: row[col], row: project(row) }));
     };
 
     if (rel.kind === "belongsTo") {
       // parent[column] -> target.id
-      const byKey = new Map<unknown, Row | null>();
-      for (const r of rows) {
-        const key = r[rel.column];
-        if (key == null) {
-          r[relName] = null;
-          continue;
-        }
-        if (!byKey.has(key)) byKey.set(key, (project(query("id", key)[0]) as Row) ?? null);
-        r[relName] = byKey.get(key) ?? null;
-      }
+      const keys = [...new Set(rows.map((r) => r[rel.column]).filter((v) => v != null))];
+      const byId = new Map<unknown, Row>();
+      for (const { key, row } of fetchBy("id", keys)) byId.set(key, row);
+      for (const r of rows) r[relName] = r[rel.column] != null ? (byId.get(r[rel.column]) ?? null) : null;
     } else {
       // hasMany: target[column] -> parent.id
-      for (const r of rows) {
-        r[relName] = query(rel.column, r.id).map((x) => project(x) as Row);
+      const ids = [...new Set(rows.map((r) => r.id).filter((v) => v != null))];
+      const grouped = new Map<unknown, Row[]>();
+      for (const { key, row } of fetchBy(rel.column, ids)) {
+        const bucket = grouped.get(key) ?? grouped.set(key, []).get(key)!;
+        bucket.push(row);
       }
+      for (const r of rows) r[relName] = grouped.get(r.id) ?? [];
     }
   }
 

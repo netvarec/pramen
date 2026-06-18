@@ -18,7 +18,8 @@ import { app } from "../example/app";
 import { migrate } from "./runtime/migrate";
 import { dispatch } from "./runtime/dispatch";
 import { digest } from "./runtime/digest";
-import { AclDenied, compileAcl, type AclContext, type CompiledAcl } from "./runtime/acl";
+import { compileAcl, type AclContext, type CompiledAcl } from "./runtime/acl";
+import { BadRequest, toResponse, toWsError } from "./runtime/errors";
 import type { Identity } from "./sdk/acl";
 import type { ClientMsg, ServerMsg, Subscription } from "./runtime/protocol";
 
@@ -26,6 +27,9 @@ interface SocketState {
   identity: Identity | null;
   subs: Subscription[];
 }
+
+/** Per-socket subscription cap — bounds memory and per-mutation re-run cost. */
+const MAX_SUBSCRIPTIONS = 64;
 
 export class MrakDO extends DurableObject {
   private readonly acl: CompiledAcl;
@@ -62,8 +66,8 @@ export class MrakDO extends DurableObject {
       if (kind === "mutation" && touched.length > 0) await this.broadcast(touched);
       return Response.json({ ok: true, result });
     } catch (err) {
-      const status = err instanceof AclDenied ? 403 : 400;
-      return Response.json({ ok: false, error: String(err) }, { status });
+      const { status, body } = toResponse(err);
+      return Response.json(body, { status });
     }
   }
 
@@ -96,21 +100,34 @@ export class MrakDO extends DurableObject {
     ws.close();
   }
 
+  override async webSocketError(ws: WebSocket, error: unknown): Promise<void> {
+    console.error("mrak: websocket error", error);
+    try {
+      ws.close(1011, "error");
+    } catch {
+      /* already closing */
+    }
+  }
+
   // --- live-query internals ---
 
   private async onSubscribe(ws: WebSocket, id: string, name: string, input: unknown): Promise<void> {
     const state = this.getState(ws);
     try {
+      const replacing = state.subs.some((s) => s.id === id);
+      if (!replacing && state.subs.length >= MAX_SUBSCRIPTIONS) {
+        return this.send(ws, toWsError(id, new BadRequest("subscription limit reached")));
+      }
       const { result, kind, touched } = await dispatch(app.handlers, app.schema, this.ctx.storage, this.ctxFor(state.identity), name, input);
       if (kind !== "query") {
-        return this.send(ws, { type: "error", id, error: `${name} is not a query` });
+        return this.send(ws, toWsError(id, new BadRequest(`${name} is not a query`)));
       }
       const subs = state.subs.filter((s) => s.id !== id);
       subs.push({ id, name, input, tables: touched, digest: digest(result) });
       this.setState(ws, { ...state, subs });
       this.send(ws, { type: "data", id, result });
     } catch (err) {
-      this.send(ws, { type: "error", id, error: String(err) });
+      this.send(ws, toWsError(id, err));
     }
   }
 
@@ -121,7 +138,7 @@ export class MrakDO extends DurableObject {
       this.send(ws, { type: "result", id, result });
       if (kind === "mutation" && touched.length > 0) await this.broadcast(touched);
     } catch (err) {
-      this.send(ws, { type: "error", id, error: String(err) });
+      this.send(ws, toWsError(id, err));
     }
   }
 
@@ -142,7 +159,7 @@ export class MrakDO extends DurableObject {
           dirty = true;
           this.send(ws, { type: "data", id: sub.id, result });
         } catch (err) {
-          this.send(ws, { type: "error", id: sub.id, error: String(err) });
+          this.send(ws, toWsError(sub.id, err));
         }
       }
       if (dirty) this.setState(ws, state);

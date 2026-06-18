@@ -45,14 +45,24 @@ const handlers = {
   }),
 
   // ownerId is accepted here but the create policy's `set` forces it to the
-  // caller — so a forged ownerId in the request body is ignored.
-  createNote: mutation((ctx, input: { title: string; body: string; ownerId?: string }) =>
-    ctx.db.insert("notes", {
-      title: input.title,
-      body: input.body,
-      ownerId: input.ownerId ?? null,
-      createdAt: Date.now(),
-    }),
+  // caller — so a forged ownerId in the request body is ignored. The `input`
+  // validator rejects malformed bodies at the boundary (400).
+  createNote: mutation(
+    (ctx, input: { title: string; body: string; ownerId?: string }) =>
+      ctx.db.insert("notes", {
+        title: input.title,
+        body: input.body,
+        ownerId: input.ownerId ?? null,
+        createdAt: Date.now(),
+      }),
+    {
+      input: (raw): { title: string; body: string; ownerId?: string } => {
+        const o = (raw ?? {}) as Record<string, unknown>;
+        if (typeof o.title !== "string") throw new Error("title must be a string");
+        if (typeof o.body !== "string") throw new Error("body must be a string");
+        return { title: o.title, body: o.body, ownerId: typeof o.ownerId === "string" ? o.ownerId : undefined };
+      },
+    },
   ),
 
   updateNote: mutation((ctx, input: { id: number; title?: string; body?: string }) => {
