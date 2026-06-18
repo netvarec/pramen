@@ -1,33 +1,81 @@
-// Identity resolution at the edge. The Worker authenticates the request and
-// forwards a trusted identity to the DO; the DO never re-derives it.
+// Identity resolution at the edge. The Worker verifies a signed token and
+// forwards a trusted identity to the DO; the DO never re-derives it, and the
+// client-supplied X-Mrak-Identity header is stripped unless a token verified
+// (see src/index.ts), so a validly-signed JWT is the only path to an identity.
 //
-// v0 uses a demo bearer-token table. A real deployment verifies a signed token
-// (JWT/session) here and maps its claims to an Identity — the rest of the system
-// is unchanged. The X-Mrak-Identity escape hatch lets tests assert arbitrary
-// identities; drop that branch (and trust only verified tokens) in production.
+// v0 verifies HS256 (shared secret in env.AUTH_SECRET) with WebCrypto. Swapping
+// to RS256/EdDSA (asymmetric, JWKS) is a localized change to verifyJwt — the
+// rest of the system is unchanged. Claims map to Identity: `sub` -> userId,
+// `roles`/`role` -> roles, other non-standard claims pass through.
 
 import type { Identity } from "./sdk/acl";
 
-const DEMO_TOKENS: Record<string, Identity> = {
-  admin: { roles: ["admin"], userId: "admin" },
-  alice: { roles: ["author"], userId: "alice" },
-  bob: { roles: ["author"], userId: "bob" },
-  reader: { roles: ["reader"], userId: "anon" },
-  mia: { roles: ["member"], userId: "mia" },
-};
+const STANDARD_CLAIMS = new Set(["exp", "iat", "nbf", "iss", "aud", "jti", "sub", "role", "roles", "userId"]);
 
-export function resolveIdentity(request: Request): Identity | null {
-  // Test convenience: explicit identity JSON.
-  const explicit = request.headers.get("x-mrak-identity");
-  if (explicit) {
-    try {
-      return JSON.parse(explicit) as Identity;
-    } catch {
-      return null;
-    }
+function b64urlToBytes(s: string): Uint8Array {
+  const b64 = s.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (s.length % 4)) % 4);
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+function b64urlToString(s: string): string {
+  return new TextDecoder().decode(b64urlToBytes(s));
+}
+
+async function verifyJwt(token: string, secret: string): Promise<Record<string, unknown> | null> {
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  const [h, p, sig] = parts;
+
+  let header: { alg?: string };
+  try {
+    header = JSON.parse(b64urlToString(h!));
+  } catch {
+    return null;
+  }
+  if (header.alg !== "HS256") return null;
+
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["verify"],
+  );
+  const valid = await crypto.subtle.verify("HMAC", key, b64urlToBytes(sig!), new TextEncoder().encode(`${h}.${p}`));
+  if (!valid) return null;
+
+  let payload: Record<string, unknown>;
+  try {
+    payload = JSON.parse(b64urlToString(p!));
+  } catch {
+    return null;
   }
 
-  const auth = request.headers.get("authorization");
-  const token = auth?.match(/^Bearer\s+(.+)$/i)?.[1];
-  return token ? (DEMO_TOKENS[token] ?? null) : null;
+  const now = Math.floor(Date.now() / 1000);
+  if (typeof payload.exp === "number" && now >= payload.exp) return null;
+  if (typeof payload.nbf === "number" && now < payload.nbf) return null;
+  return payload;
+}
+
+function toIdentity(claims: Record<string, unknown>): Identity {
+  const roles = Array.isArray(claims.roles)
+    ? (claims.roles as string[])
+    : typeof claims.role === "string"
+      ? [claims.role]
+      : [];
+  const identity: Identity = { roles, userId: (claims.sub ?? claims.userId) as string | undefined };
+  for (const [k, v] of Object.entries(claims)) {
+    if (!STANDARD_CLAIMS.has(k)) identity[k] = v; // carry custom claims (tier, …)
+  }
+  return identity;
+}
+
+export async function resolveIdentity(request: Request, secret: string): Promise<Identity | null> {
+  const token = request.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
+  if (!token || !secret) return null;
+  const claims = await verifyJwt(token, secret);
+  return claims ? toIdentity(claims) : null;
 }

@@ -6,18 +6,25 @@
 // This proves resolvers run per request, can read the DB without recursing, and
 // flip access based on live state.
 
+import { token } from "./jwt";
+
 const port = process.argv[2] ?? "8799";
 const base = `http://localhost:${port}`;
 const TENANT = "resolver-demo";
+
+const TOKENS: Record<string, string> = {
+  admin: await token("admin", ["admin"]),
+  mia: await token("mia", ["member"]),
+};
 
 const assert = (cond: boolean, msg: string) => {
   if (!cond) throw new Error(`FAIL: ${msg}`);
   console.log(`  ok: ${msg}`);
 };
 
-async function post(name: string, input: unknown, token?: string): Promise<{ status: number; body: any }> {
+async function post(name: string, input: unknown, role?: keyof typeof TOKENS): Promise<{ status: number; body: any }> {
   const headers: Record<string, string> = { "content-type": "application/json", "x-mrak-tenant": TENANT };
-  if (token) headers.authorization = `Bearer ${token}`;
+  if (role) headers.authorization = `Bearer ${TOKENS[role]}`;
   const r = await fetch(`${base}/rpc/${name}`, { method: "POST", headers, body: JSON.stringify(input ?? {}) });
   return { status: r.status, body: await r.json() };
 }

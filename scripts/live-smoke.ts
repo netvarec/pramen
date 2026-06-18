@@ -8,11 +8,13 @@
 //  - row-level: inserting a note wakes listNotes but NOT a getNote(other id);
 //    updating that row wakes its getNote view (and listNotes).
 
+import { token } from "./jwt";
+
 const port = process.argv[2] ?? "8799";
 const httpBase = `http://localhost:${port}`;
 const wsUrl = `ws://localhost:${port}/live`;
 const TENANT = "live-demo";
-const AUTH = "Bearer admin"; // full access — this test isn't about ACL
+const AUTH = `Bearer ${await token("admin", ["admin"])}`; // full access — this test isn't about ACL
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 

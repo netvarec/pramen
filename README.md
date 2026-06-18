@@ -11,19 +11,31 @@ instead of a Rust + Turso runtime. See [DESIGN.md](./DESIGN.md).
 bun install
 bun run dev            # wrangler dev (local, miniflare) on http://localhost:8787
 
-# create a note (ACL is deny-by-default — a token is required; see ACL below)
+# Requests need a signed bearer JWT (deny-by-default; see Auth/ACL below).
+# Mint one with the dev secret:
+TOKEN=$(bun -e 'import {token} from "./scripts/jwt"; console.log(await token("alice",["author"]))')
+
+# create a note
 curl -s -X POST http://localhost:8787/rpc/createNote \
-  -H 'content-type: application/json' -H 'authorization: Bearer alice' \
+  -H 'content-type: application/json' -H "authorization: Bearer $TOKEN" \
   -d '{"title":"hello","body":"from mrak"}'
 
 # list notes
-curl -s -X POST http://localhost:8787/rpc/listNotes -H 'authorization: Bearer alice'
+curl -s -X POST http://localhost:8787/rpc/listNotes -H "authorization: Bearer $TOKEN"
 ```
+
+### Auth
+
+The Worker verifies an **HS256 bearer JWT** (WebCrypto) against `AUTH_SECRET`
+(dev value in `wrangler.jsonc`; production via `wrangler secret put AUTH_SECRET`),
+checks `exp`/`nbf`, and maps claims to an Identity (`sub`→userId, `roles`/`role`→
+roles, custom claims pass through). A forged or unsigned request gets no identity.
+Swap `verifyJwt` for RS256/EdDSA + JWKS without touching the rest of the system.
 
 ### ACL
 
 Access is **deny-by-default**; roles grant it. Define roles/policies on the app
-(`example/app.ts`) and resolve identity at the edge (`src/auth.ts`). Grants
+(`example/app.ts`); identity comes from the verified token (`src/auth.ts`). Grants
 OR-merge across an identity's roles; row-level `where` scopes are AND-merged into
 queries, and `fields` restrict read projection / writable columns.
 
@@ -35,9 +47,10 @@ role("author", [
 ]);
 ```
 
-The demo bearer tokens (`src/auth.ts`): `admin` (full access), `alice`/`bob`
-(authors, own notes only), `reader` (reads all, no `body`). Live subscriptions
-inherit the connecting identity, so pushes respect row-level scope too.
+The example roles (`example/app.ts`): `admin` (full access), `author` (own notes
+only — mint a token with `sub` = the owner), `reader` (reads all, no `body`),
+`member` (read unlocked dynamically once you've authored a note). Live
+subscriptions inherit the connecting identity, so pushes respect row-level scope.
 
 ```bash
 bun run scripts/acl-smoke.ts    # ACL + per-identity live-query test

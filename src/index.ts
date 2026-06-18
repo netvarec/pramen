@@ -7,6 +7,9 @@ import { resolveIdentity } from "./auth";
 
 export interface Env {
   MRAK: DurableObjectNamespace;
+  /** HMAC secret for verifying bearer JWTs. Dev value in wrangler.jsonc;
+   * production via `wrangler secret put AUTH_SECRET`. */
+  AUTH_SECRET: string;
 }
 
 export default {
@@ -25,7 +28,7 @@ export default {
     }
 
     // Authenticate at the edge, then forward a trusted identity to the DO.
-    const identity = resolveIdentity(request);
+    const identity = await resolveIdentity(request, env.AUTH_SECRET);
     const headers = new Headers(request.headers);
     if (identity) headers.set("x-mrak-identity", JSON.stringify(identity));
     else headers.delete("x-mrak-identity");

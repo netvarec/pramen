@@ -67,7 +67,13 @@ header `X-Mrak-Tenant` selects the store (default `main`).
 - [x] Dynamic policy resolvers: `resolve(fn)` rules computed once per request in a `warmup()` pass,
       reading through a SYSTEM-mode db (ACL bypassed, so no recursion) and returning allow/deny/rules.
       Lets access flip on live DB state. Next: relation/nested ACL, cell-level (conditional per-field),
-      `set`/`validate` on writes, hard-deny override, path-aware resolvers, verified-token auth.
+      `set`/`validate` on writes, hard-deny override, path-aware resolvers.
+- [x] Verified-token auth: the Worker verifies an HS256 bearer JWT (WebCrypto) against
+      `env.AUTH_SECRET`, checks exp/nbf, and maps claims (`sub`->userId, `roles`/`role`->roles, custom
+      claims pass through) to an Identity forwarded to the DO. The client-supplied X-Mrak-Identity
+      header is stripped unless a token verified, so a validly-signed JWT is the only path to an
+      identity (`auth.ts`). Next: RS256/EdDSA + JWKS (asymmetric, key rotation) — a localized change
+      to verifyJwt.
 - [x] Reactivity: live queries over Hibernatable WebSockets on the DO. Subscriptions
       declare a table-level read-set (tracked in `runtime/db.ts`); a committed
       mutation re-runs only the subscriptions whose read-set intersects its writes.

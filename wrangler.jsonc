@@ -6,6 +6,10 @@
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
 
+  // Dev-only HMAC secret for verifying bearer JWTs. In production set it with
+  // `wrangler secret put AUTH_SECRET` (a secret overrides this var).
+  "vars": { "AUTH_SECRET": "dev-secret-change-me" },
+
   // The DO is the database. SQLite storage lives in-process inside the isolate,
   // which is the Cloudflare analog of the prior runtime's in-process Turso + single-writer.
   "durable_objects": {

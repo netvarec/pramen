@@ -6,18 +6,28 @@
 // Part B (WS):   live queries are per-identity — a write by another user does
 //                not push to a subscriber whose row-scope excludes it.
 
+import { sign, token } from "./jwt";
+
 const port = process.argv[2] ?? "8799";
 const base = `http://localhost:${port}`;
 const TENANT = "acl-demo";
+
+// Signed JWTs standing in for what an auth service would issue.
+const TOKENS: Record<string, string> = {
+  admin: await token("admin", ["admin"]),
+  alice: await token("alice", ["author"]),
+  bob: await token("bob", ["author"]),
+  reader: await token("reader-user", ["reader"]),
+};
 
 const assert = (cond: boolean, msg: string) => {
   if (!cond) throw new Error(`FAIL: ${msg}`);
   console.log(`  ok: ${msg}`);
 };
 
-async function post(name: string, input: unknown, token?: string): Promise<{ status: number; body: any }> {
+async function post(name: string, input: unknown, role?: keyof typeof TOKENS): Promise<{ status: number; body: any }> {
   const headers: Record<string, string> = { "content-type": "application/json", "x-mrak-tenant": TENANT };
-  if (token) headers.authorization = `Bearer ${token}`;
+  if (role) headers.authorization = `Bearer ${TOKENS[role]}`;
   const r = await fetch(`${base}/rpc/${name}`, { method: "POST", headers, body: JSON.stringify(input ?? {}) });
   return { status: r.status, body: await r.json() };
 }
@@ -27,6 +37,15 @@ console.log("== Part A: HTTP ACL ==");
 // deny-by-default: anonymous is refused.
 const anon = await post("listNotes", {}, undefined);
 assert(anon.status === 403 && anon.body.ok === false, "anonymous read is denied (403)");
+
+// a token signed with the wrong secret must fail signature verification.
+const forged = await sign({ sub: "alice", roles: ["admin"] }, "wrong-secret");
+const forgedRes = await fetch(`${base}/rpc/listNotes`, {
+  method: "POST",
+  headers: { "content-type": "application/json", "x-mrak-tenant": TENANT, authorization: `Bearer ${forged}` },
+  body: "{}",
+});
+assert(forgedRes.status === 403, "forged token (wrong secret) is rejected");
 
 // seed notes owned by different identities
 const adminNote = await post("createNote", { title: "by-admin", body: "secret" }, "admin");
@@ -79,7 +98,7 @@ console.log("\n== Part B: per-identity live queries ==");
 const inbox: any[] = [];
 let notify: (() => void) | null = null;
 const ws = new WebSocket(`ws://localhost:${port}/live`, {
-  headers: { authorization: "Bearer alice", "x-mrak-tenant": TENANT },
+  headers: { authorization: `Bearer ${TOKENS.alice}`, "x-mrak-tenant": TENANT },
 } as any);
 ws.addEventListener("message", (e) => {
   inbox.push(JSON.parse(String(e.data)));
