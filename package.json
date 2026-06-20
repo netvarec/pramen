@@ -4,13 +4,16 @@
   "private": true,
   "description": "Reactive backend runtime for TypeScript on Cloudflare — schema + handlers, deployed as Workers + Durable Objects.",
   "type": "module",
-  "workspaces": ["packages/*"],
+  "workspaces": [
+    "packages/*"
+  ],
   "bin": {
     "mrak": "scripts/cli.ts"
   },
   "scripts": {
     "config": "oblaka oblaka.ts",
-    "dev": "oblaka oblaka.ts && wrangler dev",
+    "dev": "oblaka oblaka.ts && lopata dev",
+    "dev:wrangler": "oblaka oblaka.ts && wrangler dev",
     "deploy": "oblaka oblaka.ts --remote && wrangler deploy",
     "plan": "oblaka oblaka.ts --remote --dry-run",
     "mrak": "bun scripts/cli.ts",
@@ -22,6 +25,7 @@
     "@mrak/client": "workspace:*",
     "@mrak/react": "workspace:*",
     "@types/react": "^19.0.0",
+    "lopata": "file:../../contember/lopata",
     "oblaka-iac": "^0.0.14",
     "react": "^19.0.0",
     "typescript": "^5.7.0",

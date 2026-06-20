@@ -4,6 +4,7 @@
 
 import { Entity, defineSchema } from "../src/sdk/schema";
 import { createApp } from "../src/sdk/app";
+import type { FieldsOf, ProjectedRow } from "../src/sdk/infer";
 
 const schema = defineSchema({
   users: Entity(
@@ -24,8 +25,8 @@ const schema = defineSchema({
 
 const { query, mutation } = createApp(schema);
 
-export const readChecks = query((ctx) => {
-  const rows = ctx.db.find({
+export const readChecks = query(async (ctx) => {
+  const rows = await ctx.db.find({
     from: "notes",
     where: { title: "hi", pinned: true },
     orderBy: { column: "views", dir: "desc" },
@@ -60,7 +61,7 @@ export const readChecks = query((ctx) => {
   ctx.db.find({ from: "notes", where: { views: { gt: "big" } } });
 
   // cursor pagination: typed page with items + cursor + hasMore
-  const page = ctx.db.page({ from: "notes", orderBy: { column: "id", dir: "asc" }, limit: 10, after: undefined });
+  const page = await ctx.db.page({ from: "notes", orderBy: { column: "id", dir: "asc" }, limit: 10, after: undefined });
   const more: boolean = page.hasMore;
   const next: string | null = page.cursor;
   const firstViews: number | null | undefined = page.items[0]?.views;
@@ -68,25 +69,47 @@ export const readChecks = query((ctx) => {
   void next;
   void firstViews;
 
-  // count + aggregate
-  const n: number = ctx.db.count({ from: "notes", where: { pinned: true } });
-  const stats = ctx.db.aggregate({ from: "notes", groupBy: "ownerId", aggregations: { c: { fn: "count" }, hi: { fn: "max", column: "views" } } });
-  const owner: string | number | null = stats[0]?.ownerId ?? null;
+  // count + aggregate — the result row is inferred from the spec.
+  const n: number = await ctx.db.count({ from: "notes", where: { pinned: true } });
+  const stats = await ctx.db.aggregate({
+    from: "notes",
+    groupBy: "ownerId",
+    aggregations: { c: { fn: "count" }, hi: { fn: "max", column: "views" }, lastTitle: { fn: "min", column: "title" } },
+  });
+  const owner: string | null | undefined = stats[0]?.ownerId; // group column keeps its schema type
+  const c: number | undefined = stats[0]?.c; // count -> number
+  const hi: number | null | undefined = stats[0]?.hi; // max(int) -> number | null
+  const lastTitle: string | null | undefined = stats[0]?.lastTitle; // min(text) -> string | null
+  // @ts-expect-error count is a number, not a string
+  const cBad: string | undefined = stats[0]?.c;
   // @ts-expect-error unknown aggregate column
   ctx.db.aggregate({ from: "notes", aggregations: { x: { fn: "sum", column: "nope" } } });
   void n;
   void owner;
+  void c;
+  void hi;
+  void lastTitle;
+  void cBad;
 
   return { id, title, pinned };
 });
 
-export const relationChecks = query((ctx) => {
+// ProjectedRow: the honest type when field-level (incl. cell-level) ACL may drop
+// columns per row — every field optional, so a partial literal compiles and a
+// dropped field is not assignable to a required value.
+type ProjectedNote = ProjectedRow<FieldsOf<typeof schema.notes>>;
+const projectedNote: ProjectedNote = { id: 1 }; // all fields optional
+// @ts-expect-error a projected field may be absent (number | null | undefined)
+const requiredViews: number = projectedNote.views;
+void requiredViews;
+
+export const relationChecks = query(async (ctx) => {
   // belongsTo: owner is the users row (or null).
-  const notes = ctx.db.find({ from: "notes", with: { owner: true } });
+  const notes = await ctx.db.find({ from: "notes", with: { owner: true } });
   const ownerName: string | null | undefined = notes[0]?.owner?.name;
 
   // hasMany: notes is an array of note rows.
-  const users = ctx.db.find({ from: "users", with: { notes: true } });
+  const users = await ctx.db.find({ from: "users", with: { notes: true } });
   const firstTitle: string | null | undefined = users[0]?.notes?.[0]?.title;
 
   // @ts-expect-error unknown relation
@@ -95,9 +118,9 @@ export const relationChecks = query((ctx) => {
   return { ownerName, firstTitle };
 });
 
-export const writeChecks = mutation((ctx) => {
+export const writeChecks = mutation(async (ctx) => {
   // id is auto (optional); other columns optional (nullable).
-  const created = ctx.db.insert("notes", { title: "x", views: 1, pinned: false });
+  const created = await ctx.db.insert("notes", { title: "x", views: 1, pinned: false });
   const newId: number = created.id;
 
   // @ts-expect-error wrong value type on insert (views is integer -> number)

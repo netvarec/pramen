@@ -9,7 +9,8 @@ instead of a Rust + Turso runtime. See [DESIGN.md](./DESIGN.md).
 
 ```bash
 bun install
-bun run dev            # wrangler dev (local, miniflare) on http://localhost:8787
+bun run dev            # lopata dev (Bun runtime; fast reload + /__dashboard) on http://localhost:8787
+# bun run dev:wrangler # wrangler dev (miniflare) — workerd-parity check before deploy
 
 # Requests need a signed bearer JWT (deny-by-default; see Auth/ACL below). The
 # token must be authorized for the tenant (here the default "main") via a
@@ -27,11 +28,17 @@ curl -s -X POST http://localhost:8787/rpc/listNotes -H "authorization: Bearer $T
 
 ### Auth
 
-The Worker verifies an **HS256 bearer JWT** (WebCrypto) against `AUTH_SECRET`
-(dev value in `wrangler.jsonc`; production via `wrangler secret put AUTH_SECRET`),
-checks `exp`/`nbf`, and maps claims to an Identity (`sub`→userId, `roles`/`role`→
-roles, custom claims pass through). A forged or unsigned request gets no identity.
-Swap `verifyJwt` for RS256/EdDSA + JWKS without touching the rest of the system.
+The Worker verifies a **bearer JWT** (WebCrypto), checks `exp`/`nbf`, and maps
+claims to an Identity (`sub`→userId, `roles`/`role`→roles, custom claims pass
+through). A forged or unsigned request gets no identity. Verification is pluggable
+(`VerifyStrategy` in `src/auth.ts`):
+
+- **HS256** (`HmacStrategy`) — shared secret in `AUTH_SECRET` (dev value in
+  `wrangler.jsonc`; production via `wrangler secret put AUTH_SECRET`). The default.
+- **RS256 via JWKS** (`JwksStrategy`) — set `JWKS_URL` to your identity provider's
+  JWKS endpoint and tokens are verified asymmetrically against the fetched public
+  keys (cached, with `kid` selection and rotation handling). When `JWKS_URL` is
+  set it takes over from `AUTH_SECRET`.
 
 ### ACL
 
@@ -55,6 +62,27 @@ ACL `where` rules accept the same operators and `AND`/`OR` as queries, with
 // reads notes owned by anyone on the caller's team; no `team` claim -> sees none
 policy("manager:read", "notes", "read", { where: { ownerId: { in: $identity("team") } } });
 ```
+
+**Cell-level (per-row) field ACL.** Beyond the flat `fields` list, a policy can
+grant fields *conditionally per row* — visibility that depends on the row's data,
+not just the (entity, action). Use the declarative `conditionalFields` (a row
+predicate, statically analyzable) or the `fieldsFn` escape hatch for arbitrary
+logic. Conditional grants are **additive** — they only ever add fields to the base.
+
+```ts
+// teammate reads every note, but sees `body` only on the notes they own
+policy("teammate:read", "notes", "read", {
+  fields: ["id", "title", "ownerId", "createdAt"],
+  conditionalFields: [{ fields: ["body"], when: { ownerId: $identity("userId") } }],
+  // or, equivalently, the function form:
+  // fieldsFn: (identity, row) => (row.ownerId === identity?.userId ? ["body"] : []),
+});
+```
+
+The same rules enforce writes per row (insert checks the candidate values, update
+the post-merge row), so a teammate can edit `body` on their own note but not on
+another's. A conditionally-visible column can't be aggregated or used in `orderBy`
+(that would leak its value across rows).
 
 The example roles (`example/app.ts`): `admin` (full access), `author` (own notes
 only — mint a token with `sub` = the owner), `reader` (reads all, no `body`),
@@ -107,7 +135,7 @@ over the socket. Single-writer DOs see every write, so invalidation is exact.
 oblaka.ts             IaC source of truth -> generates wrangler.jsonc
 src/
   index.ts            Worker entry — verifies JWT, routes to the per-tenant DO
-  auth.ts             HS256 JWT verification (claims -> Identity)
+  auth.ts             pluggable JWT verification — HS256 + RS256/JWKS (claims -> Identity)
   durable-object.ts   MrakDO — in-process SQLite, schema boot, dispatch, live queries
   sdk/                portable SDK (no platform dep)
     schema.ts         Entity() + defineSchema() + relations (belongsTo/hasMany)
@@ -118,7 +146,7 @@ src/
   runtime/            substrate glue
     errors.ts         typed error envelope (status + code; no internal leakage)
     ddl.ts            CREATE TABLE / ADD COLUMN fragments
-    migrate.ts        additive schema migration on DO boot (create + add column)
+    migrate.ts        schema migration on DO boot (additive + destructive rebuild)
     read-engine.ts    structured query + SqlExpr -> parameterized SQL (TS; WASM later)
     acl.ts            scope resolution, relation scopes, warmup, write rules
     db.ts             ACL-enforcing repository over ctx.storage.sql (+ eager loading)
@@ -229,7 +257,7 @@ const perOwner = ctx.db.aggregate({
   from: "notes",
   groupBy: "ownerId",
   aggregations: { count: { fn: "count" }, lastId: { fn: "max", column: "id" } },
-});                              // [{ ownerId, count, lastId }, ...]
+});  // typed: { ownerId: string | null; count: number; lastId: number | null }[]
 ```
 
 ### Tenants
@@ -312,21 +340,36 @@ bun run mrak init my-app                 # scaffold app.ts + oblaka.ts
 bun run mrak token alice author --tenant acme   # mint a dev JWT
 bun run mrak schema sql                  # CREATE TABLE for the schema
 bun run mrak schema snapshot             # baseline in .mrak/schema.json
-bun run mrak schema diff                 # safe (additive) vs unsafe changes
+bun run mrak schema diff                 # additive vs destructive changes
 bun run mrak schema status --tenant acme # is a deployed tenant caught up?
 ```
 
-`schema diff` understands mrak's additive migrations: added tables/columns are
-safe (applied automatically on the next DO boot); drops and type changes are
-flagged as not auto-applied.
+`schema diff` flags each change as additive (no data loss) or **destructive**
+(drop / type change — rebuilds the table, may lose data). All are auto-applied on
+the next DO boot; declare a `renamedFrom` hint to migrate a renamed column's data
+instead of dropping it.
 
 ### Migrations
 
-The schema is reconciled with the store on every DO boot — new tables are created
-and new fields are added (`ALTER TABLE ADD COLUMN`, nullable) **without data
-loss**. A schema hash in `_mrak_meta` skips the work when nothing changed. Just
-edit the schema and redeploy; existing rows are preserved. (Additive only —
-column drops/renames/type changes aren't auto-applied.)
+The schema is reconciled with the store on every DO boot, inside a storage
+transaction. Two passes:
+
+- **Additive** (no data loss): new tables are created and new columns added
+  (`ALTER TABLE ADD COLUMN`, nullable).
+- **Destructive** (auto-applied): a column the schema no longer declares is
+  dropped, a type change is applied, and a table absent from the schema is dropped
+  — all via the standard SQLite table-rebuild (create new, copy, drop, rename),
+  preserving rows and ids. This **can lose data** on a bad deploy, by design.
+
+A schema hash in `_mrak_meta` skips the work when nothing changed. A **rename**
+can't be inferred from a diff (a removed + added column is ambiguous), so declare
+it with `renamedFrom` — the migrator then copies the old column's data:
+
+```ts
+notes: Entity((t) => ({ id: t.id(), title: t.text(), content: renamedFrom(t.text(), "body") })),
+```
+
+Without the hint, a rename is applied as drop + add (the old column's data is lost).
 
 ## Deploy
 

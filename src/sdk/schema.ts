@@ -14,6 +14,10 @@ export interface FieldDef {
   readonly primaryKey?: boolean;
   readonly autoIncrement?: boolean;
   readonly notNull?: boolean;
+  /** Migration hint: this column was previously named X. On boot the migrator
+   * rebuilds the table, copying data from the old column. A diff cannot tell a
+   * rename from a drop+add, so the rename must be declared explicitly. */
+  readonly renamedFrom?: string;
 }
 
 const builders = {
@@ -61,6 +65,12 @@ export function Entity<F extends EntityFields, R extends RelationDefs = Record<s
   relations?: (r: RelationBuilders) => R,
 ): EntityDef<F, R> {
   return { fields: build(builders), relations: (relations ? relations(relationBuilders) : {}) as R };
+}
+
+/** Annotate a field as renamed from a previous column name (migration hint). Wraps
+ * a builder result, preserving its literal field type: `title: renamedFrom(t.text(), "name")`. */
+export function renamedFrom<F extends FieldDef>(field: F, from: string): F & { readonly renamedFrom: string } {
+  return { ...field, renamedFrom: from };
 }
 
 export type SchemaDef = Record<string, EntityDef<EntityFields, RelationDefs>>;

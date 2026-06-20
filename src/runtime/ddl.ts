@@ -4,11 +4,12 @@
 
 import type { EntityFields, FieldDef } from "../sdk/schema";
 
-// SQLite has no boolean type; store as INTEGER 0/1.
-const colType = (f: FieldDef): string => (f.type === "boolean" ? "INTEGER" : f.type.toUpperCase());
+// SQLite has no boolean type; store as INTEGER 0/1. Exported for the migrator,
+// which compares declared column types (and CASTs on a type change).
+export const sqlType = (f: FieldDef): string => (f.type === "boolean" ? "INTEGER" : f.type.toUpperCase());
 
 function columnSql(name: string, f: FieldDef): string {
-  let s = `${name} ${colType(f)}`;
+  let s = `${name} ${sqlType(f)}`;
   if (f.primaryKey) s += " PRIMARY KEY";
   if (f.autoIncrement) s += " AUTOINCREMENT";
   if (f.notNull && !f.primaryKey) s += " NOT NULL";
@@ -23,5 +24,5 @@ export function createTableSql(table: string, def: { fields: EntityFields }): st
 /** Column definition for ALTER TABLE ADD COLUMN — always nullable, with no
  * PRIMARY KEY / AUTOINCREMENT / NOT NULL (those can't be added to existing rows). */
 export function addColumnSql(name: string, f: FieldDef): string {
-  return `${name} ${colType(f)}`;
+  return `${name} ${sqlType(f)}`;
 }

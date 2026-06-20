@@ -8,7 +8,7 @@
 // + Durable Object (and the SQLite DO migration) on Cloudflare; it uploads only a
 // placeholder module, so `wrangler deploy` does the actual code bundle + upload.
 
-import { define, DurableObject, KVNamespace, Worker } from "oblaka-iac";
+import { define, D1Database, DurableObject, KVNamespace, Worker } from "oblaka-iac";
 
 // One name to namespace every resource this project owns. Cloudflare resource
 // names are account-global, so set a unique PROJECT per app and all its resources
@@ -34,6 +34,9 @@ export default define(({ env }) => {
       // One KV namespace per project. Holds the tenant registry (`tenant:` keys)
       // and handler-facing ctx.kv data (`app:` keys); see src/runtime/kv.ts.
       KV: new KVNamespace({ name: `${PROJECT}-kv` }),
+      // D1 database for the "Worker + D1 (no DO)" path — the same engine over D1,
+      // selected per-request via `x-mrak-store: d1`. The DO remains the write path.
+      DB: new D1Database({ name: `${PROJECT}-d1` }),
     },
     vars,
   });

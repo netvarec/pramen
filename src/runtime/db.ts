@@ -13,6 +13,8 @@
 
 import {
   AclDenied,
+  ALLOW_ALL,
+  effectiveFields,
   projectRow,
   resolveRelationScope,
   resolveScope,
@@ -20,6 +22,7 @@ import {
   type AclContext,
   type Scope,
 } from "./acl";
+import type { Validator } from "../sdk/acl";
 import {
   and,
   cmp,
@@ -37,8 +40,9 @@ import {
   type SqlExpr,
 } from "./read-engine";
 import { BadRequest } from "./errors";
-import type { FieldDef, RelationDef, SchemaDef } from "../sdk/schema";
-import type { FieldsOf, InferInsert, InferRow, InferUpdate, RelationsOf, RelationsResult, WhereInput } from "../sdk/infer";
+import type { Dialect, Driver } from "./driver";
+import type { EntityFields, FieldDef, RelationDef, SchemaDef } from "../sdk/schema";
+import type { Cell, FieldsOf, InferInsert, InferRow, InferUpdate, RelationsOf, RelationsResult, WhereInput } from "../sdk/infer";
 
 type Row = Record<string, unknown>;
 type Action = "read" | "create" | "update" | "delete";
@@ -46,10 +50,6 @@ type Id = string | number | bigint;
 type Selected = Partial<Record<string, true>> | undefined;
 
 const DEFAULT_PAGE_SIZE = 50;
-
-function bind(v: unknown): unknown {
-  return typeof v === "boolean" ? (v ? 1 : 0) : v;
-}
 
 function normalizeOrder(orderBy: unknown): OrderBy[] | undefined {
   if (!orderBy) return undefined;
@@ -88,15 +88,38 @@ export interface Page<R> {
   hasMore: boolean;
 }
 
+/** The aggregations map of an aggregate spec, keyed by output column name. */
+type Aggregations<F extends EntityFields> = Record<string, { fn: AggFn; column?: keyof F & string }>;
+
 export interface AggregateSpec<S extends SchemaDef, T extends keyof S> {
   from: T;
   where?: WhereInput<FieldsOf<S[T]>>;
   groupBy?: (keyof FieldsOf<S[T]> & string) | (keyof FieldsOf<S[T]> & string)[];
-  aggregations: Record<string, { fn: AggFn; column?: keyof FieldsOf<S[T]> & string }>;
+  aggregations: Aggregations<FieldsOf<S[T]>>;
 }
 
-/** One aggregate result row: group columns + the aggregated values. */
+/** One aggregate result row: loosely typed (any output column -> value). */
 export type AggregateRow = Record<string, number | string | null>;
+
+// --- precise aggregate result inference (groupBy keys + per-aggregation values) ---
+
+type GroupKeys<G> = G extends readonly (infer K)[] ? K : G;
+
+/** The value type of a single aggregation: count -> number; min/max -> the column's
+ * own type (nullable); sum/avg -> number | null. */
+type AggValue<Fn extends AggFn, Col, F extends EntityFields> = Fn extends "count"
+  ? number
+  : Fn extends "min" | "max"
+    ? Col extends keyof F
+      ? Cell<F[Col]> | null
+      : number | null
+    : number | null;
+
+/** A result row inferred from a (groupBy, aggregations) spec: group columns keep
+ * their schema type, each aggregation gets its computed value type. */
+export type AggregateResult<F extends EntityFields, G, A extends Aggregations<F>> = {
+  [K in Extract<GroupKeys<G>, keyof F & string>]: Cell<F[K]>;
+} & { [K in keyof A]: AggValue<A[K]["fn"], A[K]["column"], F> };
 
 function encodeCursor(order: OrderBy[], row: Row): string {
   const vals = order.map((o) => row[o.column]);
@@ -130,40 +153,72 @@ function keysetAfter(order: OrderBy[], values: unknown[]): SqlExpr {
 export class Db<S extends SchemaDef = SchemaDef> {
   /** Tables read or written during this Db's lifetime. */
   readonly touched = new Set<string>();
+  private readonly dialect: Dialect;
 
   constructor(
-    private readonly sql: SqlStorage,
+    private readonly driver: Driver,
     private readonly acl: AclContext,
     private readonly schema: SchemaDef,
-  ) {}
+  ) {
+    this.dialect = driver.dialect;
+  }
 
   /** Resolve the ACL scope for an operation, or grant everything in SYSTEM mode. */
   private scopeFor(entity: string, action: Action): Scope {
-    if (this.acl.system) return { allowed: true, where: null, fields: null };
+    if (this.acl.system) return ALLOW_ALL;
     return resolveScope(this.acl, entity, action);
   }
 
-  /** Apply policy `set` (forced, server-controlled column values) and run `validate`
-   * on the final values. Mutates `values`. Skipped in SYSTEM mode. */
-  private applyWriteRules(entity: string, action: "create" | "update", values: Row): void {
-    if (this.acl.system) return;
-    const { set, validators } = resolveWriteRules(this.acl, entity, action);
-    Object.assign(values, set); // forced values override client input
+  /** Forced `set` values + validators for a write (empty in SYSTEM mode). The two
+   * halves are applied separately so the cell-level field check can run AFTER `set`
+   * (so a conditional `when` sees forced columns) but BEFORE `validate`. */
+  private writeRules(entity: string, action: "create" | "update"): { set: Row; validators: Validator[] } {
+    if (this.acl.system) return { set: {}, validators: [] };
+    return resolveWriteRules(this.acl, entity, action);
+  }
+
+  /** Run write validators against the final values; a throw surfaces as a 400. */
+  private runValidators(validators: Validator[], values: Row): void {
     for (const validate of validators) {
       try {
         validate({ identity: this.acl.identity, values });
       } catch (e) {
-        // validators are authored for end users -> surface as a 400.
         throw new BadRequest(e instanceof Error ? e.message : "validation failed");
       }
     }
   }
 
+  /** Enforce field-level (incl. cell-level) write permission for one row. `setCols`
+   * are server-forced values that bypass the restriction. `evalRow` is the row the
+   * per-row grants are evaluated against (candidate on insert, post-merge on update). */
+  private checkWriteFields(
+    table: string,
+    action: "create" | "update",
+    scope: Scope,
+    writtenCols: string[],
+    evalRow: Row,
+    setCols: Set<string>,
+  ): void {
+    const allowed = effectiveFields(scope, evalRow, this.acl.identity);
+    if (!allowed) return; // all fields permitted for this row
+    for (const c of writtenCols) {
+      if (!setCols.has(c) && !allowed.includes(c)) throw new AclDenied(table, action, c);
+    }
+  }
+
+  /** Reject ordering by a column the caller cannot read (closes an info-leak: order
+   * and the keyset cursor would otherwise expose a hidden column's values). Columns
+   * granted only conditionally are NOT orderable. */
+  private assertReadableCols(from: string, scope: Scope, cols: string[]): void {
+    if (scope.fields === null) return;
+    for (const c of cols) if (!scope.fields.includes(c)) throw new AclDenied(from, "read", c);
+  }
+
   /** Structured read; ACL row-scope is AND-ed in, permitted fields projected.
    * Selected relations are eager-loaded, each independently ACL-checked. */
-  find<T extends keyof S & string>(
+  async find<T extends keyof S & string>(
     spec: FindSpec<S, T>,
-  ): (InferRow<FieldsOf<S[T]>> & RelationsResult<S, T>)[] {
+  ): Promise<(InferRow<FieldsOf<S[T]>> & RelationsResult<S, T>)[]> {
     const from = spec.from as string;
     this.touched.add(from);
     const scope = this.scopeFor(from, "read");
@@ -171,53 +226,66 @@ export class Db<S extends SchemaDef = SchemaDef> {
 
     const where = this.readWhere(spec.where, scope);
     const orderBy = normalizeOrder(spec.orderBy);
-    const raw = this.selectRaw(from, where, orderBy, spec.limit, spec.offset);
-    return this.finishRows(from, raw, scope.fields, spec.with as Selected) as (InferRow<FieldsOf<S[T]>> &
+    if (orderBy) this.assertReadableCols(from, scope, orderBy.map((o) => o.column));
+    const raw = await this.selectRaw(from, where, orderBy, spec.limit, spec.offset);
+    return (await this.finishRows(from, raw, scope, spec.with as Selected)) as (InferRow<FieldsOf<S[T]>> &
       RelationsResult<S, T>)[];
   }
 
   /** Cursor (keyset) pagination. Stable under inserts/deletes; the PK is appended
    * to `orderBy` as a tiebreaker so the keyset is unique. Returns the page plus an
    * opaque `cursor` (pass back as `after`) and whether more rows remain. */
-  page<T extends keyof S & string>(
+  async page<T extends keyof S & string>(
     spec: PageSpec<S, T>,
-  ): Page<InferRow<FieldsOf<S[T]>> & RelationsResult<S, T>> {
+  ): Promise<Page<InferRow<FieldsOf<S[T]>> & RelationsResult<S, T>>> {
     const from = spec.from as string;
     this.touched.add(from);
     const scope = this.scopeFor(from, "read");
     if (!scope.allowed) throw new AclDenied(from, "read");
 
     const order = this.orderWithPk(from, spec.orderBy);
+    this.assertReadableCols(from, scope, order.map((o) => o.column)); // order + cursor must not leak hidden cols
     let where = this.readWhere(spec.where, scope);
     if (spec.after != null) where = and(where, keysetAfter(order, decodeCursor(spec.after)));
 
     const limit = spec.limit ?? DEFAULT_PAGE_SIZE;
-    const raw = this.selectRaw(from, where, order, limit + 1); // +1 to detect a next page
+    const raw = await this.selectRaw(from, where, order, limit + 1); // +1 to detect a next page
     const hasMore = raw.length > limit;
     if (hasMore) raw.length = limit;
 
     const last = raw[raw.length - 1];
     const cursor = last ? encodeCursor(order, last) : null; // from raw row (has all order cols)
-    const items = this.finishRows(from, raw, scope.fields, spec.with as Selected) as (InferRow<FieldsOf<S[T]>> &
+    const items = (await this.finishRows(from, raw, scope, spec.with as Selected)) as (InferRow<FieldsOf<S[T]>> &
       RelationsResult<S, T>)[];
     return { items, cursor, hasMore };
   }
 
   /** Count rows visible to the caller (ACL read scope applied). */
-  count<T extends keyof S & string>(spec: { from: T; where?: WhereInput<FieldsOf<S[T]>> }): number {
+  async count<T extends keyof S & string>(spec: { from: T; where?: WhereInput<FieldsOf<S[T]>> }): Promise<number> {
     const from = spec.from as string;
     this.touched.add(from);
     const scope = this.scopeFor(from, "read");
     if (!scope.allowed) throw new AclDenied(from, "read");
     const where = this.readWhere(spec.where, scope);
-    const { sql, params } = compileCount(from, where);
-    const rows = this.sql.exec(sql, ...params).toArray() as { n: number }[];
+    const { sql, params } = compileCount(from, this.dialect, where);
+    const rows = (await this.driver.exec(sql, params)) as { n: number }[];
     return Number(rows[0]?.n ?? 0);
   }
 
   /** Grouped aggregation (count/sum/avg/min/max). ACL read scope is applied, and
-   * every referenced column must be readable under field permissions. */
-  aggregate<T extends keyof S & string>(spec: AggregateSpec<S, T>): AggregateRow[] {
+   * every referenced column must be readable under field permissions. The result
+   * row type is inferred from the spec: group columns keep their schema type and
+   * each aggregation gets its computed value type. */
+  async aggregate<
+    T extends keyof S & string,
+    A extends Aggregations<FieldsOf<S[T]>>,
+    G extends (keyof FieldsOf<S[T]> & string) | (keyof FieldsOf<S[T]> & string)[] = never,
+  >(spec: {
+    from: T;
+    where?: WhereInput<FieldsOf<S[T]>>;
+    groupBy?: G;
+    aggregations: A;
+  }): Promise<AggregateResult<FieldsOf<S[T]>, G, A>[]> {
     const from = spec.from as string;
     this.touched.add(from);
     const scope = this.scopeFor(from, "read");
@@ -231,8 +299,8 @@ export class Db<S extends SchemaDef = SchemaDef> {
     }
 
     const where = this.readWhere(spec.where, scope);
-    const { sql, params } = compileAggregate({ from, where, groupBy, aggregations: spec.aggregations });
-    return this.sql.exec(sql, ...params).toArray() as AggregateRow[];
+    const { sql, params } = compileAggregate({ from, where, groupBy, aggregations: spec.aggregations }, this.dialect);
+    return (await this.driver.exec(sql, params)) as AggregateResult<FieldsOf<S[T]>, G, A>[];
   }
 
   // --- read internals shared by find/page ---
@@ -242,17 +310,24 @@ export class Db<S extends SchemaDef = SchemaDef> {
     return scope.where ? and(userExpr, scope.where) : userExpr;
   }
 
-  private selectRaw(from: string, where: SqlExpr, orderBy?: OrderBy[], limit?: number, offset?: number): Row[] {
-    const { sql, params } = compileSelect({ from, where, orderBy, limit, offset });
-    return this.sql.exec(sql, ...params).toArray() as Row[];
+  private async selectRaw(from: string, where: SqlExpr, orderBy?: OrderBy[], limit?: number, offset?: number): Promise<Row[]> {
+    const { sql, params } = compileSelect({ from, where, orderBy, limit, offset }, this.dialect);
+    return this.driver.exec(sql, params);
   }
 
-  private finishRows(from: string, raw: Row[], fields: string[] | null, withSel: Selected): Row[] {
+  /** Fetch one row by id within an ACL row-scope (for per-row write evaluation). */
+  private async fetchOne(from: string, id: Id, scopeWhere: SqlExpr | null): Promise<Row | undefined> {
+    const where = scopeWhere ? and(eq("id", id), scopeWhere) : eq("id", id);
+    const { sql, params } = compileSelect({ from, where, limit: 1 }, this.dialect);
+    return (await this.driver.exec(sql, params))[0] as Row | undefined;
+  }
+
+  private async finishRows(from: string, raw: Row[], scope: Scope, withSel: Selected): Promise<Row[]> {
     const relNames = withSel ? Object.keys(withSel).filter((k) => withSel[k]) : [];
-    for (const relName of relNames) this.loadRelation(from, raw, relName);
-    if (!fields) return raw;
+    for (const relName of relNames) await this.loadRelation(from, raw, relName);
+    if (scope.fields === null) return raw; // base unrestricted -> no per-row narrowing possible
     return raw.map((r) => {
-      const projected = projectRow(r, fields);
+      const projected = projectRow(r, effectiveFields(scope, r, this.acl.identity));
       for (const relName of relNames) projected[relName] = r[relName]; // relations survive projection
       return projected;
     });
@@ -273,37 +348,35 @@ export class Db<S extends SchemaDef = SchemaDef> {
 
   /** Eager-load one relation onto `rows` (mutates them). Traversal is ACL-checked
    * via resolveRelationScope: the related read scope OR a parent directAccess grant. */
-  private loadRelation(parentEntity: string, rows: Row[], relName: string): void {
+  private async loadRelation(parentEntity: string, rows: Row[], relName: string): Promise<void> {
     const rel = this.schema[parentEntity]?.relations?.[relName] as RelationDef | undefined;
     if (!rel) throw new Error(`unknown relation: ${parentEntity}.${relName}`);
 
     this.touched.add(rel.target);
-    const scope = this.acl.system
-      ? ({ allowed: true, where: null, fields: null } as Scope)
-      : resolveRelationScope(this.acl, parentEntity, relName, rel.target);
+    const scope = this.acl.system ? ALLOW_ALL : resolveRelationScope(this.acl, parentEntity, relName, rel.target);
     if (!scope.allowed) throw new AclDenied(rel.target, "read");
 
-    const project = (row: Row): Row => (scope.fields ? projectRow(row, scope.fields) : row);
+    const project = (row: Row): Row => projectRow(row, effectiveFields(scope, row, this.acl.identity));
     // One IN query per relation (no N+1). Match column before projecting (which
     // may drop the join column).
-    const fetchBy = (col: string, values: unknown[]): Array<{ key: unknown; row: Row }> => {
+    const fetchBy = async (col: string, values: unknown[]): Promise<Array<{ key: unknown; row: Row }>> => {
       if (values.length === 0) return [];
       const where = scope.where ? and(inList(col, values), scope.where) : inList(col, values);
-      const { sql, params } = compileSelect({ from: rel.target, where });
-      return (this.sql.exec(sql, ...params).toArray() as Row[]).map((row) => ({ key: row[col], row: project(row) }));
+      const { sql, params } = compileSelect({ from: rel.target, where }, this.dialect);
+      return (await this.driver.exec(sql, params)).map((row) => ({ key: row[col], row: project(row) }));
     };
 
     if (rel.kind === "belongsTo") {
       // parent[column] -> target.id
       const keys = [...new Set(rows.map((r) => r[rel.column]).filter((v) => v != null))];
       const byId = new Map<unknown, Row>();
-      for (const { key, row } of fetchBy("id", keys)) byId.set(key, row);
+      for (const { key, row } of await fetchBy("id", keys)) byId.set(key, row);
       for (const r of rows) r[relName] = r[rel.column] != null ? (byId.get(r[rel.column]) ?? null) : null;
     } else {
       // hasMany: target[column] -> parent.id
       const ids = [...new Set(rows.map((r) => r.id).filter((v) => v != null))];
       const grouped = new Map<unknown, Row[]>();
-      for (const { key, row } of fetchBy(rel.column, ids)) {
+      for (const { key, row } of await fetchBy(rel.column, ids)) {
         const bucket = grouped.get(key) ?? grouped.set(key, []).get(key)!;
         bucket.push(row);
       }
@@ -312,69 +385,95 @@ export class Db<S extends SchemaDef = SchemaDef> {
   }
 
   /** Insert a single row, returning the persisted row. */
-  insert<T extends keyof S & string>(table: T, values: InferInsert<FieldsOf<S[T]>>): InferRow<FieldsOf<S[T]>> {
+  async insert<T extends keyof S & string>(
+    table: T,
+    values: InferInsert<FieldsOf<S[T]>>,
+  ): Promise<InferRow<FieldsOf<S[T]>>> {
     this.touched.add(table);
     const scope = this.scopeFor(table, "create");
     if (!scope.allowed) throw new AclDenied(table, "create");
     const vals = { ...(values as Row) };
-    if (scope.fields) {
-      for (const c of Object.keys(vals)) if (!scope.fields.includes(c)) throw new AclDenied(table, "create", c);
-    }
-    this.applyWriteRules(table, "create", vals); // forced `set` values + `validate`
+    const { set, validators } = this.writeRules(table, "create");
+    Object.assign(vals, set); // forced server values first, so a conditional `when` can see them
+    this.checkWriteFields(table, "create", scope, Object.keys(vals), vals, new Set(Object.keys(set)));
+    this.runValidators(validators, vals);
 
     const cols = Object.keys(vals);
-    const placeholders = cols.map(() => "?").join(", ");
-    const sql = `INSERT INTO ${table} (${cols.join(", ")}) VALUES (${placeholders}) RETURNING *`;
-    const rows = this.sql.exec(sql, ...cols.map((c) => bind(vals[c]))).toArray() as Row[];
+    const colList = cols.map((c) => this.dialect.id(c)).join(", ");
+    const phs = cols.map((_, i) => this.dialect.placeholder(i + 1)).join(", ");
+    const params = cols.map((c) => this.dialect.encode(vals[c]));
+    const sql = `INSERT INTO ${this.dialect.id(table)} (${colList}) VALUES (${phs})${this.returningClause("*")}`;
+    const rows = await this.driver.exec(sql, params);
     return rows[0]! as InferRow<FieldsOf<S[T]>>;
   }
 
   /** Update a row by id. ACL row-scope is AND-ed into the WHERE, so a caller can
    * only update rows within scope; returns undefined if none matched. */
-  update<T extends keyof S & string>(
+  async update<T extends keyof S & string>(
     table: T,
     id: Id,
     patch: InferUpdate<FieldsOf<S[T]>>,
-  ): InferRow<FieldsOf<S[T]>> | undefined {
+  ): Promise<InferRow<FieldsOf<S[T]>> | undefined> {
     this.touched.add(table);
     const scope = this.scopeFor(table, "update");
     if (!scope.allowed) throw new AclDenied(table, "update");
     const p = { ...(patch as Row) };
-    if (scope.fields) {
-      for (const c of Object.keys(p)) if (!scope.fields.includes(c)) throw new AclDenied(table, "update", c);
-    }
-    this.applyWriteRules(table, "update", p); // forced `set` values + `validate`
+    const { set, validators } = this.writeRules(table, "update");
+    Object.assign(p, set); // forced server values first
     const cols = Object.keys(p);
     if (cols.length === 0) return undefined;
 
-    const assignments = cols.map((c) => `${c} = ?`).join(", ");
-    const params: unknown[] = [...cols.map((c) => bind(p[c])), bind(id)];
-    let sql = `UPDATE ${table} SET ${assignments} WHERE id = ?`;
+    // Per-row field permission is evaluated against the FINAL (post-merge) row, so
+    // fetch the existing row within update scope when any cell-level rule applies.
+    let evalRow: Row = p;
+    if (scope.fields !== null && (scope.conditional.length > 0 || scope.fieldsFns.length > 0)) {
+      const existing = await this.fetchOne(table, id, scope.where);
+      if (!existing) return undefined; // out of update scope -> no-op
+      evalRow = { ...existing, ...p };
+    }
+    this.checkWriteFields(table, "update", scope, cols, evalRow, new Set(Object.keys(set)));
+    this.runValidators(validators, p);
+
+    const params: unknown[] = [];
+    const assignments = cols
+      .map((c) => {
+        params.push(this.dialect.encode(p[c]));
+        return `${this.dialect.id(c)} = ${this.dialect.placeholder(params.length)}`;
+      })
+      .join(", ");
+    params.push(this.dialect.encode(id));
+    let sql = `UPDATE ${this.dialect.id(table)} SET ${assignments} WHERE ${this.dialect.id("id")} = ${this.dialect.placeholder(params.length)}`;
     sql += this.scopeClause(scope.where, params);
-    sql += " RETURNING *";
-    return this.sql.exec(sql, ...params).toArray()[0] as InferRow<FieldsOf<S[T]>> | undefined;
+    sql += this.returningClause("*");
+    return (await this.driver.exec(sql, params))[0] as InferRow<FieldsOf<S[T]>> | undefined;
   }
 
   /** Delete a row by id within scope. Returns whether a row was deleted. */
-  delete<T extends keyof S & string>(table: T, id: Id): boolean {
+  async delete<T extends keyof S & string>(table: T, id: Id): Promise<boolean> {
     this.touched.add(table);
     const scope = this.scopeFor(table, "delete");
     if (!scope.allowed) throw new AclDenied(table, "delete");
-    const params: unknown[] = [bind(id)];
-    let sql = `DELETE FROM ${table} WHERE id = ?`;
+    const params: unknown[] = [this.dialect.encode(id)];
+    let sql = `DELETE FROM ${this.dialect.id(table)} WHERE ${this.dialect.id("id")} = ${this.dialect.placeholder(1)}`;
     sql += this.scopeClause(scope.where, params);
-    sql += " RETURNING id";
-    return this.sql.exec(sql, ...params).toArray().length > 0;
+    sql += this.returningClause("id");
+    return (await this.driver.exec(sql, params)).length > 0;
   }
 
   /** Escape hatch — raw SQL, NOT ACL-checked. For system/internal use only. */
-  exec(sql: string, ...params: unknown[]): Row[] {
-    return this.sql.exec(sql, ...params.map(bind)).toArray() as Row[];
+  async exec(sql: string, ...params: unknown[]): Promise<Row[]> {
+    return this.driver.exec(sql, params.map((p) => this.dialect.encode(p)));
+  }
+
+  // RETURNING is supported on SQLite/Postgres; a dialect without it (MySQL) would
+  // need an insert-then-select-back path — not implemented in this spike.
+  private returningClause(cols: string): string {
+    return this.dialect.returning ? ` RETURNING ${cols}` : "";
   }
 
   private scopeClause(where: SqlExpr | null, params: unknown[]): string {
     if (!where) return "";
-    const compiled = compileExpr(where, params);
+    const compiled = compileExpr(where, this.dialect, params);
     return compiled.sql === "1" ? "" : ` AND (${compiled.sql})`;
   }
 }

@@ -11,6 +11,7 @@
 import { Db } from "./db";
 import { warmup, type AclContext } from "./acl";
 import { BadRequest } from "./errors";
+import type { Driver } from "./driver";
 import type { Kv } from "./kv";
 import type { ResolverDb } from "../sdk/acl";
 import type { SchemaDef } from "../sdk/schema";
@@ -25,7 +26,7 @@ export interface DispatchResult {
 export async function dispatch(
   handlers: HandlerMap,
   schema: SchemaDef,
-  storage: DurableObjectStorage,
+  driver: Driver,
   kv: Kv,
   acl: AclContext,
   name: string,
@@ -46,16 +47,16 @@ export async function dispatch(
 
   // Warmup: evaluate dynamic resolvers once, reading through a SYSTEM-mode db
   // (separate from the handler's db, so its reads don't pollute `touched`).
-  const systemDb = new Db(storage.sql, { acl: acl.acl, identity: acl.identity, system: true }, schema);
+  const systemDb = new Db(driver, { acl: acl.acl, identity: acl.identity, system: true }, schema);
   const resolved = await warmup(acl.acl, acl.identity, systemDb as unknown as ResolverDb);
 
-  const db = new Db(storage.sql, { acl: acl.acl, identity: acl.identity, resolved }, schema);
+  const db = new Db(driver, { acl: acl.acl, identity: acl.identity, resolved }, schema);
   const ctx: HandlerContext = { db, kv, identity: acl.identity };
 
   const result =
     handler.kind === "query"
       ? await handler.run(ctx, parsed)
-      : await storage.transaction(async () => handler.run(ctx, parsed));
+      : await driver.transaction(async () => handler.run(ctx, parsed));
 
   return { result, kind: handler.kind, touched: [...db.touched] };
 }

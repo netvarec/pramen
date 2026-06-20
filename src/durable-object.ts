@@ -19,6 +19,7 @@ import { migrate } from "./runtime/migrate";
 import { dispatch } from "./runtime/dispatch";
 import { digest } from "./runtime/digest";
 import { compileAcl, type AclContext, type CompiledAcl } from "./runtime/acl";
+import { DoSqliteDriver, type Driver } from "./runtime/driver";
 import { BadRequest, toResponse, toWsError } from "./runtime/errors";
 import { Kv } from "./runtime/kv";
 import type { Identity } from "./sdk/acl";
@@ -40,6 +41,7 @@ const MAX_SUBSCRIPTIONS = 64;
 export class MrakDO extends DurableObject<DoEnv> {
   private readonly acl: CompiledAcl;
   private readonly kv: Kv;
+  private readonly driver: Driver;
   private registered = false;
 
   constructor(ctx: DurableObjectState, env: DoEnv) {
@@ -47,11 +49,14 @@ export class MrakDO extends DurableObject<DoEnv> {
     this.acl = compileAcl(app.acl ?? []);
     this.kv = new Kv(env.KV); // app:-prefixed, handed to handlers as ctx.kv
 
-    // Reconcile the SQLite store with the schema before any request is served
-    // (create tables, add new columns; no data loss).
-    ctx.blockConcurrencyWhile(async () => {
-      migrate(ctx.storage.sql, app.schema);
-    });
+    // The data layer runs over a Driver. The DO's store is its own in-process SQLite;
+    // the D1 substrate (D1Driver) lives in the Worker (the "Worker + D1, no DO" path).
+    this.driver = new DoSqliteDriver(ctx.storage);
+
+    // Reconcile the store with the schema before any request is served (create/alter
+    // tables; destructive changes rebuild the table). Wrapped in a transaction so a
+    // partial migration can't leave a half-rebuilt table.
+    ctx.blockConcurrencyWhile(() => this.driver.transaction(() => migrate(this.driver, app.schema).then(() => {})));
   }
 
   override async fetch(request: Request): Promise<Response> {
@@ -77,7 +82,7 @@ export class MrakDO extends DurableObject<DoEnv> {
     }
 
     try {
-      const { result, kind, touched } = await dispatch(app.handlers, app.schema, this.ctx.storage, this.kv, this.ctxFor(identity), name, input);
+      const { result, kind, touched } = await dispatch(app.handlers, app.schema, this.driver, this.kv, this.ctxFor(identity), name, input);
       if (kind === "mutation" && touched.length > 0) await this.broadcast(touched);
       return Response.json({ ok: true, result });
     } catch (err) {
@@ -133,7 +138,7 @@ export class MrakDO extends DurableObject<DoEnv> {
       if (!replacing && state.subs.length >= MAX_SUBSCRIPTIONS) {
         return this.send(ws, toWsError(id, new BadRequest("subscription limit reached")));
       }
-      const { result, kind, touched } = await dispatch(app.handlers, app.schema, this.ctx.storage, this.kv, this.ctxFor(state.identity), name, input);
+      const { result, kind, touched } = await dispatch(app.handlers, app.schema, this.driver, this.kv, this.ctxFor(state.identity), name, input);
       if (kind !== "query") {
         return this.send(ws, toWsError(id, new BadRequest(`${name} is not a query`)));
       }
@@ -149,7 +154,7 @@ export class MrakDO extends DurableObject<DoEnv> {
   private async onCall(ws: WebSocket, id: string, name: string, input: unknown): Promise<void> {
     const state = this.getState(ws);
     try {
-      const { result, kind, touched } = await dispatch(app.handlers, app.schema, this.ctx.storage, this.kv, this.ctxFor(state.identity), name, input);
+      const { result, kind, touched } = await dispatch(app.handlers, app.schema, this.driver, this.kv, this.ctxFor(state.identity), name, input);
       this.send(ws, { type: "result", id, result });
       if (kind === "mutation" && touched.length > 0) await this.broadcast(touched);
     } catch (err) {
@@ -167,7 +172,7 @@ export class MrakDO extends DurableObject<DoEnv> {
       for (const sub of state.subs) {
         if (!sub.tables.some((t) => written.has(t))) continue;
         try {
-          const { result } = await dispatch(app.handlers, app.schema, this.ctx.storage, this.kv, this.ctxFor(state.identity), sub.name, sub.input);
+          const { result } = await dispatch(app.handlers, app.schema, this.driver, this.kv, this.ctxFor(state.identity), sub.name, sub.input);
           const next = digest(result);
           if (next === sub.digest) continue; // result unchanged for this subscription
           sub.digest = next;
@@ -192,13 +197,13 @@ export class MrakDO extends DurableObject<DoEnv> {
     const name = request.headers.get("x-mrak-tenant");
     if (!name) return;
 
-    const seen = this.ctx.storage.sql.exec(`SELECT 1 FROM _mrak_meta WHERE key = 'registered'`).toArray();
+    const seen = await this.driver.exec(`SELECT 1 FROM _mrak_meta WHERE key = 'registered'`, []);
     if (seen.length > 0) {
       this.registered = true;
       return;
     }
     await this.env.KV.put(`tenant:${name}`, JSON.stringify({ firstSeen: Date.now() }));
-    this.ctx.storage.sql.exec(`INSERT OR REPLACE INTO _mrak_meta (key, value) VALUES ('registered', ?)`, name);
+    await this.driver.exec(`INSERT OR REPLACE INTO _mrak_meta (key, value) VALUES ('registered', ?)`, [name]);
     this.registered = true;
   }
 
@@ -236,15 +241,17 @@ export class MrakDO extends DurableObject<DoEnv> {
 
   // Introspection: this tenant's applied schema hash + live table/column shape
   // (admin-gated at the Worker). Powers the CLI's `schema status`.
-  private handleSchema(): Response {
-    const sql = this.ctx.storage.sql;
-    const hashRow = sql.exec(`SELECT value FROM _mrak_meta WHERE key = 'schema_hash'`).toArray() as { value: string }[];
-    const tableRows = sql
-      .exec(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name <> '_mrak_meta'`)
-      .toArray() as { name: string }[];
+  private async handleSchema(): Promise<Response> {
+    const hashRow = (await this.driver.exec(`SELECT value FROM _mrak_meta WHERE key = 'schema_hash'`, [])) as {
+      value: string;
+    }[];
+    const tableRows = (await this.driver.exec(
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name <> '_mrak_meta'`,
+      [],
+    )) as { name: string }[];
     const tables: Record<string, string[]> = {};
     for (const { name } of tableRows) {
-      tables[name] = (sql.exec(`PRAGMA table_info(${name})`).toArray() as { name: string }[]).map((r) => r.name);
+      tables[name] = ((await this.driver.exec(`PRAGMA table_info(${name})`, [])) as { name: string }[]).map((r) => r.name);
     }
     return Response.json({ ok: true, result: { hash: hashRow[0]?.value ?? null, tables } });
   }

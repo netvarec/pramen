@@ -19,10 +19,15 @@ type IsNotNull<D extends FieldDef> = D extends { notNull: true }
     ? true
     : false;
 
-type Cell<D extends FieldDef> = IsNotNull<D> extends true ? FieldTsType<D> : FieldTsType<D> | null;
+export type Cell<D extends FieldDef> = IsNotNull<D> extends true ? FieldTsType<D> : FieldTsType<D> | null;
 
 /** Row shape returned from reads. */
 export type InferRow<F extends EntityFields> = { [K in keyof F]: Cell<F[K]> };
+
+/** A row whose fields may be projected away by field-level (incl. cell-level) ACL:
+ * every column optional. The honest type for a handler that reads through a policy
+ * which can drop columns per row — `InferRow` over-claims presence by design. */
+export type ProjectedRow<F extends EntityFields> = { [K in keyof F]?: Cell<F[K]> };
 
 /** Operators available on a column predicate. `like` is string-only. */
 export interface WhereOps<V> {

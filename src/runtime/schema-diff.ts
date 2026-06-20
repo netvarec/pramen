@@ -1,7 +1,8 @@
-// Schema shape + diff — powers the CLI's `schema diff`. mrak migrations are
-// additive (create table, add column), so a diff classifies each change as
-// `safe` (applied automatically by migrate() on the next DO boot) or unsafe
-// (drops / type changes — NOT applied, left as orphans / needing manual work).
+// Schema shape + diff — powers the CLI's `schema diff`. migrate() applies every
+// change on the next DO boot, additive AND destructive. A diff classifies each as
+// `destructive` (drop / type change — rebuilds the table and CAN lose data) or not
+// (add table/column — no data loss). A rename can't be detected from a shape diff;
+// it shows as drop+add unless declared with `renamedFrom` in the schema.
 
 import type { FieldDef, SchemaDef } from "../sdk/schema";
 
@@ -23,8 +24,9 @@ export interface SchemaChange {
   table: string;
   column?: string;
   detail?: string;
-  /** true = applied by additive migrate(); false = NOT applied (manual). */
-  safe: boolean;
+  /** true = rebuilds the table and may lose data (drop / type change); false =
+   * additive, no data loss. All changes are auto-applied on the next DO boot. */
+  destructive: boolean;
 }
 
 export function diffSchemaShape(prev: SchemaShape, next: SchemaShape): SchemaChange[] {
@@ -32,23 +34,23 @@ export function diffSchemaShape(prev: SchemaShape, next: SchemaShape): SchemaCha
 
   for (const table of Object.keys(next)) {
     if (!(table in prev)) {
-      changes.push({ kind: "add-table", table, safe: true });
+      changes.push({ kind: "add-table", table, destructive: false });
       continue;
     }
     for (const col of Object.keys(next[table]!)) {
       if (!(col in prev[table]!)) {
-        changes.push({ kind: "add-column", table, column: col, safe: true });
+        changes.push({ kind: "add-column", table, column: col, destructive: false });
       } else if (prev[table]![col] !== next[table]![col]) {
-        changes.push({ kind: "change-type", table, column: col, detail: `${prev[table]![col]} → ${next[table]![col]}`, safe: false });
+        changes.push({ kind: "change-type", table, column: col, detail: `${prev[table]![col]} → ${next[table]![col]}`, destructive: true });
       }
     }
     for (const col of Object.keys(prev[table]!)) {
-      if (!(col in next[table]!)) changes.push({ kind: "drop-column", table, column: col, safe: false });
+      if (!(col in next[table]!)) changes.push({ kind: "drop-column", table, column: col, destructive: true });
     }
   }
 
   for (const table of Object.keys(prev)) {
-    if (!(table in next)) changes.push({ kind: "drop-table", table, safe: false });
+    if (!(table in next)) changes.push({ kind: "drop-table", table, destructive: true });
   }
 
   return changes;

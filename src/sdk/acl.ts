@@ -55,6 +55,20 @@ export function deny(): DenyMarker {
 /** A where rule: column -> value, where value may be a literal or an $identity marker. */
 export type WhereRule = Record<string, unknown | IdentityMarker>;
 
+/** A per-row (cell-level) field grant: `fields` are permitted only for rows that
+ * match `when`. Additive over the policy's flat `fields` — a conditional grant can
+ * only ever ADD fields, never remove them. */
+export interface ConditionalFields {
+  fields: string[];
+  /** Row-predicate, same surface as `where` (operators, AND/OR, $identity markers). */
+  when: WhereRule;
+}
+
+/** Escape hatch for cell-level ACL: a late per-row resolver. Given the identity and
+ * the fetched (or candidate, on write) row, returns the extra permitted fields —
+ * additive over `fields`; `null` means all fields for that row. */
+export type FieldsFn = (identity: Identity | null, row: Record<string, unknown>) => string[] | null;
+
 /** Per-relation ACL inside a parent read policy. */
 export interface RelationAclRule {
   /** Permit traversal to the related entity via this relation even if it has no
@@ -64,6 +78,10 @@ export interface RelationAclRule {
   where?: WhereRule;
   /** Restrict fields visible through the relation. */
   fields?: string[];
+  /** Per-row field grants applied to traversed rows. Additive over `fields`. */
+  conditionalFields?: ConditionalFields[];
+  /** Late per-row field resolver for traversed rows. Additive over `fields`. */
+  fieldsFn?: FieldsFn;
 }
 
 /** A forced column value on write: a literal, or computed from the identity. */
@@ -77,6 +95,12 @@ export interface PolicyRules {
   where?: WhereRule;
   /** Permitted fields. Omit = all fields. On read = projection; on write = settable columns. */
   fields?: string[];
+  /** Cell-level (per-row) field grants applied only to rows matching `when`.
+   * Additive over `fields`. On read = projection; on write = settable columns —
+   * evaluated against the candidate (insert) or post-merge (update) row. */
+  conditionalFields?: ConditionalFields[];
+  /** Escape hatch: a late per-row field resolver. Additive over `fields`. */
+  fieldsFn?: FieldsFn;
   /** Per-relation traversal rules (see RelationAclRule). */
   relations?: Record<string, RelationAclRule>;
   /** Columns forced to server-controlled values on write (override client input,
@@ -96,7 +120,7 @@ export interface ResolverDb {
     where?: Record<string, unknown>;
     orderBy?: { column: string; dir?: "asc" | "desc" };
     limit?: number;
-  }): Array<Record<string, unknown>>;
+  }): Promise<Array<Record<string, unknown>>>;
 }
 
 export interface ResolverContext {

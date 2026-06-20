@@ -1,25 +1,13 @@
-// Unit test for the additive migrator against real SQLite (bun:sqlite). DO SQLite
-// uses its own engine, but ALTER TABLE ADD COLUMN is standard; the e2e suite
-// separately exercises the create + PRAGMA path on the real DO at boot.
+// Unit test for the migrator against real SQLite (bun:sqlite), driven through the
+// async Driver seam (the same path D1 uses). ALTER TABLE ADD COLUMN and the
+// table-rebuild are standard SQLite; the e2e suite separately exercises the boot
+// path on the real DO.
 
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { Entity, defineSchema } from "../src/sdk/schema";
+import { Entity, defineSchema, renamedFrom } from "../src/sdk/schema";
 import { migrate } from "../src/runtime/migrate";
-
-// Adapt bun:sqlite to the SqlStorage shape migrate() expects: exec(sql, ...params)
-// returning a cursor with toArray().
-function adapt(db: Database): any {
-  return {
-    exec(sql: string, ...params: unknown[]) {
-      if (/^\s*(select|pragma)/i.test(sql)) {
-        return { toArray: () => db.query(sql).all(...(params as any[])) };
-      }
-      db.run(sql, ...(params as any[]));
-      return { toArray: () => [] };
-    },
-  };
-}
+import { bunSqliteDriver } from "./sqlite-driver";
 
 const v1 = defineSchema({
   notes: Entity((t) => ({ id: t.id(), title: t.text() })),
@@ -30,33 +18,38 @@ const v2 = defineSchema({
   tags: Entity((t) => ({ id: t.id(), name: t.text() })),
 });
 
+// v3: drop `views`, rename `body` -> `content`, drop the `tags` table.
+const v3 = defineSchema({
+  notes: Entity((t) => ({ id: t.id(), title: t.text(), content: renamedFrom(t.text(), "body") })),
+});
+
 describe("migrate", () => {
-  test("creates tables on first run", () => {
+  test("creates tables on first run", async () => {
     const db = new Database(":memory:");
-    const r = migrate(adapt(db), v1);
+    const r = await migrate(bunSqliteDriver(db), v1);
     expect(r.changed).toBe(true);
     expect(r.created).toContain("notes");
     db.run("INSERT INTO notes (title) VALUES ('hi')");
     expect(db.query("SELECT title FROM notes").all()).toEqual([{ title: "hi" }]);
   });
 
-  test("is a no-op when the schema is unchanged (hash short-circuit)", () => {
+  test("is a no-op when the schema is unchanged (hash short-circuit)", async () => {
     const db = new Database(":memory:");
-    const sql = adapt(db);
-    migrate(sql, v1);
-    const r = migrate(sql, v1);
+    const d = bunSqliteDriver(db);
+    await migrate(d, v1);
+    const r = await migrate(d, v1);
     expect(r.changed).toBe(false);
     expect(r.created).toEqual([]);
     expect(r.added).toEqual([]);
   });
 
-  test("adds new columns and tables without losing data", () => {
+  test("adds new columns and tables without losing data", async () => {
     const db = new Database(":memory:");
-    const sql = adapt(db);
-    migrate(sql, v1);
+    const d = bunSqliteDriver(db);
+    await migrate(d, v1);
     db.run("INSERT INTO notes (title) VALUES ('keep me')");
 
-    const r = migrate(sql, v2);
+    const r = await migrate(d, v2);
     expect(r.changed).toBe(true);
     expect(r.added).toContain("notes.body");
     expect(r.added).toContain("notes.views");
@@ -70,12 +63,58 @@ describe("migrate", () => {
     expect(db.query("SELECT count(*) AS n FROM tags").all()).toEqual([{ n: 0 }]);
   });
 
-  test("upgrade is idempotent", () => {
+  test("upgrade is idempotent", async () => {
     const db = new Database(":memory:");
-    const sql = adapt(db);
-    migrate(sql, v1);
-    migrate(sql, v2);
-    const again = migrate(sql, v2);
+    const d = bunSqliteDriver(db);
+    await migrate(d, v1);
+    await migrate(d, v2);
+    const again = await migrate(d, v2);
     expect(again.changed).toBe(false);
+  });
+
+  test("drops columns, renames, and drops tables (rebuild preserves rows + ids)", async () => {
+    const db = new Database(":memory:");
+    const d = bunSqliteDriver(db);
+    await migrate(d, v2);
+    db.run("INSERT INTO notes (title, body, views) VALUES ('keep', 'mybody', 7)");
+    db.run("INSERT INTO tags (name) VALUES ('x')");
+    const id = (db.query("SELECT id FROM notes").all() as { id: number }[])[0]!.id;
+
+    const r = await migrate(d, v3);
+    expect(r.changed).toBe(true);
+    expect(r.rebuilt).toContain("notes");
+    expect(r.droppedTables).toContain("tags");
+
+    // `views` dropped, `body` renamed to `content` with data intact, id preserved.
+    expect(db.query("SELECT id, title, content FROM notes").all()).toEqual([{ id, title: "keep", content: "mybody" }]);
+    expect(() => db.query("SELECT views FROM notes").all()).toThrow();
+    expect(() => db.query("SELECT 1 FROM tags").all()).toThrow();
+
+    // re-running is a no-op (the rename source no longer exists).
+    expect((await migrate(d, v3)).changed).toBe(false);
+  });
+
+  test("applies a column type change with a CAST", async () => {
+    const db = new Database(":memory:");
+    const d = bunSqliteDriver(db);
+    await migrate(d, defineSchema({ items: Entity((t) => ({ id: t.id(), qty: t.text() })) }));
+    db.run("INSERT INTO items (qty) VALUES ('42')");
+
+    const r = await migrate(d, defineSchema({ items: Entity((t) => ({ id: t.id(), qty: t.int() })) }));
+    expect(r.rebuilt).toContain("items");
+    // text "42" CAST to INTEGER affinity -> numeric 42.
+    expect(db.query("SELECT qty FROM items").all()).toEqual([{ qty: 42 }]);
+  });
+
+  test("preserves ids across a rebuild and keeps numbering from the max", async () => {
+    const db = new Database(":memory:");
+    const d = bunSqliteDriver(db);
+    await migrate(d, v2);
+    db.run("INSERT INTO notes (title) VALUES ('a')"); // id 1
+    db.run("INSERT INTO notes (title) VALUES ('b')"); // id 2
+    await migrate(d, v3); // rebuild (drop views, body -> content)
+    db.run("INSERT INTO notes (title, content) VALUES ('c', 'cc')");
+    const ids = (db.query("SELECT id FROM notes ORDER BY id").all() as { id: number }[]).map((r) => r.id);
+    expect(ids).toEqual([1, 2, 3]); // existing ids kept; new row continues from the max
   });
 });

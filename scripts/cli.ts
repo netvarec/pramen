@@ -105,9 +105,11 @@ async function schemaCmd(sub: string | undefined): Promise<void> {
     for (const c of changes) {
       const where = c.column ? `${c.table}.${c.column}` : c.table;
       const note = c.detail ? ` (${c.detail})` : "";
-      console.log(`${c.safe ? "  +" : "  ⚠"} ${c.kind} ${where}${note}${c.safe ? "" : "  [NOT auto-applied]"}`);
+      console.log(`${c.destructive ? "  ⚠" : "  +"} ${c.kind} ${where}${note}${c.destructive ? "  [destructive]" : ""}`);
     }
-    if (changes.some((c) => !c.safe)) console.log("\n⚠ unsafe changes aren't applied by additive migration — handle manually.");
+    console.log("\nAll changes are auto-applied on the next DO boot.");
+    if (changes.some((c) => c.destructive))
+      console.log("⚠ destructive changes rebuild the table and CAN lose data. A drop+add is applied as such unless\n  the column declares `renamedFrom` (which migrates the data).");
     return;
   }
   if (sub === "status") {

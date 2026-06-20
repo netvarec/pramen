@@ -39,8 +39,8 @@ const handlers = {
     ctx.db.find({ from: "notes", orderBy: { column: "id", dir: "desc" } }),
   ),
 
-  getNote: query((ctx, input: { id: number }) => {
-    const rows = ctx.db.find({ from: "notes", where: { id: input.id }, limit: 1 });
+  getNote: query(async (ctx, input: { id: number }) => {
+    const rows = await ctx.db.find({ from: "notes", where: { id: input.id }, limit: 1 });
     return rows[0] ?? null;
   }),
 
@@ -65,9 +65,9 @@ const handlers = {
     },
   ),
 
-  updateNote: mutation((ctx, input: { id: number; title?: string; body?: string }) => {
+  updateNote: mutation(async (ctx, input: { id: number; title?: string; body?: string }) => {
     const { id, ...patch } = input;
-    return ctx.db.update("notes", id, patch) ?? null;
+    return (await ctx.db.update("notes", id, patch)) ?? null;
   }),
 
   deleteNote: mutation((ctx, input: { id: number }) => ctx.db.delete("notes", input.id)),
@@ -77,8 +77,8 @@ const handlers = {
     ctx.db.find({ from: "notes", with: { owner: true }, orderBy: { column: "id", dir: "desc" } }),
   ),
 
-  getUserWithNotes: query((ctx, input: { id: string }) => {
-    const rows = ctx.db.find({ from: "users", where: { id: input.id }, with: { notes: true }, limit: 1 });
+  getUserWithNotes: query(async (ctx, input: { id: string }) => {
+    const rows = await ctx.db.find({ from: "users", where: { id: input.id }, with: { notes: true }, limit: 1 });
     return rows[0] ?? null;
   }),
 
@@ -161,6 +161,32 @@ const acl = [
   role("reader", [
     policy("reader:read", "notes", "read", { fields: ["id", "title", "ownerId", "createdAt"] }),
   ]),
+  // teammate: cell-level ACL via the declarative form. Reads EVERY note but sees
+  // `body` only on notes it owns; may edit any title but `body` only on its own.
+  // On create, `set` forces ownerId to the caller, so a teammate can always set
+  // body on the note it is creating (the conditional `when` sees the forced owner).
+  role("teammate", [
+    policy("teammate:read", "notes", "read", {
+      fields: ["id", "title", "ownerId", "createdAt"],
+      conditionalFields: [{ fields: ["body"], when: { ownerId: $identity("userId") } }],
+    }),
+    policy("teammate:create", "notes", "create", {
+      ...ownedByCaller,
+      fields: ["title", "createdAt"],
+      conditionalFields: [{ fields: ["body"], when: { ownerId: $identity("userId") } }],
+    }),
+    policy("teammate:update", "notes", "update", {
+      fields: ["title"],
+      conditionalFields: [{ fields: ["body"], when: { ownerId: $identity("userId") } }],
+    }),
+  ]),
+  // peeker: same per-row read visibility as teammate, but via the function escape hatch.
+  role("peeker", [
+    policy("peeker:read", "notes", "read", {
+      fields: ["id", "title", "ownerId", "createdAt"],
+      fieldsFn: (identity, row) => (row.ownerId === identity?.userId ? ["body"] : []),
+    }),
+  ]),
   // manager: reads notes owned by anyone on the caller's team — an ACL `where`
   // using an operator (`in`) whose value is an $identity marker resolving to an
   // array. No `team` claim -> the rule matches nothing (safe deny).
@@ -175,9 +201,9 @@ const acl = [
       "member:read",
       "notes",
       "read",
-      resolve(({ identity, db }) => {
+      resolve(async ({ identity, db }) => {
         if (!identity?.userId) return deny();
-        const owned = db.find({ from: "notes", where: { ownerId: identity.userId }, limit: 1 });
+        const owned = await db.find({ from: "notes", where: { ownerId: identity.userId }, limit: 1 });
         return owned.length > 0 ? allow() : deny();
       }),
     ),

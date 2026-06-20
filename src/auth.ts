@@ -3,10 +3,12 @@
 // client-supplied X-Mrak-Identity header is stripped unless a token verified
 // (see src/index.ts), so a validly-signed JWT is the only path to an identity.
 //
-// v0 verifies HS256 (shared secret in env.AUTH_SECRET) with WebCrypto. Swapping
-// to RS256/EdDSA (asymmetric, JWKS) is a localized change to verifyJwt — the
-// rest of the system is unchanged. Claims map to Identity: `sub` -> userId,
-// `roles`/`role` -> roles, other non-standard claims pass through.
+// Verification is pluggable via VerifyStrategy: HmacStrategy (HS256, shared secret
+// in env.AUTH_SECRET) for dev/symmetric setups, JwksStrategy (RS256 against a remote
+// JWKS, with key caching) for real identity providers. The header parse, exp/nbf
+// checks, and claim->Identity mapping are shared; only signature verification
+// differs. Claims map to Identity: `sub` -> userId, `roles`/`role` -> roles, other
+// non-standard claims pass through.
 
 import type { Identity } from "./sdk/acl";
 
@@ -24,27 +26,40 @@ function b64urlToString(s: string): string {
   return new TextDecoder().decode(b64urlToBytes(s));
 }
 
-async function verifyJwt(token: string, secret: string): Promise<Record<string, unknown> | null> {
+interface JwtHeader {
+  alg?: string;
+  kid?: string;
+}
+
+/** Verifies a JWT and returns its claims, or null if invalid. Implementations
+ * differ only in how they verify the signature. */
+export interface VerifyStrategy {
+  verify(token: string): Promise<Record<string, unknown> | null>;
+}
+
+/** Verify a signature over `${header}.${payload}` for the parsed header. */
+type SignatureVerifier = (signingInput: string, signature: Uint8Array, header: JwtHeader) => Promise<boolean>;
+
+// Shared JWT pipeline: parse, verify the signature via the supplied function, then
+// validate exp/nbf. Any malformed part or a verification throw -> null (reject).
+async function verifyJwt(token: string, verifySignature: SignatureVerifier): Promise<Record<string, unknown> | null> {
   const parts = token.split(".");
   if (parts.length !== 3) return null;
   const [h, p, sig] = parts;
 
-  let header: { alg?: string };
+  let header: JwtHeader;
   try {
     header = JSON.parse(b64urlToString(h!));
   } catch {
     return null;
   }
-  if (header.alg !== "HS256") return null;
 
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["verify"],
-  );
-  const valid = await crypto.subtle.verify("HMAC", key, b64urlToBytes(sig!), new TextEncoder().encode(`${h}.${p}`));
+  let valid: boolean;
+  try {
+    valid = await verifySignature(`${h}.${p}`, b64urlToBytes(sig!), header);
+  } catch {
+    return null;
+  }
   if (!valid) return null;
 
   let payload: Record<string, unknown>;
@@ -60,6 +75,107 @@ async function verifyJwt(token: string, secret: string): Promise<Record<string, 
   return payload;
 }
 
+/** HS256 via a shared secret. The dev/default strategy. */
+export class HmacStrategy implements VerifyStrategy {
+  constructor(private readonly secret: string) {}
+
+  verify(token: string): Promise<Record<string, unknown> | null> {
+    return verifyJwt(token, async (input, signature, header) => {
+      if (header.alg !== "HS256" || !this.secret) return false;
+      const key = await crypto.subtle.importKey(
+        "raw",
+        new TextEncoder().encode(this.secret),
+        { name: "HMAC", hash: "SHA-256" },
+        false,
+        ["verify"],
+      );
+      return crypto.subtle.verify("HMAC", key, signature, new TextEncoder().encode(input));
+    });
+  }
+}
+
+interface Jwk extends JsonWebKey {
+  kid?: string;
+}
+
+const SINGLE_KEY = "\0single";
+
+/** RS256 verified against a remote JWKS. Public keys are fetched once and cached
+ * (TTL); a token with an unknown `kid` triggers one forced refetch to pick up key
+ * rotation. Stale keys are kept if a refetch fails. */
+export class JwksStrategy implements VerifyStrategy {
+  private keys = new Map<string, CryptoKey>();
+  private fetchedAt = 0;
+  private inflight: Promise<void> | null = null;
+
+  constructor(
+    readonly url: string,
+    private readonly ttlMs = 600_000,
+  ) {}
+
+  verify(token: string): Promise<Record<string, unknown> | null> {
+    return verifyJwt(token, async (input, signature, header) => {
+      if (header.alg !== "RS256") return false;
+      const key = await this.keyFor(header.kid);
+      if (!key) return false;
+      return crypto.subtle.verify("RSASSA-PKCS1-v1_5", key, signature, new TextEncoder().encode(input));
+    });
+  }
+
+  private lookup(kid?: string): CryptoKey | null {
+    if (kid) return this.keys.get(kid) ?? null;
+    if (this.keys.size === 1) return [...this.keys.values()][0]!; // no kid + single key
+    return this.keys.get(SINGLE_KEY) ?? null;
+  }
+
+  private async keyFor(kid?: string): Promise<CryptoKey | null> {
+    await this.refresh(false);
+    let key = this.lookup(kid);
+    if (!key) {
+      await this.refresh(true); // unknown kid -> force a refetch (key rotation)
+      key = this.lookup(kid);
+    }
+    return key;
+  }
+
+  private async refresh(force: boolean): Promise<void> {
+    if (!force && this.keys.size > 0 && Date.now() - this.fetchedAt < this.ttlMs) return;
+    if (this.inflight) return this.inflight;
+    this.inflight = this.fetchKeys();
+    try {
+      await this.inflight;
+    } finally {
+      this.inflight = null;
+    }
+  }
+
+  private async fetchKeys(): Promise<void> {
+    try {
+      const res = await fetch(this.url);
+      if (!res.ok) return; // keep stale keys
+      const body = (await res.json()) as { keys?: Jwk[] };
+      const next = new Map<string, CryptoKey>();
+      for (const jwk of body.keys ?? []) {
+        if (jwk.kty !== "RSA") continue;
+        const key = await crypto.subtle.importKey(
+          "jwk",
+          jwk,
+          { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+          false,
+          ["verify"],
+        );
+        next.set(jwk.kid ?? SINGLE_KEY, key);
+      }
+      if (next.size > 0) {
+        this.keys = next;
+        this.fetchedAt = Date.now();
+      }
+    } catch {
+      // network error -> keep whatever keys we have
+    }
+  }
+}
+
 function toIdentity(claims: Record<string, unknown>): Identity {
   const roles = Array.isArray(claims.roles)
     ? (claims.roles as string[])
@@ -73,10 +189,10 @@ function toIdentity(claims: Record<string, unknown>): Identity {
   return identity;
 }
 
-export async function resolveIdentity(request: Request, secret: string): Promise<Identity | null> {
+export async function resolveIdentity(request: Request, strategy: VerifyStrategy): Promise<Identity | null> {
   const token = request.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
-  if (!token || !secret) return null;
-  const claims = await verifyJwt(token, secret);
+  if (!token) return null;
+  const claims = await strategy.verify(token);
   return claims ? toIdentity(claims) : null;
 }
 

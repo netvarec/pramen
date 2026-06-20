@@ -1,24 +1,50 @@
-// Schema migration — applied on DO boot (blockConcurrencyWhile). Reconciles the
-// live SQLite store with the schema *additively* and without data loss:
-//   - missing table        -> CREATE TABLE
-//   - missing column        -> ALTER TABLE ADD COLUMN (nullable)
+// Schema migration — applied on boot, wrapped in a transaction by the caller.
+// Runs over a Driver, so it works on any SQLite-flavored substrate (DO SQLite and
+// D1). The introspection (`PRAGMA table_info`, `sqlite_master`) and table-rebuild
+// are SQLite-specific; a Postgres/MySQL migrator would be a separate adapter.
+// Reconciles the live store with the declared schema in two passes:
+//   1. additive (no data loss): missing table -> CREATE TABLE; missing column ->
+//      ALTER TABLE ADD COLUMN (nullable).
+//   2. destructive: a live column the schema no longer declares is DROPPED, a type
+//      change is applied, and a `renamedFrom` column is renamed — all via the
+//      standard SQLite table-rebuild (create new, copy, drop old, rename). This is
+//      auto-applied: a bad deploy CAN lose data, by design (WIP, no backward-compat).
 //
-// A schema hash is stored in the internal `_mrak_meta` table so an unchanged
-// schema skips introspection entirely on subsequent (warm) boots.
+// A schema hash in the internal `_mrak_meta` table lets an unchanged schema skip
+// introspection entirely on warm boots. The live table (PRAGMA) is the ground
+// truth diffed against the schema — no stored shape needed.
 //
-// Additive only — column drops, renames, type/constraint changes are NOT applied
-// (a removed field leaves its column orphaned). Destructive changes need an
-// explicit migration story (roadmap). ADD COLUMN is always nullable because SQLite
-// can't add a NOT NULL column to a table that already has rows.
+// ADD COLUMN is always nullable (SQLite can't add NOT NULL to a populated table).
+// A rename can't be inferred from a diff (a removed + added column is ambiguous),
+// so it must be declared with `renamedFrom`; otherwise it is applied as drop+add.
 
-import { addColumnSql, createTableSql } from "./ddl";
+import { addColumnSql, createTableSql, sqlType } from "./ddl";
 import { digest } from "./digest";
-import type { SchemaDef } from "../sdk/schema";
+import type { Driver } from "./driver";
+import type { EntityFields, FieldDef, SchemaDef } from "../sdk/schema";
 
 export interface MigrationReport {
   changed: boolean;
   created: string[];
   added: string[];
+  /** Tables rebuilt to apply a drop / rename / type change. */
+  rebuilt: string[];
+  /** Tables dropped because the schema no longer declares them. */
+  droppedTables: string[];
+}
+
+/** Internal bookkeeping tables the migrator must never touch — mrak's own, SQLite's,
+ * and the substrate's (D1 keeps `_cf_*` / `d1_*` tables in sqlite_master and forbids
+ * dropping them). Matched case-insensitively. */
+function isInternalTable(name: string): boolean {
+  const n = name.toLowerCase();
+  return (
+    n.startsWith("_mrak") ||
+    n.startsWith("__mrak") ||
+    n.startsWith("sqlite_") ||
+    n.startsWith("_cf_") ||
+    n.startsWith("d1_")
+  );
 }
 
 function ident(name: string): string {
@@ -32,43 +58,100 @@ export function schemaHash(schema: SchemaDef): string {
   return digest(canon);
 }
 
-function tableColumns(sql: SqlStorage, table: string): Set<string> {
-  const rows = sql.exec(`PRAGMA table_info(${ident(table)})`).toArray() as { name: string }[];
-  return new Set(rows.map((r) => r.name));
+/** Live columns of a table -> their declared SQL type (uppercased). Empty if the
+ * table doesn't exist. */
+async function tableColumns(driver: Driver, table: string): Promise<Map<string, string>> {
+  const rows = (await driver.exec(`PRAGMA table_info(${ident(table)})`, [])) as { name: string; type: string }[];
+  return new Map(rows.map((r) => [r.name, (r.type || "").toUpperCase()]));
 }
 
-function readMeta(sql: SqlStorage, key: string): string | undefined {
-  const rows = sql.exec(`SELECT value FROM _mrak_meta WHERE key = ?`, key).toArray() as { value: string }[];
+async function readMeta(driver: Driver, key: string): Promise<string | undefined> {
+  const rows = (await driver.exec(`SELECT value FROM _mrak_meta WHERE key = ?`, [key])) as { value: string }[];
   return rows[0]?.value;
 }
 
-function writeMeta(sql: SqlStorage, key: string, value: string): void {
-  sql.exec(`INSERT OR REPLACE INTO _mrak_meta (key, value) VALUES (?, ?)`, key, value);
+async function writeMeta(driver: Driver, key: string, value: string): Promise<void> {
+  await driver.exec(`INSERT OR REPLACE INTO _mrak_meta (key, value) VALUES (?, ?)`, [key, value]);
 }
 
-export function migrate(sql: SqlStorage, schema: SchemaDef): MigrationReport {
-  sql.exec(`CREATE TABLE IF NOT EXISTS _mrak_meta (key TEXT PRIMARY KEY, value TEXT)`);
+/** Rebuild a table to exactly the declared schema: create a temp table, copy each
+ * desired column from its source (renamed or same-named live column, CAST on a
+ * type change; brand-new columns left NULL), drop the old table, rename the temp. */
+async function rebuildTable(driver: Driver, table: string, def: { fields: EntityFields }, live: Map<string, string>): Promise<void> {
+  const tmp = `__mrak_rebuild_${table}`;
+  await driver.exec(`DROP TABLE IF EXISTS ${ident(tmp)}`, []);
+  await driver.exec(createTableSql(tmp, def), []);
+
+  const destCols: string[] = [];
+  const srcExprs: string[] = [];
+  for (const [name, field] of Object.entries(def.fields)) {
+    const f = field as FieldDef;
+    const src = f.renamedFrom && live.has(f.renamedFrom) ? f.renamedFrom : live.has(name) ? name : undefined;
+    if (!src) continue; // brand-new column with no source -> leave NULL
+    const target = sqlType(f);
+    destCols.push(ident(name));
+    srcExprs.push(live.get(src) === target ? ident(src) : `CAST(${ident(src)} AS ${target})`);
+  }
+  if (destCols.length > 0) {
+    await driver.exec(`INSERT INTO ${ident(tmp)} (${destCols.join(", ")}) SELECT ${srcExprs.join(", ")} FROM ${ident(table)}`, []);
+  }
+  await driver.exec(`DROP TABLE ${ident(table)}`, []);
+  await driver.exec(`ALTER TABLE ${ident(tmp)} RENAME TO ${ident(table)}`, []);
+}
+
+export async function migrate(driver: Driver, schema: SchemaDef): Promise<MigrationReport> {
+  await driver.exec(`CREATE TABLE IF NOT EXISTS _mrak_meta (key TEXT PRIMARY KEY, value TEXT)`, []);
 
   const current = schemaHash(schema);
-  if (readMeta(sql, "schema_hash") === current) return { changed: false, created: [], added: [] };
+  if ((await readMeta(driver, "schema_hash")) === current)
+    return { changed: false, created: [], added: [], rebuilt: [], droppedTables: [] };
 
   const created: string[] = [];
   const added: string[] = [];
+  const rebuilt: string[] = [];
+  const droppedTables: string[] = [];
 
   for (const [table, def] of Object.entries(schema)) {
-    const existing = tableColumns(sql, table);
+    const existing = await tableColumns(driver, table);
     if (existing.size === 0) {
-      sql.exec(createTableSql(table, def));
+      await driver.exec(createTableSql(table, def), []);
       created.push(table);
       continue;
     }
+    // Pass 1 — additive: add any column the schema declares but the table lacks.
     for (const [name, field] of Object.entries(def.fields)) {
       if (existing.has(name)) continue;
-      sql.exec(`ALTER TABLE ${ident(table)} ADD COLUMN ${addColumnSql(name, field)}`);
+      await driver.exec(`ALTER TABLE ${ident(table)} ADD COLUMN ${addColumnSql(name, field as FieldDef)}`, []);
       added.push(`${table}.${name}`);
+    }
+
+    // Pass 2 — destructive: rebuild if any live column must be dropped, a declared
+    // column changed type, or a rename hint points at an existing live column.
+    const live = await tableColumns(driver, table); // re-read (now includes additively-added columns)
+    const desired = new Set(Object.keys(def.fields));
+    const renamedSources = new Set<string>();
+    for (const f of Object.values(def.fields)) {
+      const from = (f as FieldDef).renamedFrom;
+      if (from && live.has(from)) renamedSources.add(from);
+    }
+    const needsDrop = [...live.keys()].some((c) => !desired.has(c) && !renamedSources.has(c));
+    const needsTypeChange = Object.entries(def.fields).some(
+      ([n, f]) => live.has(n) && live.get(n) !== sqlType(f as FieldDef),
+    );
+    if (needsDrop || needsTypeChange || renamedSources.size > 0) {
+      await rebuildTable(driver, table, def, live);
+      rebuilt.push(table);
     }
   }
 
-  writeMeta(sql, "schema_hash", current);
-  return { changed: true, created, added };
+  // Drop tables the schema no longer declares (internal bookkeeping tables skipped).
+  const liveTables = (await driver.exec(`SELECT name FROM sqlite_master WHERE type = 'table'`, [])) as { name: string }[];
+  for (const { name } of liveTables) {
+    if (isInternalTable(name) || name in schema) continue;
+    await driver.exec(`DROP TABLE ${ident(name)}`, []);
+    droppedTables.push(name);
+  }
+
+  await writeMeta(driver, "schema_hash", current);
+  return { changed: true, created, added, rebuilt, droppedTables };
 }

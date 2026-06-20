@@ -22,8 +22,9 @@ Worker (src/index.ts)  ->  MrakDO (per-tenant Durable Object)
 
 - **The DO is the database.** Single-writer serialization is free (a DO handles
   one request at a time), per-tenant via `idFromName`.
-- **D1 is NOT the write path** — it's over-RPC, not in-process. The DO's SQLite
-  is the transactional store. (D1 reserved for read-replicas/analytics later.)
+- **D1 is NOT the DO's write path** — it's over-RPC, not in-process; the DO's
+  SQLite is its transactional store. D1 is instead available as a separate
+  substrate via the Worker (`x-mrak-store: d1`) — see the Substrate seam below.
 - **SDK (`src/sdk/`) is platform-agnostic** — the portable product. `runtime/` is
   the Cloudflare glue.
 
@@ -31,10 +32,37 @@ Worker (src/index.ts)  ->  MrakDO (per-tenant Durable Object)
 
 ```bash
 bun install
-bun run dev          # wrangler dev (local miniflare); http://localhost:8787
+bun run dev          # lopata dev (Bun runtime; fast reload + /__dashboard); http://localhost:8787
+bun run dev:wrangler # wrangler dev (miniflare) — workerd-parity check before deploy
 bun run typecheck    # tsc --noEmit
 bun run deploy       # wrangler deploy
 ```
+
+Local dev runs on **lopata** (Bun-based CF runtime; fully emulates DO SQLite +
+WebSocket Hibernation). It reads the oblaka-generated `wrangler.jsonc` unchanged and
+serves a dashboard at `/__dashboard`. The e2e suite still boots real `wrangler dev`
+(miniflare); run `bun run dev:wrangler` once before deploying to catch any
+Bun-vs-workerd differences.
+
+> mrak depends on lopata via a relative `file:` path (`../../contember/lopata`)
+> because it needs a lopata fix (≥0.19.1): the canonical proxy-to-DO pattern
+> `stub.fetch(new Request(request, { headers }))` deadlocked under lopata due to a
+> Bun `new Request(req)` stream-body clone bug. Switch to a published `^0.19.1`
+> once it's on npm.
+
+## Substrate seam (Driver/Dialect)
+
+The data layer runs over a `Driver` (async `exec` + `transaction`) + `Dialect`
+(`src/runtime/driver.ts`), so the ACL/read/write engine is substrate-agnostic:
+
+- **`DoSqliteDriver`** — the DO's in-process SQLite (the default write path).
+- **`D1Driver`** — the SAME engine over a real D1 binding, run **in the Worker**
+  (no DO) and selected per-request with the `x-mrak-store: d1` header. RPC only —
+  live queries need the DO (single writer + socket host). Proven end-to-end in
+  miniflare by `test/suites/d1.ts` (ACL, row scope, field/cell-level projection,
+  RETURNING writes, aggregates). The D1 binding is declared in `oblaka.ts`.
+- **`postgresDialect`** — shows the SQL shape for a future Hyperdrive/Postgres port
+  (quoting + `$n` placeholders); needs a pg `Driver` over Hyperdrive.
 
 ## Conventions
 

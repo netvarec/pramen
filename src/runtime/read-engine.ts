@@ -7,15 +7,12 @@
 // AND/OR groups) and ACL row-level scopes be merged before compilation. Column
 // names come from developer code (schema keys); values are always parameterized.
 
+import type { Dialect } from "./driver";
+
+// In-process value coercion for evalExpr (SQLite-style booleans). SQL-side encoding
+// goes through the active Dialect; this mirrors it for the cell-ACL `when` evaluator.
 function bind(v: unknown): unknown {
   return typeof v === "boolean" ? (v ? 1 : 0) : v;
-}
-
-// Column identifiers are interpolated, so guard against anything but a plain name
-// (handlers may forward user input as `where` keys).
-function ident(col: string): string {
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(col)) throw new Error(`invalid column name: ${col}`);
-  return col;
 }
 
 export type CmpOp = "=" | "!=" | ">" | ">=" | "<" | "<=" | "LIKE";
@@ -84,30 +81,87 @@ export interface CompiledSql {
   readonly params: unknown[];
 }
 
-export function compileExpr(expr: SqlExpr, params: unknown[] = []): CompiledSql {
+export function compileExpr(expr: SqlExpr, dialect: Dialect, params: unknown[] = []): CompiledSql {
   switch (expr.t) {
     case "true":
       return { sql: "1", params };
     case "false":
       return { sql: "0", params };
     case "cmp":
-      if (expr.value === null) return { sql: `${ident(expr.col)} IS NULL`, params };
-      params.push(bind(expr.value));
-      return { sql: `${ident(expr.col)} ${expr.op} ?`, params };
+      if (expr.value === null) return { sql: `${dialect.id(expr.col)} IS NULL`, params };
+      params.push(dialect.encode(expr.value));
+      return { sql: `${dialect.id(expr.col)} ${expr.op} ${dialect.placeholder(params.length)}`, params };
     case "null":
-      return { sql: `${ident(expr.col)} IS ${expr.negate ? "NOT " : ""}NULL`, params };
+      return { sql: `${dialect.id(expr.col)} IS ${expr.negate ? "NOT " : ""}NULL`, params };
     case "in": {
       if (expr.values.length === 0) return { sql: expr.negate ? "1" : "0", params }; // empty: notIn=>all, in=>none
-      const ph = expr.values.map((v) => (params.push(bind(v)), "?")).join(", ");
-      return { sql: `${ident(expr.col)} ${expr.negate ? "NOT IN" : "IN"} (${ph})`, params };
+      const ph = expr.values.map((v) => (params.push(dialect.encode(v)), dialect.placeholder(params.length))).join(", ");
+      return { sql: `${dialect.id(expr.col)} ${expr.negate ? "NOT IN" : "IN"} (${ph})`, params };
     }
     case "and":
     case "or": {
       if (expr.parts.length === 0) return { sql: expr.t === "and" ? "1" : "0", params };
       const sep = expr.t === "and" ? " AND " : " OR ";
-      const sql = expr.parts.map((p) => compileExpr(p, params).sql).join(sep);
+      const sql = expr.parts.map((p) => compileExpr(p, dialect, params).sql).join(sep);
       return { sql: expr.parts.length > 1 ? `(${sql})` : sql, params };
     }
+  }
+}
+
+// SQL LIKE -> RegExp. `%` is any run, `_` is any single char; SQLite LIKE is
+// case-insensitive for ASCII, so the regex is too. Other chars are escaped.
+function likeToRegex(pattern: string): RegExp {
+  let re = "";
+  for (const ch of pattern) {
+    if (ch === "%") re += ".*";
+    else if (ch === "_") re += ".";
+    else re += ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+  return new RegExp(`^${re}$`, "is");
+}
+
+/** Evaluate a compiled predicate against an in-memory row. Mirrors compileExpr's
+ * semantics (bound-boolean coercion, NULL compares false, empty-IN, LIKE) so the
+ * declarative cell-ACL `when` path can decide per-row field visibility without a
+ * round-trip to SQLite. */
+export function evalExpr(expr: SqlExpr, row: Record<string, unknown>): boolean {
+  switch (expr.t) {
+    case "true":
+      return true;
+    case "false":
+      return false;
+    case "cmp": {
+      const left = bind(row[expr.col]);
+      if (expr.value === null) return left === null || left === undefined;
+      if (left === null || left === undefined) return false; // NULL compared to a value -> false
+      const right = bind(expr.value);
+      switch (expr.op) {
+        case "=": return left === right;
+        case "!=": return left !== right;
+        case ">": return (left as never) > (right as never);
+        case ">=": return (left as never) >= (right as never);
+        case "<": return (left as never) < (right as never);
+        case "<=": return (left as never) <= (right as never);
+        case "LIKE": return typeof left === "string" && likeToRegex(String(right)).test(left);
+      }
+      return false;
+    }
+    case "null": {
+      const v = row[expr.col];
+      const isNullVal = v === null || v === undefined;
+      return expr.negate ? !isNullVal : isNullVal;
+    }
+    case "in": {
+      const left = bind(row[expr.col]);
+      if (left === null || left === undefined) return false; // can't demonstrate membership
+      if (expr.values.length === 0) return expr.negate; // empty: notIn=>all, in=>none
+      const found = expr.values.some((v) => bind(v) === left);
+      return expr.negate ? !found : found;
+    }
+    case "and":
+      return expr.parts.every((p) => evalExpr(p, row));
+    case "or":
+      return expr.parts.some((p) => evalExpr(p, row));
   }
 }
 
@@ -127,10 +181,10 @@ export interface QuerySpec {
 export type AggFn = "count" | "sum" | "avg" | "min" | "max";
 const AGG_SQL: Record<AggFn, string> = { count: "COUNT", sum: "SUM", avg: "AVG", min: "MIN", max: "MAX" };
 
-export function compileCount(from: string, where?: SqlExpr): CompiledSql {
+export function compileCount(from: string, dialect: Dialect, where?: SqlExpr): CompiledSql {
   const params: unknown[] = [];
-  let sql = `SELECT COUNT(*) AS n FROM ${ident(from)}`;
-  if (where && where.t !== "true") sql += ` WHERE ${compileExpr(where, params).sql}`;
+  let sql = `SELECT COUNT(*) AS n FROM ${dialect.id(from)}`;
+  if (where && where.t !== "true") sql += ` WHERE ${compileExpr(where, dialect, params).sql}`;
   return { sql, params };
 }
 
@@ -139,48 +193,51 @@ export interface Aggregation {
   column?: string;
 }
 
-export function compileAggregate(spec: {
-  from: string;
-  where?: SqlExpr;
-  groupBy?: string[];
-  aggregations: Record<string, Aggregation>;
-}): CompiledSql {
+export function compileAggregate(
+  spec: {
+    from: string;
+    where?: SqlExpr;
+    groupBy?: string[];
+    aggregations: Record<string, Aggregation>;
+  },
+  dialect: Dialect,
+): CompiledSql {
   const params: unknown[] = [];
   const cols: string[] = [];
-  for (const g of spec.groupBy ?? []) cols.push(ident(g));
+  for (const g of spec.groupBy ?? []) cols.push(dialect.id(g));
   for (const [key, agg] of Object.entries(spec.aggregations)) {
-    const target = agg.column != null ? ident(agg.column) : "*";
-    cols.push(`${AGG_SQL[agg.fn]}(${target}) AS ${ident(key)}`);
+    const target = agg.column != null ? dialect.id(agg.column) : "*";
+    cols.push(`${AGG_SQL[agg.fn]}(${target}) AS ${dialect.id(key)}`);
   }
-  let sql = `SELECT ${cols.join(", ")} FROM ${ident(spec.from)}`;
-  if (spec.where && spec.where.t !== "true") sql += ` WHERE ${compileExpr(spec.where, params).sql}`;
-  if (spec.groupBy && spec.groupBy.length > 0) sql += ` GROUP BY ${spec.groupBy.map(ident).join(", ")}`;
+  let sql = `SELECT ${cols.join(", ")} FROM ${dialect.id(spec.from)}`;
+  if (spec.where && spec.where.t !== "true") sql += ` WHERE ${compileExpr(spec.where, dialect, params).sql}`;
+  if (spec.groupBy && spec.groupBy.length > 0) sql += ` GROUP BY ${spec.groupBy.map((g) => dialect.id(g)).join(", ")}`;
   return { sql, params };
 }
 
-export function compileSelect(spec: QuerySpec): CompiledSql {
+export function compileSelect(spec: QuerySpec, dialect: Dialect): CompiledSql {
   const params: unknown[] = [];
-  let sql = `SELECT * FROM ${ident(spec.from)}`;
+  let sql = `SELECT * FROM ${dialect.id(spec.from)}`;
 
   if (spec.where && spec.where.t !== "true") {
-    const { sql: where } = compileExpr(spec.where, params);
+    const { sql: where } = compileExpr(spec.where, dialect, params);
     sql += ` WHERE ${where}`;
   }
 
   if (spec.orderBy && spec.orderBy.length > 0) {
-    const cols = spec.orderBy.map((o) => `${ident(o.column)} ${o.dir === "desc" ? "DESC" : "ASC"}`);
+    const cols = spec.orderBy.map((o) => `${dialect.id(o.column)} ${o.dir === "desc" ? "DESC" : "ASC"}`);
     sql += ` ORDER BY ${cols.join(", ")}`;
   }
 
   if (spec.limit != null) {
-    sql += " LIMIT ?";
     params.push(spec.limit);
+    sql += ` LIMIT ${dialect.placeholder(params.length)}`;
   } else if (spec.offset != null) {
-    sql += " LIMIT -1"; // SQLite requires a LIMIT before OFFSET
+    sql += " LIMIT -1"; // SQLite requires a LIMIT before OFFSET (offset-only is a SQLite-ism)
   }
   if (spec.offset != null) {
-    sql += " OFFSET ?";
     params.push(spec.offset);
+    sql += ` OFFSET ${dialect.placeholder(params.length)}`;
   }
 
   return { sql, params };

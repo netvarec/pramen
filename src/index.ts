@@ -4,21 +4,63 @@
 // aren't tenant-data operations.
 
 import { MrakDO } from "./durable-object";
-import { authorizeTenant, isAdmin, resolveIdentity } from "./auth";
+import { app } from "../example/app";
+import { authorizeTenant, HmacStrategy, isAdmin, JwksStrategy, resolveIdentity, type VerifyStrategy } from "./auth";
+import { dispatch } from "./runtime/dispatch";
+import { migrate } from "./runtime/migrate";
+import { compileAcl } from "./runtime/acl";
+import { D1Driver, type Driver } from "./runtime/driver";
+import { toResponse } from "./runtime/errors";
+import { Kv } from "./runtime/kv";
 import type { Identity } from "./sdk/acl";
 
 export interface Env {
   MRAK: DurableObjectNamespace;
   /** Project KV — tenant registry (`tenant:` keys) + handler ctx.kv (`app:` keys). */
   KV: KVNamespace;
-  /** HMAC secret for verifying bearer JWTs. Dev value in wrangler.jsonc;
-   * production via `wrangler secret put AUTH_SECRET`. */
+  /** HMAC secret for verifying HS256 bearer JWTs. Dev value in wrangler.jsonc;
+   * production via `wrangler secret put AUTH_SECRET`. Ignored if JWKS_URL is set. */
   AUTH_SECRET: string;
+  /** Optional: a JWKS endpoint. When set, tokens are verified as RS256 against the
+   * fetched public keys (HmacStrategy/AUTH_SECRET is bypassed). */
+  JWKS_URL?: string;
+  /** D1 binding. Enables the "Worker + D1 (no DO)" path — the same schema/ACL/read
+   * engine over D1 instead of a Durable Object. Selected per-request via
+   * `x-mrak-store: d1`. RPC only (live queries need the DO). */
+  DB?: D1Database;
+}
+
+// JwksStrategy caches fetched public keys, so keep one instance per isolate (keyed
+// by URL) rather than rebuilding it per request. HmacStrategy is stateless.
+let jwks: JwksStrategy | undefined;
+function strategyFor(env: Env): VerifyStrategy {
+  if (env.JWKS_URL) {
+    if (!jwks || jwks.url !== env.JWKS_URL) jwks = new JwksStrategy(env.JWKS_URL);
+    return jwks;
+  }
+  return new HmacStrategy(env.AUTH_SECRET);
 }
 
 const json = (body: unknown, status = 200) => Response.json(body, { status });
 const forbidden = (what: string) => json({ ok: false, error: `access denied: ${what}`, code: "forbidden" }, 403);
 const badRequest = (msg: string) => json({ ok: false, error: msg, code: "bad_request" }, 400);
+
+// ACL is compiled once per isolate; the Worker's D1 path reuses it (the DO compiles
+// its own). Schema migration over D1 runs once per isolate (and short-circuits on a
+// stored schema hash thereafter); a failed run is not cached.
+const d1Acl = compileAcl(app.acl ?? []);
+let d1Ready: Promise<void> | undefined;
+function ensureD1Migrated(driver: Driver): Promise<void> {
+  if (!d1Ready) {
+    d1Ready = migrate(driver, app.schema)
+      .then(() => undefined)
+      .catch((e) => {
+        d1Ready = undefined;
+        throw e;
+      });
+  }
+  return d1Ready;
+}
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -37,7 +79,7 @@ export default {
       req = new Request(request, { headers: h });
     }
 
-    const identity = await resolveIdentity(req, env.AUTH_SECRET);
+    const identity = await resolveIdentity(req, strategyFor(env));
 
     // --- admin: list known tenants ---
     if (url.pathname === "/tenants") {
@@ -85,6 +127,27 @@ export default {
     // caller can't address (or register) tenants they have no claim to.
     const tenant = req.headers.get("x-mrak-tenant") ?? "main";
     if (!authorizeTenant(identity, tenant)) return forbidden(`tenant '${tenant}'`);
+
+    // --- Worker + D1 (no DO): the same schema/ACL/read engine over a D1 binding,
+    // selected per-request via `x-mrak-store: d1`. RPC only — live queries need the
+    // DO (single writer + a socket host). This proof uses ONE shared D1 database
+    // across tenants; a real product would add a tenant column or a per-tenant DB.
+    if (req.headers.get("x-mrak-store") === "d1") {
+      if (!env.DB) return badRequest("D1 store is not configured");
+      if (isLive) return badRequest("live queries require the default (DO) store");
+      const name = url.pathname.replace(/^\/rpc\//, "");
+      let input: unknown;
+      if (request.method === "POST") input = await request.json().catch(() => undefined);
+      const driver = new D1Driver(env.DB);
+      try {
+        await ensureD1Migrated(driver);
+        const { result } = await dispatch(app.handlers, app.schema, driver, new Kv(env.KV), { acl: d1Acl, identity }, name, input);
+        return json({ ok: true, result });
+      } catch (err) {
+        const { status, body } = toResponse(err);
+        return json(body, status);
+      }
+    }
 
     // Forward a trusted identity to the DO (the DO never re-derives it).
     const headers = new Headers(req.headers);
