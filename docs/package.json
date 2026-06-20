@@ -1,13 +1,16 @@
 {
   "name": "mrak-docs",
-  "private": true,
-  "type": "module",
+  "dependencies": {
+    "pletivo": "^0.1.24"
+  },
   "description": "Documentation site for mrak, built with pletivo.",
+  "private": true,
   "scripts": {
     "dev": "pletivo dev",
     "build": "pletivo build"
   },
-  "dependencies": {
-    "pletivo": "^0.1.24"
+  "type": "module",
+  "devDependencies": {
+    "highlight.js": "^11.11.1"
   }
 }

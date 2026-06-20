@@ -17,12 +17,15 @@ export default async function Home() {
           deployed as a Worker + per-tenant Durable Object — with row- and cell-level ACL, live queries, and typed
           end-to-end clients.
         </p>
-        <p>
+        <p class="hero-ctas">
           {first && (
             <a class="cta" href={`/docs/${first.id}`}>
               Read the docs →
             </a>
           )}
+          <a class="cta cta-ghost" href="/choose-store">
+            🧭 Choose a store
+          </a>
         </p>
       </article>
     </Layout>

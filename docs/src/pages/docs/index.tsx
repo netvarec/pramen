@@ -11,11 +11,16 @@ export default async function DocsIndex() {
     <Layout title="Docs" nav={docs}>
       <article class="doc">
         <h1>Documentation</h1>
+        <p class="lede" style="color: var(--muted); font-size: 1.1rem;">
+          Everything you need to build on mrak — from schema and handlers to ACL, live queries, and deploy.
+        </p>
         <ul class="doc-index">
           {docs.map((doc) => (
             <li>
-              <a href={`/docs/${doc.id}`}>{doc.data.title as string}</a>
-              <p>{doc.data.summary as string}</p>
+              <a class="card" href={`/docs/${doc.id}`}>
+                <span class="t">{doc.data.title as string}</span>
+                <p>{doc.data.summary as string}</p>
+              </a>
             </li>
           ))}
         </ul>
