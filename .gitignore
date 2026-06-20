@@ -10,4 +10,4 @@ dist/
 wrangler.jsonc
 
 # CLI schema snapshot baseline (commit this in a real project; noise in the example)
-.mrak/
+.pramen/

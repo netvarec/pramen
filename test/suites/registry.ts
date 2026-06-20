@@ -12,7 +12,7 @@ export async function runRegistry(base: string): Promise<void> {
   // so even a denied call registers — here we use admin).
   await fetch(`${base}/rpc/listNotes`, {
     method: "POST",
-    headers: { "content-type": "application/json", "x-mrak-tenant": probe, authorization: `Bearer ${admin}` },
+    headers: { "content-type": "application/json", "x-pramen-tenant": probe, authorization: `Bearer ${admin}` },
     body: "{}",
   });
 
@@ -30,7 +30,7 @@ export async function runRegistry(base: string): Promise<void> {
   const asAnon = await listTenants();
   assert(asAnon.status === 403, "anonymous cannot list tenants");
 
-  // admin schema introspection (powers `mrak schema status`)
+  // admin schema introspection (powers `pramen schema status`)
   const schema = await fetch(`${base}/admin/schema?tenant=${probe}`, { headers: { authorization: `Bearer ${admin}` } });
   const schemaBody = await schema.json();
   assert(schema.status === 200 && typeof schemaBody.result?.hash === "string", "admin can read a tenant's applied schema");

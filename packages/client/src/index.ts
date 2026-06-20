@@ -1,4 +1,4 @@
-// @mrak/client — a typed client for a mrak backend.
+// @pramen/client — a typed client for a pramen backend.
 //
 //   import type { app } from "../../server/app";       // type-only (erased)
 //   const client = createClient<typeof app.handlers>({ url, token, tenant });
@@ -9,14 +9,14 @@
 // (/live) with auto-reconnect + re-subscribe. Browser WebSockets can't set
 // headers, so auth/tenant go in the query string (the Worker accepts both).
 
-export class MrakError extends Error {
+export class PramenError extends Error {
   constructor(
     message: string,
     readonly code: string,
     readonly status: number,
   ) {
     super(message);
-    this.name = "MrakError";
+    this.name = "PramenError";
   }
 }
 
@@ -41,7 +41,7 @@ export interface SubHandlers<T> {
   onError?: (err: { error: string; code: string }) => void;
 }
 
-export interface MrakClient<Api> {
+export interface PramenClient<Api> {
   call<K extends keyof Api & string>(name: K, input?: HandlerInput<Api[K]>): Promise<HandlerOutput<Api[K]>>;
   subscribe<K extends keyof Api & string>(
     name: K,
@@ -60,7 +60,7 @@ interface Sub {
   onError?: (err: { error: string; code: string }) => void;
 }
 
-export function createClient<Api = Record<string, never>>(opts: ClientOptions): MrakClient<Api> {
+export function createClient<Api = Record<string, never>>(opts: ClientOptions): PramenClient<Api> {
   const doFetch = opts.fetchImpl ?? globalThis.fetch.bind(globalThis);
   const WS = opts.WebSocketImpl ?? (globalThis as { WebSocket?: typeof WebSocket }).WebSocket;
   let token = opts.token;
@@ -75,7 +75,7 @@ export function createClient<Api = Record<string, never>>(opts: ClientOptions): 
   async function call(name: string, input?: unknown): Promise<unknown> {
     const headers: Record<string, string> = { "content-type": "application/json" };
     if (token) headers.authorization = `Bearer ${token}`;
-    if (opts.tenant) headers["x-mrak-tenant"] = opts.tenant;
+    if (opts.tenant) headers["x-pramen-tenant"] = opts.tenant;
     const res = await doFetch(`${opts.url}/rpc/${name}`, {
       method: "POST",
       headers,
@@ -83,7 +83,7 @@ export function createClient<Api = Record<string, never>>(opts: ClientOptions): 
     });
     const body = (await res.json().catch(() => ({}))) as { ok?: boolean; result?: unknown; error?: string; code?: string };
     if (!res.ok || body.ok === false) {
-      throw new MrakError(body.error ?? `request failed (${res.status})`, body.code ?? "error", res.status);
+      throw new PramenError(body.error ?? `request failed (${res.status})`, body.code ?? "error", res.status);
     }
     return body.result;
   }
@@ -160,7 +160,7 @@ export function createClient<Api = Record<string, never>>(opts: ClientOptions): 
   }
 
   return {
-    call: call as MrakClient<Api>["call"],
+    call: call as PramenClient<Api>["call"],
     subscribe(name, input, handlers) {
       const id = `s${counter++}`;
       const sub: Sub = {

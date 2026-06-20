@@ -1,25 +1,25 @@
 ---
 title: CLI & Deploy
 order: 9
-summary: The mrak CLI, and deploying to Cloudflare via oblaka + wrangler.
+summary: The pramen CLI, and deploying to Cloudflare via oblaka + wrangler.
 ---
 
 ## CLI
 
 ```bash
-bun run mrak help
-bun run mrak init my-app                        # scaffold app.ts + oblaka.ts
-bun run mrak token alice author --tenant acme   # mint a dev JWT
-bun run mrak schema sql                         # CREATE TABLE for the schema
-bun run mrak schema snapshot                    # baseline in .mrak/schema.json
-bun run mrak schema diff                        # additive vs destructive changes
-bun run mrak schema status --tenant acme        # is a deployed tenant caught up?
+bun run pramen help
+bun run pramen init my-app                        # scaffold app.ts + oblaka.ts
+bun run pramen token alice author --tenant acme   # mint a dev JWT
+bun run pramen schema sql                         # CREATE TABLE for the schema
+bun run pramen schema snapshot                    # baseline in .pramen/schema.json
+bun run pramen schema diff                        # additive vs destructive changes
+bun run pramen schema status --tenant acme        # is a deployed tenant caught up?
 ```
 
 ## Configuration: oblaka
 
 Cloudflare topology is declared in **`oblaka.ts`** (the source of truth) — the
-Worker, the `MRAK` Durable Object, its SQLite migration, vars, and observability.
+Worker, the `PRAMEN` Durable Object, its SQLite migration, vars, and observability.
 `oblaka` generates `wrangler.jsonc` from it (git-ignored; never edit by hand).
 
 Each project sets a unique `PROJECT` in `oblaka.ts`, which names the Worker, the DO,

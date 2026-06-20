@@ -1,5 +1,5 @@
-// Schema definition — the portable layer. Mirrors the prior runtime's `Entity(it => ({...}))`
-// factory and `defineSchema({...})`. Field builders return `as const` literals so
+// Schema definition — the portable layer: an `Entity(t => ({...}))` factory and
+// `defineSchema({...})`. Field builders return `as const` literals so
 // the exact field shape survives into the type system; sdk/infer.ts turns that
 // shape into row/where/insert types.
 //

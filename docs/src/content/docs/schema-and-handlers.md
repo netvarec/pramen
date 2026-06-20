@@ -11,7 +11,7 @@ Field builders (`t.id()`, `t.text()`, …) return `as const` literals, so the ex
 shape flows into the type system.
 
 ```ts
-import { Entity, defineSchema } from "mrak/sdk/schema";
+import { Entity, defineSchema } from "pramen/sdk/schema";
 
 const schema = defineSchema({
   users: Entity(
@@ -39,7 +39,7 @@ from the schema — table names, `where` columns and value types, row results, a
 insert/patch shapes are all checked at compile time.
 
 ```ts
-import { createApp } from "mrak/sdk/app";
+import { createApp } from "pramen/sdk/app";
 
 const { query, mutation } = createApp(schema);
 

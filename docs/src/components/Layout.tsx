@@ -56,13 +56,13 @@ export default function Layout(props: {
       <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>{props.title} — mrak</title>
-        <meta name="description" content="mrak — a reactive backend runtime for TypeScript on Cloudflare." />
+        <title>{props.title} — pramen</title>
+        <meta name="description" content="pramen — a reactive backend runtime for TypeScript on Cloudflare." />
         <link rel="stylesheet" href="/style.css" />
       </head>
       <body>
         <header class="site-header">
-          <a class="brand" href="/">mrak</a>
+          <a class="brand" href="/">pramen</a>
           <span class="tagline">reactive backend runtime for TypeScript on Cloudflare</span>
         </header>
         <div class={hasToc ? "layout has-toc" : "layout"}>

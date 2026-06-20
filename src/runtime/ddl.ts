@@ -1,6 +1,6 @@
 // DDL generation — CREATE TABLE for a new entity and the additive ALTER fragment
-// for a new column. The the prior runtime analog lives in the Rust the schema layer crate; here it
-// runs in TS inside the isolate. See runtime/migrate.ts for how these are applied.
+// for a new column. Runs in TS inside the isolate; see runtime/migrate.ts for how
+// these are applied.
 
 import type { EntityFields, FieldDef } from "../sdk/schema";
 

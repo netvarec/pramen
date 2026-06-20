@@ -1,6 +1,6 @@
 // Db — the repository surface handed to handlers, wrapping the DO's in-process
-// SqlStorage. This is the single ACL chokepoint (the prior runtime's "all reads go through
-// the ReadEngine"): every find/insert/update/delete resolves a scope for the
+// SqlStorage. This is the single ACL chokepoint — all reads go through the read
+// engine: every find/insert/update/delete resolves a scope for the
 // caller's identity and is denied, row-filtered, or field-projected accordingly.
 //
 // Generic over the app's schema S: method inputs and results are typed against

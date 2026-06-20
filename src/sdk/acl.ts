@@ -1,6 +1,5 @@
-// ACL primitives — the portable definition layer, mirroring the prior runtime's
-// packages/the definition layer ACL surface: role(), policy(), allow(), deny(),
-// $identity(). Resolution semantics live in runtime/acl.ts.
+// ACL primitives — the portable definition layer: role(), policy(), allow(),
+// deny(), $identity(). Resolution semantics live in runtime/acl.ts.
 //
 // Model: an Identity carries one or more roles. A policy grants a (role) access
 // to an (entity, action), optionally restricted by a row-level `where` predicate
@@ -18,7 +17,7 @@ export interface Identity {
 
 // --- $identity markers: reference an identity property inside a where rule ---
 
-const IDENTITY_MARKER = Symbol.for("mrak.identityMarker");
+const IDENTITY_MARKER = Symbol.for("pramen.identityMarker");
 
 export interface IdentityMarker {
   readonly [IDENTITY_MARKER]: true;
@@ -72,7 +71,7 @@ export type FieldsFn = (identity: Identity | null, row: Record<string, unknown>)
 /** Per-relation ACL inside a parent read policy. */
 export interface RelationAclRule {
   /** Permit traversal to the related entity via this relation even if it has no
-   * flat read grant (the prior runtime's directAccess). */
+   * flat read grant (directAccess). */
   directAccess?: boolean;
   /** Extra row-level predicate applied when traversing. */
   where?: WhereRule;

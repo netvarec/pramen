@@ -1,6 +1,6 @@
 // Example app — schema, handlers, and ACL. The entire user-facing surface.
-// In a finished mrak this would be deployed as a bundle (cf. the prior runtime's /deploy);
-// for the v0 skeleton the DO imports it statically.
+// In a finished pramen this would be deployed as a bundle at runtime; for the v0
+// skeleton the DO imports it statically.
 
 import { Entity, defineSchema } from "../src/sdk/schema";
 import { createApp } from "../src/sdk/app";

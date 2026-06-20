@@ -12,7 +12,7 @@ export default async function DocsIndex() {
       <article class="doc">
         <h1>Documentation</h1>
         <p class="lede" style="color: var(--muted); font-size: 1.1rem;">
-          Everything you need to build on mrak — from schema and handlers to ACL, live queries, and deploy.
+          Everything you need to build on pramen — from schema and handlers to ACL, live queries, and deploy.
         </p>
         <ul class="doc-index">
           {docs.map((doc) => (

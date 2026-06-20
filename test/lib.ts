@@ -17,7 +17,7 @@ export interface Res {
 /** An HTTP caller bound to a base URL + tenant. */
 export function http(base: string, tenant: string) {
   return async (name: string, input: unknown, bearer?: string): Promise<Res> => {
-    const headers: Record<string, string> = { "content-type": "application/json", "x-mrak-tenant": tenant };
+    const headers: Record<string, string> = { "content-type": "application/json", "x-pramen-tenant": tenant };
     if (bearer) headers.authorization = `Bearer ${bearer}`;
     const r = await fetch(`${base}/rpc/${name}`, { method: "POST", headers, body: JSON.stringify(input ?? {}) });
     return { status: r.status, body: await r.json() };

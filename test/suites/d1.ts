@@ -1,5 +1,5 @@
 // D1-backed end-to-end: the SAME schema / ACL / read engine running over a real D1
-// binding (the "Worker + D1, no DO" path, selected via `x-mrak-store: d1`). Proves
+// binding (the "Worker + D1, no DO" path, selected via `x-pramen-store: d1`). Proves
 // the Driver seam works end-to-end in miniflare — auth, row scoping, field
 // projection, cell-level ACL, writes, and aggregates all run over D1, not just the
 // DO. (Live queries are intentionally DO-only and not exercised here.)
@@ -9,15 +9,15 @@ import { assert, token } from "../lib";
 export async function runD1(base: string): Promise<void> {
   const TENANT = "d1-demo";
 
-  // Like the shared `http` helper, but adds `x-mrak-store: d1` so the Worker runs
+  // Like the shared `http` helper, but adds `x-pramen-store: d1` so the Worker runs
   // dispatch over D1 instead of routing to the Durable Object.
   const post = (name: string, input: unknown, bearer?: string) =>
     fetch(`${base}/rpc/${name}`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-mrak-tenant": TENANT,
-        "x-mrak-store": "d1",
+        "x-pramen-tenant": TENANT,
+        "x-pramen-store": "d1",
         ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
       },
       body: JSON.stringify(input ?? {}),

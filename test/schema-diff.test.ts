@@ -1,4 +1,4 @@
-// Unit test for the schema diff that powers `mrak schema diff`. Every change is
+// Unit test for the schema diff that powers `pramen schema diff`. Every change is
 // auto-applied on boot; the diff flags whether it's `destructive` (drop / type
 // change — rebuilds the table, may lose data) or additive (no data loss).
 

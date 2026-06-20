@@ -15,7 +15,7 @@ jobs:
           bun-version: latest
       - name: Install (workspaces)
         run: bun install --frozen-lockfile
-      - name: Typecheck (server + @mrak/client + @mrak/react)
+      - name: Typecheck (server + @pramen/client + @pramen/react)
         run: bun run typecheck
       - name: Tests (e2e + client + cli + units)
         run: bun test

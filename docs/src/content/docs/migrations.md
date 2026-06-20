@@ -6,7 +6,7 @@ summary: Automatic additive and destructive schema reconciliation on every DO bo
 
 The schema is reconciled with the live store on **every DO boot**, inside a storage
 transaction. There is no separate migration step — you edit the schema and redeploy.
-A schema hash in `_mrak_meta` skips the work entirely when nothing changed.
+A schema hash in `_pramen_meta` skips the work entirely when nothing changed.
 
 ## Two passes
 
@@ -16,7 +16,7 @@ A schema hash in `_mrak_meta` skips the work entirely when nothing changed.
 - a new column → `ALTER TABLE ADD COLUMN` (nullable; SQLite can't add `NOT NULL` to
   a populated table)
 
-**Destructive** (auto-applied, *can* lose data — by design, since mrak is WIP with
+**Destructive** (auto-applied, *can* lose data — by design, since pramen is WIP with
 no backward-compat constraints):
 
 - a column the schema no longer declares is **dropped**
@@ -33,7 +33,7 @@ ambiguous. Declare it explicitly with `renamedFrom`, and the migrator copies the
 column's data during the rebuild:
 
 ```ts
-import { Entity, renamedFrom } from "mrak/sdk/schema";
+import { Entity, renamedFrom } from "pramen/sdk/schema";
 
 notes: Entity((t) => ({
   id: t.id(),
@@ -51,7 +51,7 @@ The CLI's `schema diff` compares your schema against a snapshot baseline and fla
 each change as additive or **destructive**:
 
 ```bash
-bun run mrak schema snapshot   # baseline in .mrak/schema.json
-bun run mrak schema diff       # additive vs destructive (all auto-applied on boot)
-bun run mrak schema status --tenant acme   # is a deployed tenant caught up?
+bun run pramen schema snapshot   # baseline in .pramen/schema.json
+bun run pramen schema diff       # additive vs destructive (all auto-applied on boot)
+bun run pramen schema status --tenant acme   # is a deployed tenant caught up?
 ```

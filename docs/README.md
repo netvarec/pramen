@@ -1,7 +1,7 @@
-# mrak docs
+# pramen docs
 
-Documentation site for mrak, built with [pletivo](https://github.com/contember/pletivo)
-(a Bun-powered static site generator). Standalone from the mrak workspace — install
+Documentation site for pramen, built with [pletivo](https://github.com/contember/pletivo)
+(a Bun-powered static site generator). Standalone from the pramen workspace — install
 and run from this directory.
 
 ```bash

@@ -1,40 +1,41 @@
-# mrak — design
+# pramen — design
 
-**the prior runtime, re-architected onto Cloudflare primitives.** The TypeScript SDK (schema,
-handlers, ACL, ORM) is the portable product; the substrate changes from
-Rust + Turso + a hand-built single-writer/replication stack to **Workers +
-Durable Objects**, where the platform already provides most of that stack.
+**A reactive backend runtime built on Cloudflare primitives.** The TypeScript SDK
+(schema, handlers, ACL, ORM) is the portable product; the substrate is **Workers +
+Durable Objects**, where the platform already provides the single-writer / storage /
+replication stack a stateful backend like this would otherwise build by hand.
 
 ## Core insight
 
-the prior runtime builds from scratch what Cloudflare hands you as primitives:
+Cloudflare hands you, as platform primitives, the pieces a stateful reactive
+backend would otherwise build from scratch:
 
-| the prior runtime (Rust) | mrak (Cloudflare) | Status in v0 |
+| Concern | pramen (Cloudflare) | Status in v0 |
 |---|---|---|
-| V8 workers (deno_core, !Send) | Workers isolates | platform |
-| Single-writer serialization (manual invariant) | Durable Object (one request at a time) | ✅ free |
-| In-process Turso | DO SQLite storage (`ctx.storage.sql`) | ✅ wired |
-| `the platform sync layer` (WAL repl, snapshots, archiving, failover) | DO point-in-time recovery + platform durability | platform |
-| axum + flume dispatch | Worker `fetch` → DO stub | ✅ wired |
-| Rust ReadEngine (zero-JS SQL compile) | `src/runtime/read-engine.ts` (→ WASM later) | ✅ TS now |
-| ACL resolver, schema, ORM, handlers | TS SDK (`src/sdk/`) | partial (schema + handlers) |
-| KV | Workers KV | not yet |
+| Sandboxed execution | Workers isolates | platform |
+| Single-writer serialization | Durable Object (one request at a time) | ✅ free |
+| In-process datastore | DO SQLite storage (`ctx.storage.sql`) | ✅ wired |
+| WAL replication, snapshots, failover | DO point-in-time recovery + platform durability | platform |
+| Request dispatch | Worker `fetch` → DO stub | ✅ wired |
+| Zero-JS SQL compile | `src/runtime/read-engine.ts` (→ WASM later) | ✅ TS now |
+| ACL resolver, schema, ORM, handlers | TS SDK (`src/sdk/`) | ✅ |
+| Global config/cache | Workers KV | ✅ |
 
 ## What the platform gives us for free
 
-- **Single-writer** — a DO processes one request at a time. the prior runtime's hardest-won
-  invariant is the default here, and it's *per-tenant* instead of global: writes
-  serialize within a tenant and parallelize across tenants.
+- **Single-writer** — a DO processes one request at a time, so the hardest-won
+  invariant of a stateful backend is the default here, and it's *per-tenant*
+  instead of global: writes serialize within a tenant and parallelize across them.
 - **Durability / failover / replication** — DO storage has point-in-time
-  recovery and platform-managed durability. Most of the prior runtime's chaos/failover test
-  surface (T01–T34, RPO/RTO drills) becomes "trust the platform."
-- **Multi-tenancy** — one DO per tenant is a cleaner sharding model than a single
-  Turso instance with global single-writer contention.
+  recovery and platform-managed durability, so the whole chaos/failover surface
+  (replication drills, RPO/RTO) becomes "trust the platform."
+- **Multi-tenancy** — one DO per tenant is a clean sharding model, with no global
+  single-writer contention.
 
 ## The real tensions (tracked, not yet solved)
 
-1. **Zero-JS read path.** the prior runtime's Rust ReadEngine keeps JS out of the hot path.
-   In a DO we're in JS-land. Plan: compile `read-engine.ts` (+ the where-AST
+1. **Zero-JS read path.** Ideally SQL compilation stays out of the JS hot path,
+   but in a DO we're in JS-land. Plan: compile `read-engine.ts` (+ the where-AST
    compiler) to **WASM** so SQL compilation leaves JS. Until then, TS + cached
    prepared statements.
 2. **CPU/memory limits.** DOs relax the Worker CPU cap but aren't a dedicated OS
@@ -47,14 +48,14 @@ the prior runtime builds from scratch what Cloudflare hands you as primitives:
 
 ```
 Worker (src/index.ts)            stateless HTTP front door
-  └─ /rpc/<name> ──► MrakDO       per-tenant DO, idFromName(tenant)
+  └─ /rpc/<name> ──► PramenDO       per-tenant DO, idFromName(tenant)
         ├─ boot: schemaDDL(app.schema) under blockConcurrencyWhile
         ├─ dispatch(name, input)  query → run; mutation → BEGIN/COMMIT/ROLLBACK
         └─ Db over ctx.storage.sql (read-engine compiles SELECTs)
 ```
 
 Request: `POST /rpc/createNote` with `{ "title": "...", "body": "..." }`,
-header `X-Mrak-Tenant` selects the store (default `main`).
+header `X-Pramen-Tenant` selects the store (default `main`).
 
 ## Testing
 
@@ -80,7 +81,7 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
 - [x] Relations + nested ACL: `belongsTo`/`hasMany` on entities (`Entity(fields, relations)`), eager
       loaded via `find({ with: { rel: true } })`. Each traversal is independently ACL-checked by
       `resolveRelationScope`: the related entity's own read scope OR a parent read policy's relation
-      rule with `directAccess` (the prior runtime's traversal-only grant), with per-relation `where`/`fields`.
+      rule with `directAccess` (a traversal-only grant), with per-relation `where`/`fields`.
       Typed `with` + nested row inference.
 - [x] Write-side ACL — `set` and `validate`: a write policy may force server-controlled column values
       (`set: { ownerId: (i) => i?.userId }`, overrides client input and bypasses field restriction) and
@@ -89,7 +90,7 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
       (conditional per-field), hard-deny override, path-aware resolvers; perf: batch relation loads (avoid N+1).
 - [x] Verified-token auth: the Worker verifies an HS256 bearer JWT (WebCrypto) against
       `env.AUTH_SECRET`, checks exp/nbf, and maps claims (`sub`->userId, `roles`/`role`->roles, custom
-      claims pass through) to an Identity forwarded to the DO. The client-supplied X-Mrak-Identity
+      claims pass through) to an Identity forwarded to the DO. The client-supplied X-Pramen-Identity
       header is stripped unless a token verified, so a validly-signed JWT is the only path to an
       identity (`auth.ts`). Next: RS256/EdDSA + JWKS (asymmetric, key rotation) — a localized change
       to verifyJwt.
@@ -108,12 +109,12 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
       validator runs at the boundary (400 on reject); `validate` throws become 400s. Relation loads
       are batched with a single `IN` query (no N+1). WebSockets gain `webSocketError` handling and a
       per-socket subscription cap (64). NOT changed: ACL field permissions union across OR'd policies
-      (row-agnostic at the root) — intentional, matches the prior runtime v1; per-row field coupling is future work.
+      (row-agnostic at the root) — intentional; per-row field coupling is future work.
 - [x] Tenant registry: Durable Objects aren't enumerable, so a forgotten tenant name = orphaned
       (still durable, but unreachable). Each tenant now records its name in a `TENANTS` KV namespace on
-      its DO's first touch — once, guarded by a `_mrak_meta` flag (no per-request writes; the DO learns
-      its name from the Worker-forwarded `x-mrak-tenant` header). Admin `GET /tenants` lists them.
-- [x] Tenant authorization: the Worker gates `x-mrak-tenant` against the caller (`authorizeTenant` in
+      its DO's first touch — once, guarded by a `_pramen_meta` flag (no per-request writes; the DO learns
+      its name from the Worker-forwarded `x-pramen-tenant` header). Admin `GET /tenants` lists them.
+- [x] Tenant authorization: the Worker gates `x-pramen-tenant` against the caller (`authorizeTenant` in
       `auth.ts`) before reaching the DO — admins → any tenant; others → only tenants in their `tenants`
       claim. Closes the arbitrary-tenant addressing/registration hole. Pluggable for other tenancy models.
 - [x] Point-in-time recovery: SQLite-backed DOs have 30-day PITR (`getBookmarkForTime` →
@@ -128,19 +129,19 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
       account; within a project's single KV namespace, key prefixes separate internal (`tenant:`) from
       app (`app:`) data. Next: per-tenant KV scope option; let handlers throw clean HTTP errors (e.g.
       forbidden) so KV/app-level auth checks don't surface as 500s.
-- [x] Monorepo + client libraries: Bun workspaces. `@mrak/client` (`packages/client`) — typed
+- [x] Monorepo + client libraries: Bun workspaces. `@pramen/client` (`packages/client`) — typed
       `call()` (HTTP RPC) + `subscribe()` (live queries over a multiplexed, auto-reconnecting
       WebSocket), generic over `typeof app.handlers` with no runtime dep on the server. Browser
       WebSockets can't set headers, so /live also accepts token+tenant via the query string.
-      `@mrak/react` (`packages/react`) — `useLiveQuery` (re-renders on each push) + `useMutation`.
-- [x] CLI (`mrak`): help, init (scaffold), token (dev JWT), and schema sql/hash/snapshot/diff/status.
+      `@pramen/react` (`packages/react`) — `useLiveQuery` (re-renders on each push) + `useMutation`.
+- [x] CLI (`pramen`): help, init (scaffold), token (dev JWT), and schema sql/hash/snapshot/diff/status.
       `schema diff` classifies changes safe (additive) vs unsafe; `schema status` compares a deployed
       tenant's applied schema (admin `GET /admin/schema` → DO introspection) to the local schema.
-- [ ] Package the server runtime itself (`createMrak(app)` factory) so a project is just
+- [ ] Package the server runtime itself (`createPramen(app)` factory) so a project is just
       `app.ts` + `oblaka.ts` + a 3-line entry — currently the DO statically imports the example app.
-- [ ] Dynamic deploy: ship the app bundle to the DO instead of static import (cf. the prior runtime `/deploy`).
+- [ ] Dynamic deploy: ship the app bundle to the DO instead of static import (a runtime `/deploy`).
 - [ ] ReadEngine → WASM.
-- [x] Deploy via **oblaka** (CF IaC DSL): `oblaka.ts` declares the Worker + `MRAK` Durable Object
+- [x] Deploy via **oblaka** (CF IaC DSL): `oblaka.ts` declares the Worker + `PRAMEN` Durable Object
       (oblaka auto-emits the SQLite migration), vars, and observability, and is the source of truth —
       it generates `wrangler.jsonc` (git-ignored). `bun run config` generates locally; `bun run deploy`
       runs `oblaka --remote` (provision resources + config) then `wrangler deploy` (bundle + upload
@@ -148,18 +149,18 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
       via **lopata**; mark AUTH_SECRET as a managed secret (oblaka has no secret DSL yet — uses
       `wrangler secret put`).
 - [x] Typed query/insert inference: field builders preserve literals (`as const`); `sdk/infer.ts`
-      derives `InferRow`/`WhereInput`/`InferInsert`/`InferUpdate` (mirroring the schema layer). `Db<S>` is
+      derives `InferRow`/`WhereInput`/`InferInsert`/`InferUpdate`. `Db<S>` is
       generic, and `createApp(schema)` binds the handler factories so `ctx.db` is fully typed — table
       names, where columns/values, row results, insert/patch shapes. Compile-time proof in
       `example/inference-check.ts` (`@ts-expect-error` cases). Note: ACL field projection can drop
       columns at runtime, so a projected row is narrower than its static type — known unsoundness.
 - [x] Schema migrations (additive): on DO boot, `runtime/migrate.ts` reconciles the SQLite store
       with the schema — creates missing tables and `ALTER TABLE ADD COLUMN`s new fields (nullable),
-      with no data loss. A schema hash in the internal `_mrak_meta` table short-circuits unchanged
+      with no data loss. A schema hash in the internal `_pramen_meta` table short-circuits unchanged
       schemas on warm boots. Additive only — drops/renames/type changes are not applied (orphan
       columns remain). Unit-tested against real SQLite (`test/migrate.test.ts`); create+PRAGMA path
       exercised on the real DO by the e2e boot. Next: destructive/explicit migrations, column rename
-      detection, a `_mrak_meta` schema-version log.
+      detection, a `_pramen_meta` schema-version log.
 - [x] Query expressiveness: operators (`eq`/`ne`/`gt`/`gte`/`lt`/`lte`/`in`/`notIn`/`like`/`isNull`),
       nestable `AND`/`OR` groups, multi-column `orderBy`, and `limit`/`offset` pagination. The `SqlExpr`
       AST + `compileWhere` (`runtime/read-engine.ts`) handle it; `WhereInput<F>` types operators per

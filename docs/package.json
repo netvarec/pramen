@@ -1,9 +1,9 @@
 {
-  "name": "mrak-docs",
+  "name": "pramen-docs",
   "dependencies": {
     "pletivo": "^0.1.24"
   },
-  "description": "Documentation site for mrak, built with pletivo.",
+  "description": "Documentation site for pramen, built with pletivo.",
   "private": true,
   "scripts": {
     "dev": "pletivo dev",

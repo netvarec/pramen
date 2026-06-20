@@ -34,5 +34,5 @@ DO in memory.
 
 Browser WebSockets can't set headers, so `/live` also accepts the bearer token and
 tenant via the query string (`?token=...&tenant=...`); the Worker folds them into
-headers for the rest of the flow. The `@mrak/client` library handles this for you —
+headers for the rest of the flow. The `@pramen/client` library handles this for you —
 see [Clients](/docs/client).

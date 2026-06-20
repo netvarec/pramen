@@ -9,10 +9,10 @@ const run = (...args: string[]) => {
   return { out: p.stdout.toString(), err: p.stderr.toString(), code: p.exitCode };
 };
 
-describe("mrak cli", () => {
+describe("pramen cli", () => {
   test("help", () => {
     const { out } = run("help");
-    expect(out).toContain("Usage: mrak <command>");
+    expect(out).toContain("Usage: pramen <command>");
     expect(out).toContain("schema");
   });
 

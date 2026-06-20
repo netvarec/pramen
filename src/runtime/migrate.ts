@@ -10,7 +10,7 @@
 //      standard SQLite table-rebuild (create new, copy, drop old, rename). This is
 //      auto-applied: a bad deploy CAN lose data, by design (WIP, no backward-compat).
 //
-// A schema hash in the internal `_mrak_meta` table lets an unchanged schema skip
+// A schema hash in the internal `_pramen_meta` table lets an unchanged schema skip
 // introspection entirely on warm boots. The live table (PRAGMA) is the ground
 // truth diffed against the schema — no stored shape needed.
 //
@@ -33,14 +33,14 @@ export interface MigrationReport {
   droppedTables: string[];
 }
 
-/** Internal bookkeeping tables the migrator must never touch — mrak's own, SQLite's,
+/** Internal bookkeeping tables the migrator must never touch — pramen's own, SQLite's,
  * and the substrate's (D1 keeps `_cf_*` / `d1_*` tables in sqlite_master and forbids
  * dropping them). Matched case-insensitively. */
 function isInternalTable(name: string): boolean {
   const n = name.toLowerCase();
   return (
-    n.startsWith("_mrak") ||
-    n.startsWith("__mrak") ||
+    n.startsWith("_pramen") ||
+    n.startsWith("__pramen") ||
     n.startsWith("sqlite_") ||
     n.startsWith("_cf_") ||
     n.startsWith("d1_")
@@ -66,19 +66,19 @@ async function tableColumns(driver: Driver, table: string): Promise<Map<string, 
 }
 
 async function readMeta(driver: Driver, key: string): Promise<string | undefined> {
-  const rows = (await driver.exec(`SELECT value FROM _mrak_meta WHERE key = ?`, [key])) as { value: string }[];
+  const rows = (await driver.exec(`SELECT value FROM _pramen_meta WHERE key = ?`, [key])) as { value: string }[];
   return rows[0]?.value;
 }
 
 async function writeMeta(driver: Driver, key: string, value: string): Promise<void> {
-  await driver.exec(`INSERT OR REPLACE INTO _mrak_meta (key, value) VALUES (?, ?)`, [key, value]);
+  await driver.exec(`INSERT OR REPLACE INTO _pramen_meta (key, value) VALUES (?, ?)`, [key, value]);
 }
 
 /** Rebuild a table to exactly the declared schema: create a temp table, copy each
  * desired column from its source (renamed or same-named live column, CAST on a
  * type change; brand-new columns left NULL), drop the old table, rename the temp. */
 async function rebuildTable(driver: Driver, table: string, def: { fields: EntityFields }, live: Map<string, string>): Promise<void> {
-  const tmp = `__mrak_rebuild_${table}`;
+  const tmp = `__pramen_rebuild_${table}`;
   await driver.exec(`DROP TABLE IF EXISTS ${ident(tmp)}`, []);
   await driver.exec(createTableSql(tmp, def), []);
 
@@ -100,7 +100,7 @@ async function rebuildTable(driver: Driver, table: string, def: { fields: Entity
 }
 
 export async function migrate(driver: Driver, schema: SchemaDef): Promise<MigrationReport> {
-  await driver.exec(`CREATE TABLE IF NOT EXISTS _mrak_meta (key TEXT PRIMARY KEY, value TEXT)`, []);
+  await driver.exec(`CREATE TABLE IF NOT EXISTS _pramen_meta (key TEXT PRIMARY KEY, value TEXT)`, []);
 
   const current = schemaHash(schema);
   if ((await readMeta(driver, "schema_hash")) === current)

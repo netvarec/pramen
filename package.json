@@ -1,5 +1,5 @@
 {
-  "name": "mrak",
+  "name": "pramen",
   "version": "0.0.0",
   "private": true,
   "description": "Reactive backend runtime for TypeScript on Cloudflare — schema + handlers, deployed as Workers + Durable Objects.",
@@ -8,7 +8,7 @@
     "packages/*"
   ],
   "bin": {
-    "mrak": "scripts/cli.ts"
+    "pramen": "scripts/cli.ts"
   },
   "scripts": {
     "config": "oblaka oblaka.ts",
@@ -16,14 +16,14 @@
     "dev:wrangler": "oblaka oblaka.ts && wrangler dev",
     "deploy": "oblaka oblaka.ts --remote && wrangler deploy",
     "plan": "oblaka oblaka.ts --remote --dry-run",
-    "mrak": "bun scripts/cli.ts",
+    "pramen": "bun scripts/cli.ts",
     "typecheck": "tsc --noEmit && tsc -p packages/client/tsconfig.json && tsc -p packages/react/tsconfig.json",
     "test": "bun test"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250101.0",
-    "@mrak/client": "workspace:*",
-    "@mrak/react": "workspace:*",
+    "@pramen/client": "workspace:*",
+    "@pramen/react": "workspace:*",
     "@types/react": "^19.0.0",
     "lopata": "file:../../contember/lopata",
     "oblaka-iac": "^0.0.14",

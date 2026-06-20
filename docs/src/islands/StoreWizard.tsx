@@ -1,6 +1,6 @@
 import { useState } from "preact/hooks";
 
-// mrak runs the same schema / handlers / ACL over different stores (the Driver
+// pramen runs the same schema / handlers / ACL over different stores (the Driver
 // seam). This island walks a dev through a couple of use-case questions and
 // recommends one. Decision tree below: questions branch to other questions or to
 // a result; results map into STORES.
@@ -22,7 +22,7 @@ const STORES: Record<StoreId, Store> = {
     name: "Durable Object SQLite",
     badge: "Default",
     badgeKind: "default",
-    tagline: "Per-tenant in-process SQLite — mrak's transactional write path.",
+    tagline: "Per-tenant in-process SQLite — pramen's transactional write path.",
     best: [
       "Live queries (the server pushes fresh results in real time)",
       "Per-tenant isolation, with free single-writer transactions",
@@ -41,7 +41,7 @@ const STORES: Record<StoreId, Store> = {
       "You don't need live queries",
       "Cloudflare-native — no database to operate",
     ],
-    setup: "Send the header x-mrak-store: d1. Same schema, ACL and handlers; RPC only.",
+    setup: "Send the header x-pramen-store: d1. Same schema, ACL and handlers; RPC only.",
     watch: [
       "No live queries (those need a Durable Object)",
       "No interactive transactions / rollback-on-throw (D1 limitation)",

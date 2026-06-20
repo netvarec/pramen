@@ -5,7 +5,7 @@
 //  - Across projects: each project declares its own KV namespace in oblaka.ts
 //    (named per project), so projects in one account never share a namespace.
 //  - Within the namespace: keys are prefixed (`app:` for handler data) so they
-//    never collide with mrak-internal keys (the tenant registry uses `tenant:`).
+//    never collide with pramen-internal keys (the tenant registry uses `tenant:`).
 //
 // ctx.kv is GLOBAL across all tenants of the project — use it for config, feature
 // flags, and caches, NOT per-tenant data (that's ctx.db). KV is eventually

@@ -60,7 +60,7 @@ afterAll(() => {
   server?.kill();
 });
 
-describe("mrak e2e", () => {
+describe("pramen e2e", () => {
   test("acl + write rules + per-identity live", () => runAcl(BASE, WS), 30_000);
   test("cell-level ACL (per-row field visibility)", () => runCellAcl(BASE), 30_000);
   test("D1-backed store (Worker + D1, no DO)", () => runD1(BASE), 30_000);
@@ -73,7 +73,7 @@ describe("mrak e2e", () => {
   test("tenant registry", () => runRegistry(BASE), 30_000);
   test("admin recovery endpoint (auth + validation)", () => runRecovery(BASE), 30_000);
   test("ctx.kv (global cross-tenant config)", () => runKv(BASE), 30_000);
-  test("@mrak/client (typed RPC + live subscription)", () => runClient(BASE), 30_000);
+  test("@pramen/client (typed RPC + live subscription)", () => runClient(BASE), 30_000);
   test("live queries + row-level invalidation", () => runLive(BASE, WS), 30_000);
   test("hardening: input validation + safe errors", () => runHardening(BASE), 30_000);
 });

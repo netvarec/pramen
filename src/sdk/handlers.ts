@@ -1,5 +1,5 @@
-// Handler factories — mirrors the prior runtime's `query()` / `mutation()` from the server library.
-// A query reads; a mutation is wrapped in BEGIN/COMMIT by the dispatcher and
+// Handler factories — `query()` and `mutation()`. A query reads; a mutation is
+// wrapped in BEGIN/COMMIT by the dispatcher and
 // rolls back on throw (see runtime/dispatch.ts).
 
 import type { Db } from "../runtime/db";

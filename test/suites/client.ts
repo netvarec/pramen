@@ -1,8 +1,8 @@
-// @mrak/client end-to-end against the running server: typed RPC over HTTP, and a
+// @pramen/client end-to-end against the running server: typed RPC over HTTP, and a
 // live subscription over WebSocket (using query-string auth, the browser path)
 // that receives a push after a mutation.
 
-import { createClient } from "@mrak/client";
+import { createClient } from "@pramen/client";
 import { assert, sleep, token } from "../lib";
 import type { app } from "../../example/app";
 

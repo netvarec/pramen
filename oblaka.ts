@@ -1,4 +1,4 @@
-// oblaka IaC — the source of truth for mrak's Cloudflare topology.
+// oblaka IaC — the source of truth for pramen's Cloudflare topology.
 //
 //   bun run config            generate wrangler.jsonc from this file (local)
 //   bun run deploy            provision resources (oblaka --remote) + ship code (wrangler deploy)
@@ -12,8 +12,8 @@ import { define, D1Database, DurableObject, KVNamespace, Worker } from "oblaka-i
 
 // One name to namespace every resource this project owns. Cloudflare resource
 // names are account-global, so set a unique PROJECT per app and all its resources
-// (Worker, DO, KV) get distinct names — many mrak projects coexist in one account.
-const PROJECT = "mrak";
+// (Worker, DO, KV) get distinct names — many pramen projects coexist in one account.
+const PROJECT = "pramen";
 
 export default define(({ env }) => {
   // AUTH_SECRET: a dev value locally; in real envs set it as a secret with
@@ -29,13 +29,13 @@ export default define(({ env }) => {
     observability: { enabled: true },
     bindings: {
       // The DO is the database. oblaka emits the binding + the SQLite migration
-      // (new_sqlite_classes: ["MrakDO"]) into wrangler.jsonc automatically.
-      MRAK: new DurableObject({ name: `${PROJECT}-store`, className: "MrakDO" }),
+      // (new_sqlite_classes: ["PramenDO"]) into wrangler.jsonc automatically.
+      PRAMEN: new DurableObject({ name: `${PROJECT}-store`, className: "PramenDO" }),
       // One KV namespace per project. Holds the tenant registry (`tenant:` keys)
       // and handler-facing ctx.kv data (`app:` keys); see src/runtime/kv.ts.
       KV: new KVNamespace({ name: `${PROJECT}-kv` }),
       // D1 database for the "Worker + D1 (no DO)" path — the same engine over D1,
-      // selected per-request via `x-mrak-store: d1`. The DO remains the write path.
+      // selected per-request via `x-pramen-store: d1`. The DO remains the write path.
       DB: new D1Database({ name: `${PROJECT}-d1` }),
     },
     vars,

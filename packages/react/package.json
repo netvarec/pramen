@@ -1,7 +1,7 @@
 {
-  "name": "@mrak/react",
+  "name": "@pramen/react",
   "version": "0.0.0",
-  "description": "React hooks for a mrak backend — useLiveQuery (reactive) + useMutation.",
+  "description": "React hooks for a pramen backend — useLiveQuery (reactive) + useMutation.",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
@@ -9,7 +9,7 @@
   "types": "./src/index.ts",
   "files": ["src"],
   "peerDependencies": {
-    "@mrak/client": "*",
+    "@pramen/client": "*",
     "react": ">=18"
   }
 }

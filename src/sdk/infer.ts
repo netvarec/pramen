@@ -1,6 +1,6 @@
-// Type-level inference from a schema's field definitions — the mrak counterpart
-// of the schema layer's WhereInput / InferInsert / InferRow. Pure types; erased at
-// runtime. Relies on field builders preserving literals (`as const`), so e.g.
+// Type-level inference from a schema's field definitions: WhereInput / InferInsert
+// / InferRow. Pure types; erased at runtime. Relies on field builders preserving
+// literals (`as const`), so e.g.
 // `t.id()` is `{ type: "integer"; primaryKey: true; autoIncrement: true; notNull: true }`.
 
 import type { EntityDef, EntityFields, FieldDef, RelationDefs, SchemaDef } from "./schema";

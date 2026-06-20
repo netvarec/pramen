@@ -9,7 +9,7 @@ export async function runLive(base: string, wsUrl: string): Promise<void> {
   const post = http(base, TENANT);
   const auth = await token("admin", ["admin"]); // full access — this suite isn't about ACL
 
-  const live = wsClient(wsUrl, { authorization: `Bearer ${auth}`, "x-mrak-tenant": TENANT });
+  const live = wsClient(wsUrl, { authorization: `Bearer ${auth}`, "x-pramen-tenant": TENANT });
   await live.ready;
   const isList = (m: any) => m.type === "data" && m.id === "list";
   const isOne = (m: any) => m.type === "data" && m.id === "one";

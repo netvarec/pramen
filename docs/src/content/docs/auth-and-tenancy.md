@@ -38,7 +38,7 @@ When `JWKS_URL` is set it takes over from `AUTH_SECRET`.
 
 ## Tenancy
 
-Each tenant is a Durable Object addressed by the `X-Mrak-Tenant` header (default
+Each tenant is a Durable Object addressed by the `X-Pramen-Tenant` header (default
 `main`). Durable Objects can't be enumerated, so a tenant's name is recorded in a KV
 registry on its first touch; admins can list them at `GET /tenants`.
 
@@ -58,5 +58,5 @@ curl -s -X POST http://localhost:8787/admin/recover \
   -d '{"tenant":"acme","timestamp":1718000000000}'
 ```
 
-> PITR is platform-only — unavailable in local dev (returns 501). mrak arms the
+> PITR is platform-only — unavailable in local dev (returns 501). pramen arms the
 > restore and returns an `undo` bookmark; it completes on the DO's next restart.

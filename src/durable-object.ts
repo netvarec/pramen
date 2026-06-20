@@ -1,9 +1,9 @@
-// MrakDO — the database. One instance per tenant (see src/index.ts routing).
+// PramenDO — the database. One instance per tenant (see src/index.ts routing).
 // Holds the SQLite store in-process, applies the schema on boot, dispatches
 // handler RPCs over HTTP, and serves live queries over WebSockets.
 //
 // ACL: policies are compiled once on boot. Identity is resolved by the Worker
-// and forwarded in the X-Mrak-Identity header. For HTTP it's per request; for a
+// and forwarded in the X-Pramen-Identity header. For HTTP it's per request; for a
 // WebSocket it's fixed at connect time and stored on the socket, so live queries
 // are evaluated per-identity (row-level scopes apply to pushes too).
 //
@@ -38,7 +38,7 @@ export interface DoEnv {
 /** Per-socket subscription cap — bounds memory and per-mutation re-run cost. */
 const MAX_SUBSCRIPTIONS = 64;
 
-export class MrakDO extends DurableObject<DoEnv> {
+export class PramenDO extends DurableObject<DoEnv> {
   private readonly acl: CompiledAcl;
   private readonly kv: Kv;
   private readonly driver: Driver;
@@ -121,7 +121,7 @@ export class MrakDO extends DurableObject<DoEnv> {
   }
 
   override async webSocketError(ws: WebSocket, error: unknown): Promise<void> {
-    console.error("mrak: websocket error", error);
+    console.error("pramen: websocket error", error);
     try {
       ws.close(1011, "error");
     } catch {
@@ -194,16 +194,16 @@ export class MrakDO extends DurableObject<DoEnv> {
   // one KV write per tenant across its whole lifetime.
   private async ensureRegistered(request: Request): Promise<void> {
     if (this.registered) return;
-    const name = request.headers.get("x-mrak-tenant");
+    const name = request.headers.get("x-pramen-tenant");
     if (!name) return;
 
-    const seen = await this.driver.exec(`SELECT 1 FROM _mrak_meta WHERE key = 'registered'`, []);
+    const seen = await this.driver.exec(`SELECT 1 FROM _pramen_meta WHERE key = 'registered'`, []);
     if (seen.length > 0) {
       this.registered = true;
       return;
     }
     await this.env.KV.put(`tenant:${name}`, JSON.stringify({ firstSeen: Date.now() }));
-    await this.driver.exec(`INSERT OR REPLACE INTO _mrak_meta (key, value) VALUES ('registered', ?)`, [name]);
+    await this.driver.exec(`INSERT OR REPLACE INTO _pramen_meta (key, value) VALUES ('registered', ?)`, [name]);
     this.registered = true;
   }
 
@@ -231,7 +231,7 @@ export class MrakDO extends DurableObject<DoEnv> {
     } catch (err) {
       // PITR is a platform feature — unavailable in local dev, and can otherwise
       // fail operationally. Report 501 (not a generic 500); log the real reason.
-      console.error("mrak: recovery unavailable", err);
+      console.error("pramen: recovery unavailable", err);
       return Response.json(
         { ok: false, error: "point-in-time recovery is unavailable in this environment", code: "unavailable" },
         { status: 501 },
@@ -242,11 +242,11 @@ export class MrakDO extends DurableObject<DoEnv> {
   // Introspection: this tenant's applied schema hash + live table/column shape
   // (admin-gated at the Worker). Powers the CLI's `schema status`.
   private async handleSchema(): Promise<Response> {
-    const hashRow = (await this.driver.exec(`SELECT value FROM _mrak_meta WHERE key = 'schema_hash'`, [])) as {
+    const hashRow = (await this.driver.exec(`SELECT value FROM _pramen_meta WHERE key = 'schema_hash'`, [])) as {
       value: string;
     }[];
     const tableRows = (await this.driver.exec(
-      `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name <> '_mrak_meta'`,
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name <> '_pramen_meta'`,
       [],
     )) as { name: string }[];
     const tables: Record<string, string[]> = {};
@@ -261,7 +261,7 @@ export class MrakDO extends DurableObject<DoEnv> {
   }
 
   private identityOf(request: Request): Identity | null {
-    const raw = request.headers.get("x-mrak-identity");
+    const raw = request.headers.get("x-pramen-identity");
     if (!raw) return null;
     try {
       return JSON.parse(raw) as Identity;

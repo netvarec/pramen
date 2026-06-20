@@ -1,8 +1,8 @@
 // Dispatch — resolves a handler by name and runs it with a fresh, ACL-scoped Db.
 // Mutations run inside storage.transaction(), which commits on success and rolls
-// back on throw — the platform-correct expression of the prior runtime's "mutations auto-wrap
-// in BEGIN/COMMIT" invariant. (DO SQLite rejects raw BEGIN/COMMIT because it does
-// atomic write coalescing under this API.) Single-writer serialization is free:
+// back on throw — the platform-correct way to auto-wrap mutations in BEGIN/COMMIT.
+// (DO SQLite rejects raw BEGIN/COMMIT because it does atomic write coalescing under
+// this API.) Single-writer serialization is free:
 // a Durable Object processes one request at a time.
 //
 // The result reports `touched` (tables the run read or wrote) so the live-query

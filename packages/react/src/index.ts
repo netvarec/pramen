@@ -1,4 +1,4 @@
-// @mrak/react — React hooks over @mrak/client.
+// @pramen/react — React hooks over @pramen/client.
 //
 //   const client = createClient<typeof app.handlers>({ url, token, tenant });
 //   function Notes() {
@@ -11,7 +11,7 @@
 // (row-level — only when this query's result actually changed).
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Input, MrakClient, Output } from "@mrak/client";
+import type { Input, PramenClient, Output } from "@pramen/client";
 
 export interface LiveQueryState<T> {
   data: T | undefined;
@@ -20,7 +20,7 @@ export interface LiveQueryState<T> {
 }
 
 export function useLiveQuery<Api, K extends keyof Api & string>(
-  client: MrakClient<Api>,
+  client: PramenClient<Api>,
   name: K,
   input?: Input<Api, K>,
 ): LiveQueryState<Output<Api, K>> {
@@ -49,7 +49,7 @@ export function useLiveQuery<Api, K extends keyof Api & string>(
 }
 
 export function useMutation<Api, K extends keyof Api & string>(
-  client: MrakClient<Api>,
+  client: PramenClient<Api>,
   name: K,
 ): (input?: Input<Api, K>) => Promise<Output<Api, K>> {
   return useCallback((input?: Input<Api, K>) => client.call(name, input), [client, name]);

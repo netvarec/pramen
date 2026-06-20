@@ -66,7 +66,7 @@ export async function runAcl(base: string, wsUrl: string): Promise<void> {
   assert(adminDel.body.result === true, "admin can delete bob's note");
 
   // --- per-identity live queries ---
-  const live = wsClient(wsUrl, { authorization: `Bearer ${T.alice}`, "x-mrak-tenant": TENANT });
+  const live = wsClient(wsUrl, { authorization: `Bearer ${T.alice}`, "x-pramen-tenant": TENANT });
   await live.ready;
   const isMine = (m: any) => m.type === "data" && m.id === "mine";
   live.send({ type: "subscribe", id: "mine", name: "listNotes" });

@@ -1,6 +1,6 @@
 // Identity resolution at the edge. The Worker verifies a signed token and
 // forwards a trusted identity to the DO; the DO never re-derives it, and the
-// client-supplied X-Mrak-Identity header is stripped unless a token verified
+// client-supplied X-Pramen-Identity header is stripped unless a token verified
 // (see src/index.ts), so a validly-signed JWT is the only path to an identity.
 //
 // Verification is pluggable via VerifyStrategy: HmacStrategy (HS256, shared secret
@@ -196,7 +196,7 @@ export async function resolveIdentity(request: Request, strategy: VerifyStrategy
   return claims ? toIdentity(claims) : null;
 }
 
-/** May this identity address the given tenant? Gates `X-Mrak-Tenant` so a caller
+/** May this identity address the given tenant? Gates `X-Pramen-Tenant` so a caller
  * can't reach (or register) arbitrary tenants. Default policy: admins → any
  * tenant; everyone else → only tenants listed in their `tenants` claim. Customize
  * for your tenancy model (e.g. tenant === identity.org, or a lookup). */

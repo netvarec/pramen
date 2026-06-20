@@ -1,9 +1,9 @@
-# mrak
+# pramen
 
 Reactive backend runtime for TypeScript on **Cloudflare**. Define schema +
-handlers, get a backend deployed as a Worker + Durable Object. Sibling of
-the prior runtime (Rust + Turso); mrak keeps the prior runtime's SDK shape but
-swaps the substrate for Workers + DO. Read `DESIGN.md` for the mapping.
+handlers, get a backend deployed as a Worker + Durable Object — the platform
+provides the single-writer/storage/replication stack. Read `DESIGN.md` for the
+architecture.
 
 ## WIP — everything is subject to change
 
@@ -14,7 +14,7 @@ issues: if something is broken, fix it.
 ## Architecture
 
 ```
-Worker (src/index.ts)  ->  MrakDO (per-tenant Durable Object)
+Worker (src/index.ts)  ->  PramenDO (per-tenant Durable Object)
                               ├─ ctx.storage.sql   in-process SQLite (the DB)
                               ├─ schemaDDL on boot (blockConcurrencyWhile)
                               └─ dispatch: query -> run; mutation -> storage.transaction()
@@ -24,7 +24,7 @@ Worker (src/index.ts)  ->  MrakDO (per-tenant Durable Object)
   one request at a time), per-tenant via `idFromName`.
 - **D1 is NOT the DO's write path** — it's over-RPC, not in-process; the DO's
   SQLite is its transactional store. D1 is instead available as a separate
-  substrate via the Worker (`x-mrak-store: d1`) — see the Substrate seam below.
+  substrate via the Worker (`x-pramen-store: d1`) — see the Substrate seam below.
 - **SDK (`src/sdk/`) is platform-agnostic** — the portable product. `runtime/` is
   the Cloudflare glue.
 
@@ -44,7 +44,7 @@ serves a dashboard at `/__dashboard`. The e2e suite still boots real `wrangler d
 (miniflare); run `bun run dev:wrangler` once before deploying to catch any
 Bun-vs-workerd differences.
 
-> mrak depends on lopata via a relative `file:` path (`../../contember/lopata`)
+> pramen depends on lopata via a relative `file:` path (`../../contember/lopata`)
 > because it needs a lopata fix (≥0.19.1): the canonical proxy-to-DO pattern
 > `stub.fetch(new Request(request, { headers }))` deadlocked under lopata due to a
 > Bun `new Request(req)` stream-body clone bug. Switch to a published `^0.19.1`
@@ -57,7 +57,7 @@ The data layer runs over a `Driver` (async `exec` + `transaction`) + `Dialect`
 
 - **`DoSqliteDriver`** — the DO's in-process SQLite (the default write path).
 - **`D1Driver`** — the SAME engine over a real D1 binding, run **in the Worker**
-  (no DO) and selected per-request with the `x-mrak-store: d1` header. RPC only —
+  (no DO) and selected per-request with the `x-pramen-store: d1` header. RPC only —
   live queries need the DO (single writer + socket host). Proven end-to-end in
   miniflare by `test/suites/d1.ts` (ACL, row scope, field/cell-level projection,
   RETURNING writes, aggregates). The D1 binding is declared in `oblaka.ts`.
@@ -76,8 +76,8 @@ The data layer runs over a `Driver` (async `exec` + `transaction`) + `Dialect`
 - SQLite (DO) has no boolean type — booleans are stored as INTEGER 0/1; binding
   coercion lives in `runtime/db.ts` and `read-engine.ts`.
 
-## Turso vs DO SQLite
+## DO SQLite
 
-the prior runtime runs Turso (Rust SQLite rewrite). mrak runs **Cloudflare DO SQLite**, a
-different engine again — don't assume Turso or sqlite3 C internals. Stick to the
-`SqlStorage` API (`ctx.storage.sql.exec(sql, ...params)` → cursor `.toArray()`).
+pramen runs on **Cloudflare DO SQLite** — its own engine, not stock sqlite3, so
+don't assume sqlite3 C internals. Stick to the `SqlStorage` API
+(`ctx.storage.sql.exec(sql, ...params)` → cursor `.toArray()`).

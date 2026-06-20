@@ -1,14 +1,14 @@
 #!/usr/bin/env bun
-// mrak CLI. Run with `bun scripts/cli.ts <command>` (or `mrak <command>` once installed).
+// pramen CLI. Run with `bun scripts/cli.ts <command>` (or `pramen <command>` once installed).
 //
-//   mrak help
-//   mrak init [dir]
-//   mrak schema sql                 print CREATE TABLE for the schema
-//   mrak schema hash                print the schema hash
-//   mrak schema snapshot            save the current schema to .mrak/schema.json
-//   mrak schema diff                compare the schema to the snapshot (safe vs unsafe changes)
-//   mrak schema status [--tenant t] [--url u] [--token jwt]   compare a deployed tenant to the schema
-//   mrak token <sub> [roles...] [--tenant a,b]                mint a dev JWT
+//   pramen help
+//   pramen init [dir]
+//   pramen schema sql                 print CREATE TABLE for the schema
+//   pramen schema hash                print the schema hash
+//   pramen schema snapshot            save the current schema to .pramen/schema.json
+//   pramen schema diff                compare the schema to the snapshot (safe vs unsafe changes)
+//   pramen schema status [--tenant t] [--url u] [--token jwt]   compare a deployed tenant to the schema
+//   pramen token <sub> [roles...] [--tenant a,b]                mint a dev JWT
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -34,7 +34,7 @@ function positionals(args: string[]): string[] {
 }
 
 function fail(msg: string): never {
-  console.error(`mrak: ${msg}`);
+  console.error(`pramen: ${msg}`);
   process.exit(1);
 }
 
@@ -52,15 +52,15 @@ async function loadApp(): Promise<{ schema: SchemaDef }> {
   return fail(`no app found (looked for ${candidates.join(", ")}); pass --app <path>`);
 }
 
-const HELP = `mrak — reactive backend on Cloudflare
+const HELP = `pramen — reactive backend on Cloudflare
 
-Usage: mrak <command>
+Usage: pramen <command>
 
   help                      show this help
   init [dir]                scaffold a new project (app.ts + oblaka.ts)
   schema sql                print CREATE TABLE statements for the schema
   schema hash               print the schema hash
-  schema snapshot           save the schema shape to .mrak/schema.json
+  schema snapshot           save the schema shape to .pramen/schema.json
   schema diff               compare the schema to the snapshot (safe vs unsafe)
   schema status             compare a deployed tenant's schema to the local schema
                             [--tenant t] [--url u] [--token jwt]
@@ -69,7 +69,7 @@ Usage: mrak <command>
 Flags: --app <path> to point at your app module (default ./app.ts or ./example/app.ts).`;
 
 async function schemaCmd(sub: string | undefined): Promise<void> {
-  const snapshotPath = resolve(process.cwd(), ".mrak/schema.json");
+  const snapshotPath = resolve(process.cwd(), ".pramen/schema.json");
 
   if (sub === "sql") {
     const { schema } = await loadApp();
@@ -93,7 +93,7 @@ async function schemaCmd(sub: string | undefined): Promise<void> {
     const { schema } = await loadApp();
     const next = schemaShape(schema);
     if (!existsSync(snapshotPath)) {
-      console.log("no snapshot — run `mrak schema snapshot` to set a baseline.");
+      console.log("no snapshot — run `pramen schema snapshot` to set a baseline.");
       return;
     }
     const prev = (JSON.parse(readFileSync(snapshotPath, "utf8")) as { shape: SchemaShape }).shape;
@@ -164,11 +164,11 @@ function initCmd(args: string[]): void {
   };
   write("app.ts", APP_TEMPLATE);
   write("oblaka.ts", OBLAKA_TEMPLATE);
-  console.log(`\nScaffolded a mrak project in ${dir}.`);
+  console.log(`\nScaffolded a pramen project in ${dir}.`);
   console.log("Next: wire the server entry (src/index.ts), then `oblaka oblaka.ts && wrangler dev`.");
 }
 
-const APP_TEMPLATE = `import { Entity, defineSchema, createApp } from "mrak";
+const APP_TEMPLATE = `import { Entity, defineSchema, createApp } from "pramen";
 
 const schema = defineSchema({
   notes: Entity((t) => ({ id: t.id(), title: t.text(), body: t.text(), createdAt: t.int() })),
@@ -183,7 +183,7 @@ const handlers = {
   ),
 };
 
-// Deny-by-default. Grant access with role()/policy(); see the mrak docs.
+// Deny-by-default. Grant access with role()/policy(); see the pramen docs.
 const acl: never[] = [];
 
 export const app = { schema, handlers, acl };
@@ -191,7 +191,7 @@ export const app = { schema, handlers, acl };
 
 const OBLAKA_TEMPLATE = `import { define, DurableObject, KVNamespace, Worker } from "oblaka-iac";
 
-const PROJECT = "my-mrak-app"; // unique per project — namespaces all CF resources
+const PROJECT = "my-pramen-app"; // unique per project — namespaces all CF resources
 
 export default define(({ env }) => {
   const vars = env === "local" ? { AUTH_SECRET: "dev-secret-change-me" } : {};
@@ -203,7 +203,7 @@ export default define(({ env }) => {
     compatibility_flags: ["nodejs_compat"],
     observability: { enabled: true },
     bindings: {
-      MRAK: new DurableObject({ name: PROJECT + "-store", className: "MrakDO" }),
+      PRAMEN: new DurableObject({ name: PROJECT + "-store", className: "PramenDO" }),
       KV: new KVNamespace({ name: PROJECT + "-kv" }),
     },
     vars,
@@ -227,7 +227,7 @@ async function main(): Promise<void> {
     case "token":
       return tokenCmd(argv.slice(1));
     default:
-      console.error(`mrak: unknown command "${cmd}"\n`);
+      console.error(`pramen: unknown command "${cmd}"\n`);
       console.log(HELP);
       process.exit(1);
   }

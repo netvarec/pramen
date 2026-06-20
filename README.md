@@ -1,9 +1,9 @@
-# mrak
+# pramen
 
 Reactive backend runtime for TypeScript — **on Cloudflare**. Define a schema and
-handlers; get a complete backend deployed as a Worker + Durable Object. A sibling
-of the prior runtime, re-architected onto Cloudflare primitives
-instead of a Rust + Turso runtime. See [DESIGN.md](./DESIGN.md).
+handlers; get a complete backend deployed as a Worker + Durable Object, where the
+platform provides the single-writer/storage/replication stack. See
+[DESIGN.md](./DESIGN.md).
 
 ## Quick start
 
@@ -20,7 +20,7 @@ TOKEN=$(bun -e 'import {token} from "./scripts/jwt"; console.log(await token("al
 # create a note
 curl -s -X POST http://localhost:8787/rpc/createNote \
   -H 'content-type: application/json' -H "authorization: Bearer $TOKEN" \
-  -d '{"title":"hello","body":"from mrak"}'
+  -d '{"title":"hello","body":"from pramen"}'
 
 # list notes
 curl -s -X POST http://localhost:8787/rpc/listNotes -H "authorization: Bearer $TOKEN"
@@ -136,7 +136,7 @@ oblaka.ts             IaC source of truth -> generates wrangler.jsonc
 src/
   index.ts            Worker entry — verifies JWT, routes to the per-tenant DO
   auth.ts             pluggable JWT verification — HS256 + RS256/JWKS (claims -> Identity)
-  durable-object.ts   MrakDO — in-process SQLite, schema boot, dispatch, live queries
+  durable-object.ts   PramenDO — in-process SQLite, schema boot, dispatch, live queries
   sdk/                portable SDK (no platform dep)
     schema.ts         Entity() + defineSchema() + relations (belongsTo/hasMany)
     infer.ts          InferRow / WhereInput / InferInsert / InferUpdate / relations
@@ -262,7 +262,7 @@ const perOwner = ctx.db.aggregate({
 
 ### Tenants
 
-Each tenant is a Durable Object addressed by `X-Mrak-Tenant` (default `main`).
+Each tenant is a Durable Object addressed by `X-Pramen-Tenant` (default `main`).
 Durable Objects can't be enumerated, so on a tenant's first touch its name is
 recorded in the `TENANTS` KV registry (once, from the DO itself). Admins can list
 them:
@@ -286,14 +286,14 @@ curl -s -X POST http://localhost:8787/admin/recover -H "authorization: Bearer $A
 ```
 
 > PITR is platform-only — unavailable in local dev (`wrangler dev` returns 501).
-> mrak arms the restore and returns the `undo` bookmark; it completes on the DO's
+> pramen arms the restore and returns the `undo` bookmark; it completes on the DO's
 > next restart (we don't auto-`abort()`, so the call can return the bookmark).
 
 ### KV (ctx.kv)
 
 Handlers get `ctx.kv` — the project's KV namespace for **global, cross-tenant**
 config / feature flags / caches (per-tenant data belongs in `ctx.db`). It's keyed
-under an `app:` prefix so it never collides with mrak-internal keys, and it is
+under an `app:` prefix so it never collides with pramen-internal keys, and it is
 **not** part of a mutation's transaction.
 
 ```ts
@@ -310,38 +310,38 @@ namespace holds both the registry (`tenant:`) and app (`app:`) keys.
 
 ### Client (frontend)
 
-`@mrak/client` is a typed client — `call()` is RPC over HTTP, `subscribe()` is a
+`@pramen/client` is a typed client — `call()` is RPC over HTTP, `subscribe()` is a
 live query over a reconnecting WebSocket. It's generic over your server's handler
 map, so calls are fully typed with no runtime dependency on the server (import the
 type only):
 
 ```ts
-import { createClient } from "@mrak/client";
+import { createClient } from "@pramen/client";
 import type { app } from "../server/app"; // type-only, erased at build
 
-const mrak = createClient<typeof app.handlers>({ url, token, tenant: "acme" });
+const pramen = createClient<typeof app.handlers>({ url, token, tenant: "acme" });
 
-const note = await mrak.call("createNote", { title: "hi", body: "..." }); // typed
-const stop = mrak.subscribe("listNotes", undefined, { onData: (notes) => render(notes) });
+const note = await pramen.call("createNote", { title: "hi", body: "..." }); // typed
+const stop = pramen.subscribe("listNotes", undefined, { onData: (notes) => render(notes) });
 ```
 
-`@mrak/react` adds hooks that re-render on every server push:
+`@pramen/react` adds hooks that re-render on every server push:
 
 ```tsx
-const { data, loading } = useLiveQuery(mrak, "listNotes");
-const createNote = useMutation(mrak, "createNote");
+const { data, loading } = useLiveQuery(pramen, "listNotes");
+const createNote = useMutation(pramen, "createNote");
 ```
 
 ### CLI
 
 ```bash
-bun run mrak help
-bun run mrak init my-app                 # scaffold app.ts + oblaka.ts
-bun run mrak token alice author --tenant acme   # mint a dev JWT
-bun run mrak schema sql                  # CREATE TABLE for the schema
-bun run mrak schema snapshot             # baseline in .mrak/schema.json
-bun run mrak schema diff                 # additive vs destructive changes
-bun run mrak schema status --tenant acme # is a deployed tenant caught up?
+bun run pramen help
+bun run pramen init my-app                 # scaffold app.ts + oblaka.ts
+bun run pramen token alice author --tenant acme   # mint a dev JWT
+bun run pramen schema sql                  # CREATE TABLE for the schema
+bun run pramen schema snapshot             # baseline in .pramen/schema.json
+bun run pramen schema diff                 # additive vs destructive changes
+bun run pramen schema status --tenant acme # is a deployed tenant caught up?
 ```
 
 `schema diff` flags each change as additive (no data loss) or **destructive**
@@ -361,7 +361,7 @@ transaction. Two passes:
   — all via the standard SQLite table-rebuild (create new, copy, drop, rename),
   preserving rows and ids. This **can lose data** on a bad deploy, by design.
 
-A schema hash in `_mrak_meta` skips the work when nothing changed. A **rename**
+A schema hash in `_pramen_meta` skips the work when nothing changed. A **rename**
 can't be inferred from a diff (a removed + added column is ambiguous), so declare
 it with `renamedFrom` — the migrator then copies the old column's data:
 
@@ -374,7 +374,7 @@ Without the hint, a rename is applied as drop + add (the old column's data is lo
 ## Deploy
 
 Cloudflare topology is declared in **`oblaka.ts`** (the source of truth) — the
-Worker, the `MRAK` Durable Object, its SQLite migration, vars, and observability.
+Worker, the `PRAMEN` Durable Object, its SQLite migration, vars, and observability.
 `oblaka` generates `wrangler.jsonc` from it (git-ignored; never edit by hand).
 
 ```bash

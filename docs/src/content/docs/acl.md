@@ -9,7 +9,7 @@ verified token) carries one or more roles; grants **OR-merge** across them. Row-
 `where` scopes are **AND-merged** into queries.
 
 ```ts
-import { role, policy, allow, $identity } from "mrak/sdk/acl";
+import { role, policy, allow, $identity } from "pramen/sdk/acl";
 
 role("author", [
   policy("author:read",   "notes", "read",   { where: { ownerId: $identity("userId") } }),

@@ -2,18 +2,18 @@
 // a message safe to return. Everything else is logged server-side and surfaced as
 // a generic 500 — internal messages / stack traces never reach the client.
 
-export class MrakError extends Error {
+export class PramenError extends Error {
   constructor(
     message: string,
     readonly status: number,
     readonly code: string,
   ) {
     super(message);
-    this.name = "MrakError";
+    this.name = "PramenError";
   }
 }
 
-export class BadRequest extends MrakError {
+export class BadRequest extends PramenError {
   constructor(message: string) {
     super(message, 400, "bad_request");
   }
@@ -26,10 +26,10 @@ export interface ErrorBody {
 }
 
 function classify(err: unknown): { status: number; body: ErrorBody } {
-  if (err instanceof MrakError) {
+  if (err instanceof PramenError) {
     return { status: err.status, body: { ok: false, error: err.message, code: err.code } };
   }
-  console.error("mrak: unhandled error", err);
+  console.error("pramen: unhandled error", err);
   return { status: 500, body: { ok: false, error: "internal error", code: "internal" } };
 }
 

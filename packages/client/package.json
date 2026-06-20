@@ -1,7 +1,7 @@
 {
-  "name": "@mrak/client",
+  "name": "@pramen/client",
   "version": "0.0.0",
-  "description": "Typed client for a mrak backend — RPC over HTTP + live queries over WebSocket.",
+  "description": "Typed client for a pramen backend — RPC over HTTP + live queries over WebSocket.",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"

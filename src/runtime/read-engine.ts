@@ -1,6 +1,5 @@
-// Read engine — compiles a structured query into parameterized SQL.
-// This is the TS stand-in for the prior runtime's Rust ReadEngine. The "no hand-written SQL
-// in handler code" property is preserved; the long-term plan (see DESIGN.md) is
+// Read engine — compiles a structured query into parameterized SQL. The "no
+// hand-written SQL in handler code" property is preserved; the long-term plan is
 // to compile this module to WASM so the hot path leaves JS entirely.
 //
 // A small boolean expression AST (SqlExpr) lets user predicates (with operators,

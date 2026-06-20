@@ -1,20 +1,17 @@
 ---
 title: Overview
 order: 1
-summary: What mrak is, and how the Worker + Durable Object architecture works.
+summary: What pramen is, and how the Worker + Durable Object architecture works.
 ---
 
-**mrak** is a reactive backend runtime for TypeScript on Cloudflare. You define a
-schema and handlers; mrak gives you a complete backend deployed as a **Worker** in
+**pramen** is a reactive backend runtime for TypeScript on Cloudflare. You define a
+schema and handlers; pramen gives you a complete backend deployed as a **Worker** in
 front of a per-tenant **Durable Object** whose in-process SQLite *is* the database.
-
-It is a sibling of the prior runtime — it keeps the prior runtime's
-SDK shape but swaps the substrate for Cloudflare Workers + Durable Objects.
 
 ## Architecture
 
 ```
-Worker (src/index.ts)  ->  MrakDO (per-tenant Durable Object)
+Worker (src/index.ts)  ->  PramenDO (per-tenant Durable Object)
                               ├─ ctx.storage.sql   in-process SQLite (the DB)
                               ├─ schemaDDL on boot (blockConcurrencyWhile)
                               └─ dispatch: query -> run; mutation -> storage.transaction()
@@ -22,7 +19,7 @@ Worker (src/index.ts)  ->  MrakDO (per-tenant Durable Object)
 
 - **The DO is the database.** A Durable Object handles one request at a time, so
   single-writer serialization is free. Each tenant is its own DO, addressed by
-  `idFromName` (the `X-Mrak-Tenant` header; default `main`).
+  `idFromName` (the `X-Pramen-Tenant` header; default `main`).
 - **The Worker is the stateless front door.** It verifies the bearer JWT,
   authorizes the tenant, and forwards a trusted identity to the DO — which never
   re-derives it.
@@ -38,7 +35,7 @@ Worker (src/index.ts)  ->  MrakDO (per-tenant Durable Object)
   mutation writes a table a subscription reads.
 - **Pluggable auth** (HS256 shared secret, or RS256 against a JWKS).
 - **Automatic migrations** on every boot — additive and destructive.
-- Typed end-to-end clients (`@mrak/client`, `@mrak/react`) and a CLI.
+- Typed end-to-end clients (`@pramen/client`, `@pramen/react`) and a CLI.
 
 ## Local development
 

@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "mrak-docs",
+      "name": "pramen-docs",
       "dependencies": {
         "pletivo": "^0.1.24",
       },

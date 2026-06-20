@@ -1,4 +1,4 @@
-// Driver + Dialect — the substrate seam. mrak's ACL, read-engine, repository, and
+// Driver + Dialect — the substrate seam. pramen's ACL, read-engine, repository, and
 // migrator are written against these two interfaces, so the same data layer runs
 // over any SQL backend:
 //
