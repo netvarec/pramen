@@ -40,6 +40,19 @@ through). A forged or unsigned request gets no identity. Verification is pluggab
   keys (cached, with `kid` selection and rotation handling). When `JWKS_URL` is
   set it takes over from `AUTH_SECRET`.
 
+The core only *verifies* (bring your own IdP — Clerk/Auth0/WorkOS/Cloudflare Access
+all work via JWKS). To *issue* logins without a third party, add the optional
+**`@pramen/auth`**: spread `authSchema` into your schema and `authHandlers` into your
+handlers to get `signup`/`login`/`me` — PBKDF2-hashed passwords, returning HS256
+tokens the verifier above accepts (needs `AUTH_SECRET`):
+
+```ts
+import { authSchema, authHandlers } from "@pramen/auth";
+const schema = defineSchema({ ...authSchema, notes: Entity(/* … */) });
+const handlers = { ...authHandlers, /* your handlers */ };
+// client: const { token } = await pramen.call("login", { username, password });
+```
+
 ### ACL
 
 Access is **deny-by-default**; roles grant it. Define roles/policies on the app

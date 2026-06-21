@@ -197,14 +197,16 @@ export async function resolveIdentity(request: Request, strategy: VerifyStrategy
 }
 
 /** May this identity address the given tenant? Gates `X-Pramen-Tenant` so a caller
- * can't reach (or register) arbitrary tenants. Default policy: admins → any
- * tenant; everyone else → only tenants listed in their `tenants` claim. Customize
- * for your tenancy model (e.g. tenant === identity.org, or a lookup). */
+ * can't reach (or register) arbitrary tenants. Default policy:
+ *  - `main` is the open default tenant: any caller may reach it (anonymous too) —
+ *    data access is still governed by ACL roles (single-tenant apps live here, and
+ *    issued login tokens need no `tenants` claim to use it).
+ *  - other tenants: admins → any; everyone else → only tenants in their `tenants`
+ *    claim; anonymous → none.
+ * Customize for your tenancy model (e.g. tenant === identity.org, or a lookup). */
 export function authorizeTenant(identity: Identity | null, tenant: string): boolean {
-  // Anonymous (no verified token) may reach only the default tenant — enough for
-  // first-class public flows (the `anonymous` ACL role still gates the data), while
-  // not letting unauthenticated callers address/register arbitrary tenants.
-  if (!identity) return tenant === "main";
+  if (tenant === "main") return true;
+  if (!identity) return false;
   if (identity.roles?.includes("admin")) return true;
   const allowed = Array.isArray(identity.tenants) ? (identity.tenants as string[]) : [];
   return allowed.includes(tenant);

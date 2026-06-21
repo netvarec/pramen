@@ -11,6 +11,7 @@ import { runD1 } from "./suites/d1";
 import { runFiles } from "./suites/files";
 import { runExtras } from "./suites/extras";
 import { runAdmin } from "./suites/admin";
+import { runAuth } from "./suites/auth";
 import { runResolver } from "./suites/resolver";
 import { runRelation } from "./suites/relation";
 import { runLive } from "./suites/live";
@@ -70,6 +71,7 @@ describe("pramen e2e", () => {
   test("file storage (R2 upload/download + signed urls + ACL)", () => runFiles(BASE), 30_000);
   test("extras: json column + ctx.env + CORS", () => runExtras(BASE), 30_000);
   test("admin data API (generic per-tenant CRUD, admin-gated)", () => runAdmin(BASE), 30_000);
+  test("@pramen/auth (signup/login issue verifiable tokens)", () => runAuth(BASE), 30_000);
   test("dynamic resolvers", () => runResolver(BASE), 30_000);
   test("relations + nested ACL", () => runRelation(BASE), 30_000);
   test("query expressiveness (operators, OR/AND, offset)", () => runQuery(BASE), 30_000);

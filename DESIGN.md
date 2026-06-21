@@ -220,6 +220,14 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
 - [x] Real-Cloudflare deploy smoke: provisioned via `oblaka --remote` (OAuth) and verified the full stack
       on workerd (DO SQLite + RETURNING, ACL, R2 upload/download, signed urls), then torn down. Confirmed
       a real go-live path beyond the miniflare suite.
+- [x] Admin data API (primitives): `POST /admin/data { tenant, table, op }` (list/get/create/update/
+      delete/count) forwards to the DO's `/__admin/data`, run through a SYSTEM-mode `Db` — ACL bypassed
+      (admin-gated at the Worker), json/fileRef codec + transactions + live broadcast intact. The backend
+      a dashboard sits on; extends the existing `/tenants`, `/admin/recover`, `/admin/schema` endpoints.
+- [x] `@pramen/auth` (optional login issuance): `authSchema` + `authHandlers` (signup/login/me) issue
+      HS256 tokens the core verifier accepts; PBKDF2-hashed passwords (WebCrypto, no deps); server-assigned
+      roles. Core stays verify-only (BYO IdP via JWKS still works). `authorizeTenant` now treats `main` as
+      the open default tenant for any caller (ACL still gates data) so issued tokens need no `tenants` claim.
 - [ ] Remaining go-live items: rate limiting + request-size caps, map constraint violations to 409,
       single-use upload tokens, error reporting, and a `--env production` deploy with real secrets.
 - [ ] Dynamic deploy: ship the app bundle to the DO instead of static import (a runtime `/deploy`).

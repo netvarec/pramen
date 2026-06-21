@@ -21,12 +21,15 @@ import {
   type FileRef,
   type JsonValue,
 } from "@pramen/server";
+import { authSchema, authHandlers } from "@pramen/auth";
 
 // Reusable write rule: force ownerId to the authenticated caller (a client cannot
 // forge it), even if the request body tries to set a different owner.
 const ownedByCaller = { set: { ownerId: (i: Identity | null) => i?.userId ?? null } };
 
 const schema = defineSchema({
+  // @pramen/auth's user table (signup/login) — migrated alongside the app's own.
+  ...authSchema,
   users: Entity(
     (t) => ({
       id: t.textId(), // PK = the JWT subject (e.g. "alice")
@@ -65,6 +68,8 @@ const schema = defineSchema({
 const { query, mutation } = createApp(schema);
 
 const handlers = {
+  // @pramen/auth: signup / login / me (issue + use HS256 tokens, no third-party IdP).
+  ...authHandlers,
   listNotes: query((ctx) =>
     ctx.db.find({ from: "notes", orderBy: { column: "id", dir: "desc" } }),
   ),
@@ -309,6 +314,11 @@ const acl = [
   ]),
   role("reader", [
     policy("reader:read", "notes", "read", { fields: ["id", "title", "ownerId", "createdAt"] }),
+  ]),
+  // user: the default role @pramen/auth assigns on signup — proves an issued token
+  // flows through the verifier + ACL (here: read notes, no body).
+  role("user", [
+    policy("user:read", "notes", "read", { fields: ["id", "title", "ownerId", "createdAt"] }),
   ]),
   // teammate: cell-level ACL via the declarative form. Reads EVERY note but sees
   // `body` only on notes it owns; may edit any title but `body` only on its own.
