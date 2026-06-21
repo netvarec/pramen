@@ -182,6 +182,14 @@ by the consumer's wrangler/esbuild (every real pramen consumer bundles for Worke
   (and logged) unless `PRAMEN_ALLOW_DESTRUCTIVE=true` — so a schema edit can't silently
   drop a column on deploy. Additive changes always apply.
 - CORS is opt-in via `CORS_ORIGINS`; unset = same-origin only.
+- **Multi-project accounts:** oblaka keeps IaC state in one KV blob keyed by
+  `(state-namespace, env)`, and `state-namespace` defaults to a shared `cf-state`.
+  So every project that uses the default sees the *others'* resources as "dangling"
+  (and a stray `oblaka --destroy` would delete them). pramen's `deploy`/`plan` pass
+  `--state-namespace pramen-iac-state` to isolate it. Pick a **unique namespace per
+  project from the first deploy** — oblaka has no "adopt existing resource by name,"
+  so switching namespaces after resources exist conflicts on create. Never run
+  `oblaka --destroy` against a shared state namespace.
 
 ## Tests
 
