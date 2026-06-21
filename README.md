@@ -177,6 +177,16 @@ consumer bundling with wrangler — the `workerd` condition — gets the source,
 esbuild bundles directly; every real pramen consumer bundles for Workers anyway.)
 No `publishConfig` field overrides (npm is deprecating those).
 
+**Releasing.** The three packages are versioned in lockstep. Bump + tag in one step,
+then push — the `release` workflow (`.github/workflows/release.yml`) runs typecheck +
+tests and publishes on the tag (needs an `NPM_TOKEN` repo secret):
+
+```bash
+bun run bump patch        # 0.0.1 -> 0.0.2 across all three, commits + tags v0.0.2
+                          # (also: minor | major | an explicit X.Y.Z; --dry-run to preview)
+git push --follow-tags    # CI publishes @pramen/* to npm
+```
+
 ## Production config
 
 - Set real secrets: `wrangler secret put AUTH_SECRET` (and `FILES_SECRET` if using

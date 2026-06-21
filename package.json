@@ -18,6 +18,7 @@
     "plan": "oblaka oblaka.ts --remote --dry-run --state-namespace pramen-iac-state",
     "pramen": "bun scripts/cli.ts",
     "build": "bun run --filter '@pramen/*' build",
+    "bump": "bun scripts/bump.ts",
     "release": "bun run build && (cd packages/client && bun publish) && (cd packages/server && bun publish) && (cd packages/react && bun publish)",
     "typecheck": "tsc --noEmit && tsc -p packages/server/tsconfig.json && tsc -p packages/client/tsconfig.json && tsc -p packages/react/tsconfig.json",
     "test": "bun test"
