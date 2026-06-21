@@ -1,6 +1,6 @@
 ---
 title: CLI & Deploy
-order: 9
+order: 10
 summary: The pramen CLI, and deploying to Cloudflare via oblaka + wrangler.
 ---
 

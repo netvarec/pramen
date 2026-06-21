@@ -20,6 +20,7 @@ backend would otherwise build from scratch:
 | Zero-JS SQL compile | `src/runtime/read-engine.ts` (→ WASM later) | ✅ TS now |
 | ACL resolver, schema, ORM, handlers | TS SDK (`src/sdk/`) | ✅ |
 | Global config/cache | Workers KV | ✅ |
+| File / object storage | R2 + `ctx.files` (signed urls) | ✅ wired |
 
 ## What the platform gives us for free
 
@@ -137,6 +138,28 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
 - [x] CLI (`pramen`): help, init (scaffold), token (dev JWT), and schema sql/hash/snapshot/diff/status.
       `schema diff` classifies changes safe (additive) vs unsafe; `schema status` compares a deployed
       tenant's applied schema (admin `GET /admin/schema` → DO introspection) to the local schema.
+- [x] File storage (R2): a `fileRef` column type stores small JSON metadata (a `FileRef`:
+      `{ key, size, contentType, filename?, uploadedAt? }`) in a TEXT column — never the bytes; the
+      object-store seam (`StorageAdapter`: `R2Adapter`/`MemoryAdapter` in `runtime/storage.ts`) mirrors
+      the Driver/Dialect seam so the engine is store-agnostic, R2 being the CF default. Handlers get
+      `ctx.files`: `signUpload()` mints a tenant-scoped key + a signed PUT url; `signDownload()` mints a
+      signed GET url (call only AFTER an ACL'd read — knowing a key isn't authorization); `head()`/
+      `delete()` for verify/cascade. The Worker serves `/files/upload` + `/files/download`, authorized
+      purely by an HMAC token (`FILES_SECRET`, falls back to `AUTH_SECRET`) in the url — no S3 creds, and
+      the bytes stream in the Worker so they never touch the DO. URLs are relative (the client resolves
+      them). The `fileRef` codec (object↔JSON) lives at the `Db` chokepoint, so reads/writes/relations
+      see objects. ACL: the column is an ordinary field (projected per policy); blob access is gated by the
+      handler choosing to sign. Verified end-to-end in miniflare (`test/suites/files.ts`): upload→attach→
+      download round-trip, fileRef DB round-trip, row-level download ACL, and token hardening. Declared in
+      `oblaka.ts` (`R2Bucket`). A size-capped upload must declare a content-length (R2 needs a known
+      length for a streamed body anyway), checked before the put with a post-put safety net; downloads
+      send `nosniff` and an attachment disposition with a sanitized filename. Next: single-use upload tokens (a key is
+      currently re-PUTtable within the token's TTL — random key + short TTL + attachment/nosniff
+      bound the risk, but a KV-backed nonce would close it); delete-on-row-delete + orphan sweeper
+      (wants a durable job queue); content-type allow-lists on `fileRef`; per-tenant buckets.
+- [ ] More Cloudflare service seams (same shape as `ctx.files`): email via the Cloudflare Email/Send
+      service as `ctx.mail`, Queues as `ctx.queue`, etc. — a small pluggable adapter + a `ctx.<service>`
+      facade + Worker glue. Lean on platform primitives rather than reimplementing them.
 - [ ] Package the server runtime itself (`createPramen(app)` factory) so a project is just
       `app.ts` + `oblaka.ts` + a 3-line entry — currently the DO statically imports the example app.
 - [ ] Dynamic deploy: ship the app bundle to the DO instead of static import (a runtime `/deploy`).

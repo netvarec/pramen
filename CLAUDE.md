@@ -64,6 +64,30 @@ The data layer runs over a `Driver` (async `exec` + `transaction`) + `Dialect`
 - **`postgresDialect`** — shows the SQL shape for a future Hyperdrive/Postgres port
   (quoting + `$n` placeholders); needs a pg `Driver` over Hyperdrive.
 
+## File storage (R2)
+
+Files live in **R2**, not the DB. A `fileRef` column (`t.fileRef()`) stores only
+JSON metadata (`FileRef`: `{ key, size, contentType, filename?, uploadedAt? }`) in a
+TEXT cell — the bytes are an R2 object addressed by a tenant-scoped key. The object
+store is behind a `StorageAdapter` seam (`R2Adapter`/`MemoryAdapter` in
+`runtime/storage.ts`), mirroring the Driver/Dialect seam.
+
+- Handlers use **`ctx.files`** — never the R2 binding directly:
+  - `signUpload({ contentType, filename?, maxSize?, prefix? })` → `{ url, ref }` (a
+    signed PUT url + draft metadata to attach later).
+  - `signDownload(ref, { download? })` → `{ url, expiresAt }` — mint ONLY after an
+    ACL'd `ctx.db` read; knowing a key is not authorization.
+  - `head(key)` / `delete(key)` for upload-verify and cascade.
+- The Worker serves `/files/upload` (PUT) + `/files/download` (GET), authorized by an
+  HMAC token (`FILES_SECRET`, falls back to `AUTH_SECRET`) in the url. Bytes stream
+  in the Worker — they never pass through the DO. Signed urls are RELATIVE; the
+  client resolves them (`@pramen/client` `fileUrl()`/`upload()`).
+- The object↔JSON codec lives at the `Db` chokepoint, so handlers always see/write
+  `FileRef` objects. R2 is declared in `oblaka.ts` (`FILES` binding).
+
+The same shape (adapter + `ctx.<service>` facade + Worker glue) is how other
+Cloudflare services should be added (e.g. email via the Send service as `ctx.mail`).
+
 ## Conventions
 
 - Schema: `Entity(t => ({ id: t.id(), ... }))` + `defineSchema({ table: Entity })`.

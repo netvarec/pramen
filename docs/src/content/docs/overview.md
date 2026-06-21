@@ -34,6 +34,8 @@ Worker (src/index.ts)  ->  PramenDO (per-tenant Durable Object)
 - **Live queries** over WebSockets — the server pushes fresh results whenever a
   mutation writes a table a subscription reads.
 - **Pluggable auth** (HS256 shared secret, or RS256 against a JWKS).
+- **File storage** on R2 — a `fileRef` column + `ctx.files` signed URLs, with
+  direct-to-storage uploads that never touch the database.
 - **Automatic migrations** on every boot — additive and destructive.
 - Typed end-to-end clients (`@pramen/client`, `@pramen/react`) and a CLI.
 
