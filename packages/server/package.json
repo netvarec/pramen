@@ -3,6 +3,13 @@
   "version": "0.0.1",
   "description": "pramen server runtime — schema, ACL, ORM, live queries, files, and the createPramen(app) factory for Cloudflare Workers + Durable Objects.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/netvarec/pramen.git",
+    "directory": "packages/server"
+  },
+  "homepage": "https://github.com/netvarec/pramen#readme",
+  "bugs": "https://github.com/netvarec/pramen/issues",
   "type": "module",
   "sideEffects": false,
   "exports": {

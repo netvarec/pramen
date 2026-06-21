@@ -3,6 +3,13 @@
   "version": "0.0.1",
   "description": "Typed client for a pramen backend — RPC over HTTP + live queries over WebSocket.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/netvarec/pramen.git",
+    "directory": "packages/client"
+  },
+  "homepage": "https://github.com/netvarec/pramen#readme",
+  "bugs": "https://github.com/netvarec/pramen/issues",
   "type": "module",
   "sideEffects": false,
   "exports": {

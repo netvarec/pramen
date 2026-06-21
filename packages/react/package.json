@@ -3,6 +3,13 @@
   "version": "0.0.1",
   "description": "React hooks for a pramen backend — useLiveQuery (reactive) + useMutation.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/netvarec/pramen.git",
+    "directory": "packages/react"
+  },
+  "homepage": "https://github.com/netvarec/pramen#readme",
+  "bugs": "https://github.com/netvarec/pramen/issues",
   "type": "module",
   "sideEffects": false,
   "exports": {
