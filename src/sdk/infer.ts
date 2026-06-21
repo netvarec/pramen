@@ -4,13 +4,18 @@
 // `t.id()` is `{ type: "integer"; primaryKey: true; autoIncrement: true; notNull: true }`.
 
 import type { EntityDef, EntityFields, FieldDef, RelationDefs, SchemaDef } from "./schema";
+import type { FileRef } from "./files";
+
+export type { FileRef } from "./files";
 
 /** SQL field type -> TypeScript value type. */
 export type FieldTsType<D extends FieldDef> = D["type"] extends "text"
   ? string
   : D["type"] extends "boolean"
     ? boolean
-    : number; // integer | real
+    : D["type"] extends "fileRef"
+      ? FileRef
+      : number; // integer | real
 
 /** A column is non-null iff it's NOT NULL or a primary key. */
 type IsNotNull<D extends FieldDef> = D extends { notNull: true }

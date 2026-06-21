@@ -19,6 +19,21 @@ export class BadRequest extends PramenError {
   }
 }
 
+/** 401 — the caller is unauthenticated (no/invalid identity). */
+export class Unauthorized extends PramenError {
+  constructor(message = "authentication required") {
+    super(message, 401, "unauthorized");
+  }
+}
+
+/** 403 — authenticated but not permitted. For handler-level checks; the Db
+ * chokepoint raises AclDenied for row/field ACL. */
+export class Forbidden extends PramenError {
+  constructor(message = "forbidden") {
+    super(message, 403, "forbidden");
+  }
+}
+
 export interface ErrorBody {
   ok: false;
   error: string;

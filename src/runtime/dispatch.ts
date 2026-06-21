@@ -13,6 +13,7 @@ import { warmup, type AclContext } from "./acl";
 import { BadRequest } from "./errors";
 import type { Driver } from "./driver";
 import type { Kv } from "./kv";
+import type { Files } from "../sdk/files";
 import type { ResolverDb } from "../sdk/acl";
 import type { SchemaDef } from "../sdk/schema";
 import type { HandlerContext, HandlerKind, HandlerMap } from "../sdk/handlers";
@@ -28,6 +29,7 @@ export async function dispatch(
   schema: SchemaDef,
   driver: Driver,
   kv: Kv,
+  files: Files,
   acl: AclContext,
   name: string,
   input: unknown,
@@ -51,7 +53,7 @@ export async function dispatch(
   const resolved = await warmup(acl.acl, acl.identity, systemDb as unknown as ResolverDb);
 
   const db = new Db(driver, { acl: acl.acl, identity: acl.identity, resolved }, schema);
-  const ctx: HandlerContext = { db, kv, identity: acl.identity };
+  const ctx: HandlerContext = { db, kv, files, identity: acl.identity };
 
   const result =
     handler.kind === "query"

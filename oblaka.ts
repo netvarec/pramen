@@ -8,7 +8,7 @@
 // + Durable Object (and the SQLite DO migration) on Cloudflare; it uploads only a
 // placeholder module, so `wrangler deploy` does the actual code bundle + upload.
 
-import { define, D1Database, DurableObject, KVNamespace, Worker } from "oblaka-iac";
+import { define, D1Database, DurableObject, KVNamespace, R2Bucket, Worker } from "oblaka-iac";
 
 // One name to namespace every resource this project owns. Cloudflare resource
 // names are account-global, so set a unique PROJECT per app and all its resources
@@ -18,7 +18,8 @@ const PROJECT = "pramen";
 export default define(({ env }) => {
   // AUTH_SECRET: a dev value locally; in real envs set it as a secret with
   // `wrangler secret put AUTH_SECRET` (a secret overrides this var at runtime).
-  const vars = env === "local" ? { AUTH_SECRET: "dev-secret-change-me" } : {};
+  const vars =
+    env === "local" ? { AUTH_SECRET: "dev-secret-change-me", FILES_SECRET: "dev-files-secret-change-me" } : {};
 
   return new Worker({
     dir: ".",
@@ -37,6 +38,9 @@ export default define(({ env }) => {
       // D1 database for the "Worker + D1 (no DO)" path — the same engine over D1,
       // selected per-request via `x-pramen-store: d1`. The DO remains the write path.
       DB: new D1Database({ name: `${PROJECT}-d1` }),
+      // R2 bucket backing file storage — `fileRef` columns + ctx.files + the Worker
+      // /files/* upload/download route. Bytes live here; the DB holds only metadata.
+      FILES: new R2Bucket({ name: `${PROJECT}-files` }),
     },
     vars,
   });

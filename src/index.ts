@@ -12,6 +12,7 @@ import { compileAcl } from "./runtime/acl";
 import { D1Driver, type Driver } from "./runtime/driver";
 import { toResponse } from "./runtime/errors";
 import { Kv } from "./runtime/kv";
+import { createFiles, handleFileRequest, R2Adapter } from "./runtime/storage";
 import type { Identity } from "./sdk/acl";
 
 export interface Env {
@@ -28,7 +29,15 @@ export interface Env {
    * engine over D1 instead of a Durable Object. Selected per-request via
    * `x-pramen-store: d1`. RPC only (live queries need the DO). */
   DB?: D1Database;
+  /** R2 bucket backing file storage (ctx.files + the /files/* route). */
+  FILES: R2Bucket;
+  /** HMAC secret for signing file tokens. Falls back to AUTH_SECRET if unset. */
+  FILES_SECRET?: string;
 }
+
+/** The secret used to sign/verify file tokens — a dedicated FILES_SECRET if set,
+ * else AUTH_SECRET (so HS256 setups work out of the box). */
+const filesSecret = (env: Env): string => env.FILES_SECRET || env.AUTH_SECRET;
 
 // JwksStrategy caches fetched public keys, so keep one instance per isolate (keyed
 // by URL) rather than rebuilding it per request. HmacStrategy is stateless.
@@ -65,6 +74,14 @@ function ensureD1Migrated(driver: Driver): Promise<void> {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+
+    // File upload/download stream through the Worker (bytes never touch the DO),
+    // authorized purely by the HMAC token in the url — no JWT/tenant routing.
+    if (url.pathname.startsWith("/files/")) {
+      const res = await handleFileRequest(request, { adapter: new R2Adapter(env.FILES), secret: filesSecret(env) });
+      if (res) return res;
+    }
+
     const isWs = request.headers.get("Upgrade") === "websocket";
 
     // Browser WebSockets can't set headers, so /live accepts the bearer token and
@@ -139,9 +156,10 @@ export default {
       let input: unknown;
       if (request.method === "POST") input = await request.json().catch(() => undefined);
       const driver = new D1Driver(env.DB);
+      const files = createFiles({ tenant, secret: filesSecret(env), adapter: new R2Adapter(env.FILES) });
       try {
         await ensureD1Migrated(driver);
-        const { result } = await dispatch(app.handlers, app.schema, driver, new Kv(env.KV), { acl: d1Acl, identity }, name, input);
+        const { result } = await dispatch(app.handlers, app.schema, driver, new Kv(env.KV), files, { acl: d1Acl, identity }, name, input);
         return json({ ok: true, result });
       } catch (err) {
         const { status, body } = toResponse(err);

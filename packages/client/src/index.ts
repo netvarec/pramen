@@ -41,6 +41,14 @@ export interface SubHandlers<T> {
   onError?: (err: { error: string; code: string }) => void;
 }
 
+/** Result of a file upload (the persisted blob's storage metadata). */
+export interface UploadResult {
+  key: string;
+  size: number;
+  contentType?: string;
+  etag?: string;
+}
+
 export interface PramenClient<Api> {
   call<K extends keyof Api & string>(name: K, input?: HandlerInput<Api[K]>): Promise<HandlerOutput<Api[K]>>;
   subscribe<K extends keyof Api & string>(
@@ -48,6 +56,12 @@ export interface PramenClient<Api> {
     input: HandlerInput<Api[K]> | undefined,
     handlers: SubHandlers<HandlerOutput<Api[K]>>,
   ): () => void;
+  /** Resolve a server-issued relative path (e.g. a signed `/files/...` url) to an
+   * absolute url against the client's base. */
+  fileUrl(path: string): string;
+  /** Upload bytes to a signed upload url (from a handler's `signUpload`). Accepts a
+   * relative or absolute url; returns the stored blob's metadata. */
+  upload(uploadUrl: string, body: BodyInit, opts?: { contentType?: string }): Promise<UploadResult>;
   setToken(token: string | undefined): void;
   close(): void;
 }
@@ -159,8 +173,23 @@ export function createClient<Api = Record<string, never>>(opts: ClientOptions): 
     ensureSocket();
   }
 
+  const fileUrl = (path: string): string => new URL(path, opts.url).toString();
+
+  async function upload(uploadUrl: string, body: BodyInit, o?: { contentType?: string }): Promise<UploadResult> {
+    const headers: Record<string, string> = {};
+    if (o?.contentType) headers["content-type"] = o.contentType;
+    const res = await doFetch(fileUrl(uploadUrl), { method: "PUT", headers, body });
+    const j = (await res.json().catch(() => ({}))) as { ok?: boolean; result?: UploadResult; error?: string; code?: string };
+    if (!res.ok || j.ok === false) {
+      throw new PramenError(j.error ?? `upload failed (${res.status})`, j.code ?? "error", res.status);
+    }
+    return j.result as UploadResult;
+  }
+
   return {
     call: call as PramenClient<Api>["call"],
+    fileUrl,
+    upload,
     subscribe(name, input, handlers) {
       const id = `s${counter++}`;
       const sub: Sub = {

@@ -292,6 +292,17 @@ export class Db<S extends SchemaDef = SchemaDef> {
     if (!scope.allowed) throw new AclDenied(from, "read");
 
     const groupBy = (spec.groupBy ? (Array.isArray(spec.groupBy) ? spec.groupBy : [spec.groupBy]) : []) as string[];
+
+    // A fileRef cell is JSON; grouping/min/max over it would return the raw string
+    // (the codec only runs on row reads), so reject it rather than leak/lie.
+    const fileRefCols = new Set(this.fileRefColsOf(from));
+    for (const c of groupBy) if (fileRefCols.has(c)) throw new BadRequest(`cannot group by a fileRef column: ${c}`);
+    for (const agg of Object.values(spec.aggregations)) {
+      if (agg.column && fileRefCols.has(agg.column as string)) {
+        throw new BadRequest(`cannot aggregate a fileRef column: ${agg.column as string}`);
+      }
+    }
+
     if (scope.fields) {
       const refs = new Set<string>(groupBy);
       for (const agg of Object.values(spec.aggregations)) if (agg.column) refs.add(agg.column as string);
@@ -312,14 +323,53 @@ export class Db<S extends SchemaDef = SchemaDef> {
 
   private async selectRaw(from: string, where: SqlExpr, orderBy?: OrderBy[], limit?: number, offset?: number): Promise<Row[]> {
     const { sql, params } = compileSelect({ from, where, orderBy, limit, offset }, this.dialect);
-    return this.driver.exec(sql, params);
+    return this.decodeRows(from, await this.driver.exec(sql, params));
+  }
+
+  // --- fileRef codec: a `fileRef` column is stored as a JSON TEXT cell but handlers
+  // see/write a FileRef object. Decode on read, encode (stringify) on write. ---
+
+  private fileRefColsOf(table: string): string[] {
+    const fields = this.schema[table]?.fields;
+    if (!fields) return [];
+    return Object.entries(fields)
+      .filter(([, f]) => (f as FieldDef).type === "fileRef")
+      .map(([n]) => n);
+  }
+
+  private decodeRows(table: string, rows: Row[]): Row[] {
+    const cols = this.fileRefColsOf(table);
+    if (cols.length === 0) return rows;
+    for (const row of rows) {
+      for (const c of cols) {
+        const v = row[c];
+        if (typeof v === "string") {
+          try {
+            row[c] = JSON.parse(v);
+          } catch {
+            /* leave a non-JSON value as-is */
+          }
+        }
+      }
+    }
+    return rows;
+  }
+
+  private decodeRow(table: string, row: Row | undefined): Row | undefined {
+    return row ? this.decodeRows(table, [row])[0] : row;
+  }
+
+  /** Encode one write cell: JSON-stringify a fileRef object, then dialect-encode. */
+  private encodeCell(fileRefCols: Set<string>, col: string, v: unknown): unknown {
+    if (v != null && fileRefCols.has(col)) return this.dialect.encode(JSON.stringify(v));
+    return this.dialect.encode(v);
   }
 
   /** Fetch one row by id within an ACL row-scope (for per-row write evaluation). */
   private async fetchOne(from: string, id: Id, scopeWhere: SqlExpr | null): Promise<Row | undefined> {
     const where = scopeWhere ? and(eq("id", id), scopeWhere) : eq("id", id);
     const { sql, params } = compileSelect({ from, where, limit: 1 }, this.dialect);
-    return (await this.driver.exec(sql, params))[0] as Row | undefined;
+    return this.decodeRow(from, (await this.driver.exec(sql, params))[0] as Row | undefined);
   }
 
   private async finishRows(from: string, raw: Row[], scope: Scope, withSel: Selected): Promise<Row[]> {
@@ -363,7 +413,8 @@ export class Db<S extends SchemaDef = SchemaDef> {
       if (values.length === 0) return [];
       const where = scope.where ? and(inList(col, values), scope.where) : inList(col, values);
       const { sql, params } = compileSelect({ from: rel.target, where }, this.dialect);
-      return (await this.driver.exec(sql, params)).map((row) => ({ key: row[col], row: project(row) }));
+      const rows = this.decodeRows(rel.target, await this.driver.exec(sql, params));
+      return rows.map((row) => ({ key: row[col], row: project(row) }));
     };
 
     if (rel.kind === "belongsTo") {
@@ -399,12 +450,13 @@ export class Db<S extends SchemaDef = SchemaDef> {
     this.runValidators(validators, vals);
 
     const cols = Object.keys(vals);
+    const fileRefCols = new Set(this.fileRefColsOf(table));
     const colList = cols.map((c) => this.dialect.id(c)).join(", ");
     const phs = cols.map((_, i) => this.dialect.placeholder(i + 1)).join(", ");
-    const params = cols.map((c) => this.dialect.encode(vals[c]));
+    const params = cols.map((c) => this.encodeCell(fileRefCols, c, vals[c]));
     const sql = `INSERT INTO ${this.dialect.id(table)} (${colList}) VALUES (${phs})${this.returningClause("*")}`;
     const rows = await this.driver.exec(sql, params);
-    return rows[0]! as InferRow<FieldsOf<S[T]>>;
+    return this.decodeRow(table, rows[0])! as InferRow<FieldsOf<S[T]>>;
   }
 
   /** Update a row by id. ACL row-scope is AND-ed into the WHERE, so a caller can
@@ -435,9 +487,10 @@ export class Db<S extends SchemaDef = SchemaDef> {
     this.runValidators(validators, p);
 
     const params: unknown[] = [];
+    const fileRefCols = new Set(this.fileRefColsOf(table));
     const assignments = cols
       .map((c) => {
-        params.push(this.dialect.encode(p[c]));
+        params.push(this.encodeCell(fileRefCols, c, p[c]));
         return `${this.dialect.id(c)} = ${this.dialect.placeholder(params.length)}`;
       })
       .join(", ");
@@ -445,7 +498,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
     let sql = `UPDATE ${this.dialect.id(table)} SET ${assignments} WHERE ${this.dialect.id("id")} = ${this.dialect.placeholder(params.length)}`;
     sql += this.scopeClause(scope.where, params);
     sql += this.returningClause("*");
-    return (await this.driver.exec(sql, params))[0] as InferRow<FieldsOf<S[T]>> | undefined;
+    return this.decodeRow(table, (await this.driver.exec(sql, params))[0]) as InferRow<FieldsOf<S[T]>> | undefined;
   }
 
   /** Delete a row by id within scope. Returns whether a row was deleted. */

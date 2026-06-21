@@ -5,6 +5,8 @@
 import { Entity, defineSchema } from "../src/sdk/schema";
 import { createApp } from "../src/sdk/app";
 import { $identity, allow, deny, policy, resolve, role, type Identity } from "../src/sdk/acl";
+import { BadRequest, Forbidden } from "../src/runtime/errors";
+import type { FileRef } from "../src/sdk/files";
 
 // Reusable write rule: force ownerId to the authenticated caller (a client cannot
 // forge it), even if the request body tries to set a different owner.
@@ -26,6 +28,9 @@ const schema = defineSchema({
       body: t.text(),
       ownerId: t.text(),
       createdAt: t.int(),
+      // Optional attached file (R2 object). Stored as JSON metadata (a FileRef),
+      // not the bytes — see ctx.files + the upload/download handlers below.
+      attachment: t.fileRef(),
     }),
     (r) => ({ owner: r.belongsTo("users", "ownerId") }),
   ),
@@ -128,6 +133,80 @@ const handlers = {
   createUser: mutation((ctx, input: { id: string; name: string; email: string }) =>
     ctx.db.insert("users", input),
   ),
+
+  // --- file storage (R2 via ctx.files) ---
+  // The three-step flow: request a signed upload url, PUT the bytes to it, then
+  // attach the resulting FileRef to a row. Download is a signed url minted only
+  // after an ACL'd read. Bytes never pass through the DO.
+
+  // 1) Mint a signed upload url (authenticated callers only). The client PUTs the
+  //    file bytes directly to `url`; `ref` is the draft metadata to attach later.
+  requestUpload: mutation(
+    (ctx, input: { contentType: string; filename?: string }) => {
+      if (!ctx.identity?.userId) throw new Forbidden("authentication required to upload");
+      return ctx.files.signUpload({ contentType: input.contentType, filename: input.filename, maxSize: 5_000_000 });
+    },
+    {
+      input: (raw): { contentType: string; filename?: string } => {
+        const o = (raw ?? {}) as Record<string, unknown>;
+        if (typeof o.contentType !== "string") throw new Error("contentType must be a string");
+        return { contentType: o.contentType, filename: typeof o.filename === "string" ? o.filename : undefined };
+      },
+    },
+  ),
+
+  // A tight maxSize (8 bytes) — shows the cap and lets the suite prove the Worker
+  // rejects an over-size body while streaming, not just when a length is declared.
+  requestTinyUpload: mutation((ctx, input: { contentType: string }) => {
+    if (!ctx.identity?.userId) throw new Forbidden("authentication required to upload");
+    return ctx.files.signUpload({ contentType: input.contentType, maxSize: 8 });
+  }),
+
+  // 2) Attach an uploaded file to a note. Confirms the blob is really in R2 (and
+  //    captures its true size) before persisting; the note update is ACL-gated.
+  //    Note: head() is an R2 round-trip inside the mutation's transaction — the
+  //    coupling is intentional (no blob → no row), at the cost of holding this
+  //    tenant's single writer for the call. A hot path could instead trust the
+  //    size the upload endpoint already returned.
+  attachToNote: mutation(
+    async (ctx, input: { id: number; ref: FileRef }) => {
+      const head = await ctx.files.head(input.ref.key);
+      if (!head) throw new BadRequest("uploaded file not found in storage");
+      const ref: FileRef = {
+        ...input.ref,
+        size: head.size,
+        contentType: head.contentType ?? input.ref.contentType,
+        uploadedAt: Date.now(),
+      };
+      return (await ctx.db.update("notes", input.id, { attachment: ref })) ?? null;
+    },
+    {
+      input: (raw): { id: number; ref: FileRef } => {
+        const o = (raw ?? {}) as Record<string, unknown>;
+        if (typeof o.id !== "number") throw new Error("id must be a number");
+        const ref = o.ref as Record<string, unknown> | undefined;
+        if (!ref || typeof ref.key !== "string") throw new Error("ref.key must be a string");
+        return {
+          id: o.id,
+          ref: {
+            key: ref.key,
+            size: typeof ref.size === "number" ? ref.size : 0,
+            contentType: typeof ref.contentType === "string" ? ref.contentType : "application/octet-stream",
+            filename: typeof ref.filename === "string" ? ref.filename : undefined,
+          },
+        };
+      },
+    },
+  ),
+
+  // 3) Get a signed download url for a note's attachment — only if ACL lets the
+  //    caller read the note. Returns null when there's no note or no attachment.
+  getNoteAttachment: query(async (ctx, input: { id: number }) => {
+    const rows = await ctx.db.find({ from: "notes", where: { id: input.id }, limit: 1 });
+    const note = rows[0];
+    if (!note || !note.attachment) return null;
+    return ctx.files.signDownload(note.attachment, { download: true });
+  }),
 };
 
 // ACL — deny-by-default; roles only grant.

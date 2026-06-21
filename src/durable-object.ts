@@ -22,17 +22,24 @@ import { compileAcl, type AclContext, type CompiledAcl } from "./runtime/acl";
 import { DoSqliteDriver, type Driver } from "./runtime/driver";
 import { BadRequest, toResponse, toWsError } from "./runtime/errors";
 import { Kv } from "./runtime/kv";
+import { createFiles, R2Adapter, type Files } from "./runtime/storage";
 import type { Identity } from "./sdk/acl";
 import type { ClientMsg, ServerMsg, Subscription } from "./runtime/protocol";
 
 interface SocketState {
   identity: Identity | null;
+  /** Tenant fixed at connect time (survives hibernation via the attachment). */
+  tenant: string;
   subs: Subscription[];
 }
 
 export interface DoEnv {
   /** Project KV — tenant registry (`tenant:`) + handler ctx.kv (`app:`). */
   KV: KVNamespace;
+  /** R2 bucket backing ctx.files + the Worker /files/* route. */
+  FILES: R2Bucket;
+  /** HMAC secret for signing file upload/download tokens. */
+  FILES_SECRET: string;
 }
 
 /** Per-socket subscription cap — bounds memory and per-mutation re-run cost. */
@@ -43,6 +50,10 @@ export class PramenDO extends DurableObject<DoEnv> {
   private readonly kv: Kv;
   private readonly driver: Driver;
   private registered = false;
+  /** Tenant this DO serves (one per idFromName). Learned from the Worker-forwarded
+   * x-pramen-tenant header; defaults to "main". */
+  private tenant = "main";
+  private files?: Files;
 
   constructor(ctx: DurableObjectState, env: DoEnv) {
     super(ctx, env);
@@ -61,6 +72,8 @@ export class PramenDO extends DurableObject<DoEnv> {
 
   override async fetch(request: Request): Promise<Response> {
     await this.ensureRegistered(request);
+    const tenantHeader = request.headers.get("x-pramen-tenant");
+    if (tenantHeader) this.tenant = tenantHeader;
 
     const path = new URL(request.url).pathname;
     if (path === "/__recover") return this.handleRecover(request);
@@ -71,7 +84,7 @@ export class PramenDO extends DurableObject<DoEnv> {
     if (request.headers.get("Upgrade") === "websocket") {
       const { 0: client, 1: server } = new WebSocketPair();
       this.ctx.acceptWebSocket(server); // hibernatable
-      this.setState(server, { identity, subs: [] });
+      this.setState(server, { identity, tenant: this.tenant, subs: [] });
       return new Response(null, { status: 101, webSocket: client });
     }
 
@@ -82,7 +95,16 @@ export class PramenDO extends DurableObject<DoEnv> {
     }
 
     try {
-      const { result, kind, touched } = await dispatch(app.handlers, app.schema, this.driver, this.kv, this.ctxFor(identity), name, input);
+      const { result, kind, touched } = await dispatch(
+        app.handlers,
+        app.schema,
+        this.driver,
+        this.kv,
+        this.filesFor(this.tenant),
+        this.ctxFor(identity),
+        name,
+        input,
+      );
       if (kind === "mutation" && touched.length > 0) await this.broadcast(touched);
       return Response.json({ ok: true, result });
     } catch (err) {
@@ -138,7 +160,7 @@ export class PramenDO extends DurableObject<DoEnv> {
       if (!replacing && state.subs.length >= MAX_SUBSCRIPTIONS) {
         return this.send(ws, toWsError(id, new BadRequest("subscription limit reached")));
       }
-      const { result, kind, touched } = await dispatch(app.handlers, app.schema, this.driver, this.kv, this.ctxFor(state.identity), name, input);
+      const { result, kind, touched } = await dispatch(app.handlers, app.schema, this.driver, this.kv, this.filesFor(state.tenant), this.ctxFor(state.identity), name, input);
       if (kind !== "query") {
         return this.send(ws, toWsError(id, new BadRequest(`${name} is not a query`)));
       }
@@ -154,7 +176,7 @@ export class PramenDO extends DurableObject<DoEnv> {
   private async onCall(ws: WebSocket, id: string, name: string, input: unknown): Promise<void> {
     const state = this.getState(ws);
     try {
-      const { result, kind, touched } = await dispatch(app.handlers, app.schema, this.driver, this.kv, this.ctxFor(state.identity), name, input);
+      const { result, kind, touched } = await dispatch(app.handlers, app.schema, this.driver, this.kv, this.filesFor(state.tenant), this.ctxFor(state.identity), name, input);
       this.send(ws, { type: "result", id, result });
       if (kind === "mutation" && touched.length > 0) await this.broadcast(touched);
     } catch (err) {
@@ -172,7 +194,7 @@ export class PramenDO extends DurableObject<DoEnv> {
       for (const sub of state.subs) {
         if (!sub.tables.some((t) => written.has(t))) continue;
         try {
-          const { result } = await dispatch(app.handlers, app.schema, this.driver, this.kv, this.ctxFor(state.identity), sub.name, sub.input);
+          const { result } = await dispatch(app.handlers, app.schema, this.driver, this.kv, this.filesFor(state.tenant), this.ctxFor(state.identity), sub.name, sub.input);
           const next = digest(result);
           if (next === sub.digest) continue; // result unchanged for this subscription
           sub.digest = next;
@@ -260,6 +282,13 @@ export class PramenDO extends DurableObject<DoEnv> {
     return { acl: this.acl, identity };
   }
 
+  // One Files facade per DO (a DO serves one tenant). Backed by the R2 binding;
+  // signing uses FILES_SECRET. Handlers mint signed urls; the bytes never enter here.
+  private filesFor(tenant: string): Files {
+    if (!this.files) this.files = createFiles({ tenant, secret: this.env.FILES_SECRET, adapter: new R2Adapter(this.env.FILES) });
+    return this.files;
+  }
+
   private identityOf(request: Request): Identity | null {
     const raw = request.headers.get("x-pramen-identity");
     if (!raw) return null;
@@ -271,7 +300,7 @@ export class PramenDO extends DurableObject<DoEnv> {
   }
 
   private getState(ws: WebSocket): SocketState {
-    return (ws.deserializeAttachment() as SocketState | null) ?? { identity: null, subs: [] };
+    return (ws.deserializeAttachment() as SocketState | null) ?? { identity: null, tenant: this.tenant, subs: [] };
   }
 
   private setState(ws: WebSocket, state: SocketState): void {

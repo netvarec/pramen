@@ -5,6 +5,7 @@
 import type { Db } from "../runtime/db";
 import type { Kv } from "../runtime/kv";
 import type { Identity } from "./acl";
+import type { Files } from "./files";
 import type { SchemaDef } from "./schema";
 
 export interface HandlerContext<S extends SchemaDef = SchemaDef> {
@@ -13,6 +14,9 @@ export interface HandlerContext<S extends SchemaDef = SchemaDef> {
   /** Project KV — global (cross-tenant) config/flags/cache. Not per-tenant
    * (that's db) and not transactional. */
   readonly kv: Kv;
+  /** Per-tenant file storage: mint signed upload/download urls, head/delete blobs.
+   * Bytes flow through the Worker /files/* route, never through the DO. */
+  readonly files: Files;
   /** Resolved identity for this request (null = anonymous). */
   readonly identity: Identity | null;
 }
