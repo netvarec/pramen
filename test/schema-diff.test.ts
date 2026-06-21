@@ -3,8 +3,8 @@
 // change — rebuilds the table, may lose data) or additive (no data loss).
 
 import { describe, expect, test } from "bun:test";
-import { diffSchemaShape, schemaShape, type SchemaShape } from "../src/runtime/schema-diff";
-import { Entity, defineSchema } from "../src/sdk/schema";
+import { diffSchemaShape, schemaShape, type SchemaShape } from "../packages/server/src/runtime/schema-diff";
+import { Entity, defineSchema } from "../packages/server/src/sdk/schema";
 
 describe("diffSchemaShape", () => {
   const v1: SchemaShape = { notes: { id: "integer", title: "text" } };

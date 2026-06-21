@@ -1,0 +1,15 @@
+{
+  "name": "@pramen/server",
+  "version": "0.0.0",
+  "description": "pramen server runtime — schema, ACL, ORM, live queries, files, and the createPramen(app) factory for Cloudflare Workers + Durable Objects.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./worker": "./src/worker-entry.ts"
+  },
+  "types": "./src/index.ts",
+  "files": ["src"],
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250101.0"
+  }
+}

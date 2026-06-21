@@ -3,7 +3,7 @@
 // (async, SQLite dialect); the only thing it doesn't model is real transactions.
 
 import type { Database } from "bun:sqlite";
-import { sqliteDialect, type Driver, type Row } from "../src/runtime/driver";
+import { sqliteDialect, type Driver, type Row } from "../packages/server/src/runtime/driver";
 
 export function bunSqliteDriver(db: Database): Driver {
   return {

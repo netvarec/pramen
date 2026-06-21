@@ -24,7 +24,7 @@ export default define(({ env }) => {
   return new Worker({
     dir: ".",
     name: PROJECT,
-    main: "./src/index.ts",
+    main: "./example/worker.ts",
     compatibility_date: "2026-06-18",
     compatibility_flags: ["nodejs_compat"],
     observability: { enabled: true },
@@ -33,7 +33,7 @@ export default define(({ env }) => {
       // (new_sqlite_classes: ["PramenDO"]) into wrangler.jsonc automatically.
       PRAMEN: new DurableObject({ name: `${PROJECT}-store`, className: "PramenDO" }),
       // One KV namespace per project. Holds the tenant registry (`tenant:` keys)
-      // and handler-facing ctx.kv data (`app:` keys); see src/runtime/kv.ts.
+      // and handler-facing ctx.kv data (`app:` keys); see packages/server/src/runtime/kv.ts.
       KV: new KVNamespace({ name: `${PROJECT}-kv` }),
       // D1 database for the "Worker + D1 (no DO)" path — the same engine over D1,
       // selected per-request via `x-pramen-store: d1`. The DO remains the write path.

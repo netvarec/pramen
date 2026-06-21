@@ -4,7 +4,7 @@
 // endpoint, so no live identity provider is needed.
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { HmacStrategy, JwksStrategy } from "../src/auth";
+import { HmacStrategy, JwksStrategy } from "../packages/server/src/auth";
 import { DEV_SECRET, sign } from "../scripts/jwt";
 
 function b64url(bytes: Uint8Array): string {

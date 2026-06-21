@@ -2,9 +2,7 @@
 // `bun run typecheck`; every @ts-expect-error must trigger a real error, and the
 // positive cases must compile. It is not imported at runtime.
 
-import { Entity, defineSchema } from "../src/sdk/schema";
-import { createApp } from "../src/sdk/app";
-import type { FieldsOf, ProjectedRow } from "../src/sdk/infer";
+import { Entity, defineSchema, createApp, type FieldsOf, type ProjectedRow } from "@pramen/server";
 
 const schema = defineSchema({
   users: Entity(

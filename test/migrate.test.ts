@@ -5,8 +5,8 @@
 
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { Entity, defineSchema, renamedFrom } from "../src/sdk/schema";
-import { migrate } from "../src/runtime/migrate";
+import { Entity, defineSchema, renamedFrom } from "../packages/server/src/sdk/schema";
+import { migrate } from "../packages/server/src/runtime/migrate";
 import { bunSqliteDriver } from "./sqlite-driver";
 
 const v1 = defineSchema({

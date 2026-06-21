@@ -1,10 +1,9 @@
-// Worker entry — the stateless HTTP front door. Authenticates the request,
-// authorizes the tenant, and routes /rpc/<handler> and /live to the per-tenant
-// Durable Object. Also serves admin endpoints (/tenants, /admin/recover) that
-// aren't tenant-data operations.
+// makeWorker(app) — builds the stateless HTTP front door bound to an app. It
+// authenticates the request, authorizes the tenant, and routes /rpc/<handler> and
+// /live to the per-tenant Durable Object, plus the /files/* route and admin
+// endpoints (/tenants, /admin/recover, /admin/schema). createPramen() pairs the
+// returned fetch with the matching DO class; a consumer just re-exports both.
 
-import { PramenDO } from "./durable-object";
-import { app } from "../example/app";
 import { authorizeTenant, HmacStrategy, isAdmin, JwksStrategy, resolveIdentity, type VerifyStrategy } from "./auth";
 import { dispatch } from "./runtime/dispatch";
 import { migrate } from "./runtime/migrate";
@@ -14,6 +13,7 @@ import { toResponse } from "./runtime/errors";
 import { Kv } from "./runtime/kv";
 import { createFiles, handleFileRequest, R2Adapter } from "./runtime/storage";
 import type { Identity } from "./sdk/acl";
+import type { PramenApp } from "./pramen";
 
 export interface Env {
   PRAMEN: DurableObjectNamespace;
@@ -39,40 +39,43 @@ export interface Env {
  * else AUTH_SECRET (so HS256 setups work out of the box). */
 const filesSecret = (env: Env): string => env.FILES_SECRET || env.AUTH_SECRET;
 
-// JwksStrategy caches fetched public keys, so keep one instance per isolate (keyed
-// by URL) rather than rebuilding it per request. HmacStrategy is stateless.
-let jwks: JwksStrategy | undefined;
-function strategyFor(env: Env): VerifyStrategy {
-  if (env.JWKS_URL) {
-    if (!jwks || jwks.url !== env.JWKS_URL) jwks = new JwksStrategy(env.JWKS_URL);
-    return jwks;
-  }
-  return new HmacStrategy(env.AUTH_SECRET);
-}
-
 const json = (body: unknown, status = 200) => Response.json(body, { status });
 const forbidden = (what: string) => json({ ok: false, error: `access denied: ${what}`, code: "forbidden" }, 403);
 const badRequest = (msg: string) => json({ ok: false, error: msg, code: "bad_request" }, 400);
 
-// ACL is compiled once per isolate; the Worker's D1 path reuses it (the DO compiles
-// its own). Schema migration over D1 runs once per isolate (and short-circuits on a
-// stored schema hash thereafter); a failed run is not cached.
-const d1Acl = compileAcl(app.acl ?? []);
-let d1Ready: Promise<void> | undefined;
-function ensureD1Migrated(driver: Driver): Promise<void> {
-  if (!d1Ready) {
-    d1Ready = migrate(driver, app.schema)
-      .then(() => undefined)
-      .catch((e) => {
-        d1Ready = undefined;
-        throw e;
-      });
-  }
-  return d1Ready;
-}
+/** Build the Worker fetch handler for an app. State (the JWKS cache, the D1
+ * compiled-ACL + one-time migration) is per-app, held in this closure. */
+export function makeWorker(app: PramenApp) {
+  // JwksStrategy caches fetched public keys, so keep one instance per isolate (keyed
+  // by URL) rather than rebuilding it per request. HmacStrategy is stateless.
+  let jwks: JwksStrategy | undefined;
+  const strategyFor = (env: Env): VerifyStrategy => {
+    if (env.JWKS_URL) {
+      if (!jwks || jwks.url !== env.JWKS_URL) jwks = new JwksStrategy(env.JWKS_URL);
+      return jwks;
+    }
+    return new HmacStrategy(env.AUTH_SECRET);
+  };
 
-export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  // ACL is compiled once per isolate; the Worker's D1 path reuses it (the DO compiles
+  // its own). Schema migration over D1 runs once per isolate (and short-circuits on a
+  // stored schema hash thereafter); a failed run is not cached.
+  const d1Acl = compileAcl(app.acl ?? []);
+  let d1Ready: Promise<void> | undefined;
+  const ensureD1Migrated = (driver: Driver): Promise<void> => {
+    if (!d1Ready) {
+      d1Ready = migrate(driver, app.schema)
+        .then(() => undefined)
+        .catch((e) => {
+          d1Ready = undefined;
+          throw e;
+        });
+    }
+    return d1Ready;
+  };
+
+  return {
+    async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
     // File upload/download stream through the Worker (bytes never touch the DO),
@@ -174,7 +177,6 @@ export default {
 
     const stub = env.PRAMEN.get(env.PRAMEN.idFromName(tenant));
     return stub.fetch(new Request(req, { headers }));
-  },
-};
-
-export { PramenDO };
+    },
+  };
+}

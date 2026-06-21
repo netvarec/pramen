@@ -12,10 +12,10 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { createTableSql } from "../src/runtime/ddl";
-import { schemaHash } from "../src/runtime/migrate";
-import { diffSchemaShape, schemaShape, type SchemaShape } from "../src/runtime/schema-diff";
-import type { SchemaDef } from "../src/sdk/schema";
+import { createTableSql } from "../packages/server/src/runtime/ddl";
+import { schemaHash } from "../packages/server/src/runtime/migrate";
+import { diffSchemaShape, schemaShape, type SchemaShape } from "../packages/server/src/runtime/schema-diff";
+import type { SchemaDef } from "../packages/server/src/sdk/schema";
 import { sign } from "./jwt";
 
 const argv = process.argv.slice(2);
@@ -163,12 +163,13 @@ function initCmd(args: string[]): void {
     console.log(`  + ${name}`);
   };
   write("app.ts", APP_TEMPLATE);
+  write("worker.ts", WORKER_TEMPLATE);
   write("oblaka.ts", OBLAKA_TEMPLATE);
   console.log(`\nScaffolded a pramen project in ${dir}.`);
-  console.log("Next: wire the server entry (src/index.ts), then `oblaka oblaka.ts && wrangler dev`.");
+  console.log("Next: `bun add @pramen/server oblaka-iac`, then `oblaka oblaka.ts && wrangler dev`.");
 }
 
-const APP_TEMPLATE = `import { Entity, defineSchema, createApp } from "pramen";
+const APP_TEMPLATE = `import { Entity, defineSchema, createApp } from "@pramen/server";
 
 const schema = defineSchema({
   notes: Entity((t) => ({ id: t.id(), title: t.text(), body: t.text(), createdAt: t.int() })),
@@ -189,22 +190,34 @@ const acl: never[] = [];
 export const app = { schema, handlers, acl };
 `;
 
-const OBLAKA_TEMPLATE = `import { define, DurableObject, KVNamespace, Worker } from "oblaka-iac";
+const WORKER_TEMPLATE = `// The whole server entry: hand your app to createPramen and re-export the pair.
+import { createPramen } from "@pramen/server/worker";
+import { app } from "./app";
+
+const pramen = createPramen(app);
+
+export default { fetch: pramen.fetch };
+export const PramenDO = pramen.PramenDO; // wrangler binds this by class_name
+`;
+
+const OBLAKA_TEMPLATE = `import { define, DurableObject, KVNamespace, R2Bucket, Worker } from "oblaka-iac";
 
 const PROJECT = "my-pramen-app"; // unique per project — namespaces all CF resources
 
 export default define(({ env }) => {
-  const vars = env === "local" ? { AUTH_SECRET: "dev-secret-change-me" } : {};
+  const vars =
+    env === "local" ? { AUTH_SECRET: "dev-secret-change-me", FILES_SECRET: "dev-files-secret-change-me" } : {};
   return new Worker({
     dir: ".",
     name: PROJECT,
-    main: "./src/index.ts",
+    main: "./worker.ts",
     compatibility_date: "2026-06-19",
     compatibility_flags: ["nodejs_compat"],
     observability: { enabled: true },
     bindings: {
       PRAMEN: new DurableObject({ name: PROJECT + "-store", className: "PramenDO" }),
       KV: new KVNamespace({ name: PROJECT + "-kv" }),
+      FILES: new R2Bucket({ name: PROJECT + "-files" }),
     },
     vars,
   });

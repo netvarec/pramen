@@ -5,13 +5,13 @@
 
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { Entity, defineSchema } from "../src/sdk/schema";
-import { $identity, allow, policy, role, type Identity } from "../src/sdk/acl";
-import { compileAcl, type AclContext } from "../src/runtime/acl";
-import { Db } from "../src/runtime/db";
-import { migrate } from "../src/runtime/migrate";
-import { compileSelect, eq } from "../src/runtime/read-engine";
-import { postgresDialect, sqliteDialect } from "../src/runtime/driver";
+import { Entity, defineSchema } from "../packages/server/src/sdk/schema";
+import { $identity, allow, policy, role, type Identity } from "../packages/server/src/sdk/acl";
+import { compileAcl, type AclContext } from "../packages/server/src/runtime/acl";
+import { Db } from "../packages/server/src/runtime/db";
+import { migrate } from "../packages/server/src/runtime/migrate";
+import { compileSelect, eq } from "../packages/server/src/runtime/read-engine";
+import { postgresDialect, sqliteDialect } from "../packages/server/src/runtime/driver";
 import { bunSqliteDriver } from "./sqlite-driver";
 
 const schema = defineSchema({

@@ -1,6 +1,8 @@
-// PramenDO — the database. One instance per tenant (see src/index.ts routing).
+// PramenDOBase — the database. One instance per tenant (see worker.ts routing).
 // Holds the SQLite store in-process, applies the schema on boot, dispatches
-// handler RPCs over HTTP, and serves live queries over WebSockets.
+// handler RPCs over HTTP, and serves live queries over WebSockets. The concrete,
+// app-bound class is produced by pramenDO(app) (and createPramen) — the DO can't
+// take constructor args beyond (ctx, env), so the app is closed over.
 //
 // ACL: policies are compiled once on boot. Identity is resolved by the Worker
 // and forwarded in the X-Pramen-Identity header. For HTTP it's per request; for a
@@ -14,7 +16,6 @@
 // (identity + subscriptions) is stored via serializeAttachment().
 
 import { DurableObject } from "cloudflare:workers";
-import { app } from "../example/app";
 import { migrate } from "./runtime/migrate";
 import { dispatch } from "./runtime/dispatch";
 import { digest } from "./runtime/digest";
@@ -24,6 +25,7 @@ import { BadRequest, toResponse, toWsError } from "./runtime/errors";
 import { Kv } from "./runtime/kv";
 import { createFiles, R2Adapter, type Files } from "./runtime/storage";
 import type { Identity } from "./sdk/acl";
+import type { PramenApp } from "./pramen";
 import type { ClientMsg, ServerMsg, Subscription } from "./runtime/protocol";
 
 interface SocketState {
@@ -45,7 +47,8 @@ export interface DoEnv {
 /** Per-socket subscription cap — bounds memory and per-mutation re-run cost. */
 const MAX_SUBSCRIPTIONS = 64;
 
-export class PramenDO extends DurableObject<DoEnv> {
+export class PramenDOBase extends DurableObject<DoEnv> {
+  private readonly app: PramenApp;
   private readonly acl: CompiledAcl;
   private readonly kv: Kv;
   private readonly driver: Driver;
@@ -55,9 +58,10 @@ export class PramenDO extends DurableObject<DoEnv> {
   private tenant = "main";
   private files?: Files;
 
-  constructor(ctx: DurableObjectState, env: DoEnv) {
+  constructor(ctx: DurableObjectState, env: DoEnv, app: PramenApp) {
     super(ctx, env);
-    this.acl = compileAcl(app.acl ?? []);
+    this.app = app;
+    this.acl = compileAcl(this.app.acl ?? []);
     this.kv = new Kv(env.KV); // app:-prefixed, handed to handlers as ctx.kv
 
     // The data layer runs over a Driver. The DO's store is its own in-process SQLite;
@@ -67,7 +71,7 @@ export class PramenDO extends DurableObject<DoEnv> {
     // Reconcile the store with the schema before any request is served (create/alter
     // tables; destructive changes rebuild the table). Wrapped in a transaction so a
     // partial migration can't leave a half-rebuilt table.
-    ctx.blockConcurrencyWhile(() => this.driver.transaction(() => migrate(this.driver, app.schema).then(() => {})));
+    ctx.blockConcurrencyWhile(() => this.driver.transaction(() => migrate(this.driver, this.app.schema).then(() => {})));
   }
 
   override async fetch(request: Request): Promise<Response> {
@@ -96,8 +100,8 @@ export class PramenDO extends DurableObject<DoEnv> {
 
     try {
       const { result, kind, touched } = await dispatch(
-        app.handlers,
-        app.schema,
+        this.app.handlers,
+        this.app.schema,
         this.driver,
         this.kv,
         this.filesFor(this.tenant),
@@ -160,7 +164,7 @@ export class PramenDO extends DurableObject<DoEnv> {
       if (!replacing && state.subs.length >= MAX_SUBSCRIPTIONS) {
         return this.send(ws, toWsError(id, new BadRequest("subscription limit reached")));
       }
-      const { result, kind, touched } = await dispatch(app.handlers, app.schema, this.driver, this.kv, this.filesFor(state.tenant), this.ctxFor(state.identity), name, input);
+      const { result, kind, touched } = await dispatch(this.app.handlers, this.app.schema, this.driver, this.kv, this.filesFor(state.tenant), this.ctxFor(state.identity), name, input);
       if (kind !== "query") {
         return this.send(ws, toWsError(id, new BadRequest(`${name} is not a query`)));
       }
@@ -176,7 +180,7 @@ export class PramenDO extends DurableObject<DoEnv> {
   private async onCall(ws: WebSocket, id: string, name: string, input: unknown): Promise<void> {
     const state = this.getState(ws);
     try {
-      const { result, kind, touched } = await dispatch(app.handlers, app.schema, this.driver, this.kv, this.filesFor(state.tenant), this.ctxFor(state.identity), name, input);
+      const { result, kind, touched } = await dispatch(this.app.handlers, this.app.schema, this.driver, this.kv, this.filesFor(state.tenant), this.ctxFor(state.identity), name, input);
       this.send(ws, { type: "result", id, result });
       if (kind === "mutation" && touched.length > 0) await this.broadcast(touched);
     } catch (err) {
@@ -194,7 +198,7 @@ export class PramenDO extends DurableObject<DoEnv> {
       for (const sub of state.subs) {
         if (!sub.tables.some((t) => written.has(t))) continue;
         try {
-          const { result } = await dispatch(app.handlers, app.schema, this.driver, this.kv, this.filesFor(state.tenant), this.ctxFor(state.identity), sub.name, sub.input);
+          const { result } = await dispatch(this.app.handlers, this.app.schema, this.driver, this.kv, this.filesFor(state.tenant), this.ctxFor(state.identity), sub.name, sub.input);
           const next = digest(result);
           if (next === sub.digest) continue; // result unchanged for this subscription
           sub.digest = next;
@@ -310,4 +314,15 @@ export class PramenDO extends DurableObject<DoEnv> {
   private send(ws: WebSocket, msg: ServerMsg): void {
     ws.send(JSON.stringify(msg));
   }
+}
+
+/** Produce the concrete, app-bound Durable Object class. A DO is constructed by the
+ * platform with just (ctx, env), so the app is closed over here. Re-export the
+ * result from your Worker entry under the class name wrangler expects ("PramenDO"). */
+export function pramenDO(app: PramenApp): typeof PramenDOBase {
+  return class PramenDO extends PramenDOBase {
+    constructor(ctx: DurableObjectState, env: DoEnv) {
+      super(ctx, env, app);
+    }
+  };
 }

@@ -8,6 +8,7 @@
         "@cloudflare/workers-types": "^4.20250101.0",
         "@pramen/client": "workspace:*",
         "@pramen/react": "workspace:*",
+        "@pramen/server": "workspace:*",
         "@types/react": "^19.0.0",
         "lopata": "file:../../contember/lopata",
         "oblaka-iac": "^0.0.14",
@@ -26,6 +27,13 @@
       "peerDependencies": {
         "@pramen/client": "*",
         "react": ">=18",
+      },
+    },
+    "packages/server": {
+      "name": "@pramen/server",
+      "version": "0.0.0",
+      "devDependencies": {
+        "@cloudflare/workers-types": "^4.20250101.0",
       },
     },
   },
@@ -305,6 +313,8 @@
     "@pramen/client": ["@pramen/client@workspace:packages/client"],
 
     "@pramen/react": ["@pramen/react@workspace:packages/react"],
+
+    "@pramen/server": ["@pramen/server@workspace:packages/server"],
 
     "@puppeteer/browsers": ["@puppeteer/browsers@3.0.4", "", { "dependencies": { "modern-tar": "^0.7.6", "yargs": "^17.7.2" }, "peerDependencies": { "proxy-agent": ">=8.0.1" }, "optionalPeers": ["proxy-agent"], "bin": { "browsers": "lib/main-cli.js" } }, "sha512-HGM8iAmGTf+Y7t0373szVbTmt3d7vPkYL/1bpOkOFO0YUYLgSeuYBCzESklogNPvOBnZ/MRD5f07OkpqH1trtA=="],
 

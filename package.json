@@ -17,13 +17,14 @@
     "deploy": "oblaka oblaka.ts --remote && wrangler deploy",
     "plan": "oblaka oblaka.ts --remote --dry-run",
     "pramen": "bun scripts/cli.ts",
-    "typecheck": "tsc --noEmit && tsc -p packages/client/tsconfig.json && tsc -p packages/react/tsconfig.json",
+    "typecheck": "tsc --noEmit && tsc -p packages/server/tsconfig.json && tsc -p packages/client/tsconfig.json && tsc -p packages/react/tsconfig.json",
     "test": "bun test"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250101.0",
     "@pramen/client": "workspace:*",
     "@pramen/react": "workspace:*",
+    "@pramen/server": "workspace:*",
     "@types/react": "^19.0.0",
     "lopata": "file:../../contember/lopata",
     "oblaka-iac": "^0.0.14",

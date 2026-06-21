@@ -2,11 +2,21 @@
 // In a finished pramen this would be deployed as a bundle at runtime; for the v0
 // skeleton the DO imports it statically.
 
-import { Entity, defineSchema } from "../src/sdk/schema";
-import { createApp } from "../src/sdk/app";
-import { $identity, allow, deny, policy, resolve, role, type Identity } from "../src/sdk/acl";
-import { BadRequest, Forbidden } from "../src/runtime/errors";
-import type { FileRef } from "../src/sdk/files";
+import {
+  Entity,
+  defineSchema,
+  createApp,
+  $identity,
+  allow,
+  deny,
+  policy,
+  resolve,
+  role,
+  BadRequest,
+  Forbidden,
+  type Identity,
+  type FileRef,
+} from "@pramen/server";
 
 // Reusable write rule: force ownerId to the authenticated caller (a client cannot
 // forge it), even if the request body tries to set a different owner.
