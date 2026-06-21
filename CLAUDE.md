@@ -11,22 +11,34 @@ Active development; nothing is stable. No backward-compat constraints — redesi
 freely rather than patching around something that feels wrong. No preexisting
 issues: if something is broken, fix it.
 
-## Architecture
+## Layout & architecture
+
+The runtime is the publishable **`@pramen/server`** package at `packages/server/src/`
+(SDK + Cloudflare glue). A project (see `example/`) is just `app.ts` + `oblaka.ts` +
+a 3-line `worker.ts` that calls `createPramen(app)`.
 
 ```
-Worker (src/index.ts)  ->  PramenDO (per-tenant Durable Object)
-                              ├─ ctx.storage.sql   in-process SQLite (the DB)
-                              ├─ schemaDDL on boot (blockConcurrencyWhile)
-                              └─ dispatch: query -> run; mutation -> storage.transaction()
+example/worker.ts  createPramen(app) -> { fetch, PramenDO }
+  Worker (fetch)  ->  PramenDO (per-tenant Durable Object)
+                        ├─ ctx.storage.sql   in-process SQLite (the DB)
+                        ├─ schemaDDL on boot (blockConcurrencyWhile)
+                        └─ dispatch: query -> run; mutation -> storage.transaction()
 ```
 
+- **`@pramen/server`** (`.` export) is authoring-only — `Entity`/`defineSchema`,
+  `createApp`, `query`/`mutation`, ACL, files, errors, the substrate seam. The
+  **deploy** half — `createPramen` + the Durable Object — is **`@pramen/server/worker`**,
+  split off because only it imports `cloudflare:workers`. So the CLI/tests/codegen
+  can load an `app.ts` for its schema without dragging in the DO runtime.
+- The DO + Worker are **parameterized by the app** (`pramenDO(app)` / `makeWorker(app)`),
+  closed over by `createPramen` — no static app import in the runtime.
 - **The DO is the database.** Single-writer serialization is free (a DO handles
   one request at a time), per-tenant via `idFromName`.
 - **D1 is NOT the DO's write path** — it's over-RPC, not in-process; the DO's
   SQLite is its transactional store. D1 is instead available as a separate
   substrate via the Worker (`x-pramen-store: d1`) — see the Substrate seam below.
-- **SDK (`src/sdk/`) is platform-agnostic** — the portable product. `runtime/` is
-  the Cloudflare glue.
+- **SDK (`packages/server/src/sdk/`) is platform-agnostic** — the portable product.
+  `packages/server/src/runtime/` is the Cloudflare glue.
 
 ## Commands
 
@@ -53,7 +65,7 @@ Bun-vs-workerd differences.
 ## Substrate seam (Driver/Dialect)
 
 The data layer runs over a `Driver` (async `exec` + `transaction`) + `Dialect`
-(`src/runtime/driver.ts`), so the ACL/read/write engine is substrate-agnostic:
+(`packages/server/src/runtime/driver.ts`), so the ACL/read/write engine is substrate-agnostic:
 
 - **`DoSqliteDriver`** — the DO's in-process SQLite (the default write path).
 - **`D1Driver`** — the SAME engine over a real D1 binding, run **in the Worker**
@@ -91,7 +103,7 @@ Cloudflare services should be added (e.g. email via the Send service as `ctx.mai
 ## Conventions
 
 - Schema: `Entity(t => ({ id: t.id(), ... }))` + `defineSchema({ table: Entity })`.
-- Handlers: `query()` / `mutation()` from `src/sdk/handlers`. Mutations are
+- Handlers: `query()` / `mutation()` from `@pramen/server`. Mutations are
   auto-wrapped in `storage.transaction()` by `runtime/dispatch.ts` (commit on
   return, rollback on throw) — do not write transaction control in handler code.
   Raw `BEGIN`/`COMMIT` via `sql.exec` is rejected by DO SQLite.

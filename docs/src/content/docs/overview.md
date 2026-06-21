@@ -11,11 +11,15 @@ front of a per-tenant **Durable Object** whose in-process SQLite *is* the databa
 ## Architecture
 
 ```
-Worker (src/index.ts)  ->  PramenDO (per-tenant Durable Object)
-                              ├─ ctx.storage.sql   in-process SQLite (the DB)
-                              ├─ schemaDDL on boot (blockConcurrencyWhile)
-                              └─ dispatch: query -> run; mutation -> storage.transaction()
+createPramen(app) -> { fetch, PramenDO }
+  Worker (fetch)  ->  PramenDO (per-tenant Durable Object)
+                        ├─ ctx.storage.sql   in-process SQLite (the DB)
+                        ├─ schemaDDL on boot (blockConcurrencyWhile)
+                        └─ dispatch: query -> run; mutation -> storage.transaction()
 ```
+
+The runtime ships as `@pramen/server`; your project is just `app.ts`, `oblaka.ts`,
+and a 3-line `worker.ts` that calls `createPramen(app)`.
 
 - **The DO is the database.** A Durable Object handles one request at a time, so
   single-writer serialization is free. Each tenant is its own DO, addressed by
@@ -23,8 +27,8 @@ Worker (src/index.ts)  ->  PramenDO (per-tenant Durable Object)
 - **The Worker is the stateless front door.** It verifies the bearer JWT,
   authorizes the tenant, and forwards a trusted identity to the DO — which never
   re-derives it.
-- **The SDK (`src/sdk/`) is platform-agnostic** — the portable product surface.
-  `src/runtime/` is the Cloudflare glue.
+- **The SDK (`@pramen/server`, `packages/server/src/sdk/`) is platform-agnostic** —
+  the portable product surface. `packages/server/src/runtime/` is the Cloudflare glue.
 
 ## What you get
 

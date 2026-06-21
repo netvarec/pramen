@@ -31,7 +31,7 @@ curl -s -X POST http://localhost:8787/rpc/listNotes -H "authorization: Bearer $T
 The Worker verifies a **bearer JWT** (WebCrypto), checks `exp`/`nbf`, and maps
 claims to an Identity (`sub`→userId, `roles`/`role`→roles, custom claims pass
 through). A forged or unsigned request gets no identity. Verification is pluggable
-(`VerifyStrategy` in `src/auth.ts`):
+(`VerifyStrategy` in `packages/server/src/auth.ts`):
 
 - **HS256** (`HmacStrategy`) — shared secret in `AUTH_SECRET` (dev value in
   `wrangler.jsonc`; production via `wrangler secret put AUTH_SECRET`). The default.
@@ -43,7 +43,7 @@ through). A forged or unsigned request gets no identity. Verification is pluggab
 ### ACL
 
 Access is **deny-by-default**; roles grant it. Define roles/policies on the app
-(`example/app.ts`); identity comes from the verified token (`src/auth.ts`). Grants
+(`example/app.ts`); identity comes from the verified token (`packages/server/src/auth.ts`). Grants
 OR-merge across an identity's roles; row-level `where` scopes are AND-merged into
 queries, and `fields` restrict read projection / writable columns.
 
@@ -131,31 +131,37 @@ over the socket. Single-writer DOs see every write, so invalidation is exact.
 
 ## Layout
 
+The runtime is the **`@pramen/server`** package; a project is just `app.ts`,
+`oblaka.ts`, and a 3-line `worker.ts` (`createPramen(app)`).
+
 ```
-oblaka.ts             IaC source of truth -> generates wrangler.jsonc
-src/
-  index.ts            Worker entry — verifies JWT, routes to the per-tenant DO
-  auth.ts             pluggable JWT verification — HS256 + RS256/JWKS (claims -> Identity)
-  durable-object.ts   PramenDO — in-process SQLite, schema boot, dispatch, live queries
-  sdk/                portable SDK (no platform dep)
-    schema.ts         Entity() + defineSchema() + relations (belongsTo/hasMany)
-    infer.ts          InferRow / WhereInput / InferInsert / InferUpdate / relations
-    app.ts            createApp(schema) -> typed query() / mutation()
-    handlers.ts       query() / mutation() (untyped, schema-agnostic)
-    acl.ts            role/policy/allow/deny/$identity/resolve + set/validate
-  runtime/            substrate glue
-    errors.ts         typed error envelope (status + code; no internal leakage)
-    ddl.ts            CREATE TABLE / ADD COLUMN fragments
-    migrate.ts        schema migration on DO boot (additive + destructive rebuild)
-    read-engine.ts    structured query + SqlExpr -> parameterized SQL (TS; WASM later)
-    acl.ts            scope resolution, relation scopes, warmup, write rules
-    db.ts             ACL-enforcing repository over ctx.storage.sql (+ eager loading)
-    dispatch.ts       handler resolution + storage.transaction() for mutations
+oblaka.ts             IaC source of truth -> generates wrangler.jsonc (main -> example/worker.ts)
+packages/server/      @pramen/server — the runtime (publishable)
+  src/
+    index.ts          authoring entry: re-exports schema/handlers/ACL/files/errors/substrate
+    worker-entry.ts   deploy entry ("@pramen/server/worker"): createPramen + the DO (cloudflare:workers)
+    pramen.ts         createPramen(app) -> { fetch, PramenDO }
+    worker.ts         makeWorker(app) — verifies JWT, routes to the DO, /files/*, admin
+    durable-object.ts PramenDOBase + pramenDO(app) — in-process SQLite, schema boot, dispatch, live
+    auth.ts           pluggable JWT verification — HS256 + RS256/JWKS (claims -> Identity)
+    sdk/              portable SDK (no platform dep)
+      schema.ts        Entity() + defineSchema() + relations (belongsTo/hasMany); fileRef type
+      infer.ts         InferRow / WhereInput / InferInsert / InferUpdate / relations
+      app.ts           createApp(schema) -> typed query() / mutation()
+      handlers.ts      query() / mutation(); HandlerContext (ctx.db / ctx.kv / ctx.files)
+      acl.ts           role/policy/allow/deny/$identity/resolve + set/validate
+      files.ts         FileRef + Files (the ctx.files type surface)
+    runtime/          substrate glue
+      errors.ts        typed error envelope (status + code; no internal leakage)
+      storage.ts       R2/Memory StorageAdapter, signed tokens, ctx.files, /files endpoint
+      ddl.ts · migrate.ts · read-engine.ts · acl.ts · db.ts · dispatch.ts · driver.ts · kv.ts
 example/
   app.ts              the demo schema + handlers + ACL
+  worker.ts           the 3-line entry: createPramen(app) (oblaka's `main`)
+packages/client · packages/react   typed @pramen/client + @pramen/react
 test/
   e2e.test.ts         boots one wrangler-dev server, runs every suite (bun test)
-  suites/             acl · resolver · relation · live (reusable suite fns)
+  suites/             acl · resolver · relation · live · files · d1 (reusable suite fns)
   lib.ts              assert + HTTP/WS helpers + JWT minting
 ```
 
@@ -273,7 +279,7 @@ curl -s http://localhost:8787/tenants -H "authorization: Bearer $ADMIN_TOKEN"
 ```
 
 The Worker **authorizes the tenant** against the caller before reaching the DO
-(`authorizeTenant` in `src/auth.ts`): admins may access any tenant; everyone else
+(`authorizeTenant` in `packages/server/src/auth.ts`): admins may access any tenant; everyone else
 only tenants listed in their `tenants` claim. Customize for your tenancy model.
 
 **Recovery.** SQLite-backed DOs have 30-day point-in-time recovery. An admin can
@@ -390,4 +396,4 @@ bun run deploy --env production    # oblaka --remote (provision + config) && wra
 
 `oblaka --remote` provisions the Worker + Durable Object (and the SQLite DO
 migration) on Cloudflare and writes the config; `wrangler deploy` bundles and
-uploads `src/index.ts`.
+uploads the Worker entry (`worker.ts`, your `createPramen(app)` call).

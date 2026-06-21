@@ -17,8 +17,8 @@ backend would otherwise build from scratch:
 | In-process datastore | DO SQLite storage (`ctx.storage.sql`) | ✅ wired |
 | WAL replication, snapshots, failover | DO point-in-time recovery + platform durability | platform |
 | Request dispatch | Worker `fetch` → DO stub | ✅ wired |
-| Zero-JS SQL compile | `src/runtime/read-engine.ts` (→ WASM later) | ✅ TS now |
-| ACL resolver, schema, ORM, handlers | TS SDK (`src/sdk/`) | ✅ |
+| Zero-JS SQL compile | `packages/server/src/runtime/read-engine.ts` (→ WASM later) | ✅ TS now |
+| ACL resolver, schema, ORM, handlers | TS SDK (`packages/server/src/sdk/`) | ✅ |
 | Global config/cache | Workers KV | ✅ |
 | File / object storage | R2 + `ctx.files` (signed urls) | ✅ wired |
 
@@ -47,8 +47,11 @@ backend would otherwise build from scratch:
 
 ## v0 architecture (this skeleton)
 
+The runtime is the `@pramen/server` package; a project's entry is
+`createPramen(app)` (see `example/worker.ts`), which returns `{ fetch, PramenDO }`.
+
 ```
-Worker (src/index.ts)            stateless HTTP front door
+Worker (createPramen(app).fetch)  stateless HTTP front door
   └─ /rpc/<name> ──► PramenDO       per-tenant DO, idFromName(tenant)
         ├─ boot: schemaDDL(app.schema) under blockConcurrencyWhile
         ├─ dispatch(name, input)  query → run; mutation → BEGIN/COMMIT/ROLLBACK
@@ -160,8 +163,14 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
 - [ ] More Cloudflare service seams (same shape as `ctx.files`): email via the Cloudflare Email/Send
       service as `ctx.mail`, Queues as `ctx.queue`, etc. — a small pluggable adapter + a `ctx.<service>`
       facade + Worker glue. Lean on platform primitives rather than reimplementing them.
-- [ ] Package the server runtime itself (`createPramen(app)` factory) so a project is just
-      `app.ts` + `oblaka.ts` + a 3-line entry — currently the DO statically imports the example app.
+- [x] Server library entry: the runtime is the publishable `@pramen/server` package (was `packages/server/src/`).
+      `createPramen(app)` returns `{ fetch, PramenDO }`, so a project is just `app.ts` + `oblaka.ts` +
+      a 3-line `worker.ts` (`export default { fetch }; export const PramenDO = …`). The DO + Worker are
+      parameterized by the app — no more static `../example/app` import. Split entries: `@pramen/server`
+      is authoring-only (schema/handlers/ACL/files/errors/substrate), while the deploy half — createPramen
+      + the Durable Object — is `@pramen/server/worker`, isolated because it imports `cloudflare:workers`
+      (so the CLI/tests/codegen can load an app.ts for its schema without pulling in the DO runtime).
+      `pramen init` scaffolds the 3-line entry; the full e2e suite boots wrangler against `example/worker.ts`.
 - [ ] Dynamic deploy: ship the app bundle to the DO instead of static import (a runtime `/deploy`).
 - [ ] ReadEngine → WASM.
 - [x] Deploy via **oblaka** (CF IaC DSL): `oblaka.ts` declares the Worker + `PRAMEN` Durable Object

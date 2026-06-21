@@ -41,7 +41,7 @@ bun run deploy --env production     # oblaka --remote (provision) && wrangler de
 
 `oblaka --remote` provisions the Worker + Durable Object (and the SQLite DO
 migration) on Cloudflare and writes the config; `wrangler deploy` bundles and
-uploads `src/index.ts`.
+uploads the Worker entry (`worker.ts`, your `createPramen(app)` call).
 
 ## Testing
 

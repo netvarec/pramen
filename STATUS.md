@@ -6,14 +6,14 @@ Worker + Durable Object. See [DESIGN.md](./DESIGN.md) for the architecture and
 rationale.
 
 Status: **working end-to-end, fully tested**, now a Bun-workspace **monorepo**:
-the server/runtime (root `src/`) plus publishable client libraries
+the server/runtime (root `packages/server/src/`) plus publishable client libraries
 (`@pramen/client`, `@pramen/react`) and a `pramen` CLI. Active development; WIP; no
 backward-compat constraints.
 
 ## The spine — one request
 
 ```
-client ──HTTP /rpc/<h> or WS /live──►  Worker (src/index.ts)
+client ──HTTP /rpc/<h> or WS /live──►  Worker (createPramen(app).fetch)
                                         │  auth.ts: verify HS256 JWT -> Identity
                                         │  route per tenant: idFromName(x-pramen-tenant)
                                         ▼
@@ -42,23 +42,23 @@ exact).
 
 | Area | What it does | Files |
 |---|---|---|
-| **Auth** | Verify HS256 bearer JWT (WebCrypto) → Identity; forward to DO. Client can't spoof identity. | `src/auth.ts` |
-| **Schema/SDK** | `Entity()/defineSchema()` with field + relation builders; `createApp(schema)` → typed `query/mutation`. Portable, no platform dep. | `src/sdk/{schema,app,handlers}.ts` |
-| **Typed inference** | `InferRow/WhereInput/InferInsert/InferUpdate/RelationsResult` derived from the schema; `ctx.db` fully typed. | `src/sdk/infer.ts` |
-| **ACL** | Deny-by-default; roles/policies; row-level `where` scopes (with operators + `$identity`), field projection, relation/`directAccess` traversal, dynamic `resolve()`, write-side `set`/`validate`. Per-identity. | `src/sdk/acl.ts`, `src/runtime/acl.ts` |
-| **Read engine** | `SqlExpr` AST + `compileWhere/compileSelect/compileCount/compileAggregate`. Operators, AND/OR, multi-orderBy, limit/offset, keyset cursor, count/aggregates. Identifiers validated; values parameterized. | `src/runtime/read-engine.ts` |
-| **Repository** | The single ACL chokepoint: `find/page/count/aggregate/insert/update/delete`, eager relation loads (batched `IN`), field projection. | `src/runtime/db.ts` |
-| **KV (ctx.kv)** | Handlers get a prefixed (`app:`) KV wrapper for GLOBAL (cross-tenant) config/flags/cache — not per-tenant, not transactional. | `src/runtime/kv.ts` |
-| **Reactivity** | Live queries over Hibernatable WebSockets; per-socket identity + subscriptions in `serializeAttachment`; table-prefilter + per-subscription result digest for row-level pushes; sub cap. | `src/durable-object.ts`, `src/runtime/{protocol,digest}.ts` |
-| **Migrations** | On DO boot: create tables + additive `ADD COLUMN`, gated by a schema hash in `_pramen_meta`. No data loss. | `src/runtime/{migrate,ddl}.ts` |
-| **Errors** | Typed envelope `{ ok, error, code }` + status; internal errors logged, returned as generic 500. | `src/runtime/errors.ts` |
-| **Dispatch** | Resolve handler, optional input validator (→400), warmup, run, report `touched` tables. | `src/runtime/dispatch.ts` |
-| **Tenancy** | Worker authorizes `x-pramen-tenant` against the identity (`authorizeTenant`). DOs aren't enumerable, so each tenant self-registers in a KV registry on first touch; admin `GET /tenants` lists them. | `src/auth.ts`, `src/durable-object.ts`, `src/index.ts` |
-| **Recovery** | 30-day point-in-time recovery (platform). Admin `POST /admin/recover {tenant,timestamp}` arms a restore, returns the `undo` bookmark. Local dev → 501 (PITR is platform-only). | `src/durable-object.ts`, `src/index.ts` |
+| **Auth** | Verify HS256 bearer JWT (WebCrypto) → Identity; forward to DO. Client can't spoof identity. | `packages/server/src/auth.ts` |
+| **Schema/SDK** | `Entity()/defineSchema()` with field + relation builders; `createApp(schema)` → typed `query/mutation`. Portable, no platform dep. | `packages/server/src/sdk/{schema,app,handlers}.ts` |
+| **Typed inference** | `InferRow/WhereInput/InferInsert/InferUpdate/RelationsResult` derived from the schema; `ctx.db` fully typed. | `packages/server/src/sdk/infer.ts` |
+| **ACL** | Deny-by-default; roles/policies; row-level `where` scopes (with operators + `$identity`), field projection, relation/`directAccess` traversal, dynamic `resolve()`, write-side `set`/`validate`. Per-identity. | `packages/server/src/sdk/acl.ts`, `packages/server/src/runtime/acl.ts` |
+| **Read engine** | `SqlExpr` AST + `compileWhere/compileSelect/compileCount/compileAggregate`. Operators, AND/OR, multi-orderBy, limit/offset, keyset cursor, count/aggregates. Identifiers validated; values parameterized. | `packages/server/src/runtime/read-engine.ts` |
+| **Repository** | The single ACL chokepoint: `find/page/count/aggregate/insert/update/delete`, eager relation loads (batched `IN`), field projection. | `packages/server/src/runtime/db.ts` |
+| **KV (ctx.kv)** | Handlers get a prefixed (`app:`) KV wrapper for GLOBAL (cross-tenant) config/flags/cache — not per-tenant, not transactional. | `packages/server/src/runtime/kv.ts` |
+| **Reactivity** | Live queries over Hibernatable WebSockets; per-socket identity + subscriptions in `serializeAttachment`; table-prefilter + per-subscription result digest for row-level pushes; sub cap. | `packages/server/src/durable-object.ts`, `packages/server/src/runtime/{protocol,digest}.ts` |
+| **Migrations** | On DO boot: create tables + additive `ADD COLUMN`, gated by a schema hash in `_pramen_meta`. No data loss. | `packages/server/src/runtime/{migrate,ddl}.ts` |
+| **Errors** | Typed envelope `{ ok, error, code }` + status; internal errors logged, returned as generic 500. | `packages/server/src/runtime/errors.ts` |
+| **Dispatch** | Resolve handler, optional input validator (→400), warmup, run, report `touched` tables. | `packages/server/src/runtime/dispatch.ts` |
+| **Tenancy** | Worker authorizes `x-pramen-tenant` against the identity (`authorizeTenant`). DOs aren't enumerable, so each tenant self-registers in a KV registry on first touch; admin `GET /tenants` lists them. | `packages/server/src/auth.ts`, `packages/server/src/durable-object.ts`, `packages/server/src/worker.ts` |
+| **Recovery** | 30-day point-in-time recovery (platform). Admin `POST /admin/recover {tenant,timestamp}` arms a restore, returns the `undo` bookmark. Local dev → 501 (PITR is platform-only). | `packages/server/src/durable-object.ts`, `packages/server/src/worker.ts` |
 | **Deploy (IaC)** | `oblaka.ts` is source of truth → generates `wrangler.jsonc`; `oblaka --remote` provisions, `wrangler deploy` ships code. | `oblaka.ts` |
 | **Client** | `@pramen/client` — typed `call()` (RPC/HTTP) + `subscribe()` (live queries over a reconnecting WS). Generic over `typeof app.handlers`; no runtime dep on the server. | `packages/client` |
 | **React** | `@pramen/react` — `useLiveQuery` (re-renders on every push) + `useMutation`. | `packages/react` |
-| **CLI** | `pramen` — help, init, token, and schema sql/hash/snapshot/diff/status (additive-aware diff; status vs a deployed tenant). | `scripts/cli.ts`, `src/runtime/schema-diff.ts` |
+| **CLI** | `pramen` — help, init, token, and schema sql/hash/snapshot/diff/status (additive-aware diff; status vs a deployed tenant). | `scripts/cli.ts`, `packages/server/src/runtime/schema-diff.ts` |
 | **Tests/CI** | `bun test` boots one `wrangler dev`, runs all e2e suites on isolated tenants + the client lib + CLI/migrate/diff units. CI on push/PR. | `test/**`, `.github/workflows/ci.yml` |
 
 ## What's done (17 commits)
