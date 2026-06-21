@@ -1,0 +1,33 @@
+name: release
+
+# Publishes @pramen/* to npm. Trigger by pushing a version tag (e.g. `v0.0.2`)
+# after bumping the package versions, or run manually from the Actions tab.
+# Requires a repo secret NPM_TOKEN (an npm "Automation" access token).
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install (workspaces)
+        run: bun install --frozen-lockfile
+      - name: Typecheck
+        run: bun run typecheck
+      - name: Tests (e2e + units, fully local via miniflare)
+        run: bun test
+        env:
+          WRANGLER_SEND_METRICS: "false"
+      # Write the token via an env var (never interpolate the secret into `run`).
+      - name: Configure npm auth
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
+      - name: Publish @pramen/* (build + publish in dependency order)
+        run: bun run release
