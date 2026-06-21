@@ -18,12 +18,33 @@ import type { SchemaDef } from "./sdk/schema";
 import type { HandlerMap } from "./sdk/handlers";
 import type { Role } from "./sdk/acl";
 
-/** The user-facing app: a schema, the handler map, and (optionally) ACL roles.
- * `example/app.ts` exports exactly this shape. */
+/** Injected into a public route's handler — forward a privileged mutation into the
+ * tenant's DO without the handler importing any deploy-side code (so app.ts stays
+ * authoring-only). The synthetic identity defaults to the admin role. */
+export interface RouteContext {
+  callPrivileged(opts: { name: string; input?: unknown; tenant?: string; roles?: string[] }): Promise<Response>;
+}
+
+/** A public, pre-auth route — matched before identity resolution, so it can host a
+ * signature-authenticated endpoint (e.g. a Stripe webhook) that doesn't fit the
+ * JWT-gated /rpc surface. The handler verifies its own auth (a signature), then can
+ * `ctx.callPrivileged(...)` to apply a mutation. `env` is loosely typed here so the
+ * app definition stays platform-agnostic. */
+export interface PublicRoute {
+  /** HTTP method to match (e.g. "POST"). */
+  method: string;
+  /** Exact pathname to match (e.g. "/stripe/webhook"). */
+  path: string;
+  handler: (request: Request, env: Readonly<Record<string, unknown>>, ctx: RouteContext) => Response | Promise<Response>;
+}
+
+/** The user-facing app: a schema, the handler map, ACL roles, and optional public
+ * (pre-auth) routes. `example/app.ts` exports this shape. */
 export interface PramenApp {
   schema: SchemaDef;
   handlers: HandlerMap;
   acl?: Role[];
+  routes?: PublicRoute[];
 }
 
 export type { Env, DoEnv };

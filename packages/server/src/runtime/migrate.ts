@@ -18,7 +18,7 @@
 // A rename can't be inferred from a diff (a removed + added column is ambiguous),
 // so it must be declared with `renamedFrom`; otherwise it is applied as drop+add.
 
-import { addColumnSql, createTableSql, sqlType } from "./ddl";
+import { addColumnSql, createTableSql, indexStatements, sqlType } from "./ddl";
 import { digest } from "./digest";
 import type { Driver } from "./driver";
 import type { EntityFields, FieldDef, SchemaDef } from "../sdk/schema";
@@ -142,6 +142,13 @@ export async function migrate(driver: Driver, schema: SchemaDef): Promise<Migrat
       await rebuildTable(driver, table, def, live);
       rebuilt.push(table);
     }
+  }
+
+  // Ensure unique/index declarations (idempotent, via IF NOT EXISTS). Indexes can be
+  // added to an existing table without a rebuild; a stale index from a removed
+  // declaration is left in place (cleanup is future work).
+  for (const [table, def] of Object.entries(schema)) {
+    for (const stmt of indexStatements(table, def)) await driver.exec(stmt, []);
   }
 
   // Drop tables the schema no longer declares (internal bookkeeping tables skipped).

@@ -47,4 +47,40 @@ export async function runExtras(base: string): Promise<void> {
     real.headers.get("access-control-allow-origin") === "*",
     "extras: the actual RPC response carries the CORS header",
   );
+
+  // --- P7 anonymous role + P9 capability read (on the default `main` tenant, which
+  // anonymous callers may reach; the `anonymous` ACL role gates the data) ---
+  const main = http(base, "main"); // post(name, input, bearer?) — omit bearer = anonymous
+
+  // anonymous can create a signup (public write), but can't read notes
+  const anonNote = await main("listNotes", {});
+  assert(anonNote.status === 403, "extras: anonymous still can't read notes (deny-by-default)");
+  const cap = "cap-code-7a9f";
+  const made = await main("createSignup", { email: "guest@example.com", code: cap });
+  assert(made.body.ok, "extras: anonymous can create a signup (anonymous role, public write)");
+
+  // capability read: only by presenting the exact code; no code / wrong code -> nothing
+  const byCode = await main("getSignupByCode", { code: cap });
+  assert(byCode.body.result?.email === "guest@example.com", "extras: capability read returns the row for the right code");
+  // DEFAULT: status wasn't supplied on insert, so the DB filled it
+  assert(byCode.body.result?.status === "pending", "extras: column DEFAULT is applied on insert (t.default)");
+  // UNIQUE: a second signup with the same code is rejected by the unique index
+  const dup = await main("createSignup", { email: "dup@example.com", code: cap });
+  assert(dup.body.ok === false, "extras: UNIQUE constraint rejects a duplicate code (t.unique)");
+  const wrong = await main("getSignupByCode", { code: "not-the-code" });
+  assert(wrong.body.ok && wrong.body.result === null, "extras: capability read returns nothing for a wrong code");
+  const noCode = await main("getSignupByCode", {});
+  assert(noCode.body.ok && noCode.body.result === null, "extras: capability read can't enumerate (no code -> nothing)");
+
+  // --- P4 public pre-auth route + privileged forward (no JWT, no tenant header) ---
+  const hookCode = "cap-route-3c2e";
+  const hook = await fetch(`${base}/hooks/signup`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email: "hook@example.com", code: hookCode }),
+  });
+  const hookBody = (await hook.json().catch(() => ({}))) as any;
+  assert(hook.status === 200 && hookBody.ok, "extras: public route runs pre-auth (no token) and forwards a privileged mutation");
+  const fromHook = await main("getSignupByCode", { code: hookCode });
+  assert(fromHook.body.result?.email === "hook@example.com", "extras: the webhook-forwarded signup landed in the DO");
 }

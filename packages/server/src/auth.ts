@@ -201,7 +201,10 @@ export async function resolveIdentity(request: Request, strategy: VerifyStrategy
  * tenant; everyone else → only tenants listed in their `tenants` claim. Customize
  * for your tenancy model (e.g. tenant === identity.org, or a lookup). */
 export function authorizeTenant(identity: Identity | null, tenant: string): boolean {
-  if (!identity) return false;
+  // Anonymous (no verified token) may reach only the default tenant — enough for
+  // first-class public flows (the `anonymous` ACL role still gates the data), while
+  // not letting unauthenticated callers address/register arbitrary tenants.
+  if (!identity) return tenant === "main";
   if (identity.roles?.includes("admin")) return true;
   const allowed = Array.isArray(identity.tenants) ? (identity.tenants as string[]) : [];
   return allowed.includes(tenant);

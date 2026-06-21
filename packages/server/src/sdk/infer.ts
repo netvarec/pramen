@@ -3,7 +3,7 @@
 // literals (`as const`), so e.g.
 // `t.id()` is `{ type: "integer"; primaryKey: true; autoIncrement: true; notNull: true }`.
 
-import type { EntityDef, EntityFields, FieldDef, RelationDefs, SchemaDef } from "./schema";
+import type { DefaultValue, EntityDef, EntityFields, FieldDef, RelationDefs, SchemaDef } from "./schema";
 import type { FileRef } from "./files";
 
 export type { FileRef } from "./files";
@@ -65,9 +65,16 @@ export type WhereInput<F extends EntityFields> = {
 /** Patch input for updates: every column optional, value typed (nullable). */
 export type InferUpdate<F extends EntityFields> = Partial<{ [K in keyof F]: FieldTsType<F[K]> | null }>;
 
-// Insert: NOT NULL columns without a generated value are required; the rest optional.
+// Insert: a NOT NULL column is required unless it's auto-generated (autoIncrement)
+// or has a DEFAULT (the DB fills it); everything else is optional.
 type RequiredInsertKeys<F extends EntityFields> = {
-  [K in keyof F]: IsNotNull<F[K]> extends true ? (F[K] extends { autoIncrement: true } ? never : K) : never;
+  [K in keyof F]: IsNotNull<F[K]> extends true
+    ? F[K] extends { autoIncrement: true }
+      ? never
+      : F[K] extends { default: DefaultValue }
+        ? never
+        : K
+    : never;
 }[keyof F];
 type OptionalInsertKeys<F extends EntityFields> = Exclude<keyof F, RequiredInsertKeys<F>>;
 

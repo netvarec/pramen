@@ -12,6 +12,9 @@ import {
   policy,
   resolve,
   role,
+  $input,
+  unique,
+  defaultTo,
   BadRequest,
   Forbidden,
   type Identity,
@@ -48,6 +51,14 @@ const schema = defineSchema({
     }),
     (r) => ({ owner: r.belongsTo("users", "ownerId") }),
   ),
+  // Public-write entity for the anonymous-role + capability-read demo: a guest can
+  // create a signup and read one back only by presenting its unguessable `code`.
+  signups: Entity((t) => ({
+    id: t.id(),
+    email: t.text(),
+    code: unique(t.text()), // unique constraint (a unique index) — like a unique slug
+    status: defaultTo(t.text(), "pending"), // DEFAULT — optional on insert, DB fills it
+  })),
 });
 
 // Handlers bound to this schema — ctx.db is fully typed against it.
@@ -131,6 +142,26 @@ const handlers = {
 
   // References the `body` column — denied for roles that can't read it.
   maxBody: query((ctx) => ctx.db.aggregate({ from: "notes", aggregations: { m: { fn: "max", column: "body" } } })),
+
+  // Anonymous (no token) public write — the anonymous role grants `signups` create.
+  createSignup: mutation(
+    (ctx, input: { email: string; code: string }) => ctx.db.insert("signups", { email: input.email, code: input.code }),
+    {
+      input: (raw): { email: string; code: string } => {
+        const o = (raw ?? {}) as Record<string, unknown>;
+        if (typeof o.email !== "string" || typeof o.code !== "string") throw new Error("email and code are required");
+        return { email: o.email, code: o.code };
+      },
+    },
+  ),
+
+  // Capability read: the anonymous read policy is scoped to `code = $input("code")`,
+  // so a row is readable only by presenting its unguessable code (no enumeration).
+  getSignupByCode: query(async (ctx, input: { code: string }) => {
+    void input; // the ACL `where` consumes input.code via $input; no manual filter needed
+    const rows = await ctx.db.find({ from: "signups", limit: 1 });
+    return rows[0] ?? null;
+  }),
 
   // ctx.env — Worker/DO env (bindings + vars + secrets). Real handlers use it to
   // call external APIs (Stripe, Resend, …). Here we only report presence, never the
@@ -252,6 +283,15 @@ const acl = [
     policy("admin:delete", "notes", "delete", allow()),
     policy("admin:users:read", "users", "read", allow()),
     policy("admin:users:create", "users", "create", allow()),
+    policy("admin:signups:read", "signups", "read", allow()),
+    policy("admin:signups:create", "signups", "create", allow()),
+  ]),
+  // anonymous: applied to callers with NO verified token. A guest may create a
+  // signup (public write) and read one back only by presenting its `code`
+  // ($input capability) — they cannot enumerate signups or touch notes/users.
+  role("anonymous", [
+    policy("anon:signups:create", "signups", "create", allow()),
+    policy("anon:signups:read", "signups", "read", { where: { code: $input("code") } }),
   ]),
   role("author", [
     policy("author:read", "notes", "read", {
@@ -319,4 +359,19 @@ const acl = [
   ]),
 ];
 
-export const app = { schema, handlers, acl };
+// Public (pre-auth) routes — e.g. a payment/webhook callback that authenticates by
+// signature, not JWT. A real handler verifies the signature on the raw body; here we
+// just accept and forward a privileged mutation into the DO via ctx.callPrivileged.
+const routes = [
+  {
+    method: "POST",
+    path: "/hooks/signup",
+    handler: async (request: Request, _env: Readonly<Record<string, unknown>>, ctx: { callPrivileged: (o: { name: string; input?: unknown; roles?: string[] }) => Promise<Response> }) => {
+      const body = (await request.json().catch(() => ({}))) as { email?: string; code?: string };
+      // (verify a signature header here in a real webhook)
+      return ctx.callPrivileged({ name: "createSignup", input: { email: body.email ?? "", code: body.code ?? "" } });
+    },
+  },
+];
+
+export const app = { schema, handlers, acl, routes };

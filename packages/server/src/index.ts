@@ -8,8 +8,9 @@
 // and codegen load an app.ts for its schema without dragging in the DO runtime.
 
 // --- schema authoring ---
-export { Entity, defineSchema, renamedFrom } from "./sdk/schema";
+export { Entity, defineSchema, renamedFrom, notNull, unique, indexed, defaultTo } from "./sdk/schema";
 export type {
+  DefaultValue,
   FieldType,
   FieldDef,
   EntityFields,
@@ -27,10 +28,12 @@ export { query, mutation } from "./sdk/handlers";
 export type { Handler, HandlerContext, HandlerKind, HandlerMap, HandlerOpts } from "./sdk/handlers";
 
 // --- ACL ---
-export { $identity, allow, deny, policy, resolve, role, isAllow, isDeny, isResolver } from "./sdk/acl";
+export { $identity, $input, allow, deny, policy, resolve, role, isAllow, isDeny, isResolver, isIdentityMarker, isInputMarker } from "./sdk/acl";
 export type {
   Action,
   Identity,
+  IdentityMarker,
+  InputMarker,
   Policy,
   PolicyRule,
   PolicyRules,

@@ -20,6 +20,7 @@ import {
   isAllow,
   isDeny,
   isIdentityMarker,
+  isInputMarker,
   isResolver,
 } from "../sdk/acl";
 import { compileWhere, evalExpr, FALSE, or, type SqlExpr } from "./read-engine";
@@ -49,6 +50,9 @@ export interface CompiledAcl {
 export interface AclContext {
   readonly acl: CompiledAcl;
   readonly identity: Identity | null;
+  /** The request input (handler args), so policy `where` rules can reference an
+   * `$input(...)` marker — a capability / by-unguessable-key read grant. */
+  readonly input?: unknown;
   /** Resolver results for this request (resolverId -> rule), from warmup(). */
   readonly resolved?: Map<number, PolicyRule>;
   /** SYSTEM mode bypasses all ACL — used for warmup reads and internal ops. */
@@ -126,33 +130,44 @@ interface Grant {
 
 /** Build a grant from a policy/relation rule, resolving $identity markers in
  * `where` and each conditional `when`. */
-function grantOf(rule: PolicyRules | RelationAclRule, where: SqlExpr | null, identity: Identity | null): Grant {
+function grantOf(rule: PolicyRules | RelationAclRule, where: SqlExpr | null, identity: Identity | null, input: unknown): Grant {
   return {
     where,
     fields: rule.fields ?? null,
     conditional: (rule.conditionalFields ?? []).map((cf) => ({
-      when: whereToExpr(cf.when, identity),
+      when: whereToExpr(cf.when, identity, input),
       fields: cf.fields,
     })),
     fieldsFns: rule.fieldsFn ? [rule.fieldsFn] : [],
   };
 }
 
+/** The roles to evaluate for a caller. An unauthenticated caller (no verified
+ * token) is treated as the `anonymous` role, so an app can grant first-class
+ * public reads/writes; if no `anonymous` role is defined this matches nothing
+ * (still deny-by-default). */
 function rolesOf(identity: Identity | null): string[] {
-  if (!identity) return [];
+  if (!identity) return ["anonymous"];
   if (identity.roles?.length) return identity.roles;
-  return identity.role ? [identity.role] : [];
+  return identity.role ? [identity.role] : ["anonymous"];
 }
 
-function getPath(identity: Identity | null, path: string): unknown {
-  return path.split(".").reduce<unknown>((acc, seg) => (acc == null ? undefined : (acc as Record<string, unknown>)[seg]), identity ?? undefined);
+function getPath(obj: unknown, path: string): unknown {
+  return path.split(".").reduce<unknown>((acc, seg) => (acc == null ? undefined : (acc as Record<string, unknown>)[seg]), obj ?? undefined);
 }
 
 const UNRESOLVED = Symbol("unresolved");
 
-function resolveValue(v: unknown, identity: Identity | null): unknown {
+// Resolve a value that may be an $identity marker (against the caller) or an
+// $input marker (against the request input — a capability/by-key grant). An
+// unresolvable marker yields UNRESOLVED, which makes its rule match nothing.
+function resolveValue(v: unknown, identity: Identity | null, input: unknown): unknown {
   if (isIdentityMarker(v)) {
     const value = getPath(identity, v.path);
+    return value === undefined ? UNRESOLVED : value;
+  }
+  if (isInputMarker(v)) {
+    const value = getPath(input, v.path);
     return value === undefined ? UNRESOLVED : value;
   }
   return v;
@@ -161,13 +176,13 @@ function resolveValue(v: unknown, identity: Identity | null): unknown {
 // Resolve every $identity marker in a policy where-rule (bare values, operator
 // objects, in/notIn arrays, AND/OR groups). Returns a plain WhereInput, or null
 // if any marker is unresolvable — in which case the rule matches nothing.
-function resolveMarkers(rule: Record<string, unknown>, identity: Identity | null): Record<string, unknown> | null {
+function resolveMarkers(rule: Record<string, unknown>, identity: Identity | null, input: unknown): Record<string, unknown> | null {
   const out: Record<string, unknown> = {};
   for (const [key, v] of Object.entries(rule)) {
     if (key === "AND" || key === "OR") {
       const groups: Record<string, unknown>[] = [];
       for (const g of v as Record<string, unknown>[]) {
-        const resolved = resolveMarkers(g, identity);
+        const resolved = resolveMarkers(g, identity, input);
         if (resolved === null) return null;
         groups.push(resolved);
       }
@@ -175,30 +190,31 @@ function resolveMarkers(rule: Record<string, unknown>, identity: Identity | null
       continue;
     }
 
-    if (v !== null && typeof v === "object" && !isIdentityMarker(v) && !Array.isArray(v)) {
+    const isMarker = isIdentityMarker(v) || isInputMarker(v);
+    if (v !== null && typeof v === "object" && !isMarker && !Array.isArray(v)) {
       const ops: Record<string, unknown> = {};
       for (const [op, val] of Object.entries(v as Record<string, unknown>)) {
         if (op === "in" || op === "notIn") {
           let arr: unknown;
-          if (isIdentityMarker(val)) {
-            arr = resolveValue(val, identity);
+          if (isIdentityMarker(val) || isInputMarker(val)) {
+            arr = resolveValue(val, identity, input);
             if (arr === UNRESOLVED) return null;
           } else {
-            const mapped = (val as unknown[]).map((x) => resolveValue(x, identity));
+            const mapped = (val as unknown[]).map((x) => resolveValue(x, identity, input));
             if (mapped.some((x) => x === UNRESOLVED)) return null;
             arr = mapped;
           }
           if (!Array.isArray(arr)) return null; // marker must resolve to a list
           ops[op] = arr;
         } else {
-          const rv = resolveValue(val, identity);
+          const rv = resolveValue(val, identity, input);
           if (rv === UNRESOLVED) return null;
           ops[op] = rv;
         }
       }
       out[key] = ops;
     } else {
-      const rv = resolveValue(v, identity);
+      const rv = resolveValue(v, identity, input);
       if (rv === UNRESOLVED) return null;
       out[key] = rv;
     }
@@ -207,10 +223,10 @@ function resolveMarkers(rule: Record<string, unknown>, identity: Identity | null
 }
 
 /** Turn a policy where-rule into an expression. Supports the full user query
- * surface (operators, AND/OR) with $identity markers; an unresolvable marker
- * makes the rule match nothing. */
-function whereToExpr(rule: WhereRule, identity: Identity | null): SqlExpr {
-  const resolved = resolveMarkers(rule as Record<string, unknown>, identity);
+ * surface (operators, AND/OR) with $identity / $input markers; an unresolvable
+ * marker makes the rule match nothing. */
+function whereToExpr(rule: WhereRule, identity: Identity | null, input: unknown): SqlExpr {
+  const resolved = resolveMarkers(rule as Record<string, unknown>, identity, input);
   return resolved === null ? FALSE : compileWhere(resolved);
 }
 
@@ -265,7 +281,7 @@ export function resolveScope(ctx: AclContext, entity: string, action: Action): S
   for (const rule of matchedRules(ctx, entity, action)) {
     if (isDeny(rule)) continue;
     if (isAllow(rule)) grants.push(ALLOW_GRANT);
-    else grants.push(grantOf(rule, whereToExpr(rule.where ?? {}, ctx.identity), ctx.identity));
+    else grants.push(grantOf(rule, whereToExpr(rule.where ?? {}, ctx.identity, ctx.input), ctx.identity, ctx.input));
   }
   return mergeGrants(grants);
 }
@@ -330,7 +346,7 @@ export function resolveRelationScope(
     if (isAllow(rule) || isDeny(rule)) continue;
     const rel = rule.relations?.[relName];
     if (rel?.directAccess) {
-      grants.push(grantOf(rel, rel.where ? whereToExpr(rel.where, ctx.identity) : null, ctx.identity));
+      grants.push(grantOf(rel, rel.where ? whereToExpr(rel.where, ctx.identity, ctx.input) : null, ctx.identity, ctx.input));
     }
   }
 

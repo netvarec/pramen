@@ -70,6 +70,29 @@ function withCors(res: Response, cors: Record<string, string>): Response {
   return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
 }
 
+/** Forward a privileged mutation into a tenant's DO from a public route. The
+ * synthetic identity (default `["admin"]`) is trusted because the call originates
+ * in the Worker — the same internal mechanism the admin endpoints use. Returns the
+ * DO's JSON response (`{ ok, result }` / `{ ok: false, … }`). */
+export async function callPrivileged(
+  env: Env,
+  opts: { name: string; input?: unknown; tenant?: string; roles?: string[] },
+): Promise<Response> {
+  const tenant = opts.tenant ?? "main";
+  const stub = env.PRAMEN.get(env.PRAMEN.idFromName(tenant));
+  return stub.fetch(
+    new Request(`https://do/rpc/${opts.name}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-pramen-tenant": tenant,
+        "x-pramen-identity": JSON.stringify({ roles: opts.roles ?? ["admin"] }),
+      },
+      body: JSON.stringify(opts.input ?? {}),
+    }),
+  );
+}
+
 /** Build the Worker fetch handler for an app. State (the JWKS cache, the D1
  * compiled-ACL + one-time migration) is per-app, held in this closure. */
 export function makeWorker(app: PramenApp) {
@@ -110,6 +133,15 @@ export function makeWorker(app: PramenApp) {
     if (url.pathname.startsWith("/files/")) {
       const res = await handleFileRequest(request, { adapter: new R2Adapter(env.FILES), secret: filesSecret(env) });
       if (res) return res;
+    }
+
+    // Public (pre-auth) routes — matched before identity resolution, so a
+    // signature-authed webhook can live outside the JWT-gated /rpc surface.
+    for (const r of app.routes ?? []) {
+      if (request.method === r.method && url.pathname === r.path) {
+        const routeCtx = { callPrivileged: (opts: Parameters<typeof callPrivileged>[1]) => callPrivileged(env, opts) };
+        return r.handler(request, env as unknown as Record<string, unknown>, routeCtx);
+      }
     }
 
     // CORS (opt-in via CORS_ORIGINS) for cross-origin browser clients. Answer the

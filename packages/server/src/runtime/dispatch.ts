@@ -53,7 +53,7 @@ export async function dispatch(
   const systemDb = new Db(driver, { acl: acl.acl, identity: acl.identity, system: true }, schema);
   const resolved = await warmup(acl.acl, acl.identity, systemDb as unknown as ResolverDb);
 
-  const db = new Db(driver, { acl: acl.acl, identity: acl.identity, resolved }, schema);
+  const db = new Db(driver, { acl: acl.acl, identity: acl.identity, input: parsed, resolved }, schema);
   const ctx: HandlerContext = { db, kv, files, env, identity: acl.identity };
 
   const result =

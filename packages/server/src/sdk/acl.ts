@@ -33,6 +33,28 @@ export function isIdentityMarker(v: unknown): v is IdentityMarker {
   return typeof v === "object" && v !== null && (v as Record<symbol, unknown>)[IDENTITY_MARKER] === true;
 }
 
+// --- $input markers: reference a request-input field inside a where rule, for a
+// capability / by-unguessable-key grant (possessing the value IS the authorization).
+
+const INPUT_MARKER = Symbol.for("pramen.inputMarker");
+
+export interface InputMarker {
+  readonly [INPUT_MARKER]: true;
+  readonly path: string;
+}
+
+/** Reference a request-input field in a policy `where`, resolved per request. The
+ * grant matches only the row(s) whose column equals the supplied value — so a
+ * caller can read a row only by presenting its unguessable key, without being able
+ * to enumerate. An absent input value makes the rule match nothing (safe deny). */
+export function $input(path: string): InputMarker {
+  return { [INPUT_MARKER]: true, path };
+}
+
+export function isInputMarker(v: unknown): v is InputMarker {
+  return typeof v === "object" && v !== null && (v as Record<symbol, unknown>)[INPUT_MARKER] === true;
+}
+
 // --- allow / deny markers ---
 
 export interface AllowMarker {

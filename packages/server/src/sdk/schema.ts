@@ -12,11 +12,20 @@
 // to/from the column, and infer.ts types it accordingly.
 export type FieldType = "text" | "integer" | "real" | "boolean" | "json" | "fileRef";
 
+/** A SQL DEFAULT literal (used by the migrator + DDL). */
+export type DefaultValue = string | number | boolean | null;
+
 export interface FieldDef {
   readonly type: FieldType;
   readonly primaryKey?: boolean;
   readonly autoIncrement?: boolean;
   readonly notNull?: boolean;
+  /** A UNIQUE constraint (enforced via a unique index). */
+  readonly unique?: boolean;
+  /** A (non-unique) index on this column. */
+  readonly index?: boolean;
+  /** A column DEFAULT (a literal). Makes the column optional on insert. */
+  readonly default?: DefaultValue;
   /** Migration hint: this column was previously named X. On boot the migrator
    * rebuilds the table, copying data from the old column. A diff cannot tell a
    * rename from a drop+add, so the rename must be declared explicitly. */
@@ -80,6 +89,30 @@ export function Entity<F extends EntityFields, R extends RelationDefs = Record<s
  * a builder result, preserving its literal field type: `title: renamedFrom(t.text(), "name")`. */
 export function renamedFrom<F extends FieldDef>(field: F, from: string): F & { readonly renamedFrom: string } {
   return { ...field, renamedFrom: from };
+}
+
+// --- field modifiers — wrap a builder result, preserving its literal type. They
+// compose: `unique(notNull(t.text()))`, `defaultTo(t.int(), 0)`. (Wrapper style,
+// like renamedFrom — avoids the method/field name clash a `.notNull()` chain hits.)
+
+/** Mark a column NOT NULL. */
+export function notNull<F extends FieldDef>(field: F): F & { readonly notNull: true } {
+  return { ...field, notNull: true };
+}
+
+/** Add a UNIQUE constraint (enforced via a unique index). */
+export function unique<F extends FieldDef>(field: F): F & { readonly unique: true } {
+  return { ...field, unique: true };
+}
+
+/** Add a (non-unique) index on the column. */
+export function indexed<F extends FieldDef>(field: F): F & { readonly index: true } {
+  return { ...field, index: true };
+}
+
+/** Give the column a DEFAULT (a literal) — also makes it optional on insert. */
+export function defaultTo<F extends FieldDef, D extends DefaultValue>(field: F, value: D): F & { readonly default: D } {
+  return { ...field, default: value };
 }
 
 export type SchemaDef = Record<string, EntityDef<EntityFields, RelationDefs>>;
