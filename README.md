@@ -168,10 +168,14 @@ test/
 ## Building & publishing
 
 The three packages build to `dist` (JS + `.d.ts`) with `tsc` — `bun run build`.
-In the monorepo, `exports` resolve to `src` (fast edit-rerun, no build needed for
-dev/tests); `publishConfig.exports` point at `dist` so published consumers get
-compiled output. The `dist` is plain ESM mirroring `src` and is meant to be bundled
-by the consumer's wrangler/esbuild (every real pramen consumer bundles for Workers).
+They use **conditional `exports`**: the `development`/`bun`/`workerd` conditions
+resolve to `src`, so in-repo typecheck, tests, dev, and deploy run straight off
+source with no build step (tsconfigs set `customConditions: ["development"]`).
+Published consumers fall through to `default`→`dist` (and `types`→`dist`), so Node
+tooling gets compiled output and correct types. (`src` is also shipped, so a
+consumer bundling with wrangler — the `workerd` condition — gets the source, which
+esbuild bundles directly; every real pramen consumer bundles for Workers anyway.)
+No `publishConfig` field overrides (npm is deprecating those).
 
 ## Production config
 

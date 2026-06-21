@@ -212,11 +212,16 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
       instead of minting/accepting tokens HMAC'd with an empty key. The DO falls back FILES_SECRET → AUTH_SECRET.
 - [x] Go-live hardening (3/3): publishable packages. `@pramen/server`/`client`/`react` build to `dist`
       (JS + `.d.ts`) via `tsc` — no extra bundler (bun's bundler mangles pure re-export barrels and can't
-      emit types). Dev/workspace resolves `exports`→`src` (fast edit-rerun); `publishConfig.exports`→`dist`
-      on publish. v0.0.1, MIT license, CI builds the artifacts. dist targets bundler/Workers consumers
-      (wrangler/esbuild), which is every real pramen consumer.
-- [ ] Remaining go-live items: a real-Cloudflare deploy smoke (suite is miniflare-only), rate limiting +
-      request-size caps, map constraint violations to 409, single-use upload tokens, error reporting.
+      emit types). Conditional `exports`: `development`/`bun`/`workerd` → `src` (in-repo typecheck/tests/
+      dev/deploy need no build; tsconfigs set `customConditions: ["development"]`), while published Node
+      consumers fall through to `types`/`default` → `dist`. No `publishConfig` field overrides (npm is
+      deprecating those). v0.0.1, MIT license, CI builds the artifacts; `src` is shipped too so a
+      consumer's wrangler (`workerd`) bundles source directly.
+- [x] Real-Cloudflare deploy smoke: provisioned via `oblaka --remote` (OAuth) and verified the full stack
+      on workerd (DO SQLite + RETURNING, ACL, R2 upload/download, signed urls), then torn down. Confirmed
+      a real go-live path beyond the miniflare suite.
+- [ ] Remaining go-live items: rate limiting + request-size caps, map constraint violations to 409,
+      single-use upload tokens, error reporting, and a `--env production` deploy with real secrets.
 - [ ] Dynamic deploy: ship the app bundle to the DO instead of static import (a runtime `/deploy`).
 - [ ] ReadEngine → WASM.
 - [x] Deploy via **oblaka** (CF IaC DSL): `oblaka.ts` declares the Worker + `PRAMEN` Durable Object

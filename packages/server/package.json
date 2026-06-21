@@ -6,22 +6,29 @@
   "type": "module",
   "sideEffects": false,
   "exports": {
-    ".": "./src/index.ts",
-    "./worker": "./src/worker-entry.ts"
+    ".": {
+      "development": "./src/index.ts",
+      "bun": "./src/index.ts",
+      "workerd": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./worker": {
+      "development": "./src/worker-entry.ts",
+      "bun": "./src/worker-entry.ts",
+      "workerd": "./src/worker-entry.ts",
+      "types": "./dist/worker-entry.d.ts",
+      "default": "./dist/worker-entry.js"
+    }
   },
-  "types": "./src/index.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "files": ["dist", "src"],
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json"
   },
   "publishConfig": {
-    "access": "public",
-    "main": "./dist/index.js",
-    "types": "./dist/index.d.ts",
-    "exports": {
-      ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
-      "./worker": { "types": "./dist/worker-entry.d.ts", "import": "./dist/worker-entry.js" }
-    }
+    "access": "public"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250101.0"

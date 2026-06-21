@@ -6,19 +6,21 @@
   "type": "module",
   "sideEffects": false,
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "development": "./src/index.ts",
+      "bun": "./src/index.ts",
+      "workerd": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
   },
-  "types": "./src/index.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "files": ["dist", "src"],
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json"
   },
   "publishConfig": {
-    "access": "public",
-    "main": "./dist/index.js",
-    "types": "./dist/index.d.ts",
-    "exports": {
-      ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" }
-    }
+    "access": "public"
   }
 }
