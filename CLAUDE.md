@@ -61,11 +61,12 @@ serves a dashboard at `/__dashboard`. The e2e suite still boots real `wrangler d
 (miniflare); run `bun run dev:wrangler` once before deploying to catch any
 Bun-vs-workerd differences.
 
-> pramen depends on lopata via a relative `file:` path (`../../contember/lopata`)
-> because it needs a lopata fix (≥0.19.1): the canonical proxy-to-DO pattern
-> `stub.fetch(new Request(request, { headers }))` deadlocked under lopata due to a
-> Bun `new Request(req)` stream-body clone bug. Switch to a published `^0.19.1`
-> once it's on npm.
+> pramen uses the published **lopata `^0.19.2`** from npm. It carries the two fixes
+> pramen relies on: the proxy-to-DO deadlock (the canonical
+> `stub.fetch(new Request(request, { headers }))` tripped a Bun `new Request(req)`
+> stream-body clone bug) and DO SQLite surfacing `RETURNING` rows from `exec()`.
+> `bunfig.toml` exempts lopata from a global `minimumReleaseAge` so a fresh lopata
+> release installs immediately (other deps still honor the policy).
 
 ## Substrate seam (Driver/Dialect)
 

@@ -1,0 +1,6 @@
+[install]
+# lopata is a first-party package (Contember). Exempt it from a global
+# `minimumReleaseAge` supply-chain delay so a freshly-published fix (e.g. 0.19.2,
+# which carries the proxy-to-DO stream-body + RETURNING fixes pramen needs) installs
+# immediately. All other dependencies still honor the global policy.
+minimumReleaseAgeExcludes = ["lopata"]
