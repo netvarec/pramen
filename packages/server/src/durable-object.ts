@@ -18,6 +18,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { migrate } from "./runtime/migrate";
 import { dispatch } from "./runtime/dispatch";
+import { Db } from "./runtime/db";
 import { digest } from "./runtime/digest";
 import { compileAcl, type AclContext, type CompiledAcl } from "./runtime/acl";
 import { DoSqliteDriver, type Driver } from "./runtime/driver";
@@ -90,6 +91,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
     const path = new URL(request.url).pathname;
     if (path === "/__recover") return this.handleRecover(request);
     if (path === "/__schema") return this.handleSchema();
+    if (path === "/__admin/data") return this.handleAdminData(request);
 
     const identity = this.identityOf(request);
 
@@ -289,6 +291,54 @@ export class PramenDOBase extends DurableObject<DoEnv> {
       tables[name] = ((await this.driver.exec(`PRAGMA table_info(${name})`, [])) as { name: string }[]).map((r) => r.name);
     }
     return Response.json({ ok: true, result: { hash: hashRow[0]?.value ?? null, tables } });
+  }
+
+  // Generic admin data ops (admin-gated at the Worker). Runs through a SYSTEM-mode
+  // Db, so ACL is bypassed — admin can browse/edit any row of any table — while the
+  // json/fileRef codec, transactions, and live-query broadcast still apply.
+  private async handleAdminData(request: Request): Promise<Response> {
+    const b = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    const table = typeof b.table === "string" ? b.table : "";
+    const op = typeof b.op === "string" ? b.op : "";
+    if (!table || !(table in this.app.schema)) {
+      return Response.json({ ok: false, error: "unknown table", code: "bad_request" }, { status: 400 });
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const db = new Db(this.driver, { acl: this.acl, identity: null, system: true }, this.app.schema) as any;
+    try {
+      let result: unknown;
+      let mutated = false;
+      switch (op) {
+        case "list":
+          result = await db.find({ from: table, where: b.where, orderBy: b.orderBy, limit: b.limit, offset: b.offset });
+          break;
+        case "count":
+          result = await db.count({ from: table, where: b.where });
+          break;
+        case "get":
+          result = (await db.find({ from: table, where: { id: b.id }, limit: 1 }))[0] ?? null;
+          break;
+        case "create":
+          result = await this.driver.transaction(() => db.insert(table, b.values));
+          mutated = true;
+          break;
+        case "update":
+          result = (await this.driver.transaction(() => db.update(table, b.id, b.patch))) ?? null;
+          mutated = true;
+          break;
+        case "delete":
+          result = await this.driver.transaction(() => db.delete(table, b.id));
+          mutated = true;
+          break;
+        default:
+          return Response.json({ ok: false, error: `unknown op: ${op}`, code: "bad_request" }, { status: 400 });
+      }
+      if (mutated && db.touched.size > 0) await this.broadcast([...db.touched]);
+      return Response.json({ ok: true, result });
+    } catch (err) {
+      const { status, body } = toResponse(err);
+      return Response.json(body, { status });
+    }
   }
 
   private ctxFor(identity: Identity | null): AclContext {

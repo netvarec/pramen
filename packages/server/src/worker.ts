@@ -199,6 +199,24 @@ export function makeWorker(app: PramenApp) {
       return stub.fetch(new Request("https://do/__schema", { headers: { "x-pramen-tenant": tenant } }));
     }
 
+    // --- admin: generic data ops over a tenant's tables (browse/edit any row).
+    // Body: { tenant, table, op: list|get|create|update|delete|count, ... }. Runs
+    // in the DO under SYSTEM scope (ACL bypassed) — gated to admins here. ---
+    if (url.pathname === "/admin/data" && request.method === "POST") {
+      if (!isAdmin(identity)) return forbidden("data");
+      const body = (await request.json().catch(() => ({}))) as { tenant?: unknown };
+      const tenant = typeof body.tenant === "string" && body.tenant ? body.tenant : "main";
+      const stub = env.PRAMEN.get(env.PRAMEN.idFromName(tenant));
+      const res = await stub.fetch(
+        new Request("https://do/__admin/data", {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-pramen-tenant": tenant },
+          body: JSON.stringify(body),
+        }),
+      );
+      return withCors(res, cors);
+    }
+
     const isRpc = url.pathname.startsWith("/rpc/");
     const isLive = url.pathname === "/live";
 
@@ -206,7 +224,8 @@ export function makeWorker(app: PramenApp) {
       return new Response(
         "pramen — POST /rpc/<handler> (JSON body), or WebSocket /live for live queries. " +
           "Header X-Pramen-Tenant selects the store (default: main). " +
-          "Admin: GET /tenants, POST /admin/recover {tenant,timestamp}, GET /admin/schema?tenant=.\n",
+          "Admin: GET /tenants, POST /admin/recover {tenant,timestamp}, GET /admin/schema?tenant=, " +
+          "POST /admin/data {tenant,table,op}.\n",
         { headers: { "content-type": "text/plain" } },
       );
     }
