@@ -40,8 +40,13 @@ export interface DoEnv {
   KV: KVNamespace;
   /** R2 bucket backing ctx.files + the Worker /files/* route. */
   FILES: R2Bucket;
-  /** HMAC secret for signing file upload/download tokens. */
-  FILES_SECRET: string;
+  /** HMAC secret for signing file upload/download tokens (falls back to AUTH_SECRET). */
+  FILES_SECRET?: string;
+  /** Bearer-JWT secret; also the fallback for signing file tokens. */
+  AUTH_SECRET?: string;
+  /** "true" to apply destructive schema migrations (drop/rebuild/type-change). Off by
+   * default — data-loss is gated behind this explicit opt-in. */
+  PRAMEN_ALLOW_DESTRUCTIVE?: string;
 }
 
 /** Per-socket subscription cap — bounds memory and per-mutation re-run cost. */
@@ -71,7 +76,10 @@ export class PramenDOBase extends DurableObject<DoEnv> {
     // Reconcile the store with the schema before any request is served (create/alter
     // tables; destructive changes rebuild the table). Wrapped in a transaction so a
     // partial migration can't leave a half-rebuilt table.
-    ctx.blockConcurrencyWhile(() => this.driver.transaction(() => migrate(this.driver, this.app.schema).then(() => {})));
+    const allowDestructive = env.PRAMEN_ALLOW_DESTRUCTIVE === "true";
+    ctx.blockConcurrencyWhile(() =>
+      this.driver.transaction(() => migrate(this.driver, this.app.schema, { allowDestructive }).then(() => {})),
+    );
   }
 
   override async fetch(request: Request): Promise<Response> {
@@ -296,7 +304,10 @@ export class PramenDOBase extends DurableObject<DoEnv> {
   // One Files facade per DO (a DO serves one tenant). Backed by the R2 binding;
   // signing uses FILES_SECRET. Handlers mint signed urls; the bytes never enter here.
   private filesFor(tenant: string): Files {
-    if (!this.files) this.files = createFiles({ tenant, secret: this.env.FILES_SECRET, adapter: new R2Adapter(this.env.FILES) });
+    if (!this.files) {
+      const secret = this.env.FILES_SECRET || this.env.AUTH_SECRET || "";
+      this.files = createFiles({ tenant, secret, adapter: new R2Adapter(this.env.FILES) });
+    }
     return this.files;
   }
 

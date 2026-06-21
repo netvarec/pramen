@@ -37,6 +37,8 @@ export interface Env {
    * Unset = no CORS headers (same-origin only). Lets a browser client call a
    * cross-origin Worker directly (e.g. a separate dev port). */
   CORS_ORIGINS?: string;
+  /** "true" to apply destructive schema migrations on the D1 path. Off by default. */
+  PRAMEN_ALLOW_DESTRUCTIVE?: string;
 }
 
 /** The secret used to sign/verify file tokens — a dedicated FILES_SECRET if set,
@@ -112,9 +114,9 @@ export function makeWorker(app: PramenApp) {
   // stored schema hash thereafter); a failed run is not cached.
   const d1Acl = compileAcl(app.acl ?? []);
   let d1Ready: Promise<void> | undefined;
-  const ensureD1Migrated = (driver: Driver): Promise<void> => {
+  const ensureD1Migrated = (driver: Driver, allowDestructive: boolean): Promise<void> => {
     if (!d1Ready) {
-      d1Ready = migrate(driver, app.schema)
+      d1Ready = migrate(driver, app.schema, { allowDestructive })
         .then(() => undefined)
         .catch((e) => {
           d1Ready = undefined;
@@ -228,7 +230,7 @@ export function makeWorker(app: PramenApp) {
       const files = createFiles({ tenant, secret: filesSecret(env), adapter: new R2Adapter(env.FILES) });
       const envBag = env as unknown as Record<string, unknown>;
       try {
-        await ensureD1Migrated(driver);
+        await ensureD1Migrated(driver, env.PRAMEN_ALLOW_DESTRUCTIVE === "true");
         const { result } = await dispatch(app.handlers, app.schema, driver, new Kv(env.KV), files, envBag, { acl: d1Acl, identity }, name, input);
         return withCors(json({ ok: true, result }), cors);
       } catch (err) {

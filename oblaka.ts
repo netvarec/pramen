@@ -20,7 +20,13 @@ export default define(({ env }) => {
   // `wrangler secret put AUTH_SECRET` (a secret overrides this var at runtime).
   const vars =
     env === "local"
-      ? { AUTH_SECRET: "dev-secret-change-me", FILES_SECRET: "dev-files-secret-change-me", CORS_ORIGINS: "*" }
+      ? {
+          AUTH_SECRET: "dev-secret-change-me",
+          FILES_SECRET: "dev-files-secret-change-me",
+          CORS_ORIGINS: "*",
+          // Local dev applies destructive migrations freely; production must opt in.
+          PRAMEN_ALLOW_DESTRUCTIVE: "true",
+        }
       : {};
 
   return new Worker({

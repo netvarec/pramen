@@ -80,7 +80,7 @@ describe("migrate", () => {
     db.run("INSERT INTO tags (name) VALUES ('x')");
     const id = (db.query("SELECT id FROM notes").all() as { id: number }[])[0]!.id;
 
-    const r = await migrate(d, v3);
+    const r = await migrate(d, v3, { allowDestructive: true });
     expect(r.changed).toBe(true);
     expect(r.rebuilt).toContain("notes");
     expect(r.droppedTables).toContain("tags");
@@ -94,13 +94,36 @@ describe("migrate", () => {
     expect((await migrate(d, v3)).changed).toBe(false);
   });
 
+  test("skips destructive changes by default (data-loss gate)", async () => {
+    const db = new Database(":memory:");
+    const d = bunSqliteDriver(db);
+    await migrate(d, v2);
+    db.run("INSERT INTO notes (title, body, views) VALUES ('keep', 'mybody', 7)");
+    db.run("INSERT INTO tags (name) VALUES ('x')");
+
+    // Default (no allowDestructive): additive-only — the drop/rename/table-drop is skipped.
+    const r = await migrate(d, v3);
+    expect(r.rebuilt).toEqual([]);
+    expect(r.droppedTables).toEqual([]);
+    expect(r.skipped.length).toBeGreaterThan(0);
+    // data untouched: the old columns + table are still there
+    expect(db.query("SELECT title, body, views FROM notes").all()).toEqual([{ title: "keep", body: "mybody", views: 7 }]);
+    expect(db.query("SELECT count(*) AS n FROM tags").all()).toEqual([{ n: 1 }]);
+    // hash NOT written, so a later opt-in deploy still applies it
+    const applied = await migrate(d, v3, { allowDestructive: true });
+    expect(applied.rebuilt).toContain("notes");
+    expect(applied.droppedTables).toContain("tags");
+  });
+
   test("applies a column type change with a CAST", async () => {
     const db = new Database(":memory:");
     const d = bunSqliteDriver(db);
     await migrate(d, defineSchema({ items: Entity((t) => ({ id: t.id(), qty: t.text() })) }));
     db.run("INSERT INTO items (qty) VALUES ('42')");
 
-    const r = await migrate(d, defineSchema({ items: Entity((t) => ({ id: t.id(), qty: t.int() })) }));
+    const r = await migrate(d, defineSchema({ items: Entity((t) => ({ id: t.id(), qty: t.int() })) }), {
+      allowDestructive: true,
+    });
     expect(r.rebuilt).toContain("items");
     // text "42" CAST to INTEGER affinity -> numeric 42.
     expect(db.query("SELECT qty FROM items").all()).toEqual([{ qty: 42 }]);
@@ -112,7 +135,7 @@ describe("migrate", () => {
     await migrate(d, v2);
     db.run("INSERT INTO notes (title) VALUES ('a')"); // id 1
     db.run("INSERT INTO notes (title) VALUES ('b')"); // id 2
-    await migrate(d, v3); // rebuild (drop views, body -> content)
+    await migrate(d, v3, { allowDestructive: true }); // rebuild (drop views, body -> content)
     db.run("INSERT INTO notes (title, content) VALUES ('c', 'cc')");
     const ids = (db.query("SELECT id FROM notes ORDER BY id").all() as { id: number }[]).map((r) => r.id);
     expect(ids).toEqual([1, 2, 3]); // existing ids kept; new row continues from the max

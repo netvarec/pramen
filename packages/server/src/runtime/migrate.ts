@@ -31,6 +31,16 @@ export interface MigrationReport {
   rebuilt: string[];
   /** Tables dropped because the schema no longer declares them. */
   droppedTables: string[];
+  /** Destructive ops detected but NOT applied because destructive migrations are
+   * disabled (the default). Re-deploy with allowDestructive to apply them. */
+  skipped: string[];
+}
+
+export interface MigrateOptions {
+  /** Apply destructive changes (drop/rebuild/type-change/table-drop). Off by default
+   * — data-loss is gated behind an explicit opt-in (env `PRAMEN_ALLOW_DESTRUCTIVE`).
+   * Additive changes (create table, add column, add index) always apply. */
+  allowDestructive?: boolean;
 }
 
 /** Internal bookkeeping tables the migrator must never touch — pramen's own, SQLite's,
@@ -99,17 +109,19 @@ async function rebuildTable(driver: Driver, table: string, def: { fields: Entity
   await driver.exec(`ALTER TABLE ${ident(tmp)} RENAME TO ${ident(table)}`, []);
 }
 
-export async function migrate(driver: Driver, schema: SchemaDef): Promise<MigrationReport> {
+export async function migrate(driver: Driver, schema: SchemaDef, opts: MigrateOptions = {}): Promise<MigrationReport> {
   await driver.exec(`CREATE TABLE IF NOT EXISTS _pramen_meta (key TEXT PRIMARY KEY, value TEXT)`, []);
+  const allowDestructive = opts.allowDestructive ?? false;
 
   const current = schemaHash(schema);
   if ((await readMeta(driver, "schema_hash")) === current)
-    return { changed: false, created: [], added: [], rebuilt: [], droppedTables: [] };
+    return { changed: false, created: [], added: [], rebuilt: [], droppedTables: [], skipped: [] };
 
   const created: string[] = [];
   const added: string[] = [];
   const rebuilt: string[] = [];
   const droppedTables: string[] = [];
+  const skipped: string[] = [];
 
   for (const [table, def] of Object.entries(schema)) {
     const existing = await tableColumns(driver, table);
@@ -139,8 +151,12 @@ export async function migrate(driver: Driver, schema: SchemaDef): Promise<Migrat
       ([n, f]) => live.has(n) && live.get(n) !== sqlType(f as FieldDef),
     );
     if (needsDrop || needsTypeChange || renamedSources.size > 0) {
-      await rebuildTable(driver, table, def, live);
-      rebuilt.push(table);
+      if (allowDestructive) {
+        await rebuildTable(driver, table, def, live);
+        rebuilt.push(table);
+      } else {
+        skipped.push(`rebuild ${table} (drop/type-change/rename)`);
+      }
     }
   }
 
@@ -155,10 +171,23 @@ export async function migrate(driver: Driver, schema: SchemaDef): Promise<Migrat
   const liveTables = (await driver.exec(`SELECT name FROM sqlite_master WHERE type = 'table'`, [])) as { name: string }[];
   for (const { name } of liveTables) {
     if (isInternalTable(name) || name in schema) continue;
-    await driver.exec(`DROP TABLE ${ident(name)}`, []);
-    droppedTables.push(name);
+    if (allowDestructive) {
+      await driver.exec(`DROP TABLE ${ident(name)}`, []);
+      droppedTables.push(name);
+    } else {
+      skipped.push(`drop table ${name}`);
+    }
   }
 
-  await writeMeta(driver, "schema_hash", current);
-  return { changed: true, created, added, rebuilt, droppedTables };
+  // Only record the schema as applied when fully reconciled. If destructive changes
+  // were skipped, leave the hash so a later deploy (with allowDestructive) retries —
+  // additive work is idempotent, so re-running is safe.
+  if (skipped.length === 0) {
+    await writeMeta(driver, "schema_hash", current);
+  } else {
+    console.warn(
+      `pramen: ${skipped.length} destructive migration(s) skipped (set PRAMEN_ALLOW_DESTRUCTIVE=true to apply): ${skipped.join("; ")}`,
+    );
+  }
+  return { changed: true, created, added, rebuilt, droppedTables, skipped };
 }
