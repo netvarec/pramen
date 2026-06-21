@@ -46,9 +46,14 @@ example/worker.ts  createPramen(app) -> { fetch, PramenDO }
 bun install
 bun run dev          # lopata dev (Bun runtime; fast reload + /__dashboard); http://localhost:8787
 bun run dev:wrangler # wrangler dev (miniflare) — workerd-parity check before deploy
-bun run typecheck    # tsc --noEmit
+bun run typecheck    # tsc --noEmit (server + client + react)
+bun run build        # tsc → dist (JS + .d.ts) for all 3 packages; publishConfig points exports→dist
 bun run deploy       # wrangler deploy
 ```
+
+Prod config: secrets via `wrangler secret put` (AUTH_SECRET; FILES_SECRET ≥16 chars or
+files fail closed). Destructive migrations are OFF unless `PRAMEN_ALLOW_DESTRUCTIVE=true`
+(local dev sets it on). Packages resolve `exports`→`src` in-repo, `dist` on publish.
 
 Local dev runs on **lopata** (Bun-based CF runtime; fully emulates DO SQLite +
 WebSocket Hibernation). It reads the oblaka-generated `wrangler.jsonc` unchanged and

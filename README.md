@@ -165,6 +165,24 @@ test/
   lib.ts              assert + HTTP/WS helpers + JWT minting
 ```
 
+## Building & publishing
+
+The three packages build to `dist` (JS + `.d.ts`) with `tsc` — `bun run build`.
+In the monorepo, `exports` resolve to `src` (fast edit-rerun, no build needed for
+dev/tests); `publishConfig.exports` point at `dist` so published consumers get
+compiled output. The `dist` is plain ESM mirroring `src` and is meant to be bundled
+by the consumer's wrangler/esbuild (every real pramen consumer bundles for Workers).
+
+## Production config
+
+- Set real secrets: `wrangler secret put AUTH_SECRET` (and `FILES_SECRET` if using
+  files — it must be ≥16 chars, else file storage fails closed). Auth itself fails
+  closed too: an empty `AUTH_SECRET` rejects every token.
+- Destructive migrations are **off by default**. A drop/rename/type-change is skipped
+  (and logged) unless `PRAMEN_ALLOW_DESTRUCTIVE=true` — so a schema edit can't silently
+  drop a column on deploy. Additive changes always apply.
+- CORS is opt-in via `CORS_ORIGINS`; unset = same-origin only.
+
 ## Tests
 
 `bun test` generates the config from `oblaka.ts`, boots a single `wrangler dev`

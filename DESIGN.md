@@ -202,6 +202,21 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
       existing table without a rebuild); DEFAULT is inline (and `ADD COLUMN ... NOT NULL DEFAULT` backfills),
       and a defaulted column is optional on insert. (`t.json()` already landed; chained `.method()` syntax
       and a `timestamps()` auto-now helper — which needs SQL-expression defaults — remain.)
+- [x] Go-live hardening (1/3): destructive migrations are gated. The boot migrator applies additive
+      changes always, but drops/rebuilds/type-changes/table-drops only when `PRAMEN_ALLOW_DESTRUCTIVE=true`
+      (off by default). Skipped ops are logged and the schema hash is left unwritten so a later opt-in
+      deploy retries; local dev sets the flag on. Closes the "a fat-fingered schema edit silently drops a
+      column on next deploy" footgun.
+- [x] Go-live hardening (2/3): file tokens fail closed. A FILES_SECRET shorter than 16 chars (e.g. unset
+      under JWKS auth, where AUTH_SECRET is empty) ⇒ signing throws and the `/files` route returns 503,
+      instead of minting/accepting tokens HMAC'd with an empty key. The DO falls back FILES_SECRET → AUTH_SECRET.
+- [x] Go-live hardening (3/3): publishable packages. `@pramen/server`/`client`/`react` build to `dist`
+      (JS + `.d.ts`) via `tsc` — no extra bundler (bun's bundler mangles pure re-export barrels and can't
+      emit types). Dev/workspace resolves `exports`→`src` (fast edit-rerun); `publishConfig.exports`→`dist`
+      on publish. v0.1.0, MIT license, CI builds the artifacts. dist targets bundler/Workers consumers
+      (wrangler/esbuild), which is every real pramen consumer.
+- [ ] Remaining go-live items: a real-Cloudflare deploy smoke (suite is miniflare-only), rate limiting +
+      request-size caps, map constraint violations to 409, single-use upload tokens, error reporting.
 - [ ] Dynamic deploy: ship the app bundle to the DO instead of static import (a runtime `/deploy`).
 - [ ] ReadEngine → WASM.
 - [x] Deploy via **oblaka** (CF IaC DSL): `oblaka.ts` declares the Worker + `PRAMEN` Durable Object
