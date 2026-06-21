@@ -105,7 +105,14 @@ Cloudflare services should be added (e.g. email via the Send service as `ctx.mai
 - Schema: `Entity(t => ({ id: t.id(), ... }))` + `defineSchema({ table: Entity })`.
   Field builders: `id`/`textId`/`text`/`int`/`real`/`bool`/`json`/`fileRef`. `json`
   and `fileRef` are stored as TEXT and object↔JSON-codec'd at the `Db` chokepoint —
-  handlers read/write the parsed value (a `JsonValue` / `FileRef`).
+  handlers read/write the parsed value (a `JsonValue` / `FileRef`). Modifiers are
+  wrapper helpers (compose like `renamedFrom`): `notNull()`, `unique()`, `indexed()`,
+  `defaultTo(v)` — e.g. `code: unique(t.text())`, `status: defaultTo(t.text(), "pending")`.
+- Auth/ACL: an unauthenticated caller is the `anonymous` role (define it for public
+  reads/writes; absent ⇒ deny). A policy `where` may use `$identity("path")` (caller)
+  or `$input("path")` (request input — a capability/by-unguessable-key read). Public,
+  pre-auth routes go in `app.routes` (matched before auth; use `ctx.callPrivileged`
+  to forward a privileged mutation into the DO) — for signature-authed webhooks.
 - Handlers: `query()` / `mutation()` from `@pramen/server`. Context is
   `{ db, kv, files, env, identity }`. Mutations are auto-wrapped in
   `storage.transaction()` by `runtime/dispatch.ts` (commit on return, rollback on

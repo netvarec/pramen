@@ -181,12 +181,22 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
 - [x] CORS: an opt-in allowlist (`CORS_ORIGINS` — comma-separated origins or `*`) on `/rpc` + `/live`.
       The Worker answers the preflight before auth and merges the headers into responses, so a browser
       client can call a cross-origin Worker directly. Unset = same-origin only (unchanged).
-- [ ] Public (pre-auth) routes in the app definition (e.g. `app.routes` for signature-auth webhooks like
-      Stripe), with a documented way to forward a privileged mutation into the DO — currently needs a
-      worker edit. Plus a first-class anonymous/public-write role and a "capability / by-unguessable-key"
-      ACL read grant (surfaced by the food-tours migration: P4/P7/P9).
-- [ ] More field-DSL: `t.nullable()`/`.notNull()` chaining, `t.default()`, unique + index declarations,
-      a `timestamps()` helper (food-tours P2 — `t.json()` landed; the rest remain).
+- [x] Public (pre-auth) routes (P4): `app.routes = [{ method, path, handler }]`, matched in the Worker
+      before identity resolution — for signature-authed endpoints (Stripe-style webhooks) that don't fit
+      the JWT-gated `/rpc` surface. The handler gets `(request, env, ctx)` and can `ctx.callPrivileged({...})`
+      to forward a privileged mutation into the DO (no deploy-side import in `app.ts`, which stays
+      authoring-only). `callPrivileged` is also exported from `@pramen/server/worker`.
+- [x] Anonymous role + capability read (P7/P9): an unauthenticated caller is evaluated as the `anonymous`
+      role (define it to grant public reads/writes; absent ⇒ deny-by-default, unchanged). `authorizeTenant`
+      now lets anonymous reach the default `main` tenant (ACL still gates the data). A new `$input("path")`
+      marker in a policy `where` resolves against the request input — a capability / by-unguessable-key
+      grant (read a row only by presenting its secret id; can't enumerate). Threaded through ACL resolution
+      alongside `$identity`.
+- [x] Field-DSL modifiers (P2): `notNull()`, `unique()`, `indexed()`, `defaultTo(value)` — wrapper helpers
+      (compose, like `renamedFrom`). UNIQUE/index emit `CREATE [UNIQUE] INDEX IF NOT EXISTS` (added to an
+      existing table without a rebuild); DEFAULT is inline (and `ADD COLUMN ... NOT NULL DEFAULT` backfills),
+      and a defaulted column is optional on insert. (`t.json()` already landed; chained `.method()` syntax
+      and a `timestamps()` auto-now helper — which needs SQL-expression defaults — remain.)
 - [ ] Dynamic deploy: ship the app bundle to the DO instead of static import (a runtime `/deploy`).
 - [ ] ReadEngine → WASM.
 - [x] Deploy via **oblaka** (CF IaC DSL): `oblaka.ts` declares the Worker + `PRAMEN` Durable Object

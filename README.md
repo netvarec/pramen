@@ -193,7 +193,28 @@ const listNotes = query((ctx) =>
 The handler context is `{ db, kv, files, env, identity }`. **Field builders:**
 `id`, `textId`, `text`, `int`, `real`, `bool`, `json` (arbitrary JSON, typed as
 `JsonValue`), `fileRef` (an R2 file). `json`/`fileRef` are stored as TEXT and
-codec'd to/from the parsed value automatically.
+codec'd to/from the parsed value automatically. **Modifiers** wrap a builder and
+compose: `notNull()`, `unique()`, `indexed()`, `defaultTo(v)` — e.g.
+`code: unique(t.text())`, `status: defaultTo(t.text(), "pending")` (a defaulted
+column is optional on insert).
+
+**Public flows.** An unauthenticated caller is evaluated as the `anonymous` role —
+define it to grant public reads/writes (absent ⇒ deny). A policy `where` can use
+`$input("field")` (alongside `$identity`) for a capability read — authorize a row by
+a request-supplied unguessable key, with no enumeration. Signature-authed endpoints
+(e.g. Stripe webhooks) go in `app.routes`, matched before auth:
+
+```ts
+export const app = {
+  schema, handlers, acl,
+  routes: [
+    { method: "POST", path: "/stripe/webhook", handler: async (req, env, ctx) => {
+        // verify the signature on the raw body, then:
+        return ctx.callPrivileged({ name: "markPaid", input: { id } }); // privileged → DO
+    } },
+  ],
+};
+```
 
 **`ctx.env`** is the Worker/DO environment (bindings + vars + secrets) — call
 external services straight from a handler:
