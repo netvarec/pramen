@@ -1,6 +1,6 @@
 {
   "name": "@pramen/react",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "description": "React hooks for a pramen backend — useLiveQuery (reactive) + useMutation.",
   "license": "MIT",
   "type": "module",

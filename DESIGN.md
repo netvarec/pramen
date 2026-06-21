@@ -213,7 +213,7 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
 - [x] Go-live hardening (3/3): publishable packages. `@pramen/server`/`client`/`react` build to `dist`
       (JS + `.d.ts`) via `tsc` — no extra bundler (bun's bundler mangles pure re-export barrels and can't
       emit types). Dev/workspace resolves `exports`→`src` (fast edit-rerun); `publishConfig.exports`→`dist`
-      on publish. v0.1.0, MIT license, CI builds the artifacts. dist targets bundler/Workers consumers
+      on publish. v0.0.1, MIT license, CI builds the artifacts. dist targets bundler/Workers consumers
       (wrangler/esbuild), which is every real pramen consumer.
 - [ ] Remaining go-live items: a real-Cloudflare deploy smoke (suite is miniflare-only), rate limiting +
       request-size caps, map constraint violations to 409, single-use upload tokens, error reporting.
