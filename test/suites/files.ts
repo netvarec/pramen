@@ -82,7 +82,7 @@ export async function runFiles(base: string): Promise<void> {
   // --- hardening: missing + tampered tokens are rejected ---
   const noToken = await get("/files/download");
   assert(noToken.status === 401, "files: download without a token is 401");
-  const tampered = dl.body.result.url.replace(/.$/, (c: string) => (c === "A" ? "B" : "A"));
-  const badSig = await get(tampered);
+  // Append junk to the signed token — any change invalidates the HMAC.
+  const badSig = await get(dl.body.result.url + "xectn");
   assert(badSig.status === 403, "files: a tampered token is 403");
 }

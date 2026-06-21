@@ -122,6 +122,9 @@ Cloudflare services should be added (e.g. email via the Send service as `ctx.mai
   use it to call external services from handlers (`ctx.env.STRIPE_SECRET_KEY as string`).
 - No raw SQL in handlers — go through `ctx.db` (`find` is compiled by
   `runtime/read-engine.ts`). `ctx.db.exec` is an escape hatch.
+- `insert`/`update` echo the persisted row projected to the caller's readable fields
+  ∪ the columns they wrote ∪ the PK — never leaks an unreadable field, never `{}`
+  (a write-only caller still gets the generated id). `projectWrite` in `runtime/db.ts`.
 - SQLite (DO) has no boolean type — booleans are stored as INTEGER 0/1; binding
   coercion lives in `runtime/db.ts` and `read-engine.ts`.
 - CORS for browser clients is opt-in via the `CORS_ORIGINS` var (comma-separated

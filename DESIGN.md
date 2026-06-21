@@ -192,6 +192,11 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
       marker in a policy `where` resolves against the request input — a capability / by-unguessable-key
       grant (read a row only by presenting its secret id; can't enumerate). Threaded through ACL resolution
       alongside `$identity`.
+- [x] Mutation echo projection (P6): `insert`/`update` now project the RETURNING row through the
+      caller's readable fields PLUS the columns they just wrote PLUS the primary key — so the echo never
+      leaks a field a `find` wouldn't show (e.g. a teammate editing another's note title no longer gets
+      `body` back), yet never collapses to `{}` (a write-only caller still gets the generated id + the
+      fields it wrote). Full read access ⇒ the whole row; SYSTEM ⇒ unprojected.
 - [x] Field-DSL modifiers (P2): `notNull()`, `unique()`, `indexed()`, `defaultTo(value)` — wrapper helpers
       (compose, like `renamedFrom`). UNIQUE/index emit `CREATE [UNIQUE] INDEX IF NOT EXISTS` (added to an
       existing table without a rebuild); DEFAULT is inline (and `ADD COLUMN ... NOT NULL DEFAULT` backfills),

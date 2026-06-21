@@ -83,4 +83,29 @@ export async function runExtras(base: string): Promise<void> {
   assert(hook.status === 200 && hookBody.ok, "extras: public route runs pre-auth (no token) and forwards a privileged mutation");
   const fromHook = await main("getSignupByCode", { code: hookCode });
   assert(fromHook.body.result?.email === "hook@example.com", "extras: the webhook-forwarded signup landed in the DO");
+
+  // --- P6: mutation echoes are field-ACL-safe (no leak) and never collapse to {} ---
+  const P6 = "p6";
+  const p6 = http(base, P6);
+  const T6 = {
+    alice: await token("alice", ["author"], { tenants: [P6] }),
+    tina: await token("tina", ["teammate"], { tenants: [P6] }),
+    m1: await token("m1", ["member"], { tenants: [P6] }),
+  };
+
+  // alice (author) writes a note with a body tina cannot read
+  const aNote = await p6("createNote", { title: "p6", body: "alice-secret" }, T6.alice);
+  const noteId = aNote.body.result.id;
+
+  // tina (teammate) may edit any title but can't read body on another's note — the
+  // update echo must include the written title but NOT leak body
+  const edited = await p6("updateNote", { id: noteId, title: "p6-edited" }, T6.tina);
+  assert(edited.body.result?.title === "p6-edited", "P6: update echo returns the written field");
+  assert(edited.body.result && !("body" in edited.body.result), "P6: update echo does not leak an unreadable field (body)");
+
+  // m1 (member) has NO read access until it has authored a note, yet its first
+  // create must still echo a useful row (generated id + written fields), not {}
+  const mNote = await p6("createNote", { title: "m1-first", body: "x" }, T6.m1);
+  assert(typeof mNote.body.result?.id === "number", "P6: write-only create still echoes the generated id (not {})");
+  assert(mNote.body.result?.title === "m1-first", "P6: write-only create echoes the fields it wrote");
 }

@@ -456,7 +456,24 @@ export class Db<S extends SchemaDef = SchemaDef> {
     const params = cols.map((c) => this.encodeCell(jsonCols, c, vals[c]));
     const sql = `INSERT INTO ${this.dialect.id(table)} (${colList}) VALUES (${phs})${this.returningClause("*")}`;
     const rows = await this.driver.exec(sql, params);
-    return this.decodeRow(table, rows[0])! as InferRow<FieldsOf<S[T]>>;
+    return this.projectWrite(table, this.decodeRow(table, rows[0])!, cols) as InferRow<FieldsOf<S[T]>>;
+  }
+
+  /** Project a mutation's RETURNING row so the echo never reveals more than a read
+   * would: the caller's readable fields for this row, PLUS the columns they just
+   * wrote (which they already know) and the primary key (so a write-only caller
+   * still gets the generated id). Full read access -> the whole row; SYSTEM -> as-is.
+   * This makes create/update echoes field-ACL-safe without ever collapsing to {}. */
+  private projectWrite(table: string, row: Row, writtenCols: string[]): Row {
+    if (this.acl.system) return row;
+    const visible = new Set<string>([this.pkOf(table), ...writtenCols]);
+    const readScope = this.scopeFor(table, "read");
+    if (readScope.allowed) {
+      const readable = effectiveFields(readScope, row, this.acl.identity);
+      if (readable === null) return row; // unrestricted read -> echo everything
+      for (const f of readable) visible.add(f);
+    }
+    return projectRow(row, [...visible]);
   }
 
   /** Update a row by id. ACL row-scope is AND-ed into the WHERE, so a caller can
@@ -498,7 +515,8 @@ export class Db<S extends SchemaDef = SchemaDef> {
     let sql = `UPDATE ${this.dialect.id(table)} SET ${assignments} WHERE ${this.dialect.id("id")} = ${this.dialect.placeholder(params.length)}`;
     sql += this.scopeClause(scope.where, params);
     sql += this.returningClause("*");
-    return this.decodeRow(table, (await this.driver.exec(sql, params))[0]) as InferRow<FieldsOf<S[T]>> | undefined;
+    const updated = this.decodeRow(table, (await this.driver.exec(sql, params))[0]);
+    return (updated ? this.projectWrite(table, updated, cols) : undefined) as InferRow<FieldsOf<S[T]>> | undefined;
   }
 
   /** Delete a row by id within scope. Returns whether a row was deleted. */
