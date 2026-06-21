@@ -103,14 +103,22 @@ Cloudflare services should be added (e.g. email via the Send service as `ctx.mai
 ## Conventions
 
 - Schema: `Entity(t => ({ id: t.id(), ... }))` + `defineSchema({ table: Entity })`.
-- Handlers: `query()` / `mutation()` from `@pramen/server`. Mutations are
-  auto-wrapped in `storage.transaction()` by `runtime/dispatch.ts` (commit on
-  return, rollback on throw) — do not write transaction control in handler code.
-  Raw `BEGIN`/`COMMIT` via `sql.exec` is rejected by DO SQLite.
+  Field builders: `id`/`textId`/`text`/`int`/`real`/`bool`/`json`/`fileRef`. `json`
+  and `fileRef` are stored as TEXT and object↔JSON-codec'd at the `Db` chokepoint —
+  handlers read/write the parsed value (a `JsonValue` / `FileRef`).
+- Handlers: `query()` / `mutation()` from `@pramen/server`. Context is
+  `{ db, kv, files, env, identity }`. Mutations are auto-wrapped in
+  `storage.transaction()` by `runtime/dispatch.ts` (commit on return, rollback on
+  throw) — do not write transaction control in handler code. Raw `BEGIN`/`COMMIT`
+  via `sql.exec` is rejected by DO SQLite.
+- `ctx.env` is the Worker/DO environment (bindings + vars + secrets), loosely typed —
+  use it to call external services from handlers (`ctx.env.STRIPE_SECRET_KEY as string`).
 - No raw SQL in handlers — go through `ctx.db` (`find` is compiled by
   `runtime/read-engine.ts`). `ctx.db.exec` is an escape hatch.
 - SQLite (DO) has no boolean type — booleans are stored as INTEGER 0/1; binding
   coercion lives in `runtime/db.ts` and `read-engine.ts`.
+- CORS for browser clients is opt-in via the `CORS_ORIGINS` var (comma-separated
+  origins or `*`); unset means same-origin only.
 
 ## DO SQLite
 

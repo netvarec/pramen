@@ -171,6 +171,22 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
       + the Durable Object — is `@pramen/server/worker`, isolated because it imports `cloudflare:workers`
       (so the CLI/tests/codegen can load an app.ts for its schema without pulling in the DO runtime).
       `pramen init` scaffolds the 3-line entry; the full e2e suite boots wrangler against `example/worker.ts`.
+- [x] `ctx.env` for handlers: the Worker/DO environment (bindings + vars + secrets) is threaded into the
+      handler context (`dispatch` takes it, the DO/Worker pass theirs), so handlers can call external APIs
+      (Stripe, Resend, …) without a vendored runtime edit. Loosely typed (`Readonly<Record<string,unknown>>`);
+      cast at the use site. The "embrace CF services" path: a handler can hit any binding/secret directly.
+- [x] `t.json()` column: arbitrary JSON stored in a TEXT column, typed as `JsonValue`, with the same
+      object↔string codec as `fileRef` at the `Db` chokepoint (read/write/relations see parsed values).
+      Aggregating/grouping a json/fileRef column is rejected (the codec only runs on row reads).
+- [x] CORS: an opt-in allowlist (`CORS_ORIGINS` — comma-separated origins or `*`) on `/rpc` + `/live`.
+      The Worker answers the preflight before auth and merges the headers into responses, so a browser
+      client can call a cross-origin Worker directly. Unset = same-origin only (unchanged).
+- [ ] Public (pre-auth) routes in the app definition (e.g. `app.routes` for signature-auth webhooks like
+      Stripe), with a documented way to forward a privileged mutation into the DO — currently needs a
+      worker edit. Plus a first-class anonymous/public-write role and a "capability / by-unguessable-key"
+      ACL read grant (surfaced by the food-tours migration: P4/P7/P9).
+- [ ] More field-DSL: `t.nullable()`/`.notNull()` chaining, `t.default()`, unique + index declarations,
+      a `timestamps()` helper (food-tours P2 — `t.json()` landed; the rest remain).
 - [ ] Dynamic deploy: ship the app bundle to the DO instead of static import (a runtime `/deploy`).
 - [ ] ReadEngine → WASM.
 - [x] Deploy via **oblaka** (CF IaC DSL): `oblaka.ts` declares the Worker + `PRAMEN` Durable Object

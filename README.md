@@ -190,6 +190,29 @@ const listNotes = query((ctx) =>
 // ctx.db.find({ where: { title: 123 } })   -> type error: title is string
 ```
 
+The handler context is `{ db, kv, files, env, identity }`. **Field builders:**
+`id`, `textId`, `text`, `int`, `real`, `bool`, `json` (arbitrary JSON, typed as
+`JsonValue`), `fileRef` (an R2 file). `json`/`fileRef` are stored as TEXT and
+codec'd to/from the parsed value automatically.
+
+**`ctx.env`** is the Worker/DO environment (bindings + vars + secrets) — call
+external services straight from a handler:
+
+```ts
+const createCheckout = mutation(async (ctx, input: { amount: number }) => {
+  const res = await fetch("https://api.stripe.com/v1/checkout/sessions", {
+    method: "POST",
+    headers: { authorization: `Bearer ${ctx.env.STRIPE_SECRET_KEY as string}` },
+    body: /* ... */ "",
+  });
+  return res.json();
+});
+```
+
+For a browser client on a different origin, set `CORS_ORIGINS` (comma-separated
+origins, or `*`) and the Worker adds CORS to `/rpc` + `/live` (preflight included);
+unset means same-origin only.
+
 ### Errors & input validation
 
 Responses are `{ ok: false, error, code }` with a real status: ACL denial → `403
