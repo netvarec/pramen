@@ -28,7 +28,7 @@
     "@pramen/server": "workspace:*",
     "@types/react": "^19.0.0",
     "lopata": "^0.19.2",
-    "oblaka-iac": "^0.0.14",
+    "oblaka-iac": "^0.0.16",
     "react": "^19.0.0",
     "typescript": "^5.7.0",
     "wrangler": "^4.101.0"

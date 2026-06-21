@@ -11,7 +11,7 @@
         "@pramen/server": "workspace:*",
         "@types/react": "^19.0.0",
         "lopata": "^0.19.2",
-        "oblaka-iac": "^0.0.14",
+        "oblaka-iac": "^0.0.16",
         "react": "^19.0.0",
         "typescript": "^5.7.0",
         "wrangler": "^4.101.0",
@@ -208,7 +208,7 @@
 
     "miniflare": ["miniflare@4.20260616.0", "", { "dependencies": { "@cspotcode/source-map-support": "0.8.1", "sharp": "0.34.5", "undici": "7.24.8", "workerd": "1.20260616.1", "ws": "8.20.1", "youch": "4.1.0-beta.10" }, "bin": { "miniflare": "bootstrap.js" } }, "sha512-cEpzoNgSWjedzYmhJvttUPmL4Jk6nSzzeNNi118T5zwnmYP9fnM8UXwFU/Qa/1qoQ4SzGqtM1Q7tinHvHvIGtw=="],
 
-    "oblaka-iac": ["oblaka-iac@0.0.14", "", { "dependencies": { "jsonc-parser": "^3.3.1" }, "peerDependencies": { "typescript": "^5" }, "bin": { "oblaka": "src/commands/run.ts" } }, "sha512-KAU4ecrDOd4MNbL9qv3LSaS2j4qMuzwDFY1AEjboJJ/8MdzJDcYO3C2ZKZqZLCCJJUh4rCz8pD+YE5QNQEIDsQ=="],
+    "oblaka-iac": ["oblaka-iac@0.0.16", "", { "dependencies": { "jsonc-parser": "^3.3.1" }, "peerDependencies": { "typescript": "^5" }, "bin": { "oblaka": "src/commands/run.ts" } }, "sha512-qdAOQViRy9ugGv1ZYMDm+5ACpTaXjOfJGF2+zSR8sR0pTZxqKRtqYqMe80+fJTL9lxtcl0AvXzhBwspNqouZuQ=="],
 
     "path-to-regexp": ["path-to-regexp@6.3.0", "", {}, "sha512-Yhpw4T9C6hPpgPeA28us07OJeqZ5EzQTkbfwuhsUg0c237RomFoETJgmp2sa3F/41gfLE6G5cqcYwznmeEeOlQ=="],
 
