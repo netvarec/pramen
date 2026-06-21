@@ -33,6 +33,10 @@ export interface Env {
   FILES: R2Bucket;
   /** HMAC secret for signing file tokens. Falls back to AUTH_SECRET if unset. */
   FILES_SECRET?: string;
+  /** Optional CORS allowlist for /rpc + /live: comma-separated origins, or `*`.
+   * Unset = no CORS headers (same-origin only). Lets a browser client call a
+   * cross-origin Worker directly (e.g. a separate dev port). */
+  CORS_ORIGINS?: string;
 }
 
 /** The secret used to sign/verify file tokens — a dedicated FILES_SECRET if set,
@@ -42,6 +46,29 @@ const filesSecret = (env: Env): string => env.FILES_SECRET || env.AUTH_SECRET;
 const json = (body: unknown, status = 200) => Response.json(body, { status });
 const forbidden = (what: string) => json({ ok: false, error: `access denied: ${what}`, code: "forbidden" }, 403);
 const badRequest = (msg: string) => json({ ok: false, error: msg, code: "bad_request" }, 400);
+
+/** CORS response headers for an allowed origin, or `{}` when CORS is off / the
+ * origin isn't allowlisted. Authorization is a request header, never a cookie, so
+ * `*` is safe (no credentials mode). */
+function corsHeaders(origin: string | null, env: Env): Record<string, string> {
+  if (!origin || !env.CORS_ORIGINS) return {};
+  const allow = env.CORS_ORIGINS.split(",").map((s) => s.trim()).filter(Boolean);
+  if (!allow.includes("*") && !allow.includes(origin)) return {};
+  return {
+    "access-control-allow-origin": allow.includes("*") ? "*" : origin,
+    "access-control-allow-methods": "GET, POST, OPTIONS",
+    "access-control-allow-headers": "content-type, authorization, x-pramen-tenant, x-pramen-store",
+    vary: "origin",
+  };
+}
+
+/** Return a copy of `res` with the CORS headers merged in (no-op if none). */
+function withCors(res: Response, cors: Record<string, string>): Response {
+  if (Object.keys(cors).length === 0) return res;
+  const headers = new Headers(res.headers);
+  for (const [k, v] of Object.entries(cors)) headers.set(k, v);
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+}
 
 /** Build the Worker fetch handler for an app. State (the JWKS cache, the D1
  * compiled-ACL + one-time migration) is per-app, held in this closure. */
@@ -83,6 +110,13 @@ export function makeWorker(app: PramenApp) {
     if (url.pathname.startsWith("/files/")) {
       const res = await handleFileRequest(request, { adapter: new R2Adapter(env.FILES), secret: filesSecret(env) });
       if (res) return res;
+    }
+
+    // CORS (opt-in via CORS_ORIGINS) for cross-origin browser clients. Answer the
+    // preflight before any auth so the actual request can carry the bearer token.
+    const cors = corsHeaders(request.headers.get("origin"), env);
+    if (request.method === "OPTIONS" && Object.keys(cors).length > 0) {
+      return new Response(null, { status: 204, headers: cors });
     }
 
     const isWs = request.headers.get("Upgrade") === "websocket";
@@ -146,7 +180,7 @@ export function makeWorker(app: PramenApp) {
     // Authorize the tenant against the identity before reaching the DO, so a
     // caller can't address (or register) tenants they have no claim to.
     const tenant = req.headers.get("x-pramen-tenant") ?? "main";
-    if (!authorizeTenant(identity, tenant)) return forbidden(`tenant '${tenant}'`);
+    if (!authorizeTenant(identity, tenant)) return withCors(forbidden(`tenant '${tenant}'`), cors);
 
     // --- Worker + D1 (no DO): the same schema/ACL/read engine over a D1 binding,
     // selected per-request via `x-pramen-store: d1`. RPC only — live queries need the
@@ -160,13 +194,14 @@ export function makeWorker(app: PramenApp) {
       if (request.method === "POST") input = await request.json().catch(() => undefined);
       const driver = new D1Driver(env.DB);
       const files = createFiles({ tenant, secret: filesSecret(env), adapter: new R2Adapter(env.FILES) });
+      const envBag = env as unknown as Record<string, unknown>;
       try {
         await ensureD1Migrated(driver);
-        const { result } = await dispatch(app.handlers, app.schema, driver, new Kv(env.KV), files, { acl: d1Acl, identity }, name, input);
-        return json({ ok: true, result });
+        const { result } = await dispatch(app.handlers, app.schema, driver, new Kv(env.KV), files, envBag, { acl: d1Acl, identity }, name, input);
+        return withCors(json({ ok: true, result }), cors);
       } catch (err) {
         const { status, body } = toResponse(err);
-        return json(body, status);
+        return withCors(json(body, status), cors);
       }
     }
 
@@ -176,7 +211,9 @@ export function makeWorker(app: PramenApp) {
     else headers.delete("x-pramen-identity");
 
     const stub = env.PRAMEN.get(env.PRAMEN.idFromName(tenant));
-    return stub.fetch(new Request(req, { headers }));
+    // WebSocket upgrades (101) must be returned untouched; only add CORS to HTTP.
+    const res = await stub.fetch(new Request(req, { headers }));
+    return isWs ? res : withCors(res, cors);
     },
   };
 }

@@ -16,6 +16,7 @@ import {
   Forbidden,
   type Identity,
   type FileRef,
+  type JsonValue,
 } from "@pramen/server";
 
 // Reusable write rule: force ownerId to the authenticated caller (a client cannot
@@ -38,6 +39,9 @@ const schema = defineSchema({
       body: t.text(),
       ownerId: t.text(),
       createdAt: t.int(),
+      // Arbitrary JSON metadata (tags, structured fields). Stored as a TEXT column;
+      // handlers read/write the parsed value — db.ts codecs it.
+      meta: t.json(),
       // Optional attached file (R2 object). Stored as JSON metadata (a FileRef),
       // not the bytes — see ctx.files + the upload/download handlers below.
       attachment: t.fileRef(),
@@ -63,19 +67,27 @@ const handlers = {
   // caller — so a forged ownerId in the request body is ignored. The `input`
   // validator rejects malformed bodies at the boundary (400).
   createNote: mutation(
-    (ctx, input: { title: string; body: string; ownerId?: string }) =>
+    (ctx, input: { title: string; body: string; ownerId?: string; meta?: JsonValue }) =>
       ctx.db.insert("notes", {
         title: input.title,
         body: input.body,
         ownerId: input.ownerId ?? null,
         createdAt: Date.now(),
+        // Only write meta when provided, so roles with a restricted create-field
+        // list (e.g. teammate) aren't tripped by an always-present column.
+        ...(input.meta !== undefined ? { meta: input.meta } : {}),
       }),
     {
-      input: (raw): { title: string; body: string; ownerId?: string } => {
+      input: (raw): { title: string; body: string; ownerId?: string; meta?: JsonValue } => {
         const o = (raw ?? {}) as Record<string, unknown>;
         if (typeof o.title !== "string") throw new Error("title must be a string");
         if (typeof o.body !== "string") throw new Error("body must be a string");
-        return { title: o.title, body: o.body, ownerId: typeof o.ownerId === "string" ? o.ownerId : undefined };
+        return {
+          title: o.title,
+          body: o.body,
+          ownerId: typeof o.ownerId === "string" ? o.ownerId : undefined,
+          meta: "meta" in o ? (o.meta as JsonValue) : undefined,
+        };
       },
     },
   ),
@@ -119,6 +131,14 @@ const handlers = {
 
   // References the `body` column — denied for roles that can't read it.
   maxBody: query((ctx) => ctx.db.aggregate({ from: "notes", aggregations: { m: { fn: "max", column: "body" } } })),
+
+  // ctx.env — Worker/DO env (bindings + vars + secrets). Real handlers use it to
+  // call external APIs (Stripe, Resend, …). Here we only report presence, never the
+  // value, to prove env reaches handlers without leaking a secret.
+  envCheck: query((ctx) => ({
+    hasAuthSecret: typeof ctx.env.AUTH_SECRET === "string" && ctx.env.AUTH_SECRET.length > 0,
+    hasKvBinding: ctx.env.KV != null,
+  })),
 
   // ctx.kv — GLOBAL (cross-tenant) config/cache, not per-tenant data (use db for that).
   getConfig: query((ctx, input: { key: string }) => ctx.kv.get(`config:${input.key}`)),

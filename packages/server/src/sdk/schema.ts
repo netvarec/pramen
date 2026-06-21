@@ -7,10 +7,10 @@
 // Relations reference their target table by name (resolved at runtime) and the
 // foreign-key column. Relation traversal is ACL-governed (see runtime/acl.ts).
 
-// "fileRef" is a logical type stored as TEXT (JSON metadata; see runtime/storage.ts
-// FileRef). The value a handler reads/writes is a FileRef object — db.ts codecs it
-// to/from the JSON column, and infer.ts types the column as FileRef.
-export type FieldType = "text" | "integer" | "real" | "boolean" | "fileRef";
+// "json" and "fileRef" are logical types stored as TEXT (JSON). The value a handler
+// reads/writes is the parsed value (a JsonValue, or a FileRef) — db.ts codecs it
+// to/from the column, and infer.ts types it accordingly.
+export type FieldType = "text" | "integer" | "real" | "boolean" | "json" | "fileRef";
 
 export interface FieldDef {
   readonly type: FieldType;
@@ -30,6 +30,9 @@ const builders = {
   int: () => ({ type: "integer" }) as const,
   real: () => ({ type: "real" }) as const,
   bool: () => ({ type: "boolean" }) as const,
+  /** Arbitrary JSON, stored in a TEXT column. Handlers read/write the parsed value
+   * (a JsonValue); db.ts stringifies on write and parses on read. */
+  json: () => ({ type: "json" }) as const,
   /** A reference to a stored file (R2 object). Holds JSON metadata (a FileRef),
    * not the bytes — upload/download go through ctx.files + the Worker /files/* route. */
   fileRef: () => ({ type: "fileRef" }) as const,

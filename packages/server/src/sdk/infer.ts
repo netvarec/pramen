@@ -8,14 +8,19 @@ import type { FileRef } from "./files";
 
 export type { FileRef } from "./files";
 
+/** Any JSON-serializable value — the type of a `t.json()` column. */
+export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+
 /** SQL field type -> TypeScript value type. */
 export type FieldTsType<D extends FieldDef> = D["type"] extends "text"
   ? string
   : D["type"] extends "boolean"
     ? boolean
-    : D["type"] extends "fileRef"
-      ? FileRef
-      : number; // integer | real
+    : D["type"] extends "json"
+      ? JsonValue
+      : D["type"] extends "fileRef"
+        ? FileRef
+        : number; // integer | real
 
 /** A column is non-null iff it's NOT NULL or a primary key. */
 type IsNotNull<D extends FieldDef> = D extends { notNull: true }

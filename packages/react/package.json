@@ -8,8 +8,10 @@
   },
   "types": "./src/index.ts",
   "files": ["src"],
+  "dependencies": {
+    "@pramen/client": "workspace:*"
+  },
   "peerDependencies": {
-    "@pramen/client": "*",
     "react": ">=18"
   }
 }

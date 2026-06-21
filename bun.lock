@@ -24,8 +24,10 @@
     "packages/react": {
       "name": "@pramen/react",
       "version": "0.0.0",
+      "dependencies": {
+        "@pramen/client": "workspace:*",
+      },
       "peerDependencies": {
-        "@pramen/client": "*",
         "react": ">=18",
       },
     },

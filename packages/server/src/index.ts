@@ -53,6 +53,7 @@ export type {
   InferInsert,
   InferRow,
   InferUpdate,
+  JsonValue,
   ProjectedRow,
   RelationsOf,
   RelationsResult,

@@ -4,11 +4,11 @@
 
 import type { EntityFields, FieldDef } from "../sdk/schema";
 
-// SQLite has no boolean type; store as INTEGER 0/1. A fileRef is JSON metadata,
-// stored as TEXT. Exported for the migrator, which compares declared column types
+// SQLite has no boolean type; store as INTEGER 0/1. json + fileRef are stored as
+// TEXT (JSON). Exported for the migrator, which compares declared column types
 // (and CASTs on a type change).
 export const sqlType = (f: FieldDef): string =>
-  f.type === "boolean" ? "INTEGER" : f.type === "fileRef" ? "TEXT" : f.type.toUpperCase();
+  f.type === "boolean" ? "INTEGER" : f.type === "json" || f.type === "fileRef" ? "TEXT" : f.type.toUpperCase();
 
 function columnSql(name: string, f: FieldDef): string {
   let s = `${name} ${sqlType(f)}`;

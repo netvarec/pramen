@@ -293,13 +293,13 @@ export class Db<S extends SchemaDef = SchemaDef> {
 
     const groupBy = (spec.groupBy ? (Array.isArray(spec.groupBy) ? spec.groupBy : [spec.groupBy]) : []) as string[];
 
-    // A fileRef cell is JSON; grouping/min/max over it would return the raw string
-    // (the codec only runs on row reads), so reject it rather than leak/lie.
-    const fileRefCols = new Set(this.fileRefColsOf(from));
-    for (const c of groupBy) if (fileRefCols.has(c)) throw new BadRequest(`cannot group by a fileRef column: ${c}`);
+    // A json/fileRef cell is JSON; grouping/min/max over it would return the raw
+    // string (the codec only runs on row reads), so reject it rather than leak/lie.
+    const jsonCols = new Set(this.jsonColsOf(from));
+    for (const c of groupBy) if (jsonCols.has(c)) throw new BadRequest(`cannot group by a json column: ${c}`);
     for (const agg of Object.values(spec.aggregations)) {
-      if (agg.column && fileRefCols.has(agg.column as string)) {
-        throw new BadRequest(`cannot aggregate a fileRef column: ${agg.column as string}`);
+      if (agg.column && jsonCols.has(agg.column as string)) {
+        throw new BadRequest(`cannot aggregate a json column: ${agg.column as string}`);
       }
     }
 
@@ -326,19 +326,19 @@ export class Db<S extends SchemaDef = SchemaDef> {
     return this.decodeRows(from, await this.driver.exec(sql, params));
   }
 
-  // --- fileRef codec: a `fileRef` column is stored as a JSON TEXT cell but handlers
-  // see/write a FileRef object. Decode on read, encode (stringify) on write. ---
+  // --- JSON codec: a `json` or `fileRef` column is stored as a JSON TEXT cell but
+  // handlers see/write the parsed value. Decode on read, encode (stringify) on write. ---
 
-  private fileRefColsOf(table: string): string[] {
+  private jsonColsOf(table: string): string[] {
     const fields = this.schema[table]?.fields;
     if (!fields) return [];
     return Object.entries(fields)
-      .filter(([, f]) => (f as FieldDef).type === "fileRef")
+      .filter(([, f]) => (f as FieldDef).type === "json" || (f as FieldDef).type === "fileRef")
       .map(([n]) => n);
   }
 
   private decodeRows(table: string, rows: Row[]): Row[] {
-    const cols = this.fileRefColsOf(table);
+    const cols = this.jsonColsOf(table);
     if (cols.length === 0) return rows;
     for (const row of rows) {
       for (const c of cols) {
@@ -359,9 +359,9 @@ export class Db<S extends SchemaDef = SchemaDef> {
     return row ? this.decodeRows(table, [row])[0] : row;
   }
 
-  /** Encode one write cell: JSON-stringify a fileRef object, then dialect-encode. */
-  private encodeCell(fileRefCols: Set<string>, col: string, v: unknown): unknown {
-    if (v != null && fileRefCols.has(col)) return this.dialect.encode(JSON.stringify(v));
+  /** Encode one write cell: JSON-stringify a json/fileRef value, then dialect-encode. */
+  private encodeCell(jsonCols: Set<string>, col: string, v: unknown): unknown {
+    if (v != null && jsonCols.has(col)) return this.dialect.encode(JSON.stringify(v));
     return this.dialect.encode(v);
   }
 
@@ -450,10 +450,10 @@ export class Db<S extends SchemaDef = SchemaDef> {
     this.runValidators(validators, vals);
 
     const cols = Object.keys(vals);
-    const fileRefCols = new Set(this.fileRefColsOf(table));
+    const jsonCols = new Set(this.jsonColsOf(table));
     const colList = cols.map((c) => this.dialect.id(c)).join(", ");
     const phs = cols.map((_, i) => this.dialect.placeholder(i + 1)).join(", ");
-    const params = cols.map((c) => this.encodeCell(fileRefCols, c, vals[c]));
+    const params = cols.map((c) => this.encodeCell(jsonCols, c, vals[c]));
     const sql = `INSERT INTO ${this.dialect.id(table)} (${colList}) VALUES (${phs})${this.returningClause("*")}`;
     const rows = await this.driver.exec(sql, params);
     return this.decodeRow(table, rows[0])! as InferRow<FieldsOf<S[T]>>;
@@ -487,10 +487,10 @@ export class Db<S extends SchemaDef = SchemaDef> {
     this.runValidators(validators, p);
 
     const params: unknown[] = [];
-    const fileRefCols = new Set(this.fileRefColsOf(table));
+    const jsonCols = new Set(this.jsonColsOf(table));
     const assignments = cols
       .map((c) => {
-        params.push(this.encodeCell(fileRefCols, c, p[c]));
+        params.push(this.encodeCell(jsonCols, c, p[c]));
         return `${this.dialect.id(c)} = ${this.dialect.placeholder(params.length)}`;
       })
       .join(", ");

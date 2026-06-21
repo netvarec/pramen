@@ -30,6 +30,7 @@ export async function dispatch(
   driver: Driver,
   kv: Kv,
   files: Files,
+  env: Readonly<Record<string, unknown>>,
   acl: AclContext,
   name: string,
   input: unknown,
@@ -53,7 +54,7 @@ export async function dispatch(
   const resolved = await warmup(acl.acl, acl.identity, systemDb as unknown as ResolverDb);
 
   const db = new Db(driver, { acl: acl.acl, identity: acl.identity, resolved }, schema);
-  const ctx: HandlerContext = { db, kv, files, identity: acl.identity };
+  const ctx: HandlerContext = { db, kv, files, env, identity: acl.identity };
 
   const result =
     handler.kind === "query"

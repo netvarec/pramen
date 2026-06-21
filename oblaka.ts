@@ -19,7 +19,9 @@ export default define(({ env }) => {
   // AUTH_SECRET: a dev value locally; in real envs set it as a secret with
   // `wrangler secret put AUTH_SECRET` (a secret overrides this var at runtime).
   const vars =
-    env === "local" ? { AUTH_SECRET: "dev-secret-change-me", FILES_SECRET: "dev-files-secret-change-me" } : {};
+    env === "local"
+      ? { AUTH_SECRET: "dev-secret-change-me", FILES_SECRET: "dev-files-secret-change-me", CORS_ORIGINS: "*" }
+      : {};
 
   return new Worker({
     dir: ".",

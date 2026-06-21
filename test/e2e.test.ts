@@ -9,6 +9,7 @@ import { runAcl } from "./suites/acl";
 import { runCellAcl } from "./suites/cell-acl";
 import { runD1 } from "./suites/d1";
 import { runFiles } from "./suites/files";
+import { runExtras } from "./suites/extras";
 import { runResolver } from "./suites/resolver";
 import { runRelation } from "./suites/relation";
 import { runLive } from "./suites/live";
@@ -66,6 +67,7 @@ describe("pramen e2e", () => {
   test("cell-level ACL (per-row field visibility)", () => runCellAcl(BASE), 30_000);
   test("D1-backed store (Worker + D1, no DO)", () => runD1(BASE), 30_000);
   test("file storage (R2 upload/download + signed urls + ACL)", () => runFiles(BASE), 30_000);
+  test("extras: json column + ctx.env + CORS", () => runExtras(BASE), 30_000);
   test("dynamic resolvers", () => runResolver(BASE), 30_000);
   test("relations + nested ACL", () => runRelation(BASE), 30_000);
   test("query expressiveness (operators, OR/AND, offset)", () => runQuery(BASE), 30_000);

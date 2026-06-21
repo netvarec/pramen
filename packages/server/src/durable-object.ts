@@ -105,6 +105,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
         this.driver,
         this.kv,
         this.filesFor(this.tenant),
+        this.envBag,
         this.ctxFor(identity),
         name,
         input,
@@ -164,7 +165,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
       if (!replacing && state.subs.length >= MAX_SUBSCRIPTIONS) {
         return this.send(ws, toWsError(id, new BadRequest("subscription limit reached")));
       }
-      const { result, kind, touched } = await dispatch(this.app.handlers, this.app.schema, this.driver, this.kv, this.filesFor(state.tenant), this.ctxFor(state.identity), name, input);
+      const { result, kind, touched } = await dispatch(this.app.handlers, this.app.schema, this.driver, this.kv, this.filesFor(state.tenant), this.envBag, this.ctxFor(state.identity), name, input);
       if (kind !== "query") {
         return this.send(ws, toWsError(id, new BadRequest(`${name} is not a query`)));
       }
@@ -180,7 +181,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
   private async onCall(ws: WebSocket, id: string, name: string, input: unknown): Promise<void> {
     const state = this.getState(ws);
     try {
-      const { result, kind, touched } = await dispatch(this.app.handlers, this.app.schema, this.driver, this.kv, this.filesFor(state.tenant), this.ctxFor(state.identity), name, input);
+      const { result, kind, touched } = await dispatch(this.app.handlers, this.app.schema, this.driver, this.kv, this.filesFor(state.tenant), this.envBag, this.ctxFor(state.identity), name, input);
       this.send(ws, { type: "result", id, result });
       if (kind === "mutation" && touched.length > 0) await this.broadcast(touched);
     } catch (err) {
@@ -198,7 +199,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
       for (const sub of state.subs) {
         if (!sub.tables.some((t) => written.has(t))) continue;
         try {
-          const { result } = await dispatch(this.app.handlers, this.app.schema, this.driver, this.kv, this.filesFor(state.tenant), this.ctxFor(state.identity), sub.name, sub.input);
+          const { result } = await dispatch(this.app.handlers, this.app.schema, this.driver, this.kv, this.filesFor(state.tenant), this.envBag, this.ctxFor(state.identity), sub.name, sub.input);
           const next = digest(result);
           if (next === sub.digest) continue; // result unchanged for this subscription
           sub.digest = next;
@@ -284,6 +285,12 @@ export class PramenDOBase extends DurableObject<DoEnv> {
 
   private ctxFor(identity: Identity | null): AclContext {
     return { acl: this.acl, identity };
+  }
+
+  // The DO env (bindings + vars + secrets) handed to handlers as ctx.env. Loosely
+  // typed at the boundary so handlers can read any var/secret without a DoEnv cast.
+  private get envBag(): Readonly<Record<string, unknown>> {
+    return this.env as unknown as Record<string, unknown>;
   }
 
   // One Files facade per DO (a DO serves one tenant). Backed by the R2 binding;

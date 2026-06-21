@@ -17,6 +17,11 @@ export interface HandlerContext<S extends SchemaDef = SchemaDef> {
   /** Per-tenant file storage: mint signed upload/download urls, head/delete blobs.
    * Bytes flow through the Worker /files/* route, never through the DO. */
   readonly files: Files;
+  /** The Worker/DO environment — bindings (KV, R2, DB, …) plus vars and secrets
+   * (AUTH_SECRET, plus anything in wrangler.jsonc / .dev.vars / `wrangler secret`).
+   * Use it to call external APIs from handlers (Stripe, Resend, …). Loosely typed;
+   * cast a value at the use site, e.g. `ctx.env.STRIPE_SECRET_KEY as string`. */
+  readonly env: Readonly<Record<string, unknown>>;
   /** Resolved identity for this request (null = anonymous). */
   readonly identity: Identity | null;
 }
