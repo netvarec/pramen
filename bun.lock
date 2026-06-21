@@ -19,11 +19,11 @@
     },
     "packages/client": {
       "name": "@pramen/client",
-      "version": "0.0.0",
+      "version": "0.1.0",
     },
     "packages/react": {
       "name": "@pramen/react",
-      "version": "0.0.0",
+      "version": "0.1.0",
       "dependencies": {
         "@pramen/client": "workspace:*",
       },
@@ -33,7 +33,7 @@
     },
     "packages/server": {
       "name": "@pramen/server",
-      "version": "0.0.0",
+      "version": "0.1.0",
       "devDependencies": {
         "@cloudflare/workers-types": "^4.20250101.0",
       },

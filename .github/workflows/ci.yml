@@ -17,6 +17,8 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Typecheck (server + @pramen/client + @pramen/react)
         run: bun run typecheck
+      - name: Build (publishable JS + d.ts for all packages)
+        run: bun run build
       - name: Tests (e2e + client + cli + units)
         run: bun test
         env:

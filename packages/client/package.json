@@ -1,11 +1,24 @@
 {
   "name": "@pramen/client",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Typed client for a pramen backend — RPC over HTTP + live queries over WebSocket.",
+  "license": "MIT",
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": "./src/index.ts"
   },
   "types": "./src/index.ts",
-  "files": ["src"]
+  "files": ["dist", "src"],
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json"
+  },
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" }
+    }
+  }
 }
