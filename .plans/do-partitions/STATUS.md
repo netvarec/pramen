@@ -8,7 +8,6 @@ use `idFromName(`${tenant}:${partition}`)`.
 
 ## Pending
 
-- [ ] 01 — DESIGN.md: Partitions spec & decisions
 - [ ] 02 — Schema: `partition` on Entity + `partitionOf` helper
 - [ ] 11 — DO registry: track & enumerate all (tenant, partition) DOs
 - [ ] 03 — Schema validation: reject cross-partition relations
@@ -23,5 +22,7 @@ use `idFromName(`${tenant}:${partition}`)`.
 ## In Progress
 
 ## Completed
+
+- [x] 01 — DESIGN.md: Partitions spec & decisions
 
 ## Discoveries

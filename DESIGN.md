@@ -31,7 +31,65 @@ backend would otherwise build from scratch:
   recovery and platform-managed durability, so the whole chaos/failover surface
   (replication drills, RPO/RTO) becomes "trust the platform."
 - **Multi-tenancy** — one DO per tenant is a clean sharding model, with no global
-  single-writer contention.
+  single-writer contention. **Partitions** (see below) generalize this: a tenant's
+  data can span several DOs keyed by `(tenant, partition)`, with "one DO per tenant"
+  being the degenerate single-`default`-partition case, and an entity alone in its
+  own partition the other end of the spectrum.
+
+## Partitions
+
+Routing is one DO per tenant today: `env.PRAMEN.get(env.PRAMEN.idFromName(tenant))`.
+Every entity for a tenant shares that DO's in-process SQLite — which is exactly what
+makes atomic cross-entity transactions, in-SQL relation traversal (`acl.ts` compiles
+`{ owner: {...} }` to a subquery), `with` hydration, and reactivity (the DO's
+broadcast) free.
+
+A **partition** lets a schema author move an entity (or group) into its own DO — to
+relieve a hot/append-only entity (events, audit log, telemetry) that otherwise
+serializes the whole tenant, or to scale past the per-DO SQLite size limit — at the
+cost of those cross-entity guarantees *for the partitioned entity*. The contract:
+
+1. **`partition` is a schema concept.** An entity declares it via the third
+   `Entity` argument: `Entity(build, relations, { partition: "name" })`. The default
+   partition name is `"default"`, and an entity lives in exactly one partition.
+2. **Routing key.** A partition-DO is addressed by `idFromName(`${tenant}:${partition}`)`
+   — **except the default partition, which keeps the bare `idFromName(tenant)` key.**
+   This is a hard backward-compat requirement (not a WIP "redesign freely" case): every
+   tenant's existing data already lives under `idFromName(tenant)`, and changing that key
+   would orphan it. The default partition therefore *must* stay on the bare key.
+3. **Boundary rules — cross-partition is forbidden, enforced not degraded.**
+   - A relation (`belongsTo`/`hasMany`) whose target is in a different partition is a
+     **schema-validation error**, caught at boot/codegen (relations are static).
+   - `with` and relation-traversal `where` consequently cannot cross partitions — no
+     such relation can exist to traverse.
+   - A handler may only touch tables in **one** partition; touching another partition's
+     table is a **runtime error** — no silent cross-DO RPC, no distributed transaction,
+     no cross-DO live query.
+4. **Handler → partition association for routing.** The Worker must pick the
+   partition-DO *before* dispatch, without running the handler, so the partition is
+   declared statically in handler opts: `query(fn, { partition })` /
+   `mutation(fn, { partition })`, defaulting to `"default"`. The rationale is
+   static, server-side routing — the Worker can't introspect which tables a handler
+   will touch. The invariant: a handler's declared partition must match the partition
+   of every table it touches, enforced at runtime by the table-access guard (rule 3).
+5. **DDL placement.** Each partition-DO migrates **only its own partition's tables** —
+   the other partitions' tables don't exist in that DO, so `migrate` reconciles a
+   per-partition slice of the schema.
+6. **DO enumeration via a self-maintained registry.** A `DurableObjectNamespace` has
+   no list API (only `idFromName`/`idFromString`/`newUniqueId`/`get`) — the platform
+   cannot tell you which DOs exist. So a KV registry is the source of truth: each DO
+   self-registers on first touch (today `tenant:<t>`; with partitions a
+   `(tenant, partition)` pair). The distinction matters: the **tenant** is dynamic
+   (runtime-supplied), the **partition** is static (from the schema). The registry
+   tracks *actually-instantiated* pairs, so a partition later renamed or removed from
+   the schema — an orphan DO that still holds data — stays discoverable.
+7. **Admin surface becomes per-partition.** `/tenants` enumerates `tenant:partition`
+   pairs, and `/admin/schema`, `/admin/recover`, `/admin/data` take an optional
+   `partition` argument — absent ⇒ the default partition, so today's calls keep working
+   unchanged.
+8. **Out of scope.** Cross-partition transactions/sagas, cross-DO live queries, and
+   automatic re-partitioning / data movement between partitions are explicitly not
+   covered — the boundary is enforced, not bridged.
 
 ## The real tensions (tracked, not yet solved)
 
