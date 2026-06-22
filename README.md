@@ -76,6 +76,19 @@ ACL `where` rules accept the same operators and `AND`/`OR` as queries, with
 policy("manager:read", "notes", "read", { where: { ownerId: { in: $identity("team") } } });
 ```
 
+**Relation traversal in `where`.** A `where` key naming a relation takes a nested
+clause over the related entity — in queries *and* ACL rules — compiled to a subquery
+(`belongsTo` → `fk IN (SELECT pk FROM target …)`, `hasMany` → `pk IN (SELECT fk …)`).
+The related entity's read scope is AND-merged, so traversal can't reveal rows you
+couldn't read directly.
+
+```ts
+// query: notes whose owner is named "Alice"
+ctx.db.find({ from: "notes", where: { owner: { name: "Alice" } } });
+// ACL: read notes you own, expressed by traversing the relation
+policy("owner:read", "notes", "read", { where: { owner: { id: $identity("userId") } } });
+```
+
 **Cell-level (per-row) field ACL.** Beyond the flat `fields` list, a policy can
 grant fields *conditionally per row* — visibility that depends on the row's data,
 not just the (entity, action). Use the declarative `conditionalFields` (a row

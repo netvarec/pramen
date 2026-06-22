@@ -15,7 +15,6 @@ import {
   type ResolverDb,
   type Role,
   type Validator,
-  type WhereRule,
   deny,
   isAllow,
   isDeny,
@@ -23,8 +22,9 @@ import {
   isInputMarker,
   isResolver,
 } from "../sdk/acl";
-import { compileWhere, evalExpr, FALSE, or, type SqlExpr } from "./read-engine";
-import { PramenError } from "./errors";
+import { and, compileWhere, evalExpr, FALSE, or, type SqlExpr } from "./read-engine";
+import { BadRequest, PramenError } from "./errors";
+import type { FieldDef, RelationDef, SchemaDef } from "../sdk/schema";
 
 export class AclDenied extends PramenError {
   constructor(
@@ -57,6 +57,9 @@ export interface AclContext {
   readonly resolved?: Map<number, PolicyRule>;
   /** SYSTEM mode bypasses all ACL — used for warmup reads and internal ops. */
   readonly system?: boolean;
+  /** The app schema — lets `where` rules traverse relations (`{ rel: { col } }`),
+   * compiled to a subquery with the related entity's read scope AND-merged in. */
+  readonly schema?: SchemaDef;
 }
 
 /** Evaluate every resolver reachable by the identity's roles, once per request.
@@ -128,14 +131,14 @@ interface Grant {
   fieldsFns: FieldsFn[];
 }
 
-/** Build a grant from a policy/relation rule, resolving $identity markers in
- * `where` and each conditional `when`. */
-function grantOf(rule: PolicyRules | RelationAclRule, where: SqlExpr | null, identity: Identity | null, input: unknown): Grant {
+/** Build a grant from a policy/relation rule, resolving markers in `where` and each
+ * conditional `when` (the `when` predicate is single-table — evaluated in memory). */
+function grantOf(rule: PolicyRules | RelationAclRule, where: SqlExpr | null, entity: string, ctx: AclContext, depth: number): Grant {
   return {
     where,
     fields: rule.fields ?? null,
     conditional: (rule.conditionalFields ?? []).map((cf) => ({
-      when: whereToExpr(cf.when, identity, input),
+      when: compileScopedWhere(cf.when as Record<string, unknown>, entity, ctx, depth),
       fields: cf.fields,
     })),
     fieldsFns: rule.fieldsFn ? [rule.fieldsFn] : [],
@@ -222,12 +225,73 @@ function resolveMarkers(rule: Record<string, unknown>, identity: Identity | null
   return out;
 }
 
-/** Turn a policy where-rule into an expression. Supports the full user query
- * surface (operators, AND/OR) with $identity / $input markers; an unresolvable
- * marker makes the rule match nothing. */
-function whereToExpr(rule: WhereRule, identity: Identity | null, input: unknown): SqlExpr {
-  const resolved = resolveMarkers(rule as Record<string, unknown>, identity, input);
-  return resolved === null ? FALSE : compileWhere(resolved);
+/** Max relation-traversal nesting depth in a `where` (guards cyclic relations). */
+const MAX_REL_DEPTH = 5;
+
+/** Primary-key column of an entity (the column a belongsTo points at / a hasMany
+ * joins back to). Defaults to `id`. */
+function pkOf(schema: SchemaDef | undefined, entity: string): string {
+  const fields = schema?.[entity]?.fields;
+  if (fields) for (const [n, f] of Object.entries(fields)) if ((f as FieldDef).primaryKey) return n;
+  return "id";
+}
+
+/** Compile a relation predicate `{ rel: { … } }` to a subquery, AND-merging the
+ * related entity's read scope (and rejecting filters on fields it can't read) so
+ * traversal can never widen access beyond a direct read of the target. */
+function relationPredicate(rel: RelationDef, nested: unknown, parentEntity: string, ctx: AclContext, depth: number): SqlExpr {
+  if (depth >= MAX_REL_DEPTH) throw new BadRequest("relation `where` is nested too deep");
+  if (nested === null || typeof nested !== "object" || Array.isArray(nested)) {
+    throw new BadRequest(`relation filter for '${rel.target}' must be an object`);
+  }
+  let inner = compileScopedWhere(nested as Record<string, unknown>, rel.target, ctx, depth + 1);
+
+  // Security: a relation filter must respect the target's read ACL (else it leaks).
+  if (!ctx.system) {
+    const tScope = resolveScope(ctx, rel.target, "read", depth + 1);
+    if (!tScope.allowed) {
+      inner = FALSE; // can't filter through a relation you can't read
+    } else {
+      if (tScope.fields !== null) {
+        const targetRels = (ctx.schema?.[rel.target]?.relations ?? {}) as Record<string, unknown>;
+        for (const k of Object.keys(nested as Record<string, unknown>)) {
+          if (k === "AND" || k === "OR" || targetRels[k]) continue;
+          if (!tScope.fields.includes(k)) throw new AclDenied(rel.target, "read", k);
+        }
+      }
+      if (tScope.where) inner = and(inner, tScope.where);
+    }
+  }
+
+  // belongsTo: parent.<fk> IN (SELECT <target pk> FROM target WHERE inner)
+  // hasMany:   parent.<pk> IN (SELECT <target fk> FROM target WHERE inner)
+  return rel.kind === "belongsTo"
+    ? { t: "sub", outerCol: rel.column, from: rel.target, selectCol: pkOf(ctx.schema, rel.target), where: inner, negate: false }
+    : { t: "sub", outerCol: pkOf(ctx.schema, parentEntity), from: rel.target, selectCol: rel.column, where: inner, negate: false };
+}
+
+/** Compile a where-rule (user query or policy) into a SqlExpr. Plain columns go
+ * through the marker-resolving compiler; relation keys (`{ rel: { … } }`) become
+ * security-scoped subqueries. Supports operators, AND/OR, and $identity/$input
+ * markers; an unresolvable marker makes the rule match nothing. Schema-less
+ * contexts (no relations) behave exactly like the flat compiler. */
+export function compileScopedWhere(rule: Record<string, unknown>, entity: string, ctx: AclContext, depth = 0): SqlExpr {
+  const relations = (ctx.schema?.[entity]?.relations ?? {}) as Record<string, RelationDef>;
+  const parts: SqlExpr[] = [];
+  const plain: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(rule)) {
+    if (k === "AND" || k === "OR") {
+      const groups = (v as Record<string, unknown>[]).map((g) => compileScopedWhere(g, entity, ctx, depth));
+      parts.push(k === "AND" ? and(...groups) : or(...groups));
+    } else if (relations[k]) {
+      parts.push(relationPredicate(relations[k]!, v, entity, ctx, depth));
+    } else {
+      plain[k] = v;
+    }
+  }
+  const resolvedPlain = resolveMarkers(plain, ctx.identity, ctx.input);
+  parts.push(resolvedPlain === null ? FALSE : compileWhere(resolvedPlain));
+  return parts.length === 1 ? parts[0]! : and(...parts);
 }
 
 /** The concrete rules that apply for (entity, action) under this identity — with
@@ -276,12 +340,15 @@ function mergeGrants(grants: Grant[]): Scope {
   };
 }
 
-export function resolveScope(ctx: AclContext, entity: string, action: Action): Scope {
+export function resolveScope(ctx: AclContext, entity: string, action: Action, depth = 0): Scope {
   const grants: Grant[] = [];
   for (const rule of matchedRules(ctx, entity, action)) {
     if (isDeny(rule)) continue;
     if (isAllow(rule)) grants.push(ALLOW_GRANT);
-    else grants.push(grantOf(rule, whereToExpr(rule.where ?? {}, ctx.identity, ctx.input), ctx.identity, ctx.input));
+    else {
+      const where = compileScopedWhere((rule.where ?? {}) as Record<string, unknown>, entity, ctx, depth);
+      grants.push(grantOf(rule, where, entity, ctx, depth));
+    }
   }
   return mergeGrants(grants);
 }
@@ -346,7 +413,8 @@ export function resolveRelationScope(
     if (isAllow(rule) || isDeny(rule)) continue;
     const rel = rule.relations?.[relName];
     if (rel?.directAccess) {
-      grants.push(grantOf(rel, rel.where ? whereToExpr(rel.where, ctx.identity, ctx.input) : null, ctx.identity, ctx.input));
+      const relWhere = rel.where ? compileScopedWhere(rel.where as Record<string, unknown>, target, ctx, 0) : null;
+      grants.push(grantOf(rel, relWhere, target, ctx, 0));
     }
   }
 

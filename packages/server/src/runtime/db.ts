@@ -14,6 +14,7 @@
 import {
   AclDenied,
   ALLOW_ALL,
+  compileScopedWhere,
   effectiveFields,
   projectRow,
   resolveRelationScope,
@@ -30,7 +31,6 @@ import {
   compileCount,
   compileExpr,
   compileSelect,
-  compileWhere,
   eq,
   inList,
   or,
@@ -42,7 +42,7 @@ import {
 import { BadRequest } from "./errors";
 import type { Dialect, Driver } from "./driver";
 import type { EntityFields, FieldDef, RelationDef, SchemaDef } from "../sdk/schema";
-import type { Cell, FieldsOf, InferInsert, InferRow, InferUpdate, RelationsOf, RelationsResult, WhereInput } from "../sdk/infer";
+import type { Cell, FieldsOf, InferInsert, InferRow, InferUpdate, RelationsOf, RelationsResult, WhereClause } from "../sdk/infer";
 
 type Row = Record<string, unknown>;
 type Action = "read" | "create" | "update" | "delete";
@@ -63,7 +63,7 @@ type OrderSpec<S extends SchemaDef, T extends keyof S> = {
 
 export interface FindSpec<S extends SchemaDef, T extends keyof S> {
   from: T;
-  where?: WhereInput<FieldsOf<S[T]>>;
+  where?: WhereClause<S, T>;
   orderBy?: OrderSpec<S, T> | OrderSpec<S, T>[];
   limit?: number;
   offset?: number;
@@ -74,7 +74,7 @@ export interface FindSpec<S extends SchemaDef, T extends keyof S> {
 /** Cursor (keyset) pagination input — `after` is an opaque cursor from a prior page. */
 export interface PageSpec<S extends SchemaDef, T extends keyof S> {
   from: T;
-  where?: WhereInput<FieldsOf<S[T]>>;
+  where?: WhereClause<S, T>;
   orderBy?: OrderSpec<S, T> | OrderSpec<S, T>[];
   limit?: number;
   after?: string;
@@ -93,7 +93,7 @@ type Aggregations<F extends EntityFields> = Record<string, { fn: AggFn; column?:
 
 export interface AggregateSpec<S extends SchemaDef, T extends keyof S> {
   from: T;
-  where?: WhereInput<FieldsOf<S[T]>>;
+  where?: WhereClause<S, T>;
   groupBy?: (keyof FieldsOf<S[T]> & string) | (keyof FieldsOf<S[T]> & string)[];
   aggregations: Aggregations<FieldsOf<S[T]>>;
 }
@@ -154,12 +154,16 @@ export class Db<S extends SchemaDef = SchemaDef> {
   /** Tables read or written during this Db's lifetime. */
   readonly touched = new Set<string>();
   private readonly dialect: Dialect;
+  private readonly acl: AclContext;
 
   constructor(
     private readonly driver: Driver,
-    private readonly acl: AclContext,
+    acl: AclContext,
     private readonly schema: SchemaDef,
   ) {
+    // Ensure the ACL context carries the schema so `where` rules (user + policy) can
+    // traverse relations into subqueries.
+    this.acl = acl.schema ? acl : { ...acl, schema };
     this.dialect = driver.dialect;
   }
 
@@ -224,7 +228,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
     const scope = this.scopeFor(from, "read");
     if (!scope.allowed) throw new AclDenied(from, "read");
 
-    const where = this.readWhere(spec.where, scope);
+    const where = this.readWhere(from, spec.where, scope);
     const orderBy = normalizeOrder(spec.orderBy);
     if (orderBy) this.assertReadableCols(from, scope, orderBy.map((o) => o.column));
     const raw = await this.selectRaw(from, where, orderBy, spec.limit, spec.offset);
@@ -245,7 +249,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
 
     const order = this.orderWithPk(from, spec.orderBy);
     this.assertReadableCols(from, scope, order.map((o) => o.column)); // order + cursor must not leak hidden cols
-    let where = this.readWhere(spec.where, scope);
+    let where = this.readWhere(from, spec.where, scope);
     if (spec.after != null) where = and(where, keysetAfter(order, decodeCursor(spec.after)));
 
     const limit = spec.limit ?? DEFAULT_PAGE_SIZE;
@@ -261,12 +265,12 @@ export class Db<S extends SchemaDef = SchemaDef> {
   }
 
   /** Count rows visible to the caller (ACL read scope applied). */
-  async count<T extends keyof S & string>(spec: { from: T; where?: WhereInput<FieldsOf<S[T]>> }): Promise<number> {
+  async count<T extends keyof S & string>(spec: { from: T; where?: WhereClause<S, T> }): Promise<number> {
     const from = spec.from as string;
     this.touched.add(from);
     const scope = this.scopeFor(from, "read");
     if (!scope.allowed) throw new AclDenied(from, "read");
-    const where = this.readWhere(spec.where, scope);
+    const where = this.readWhere(from, spec.where, scope);
     const { sql, params } = compileCount(from, this.dialect, where);
     const rows = (await this.driver.exec(sql, params)) as { n: number }[];
     return Number(rows[0]?.n ?? 0);
@@ -282,7 +286,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
     G extends (keyof FieldsOf<S[T]> & string) | (keyof FieldsOf<S[T]> & string)[] = never,
   >(spec: {
     from: T;
-    where?: WhereInput<FieldsOf<S[T]>>;
+    where?: WhereClause<S, T>;
     groupBy?: G;
     aggregations: A;
   }): Promise<AggregateResult<FieldsOf<S[T]>, G, A>[]> {
@@ -309,15 +313,17 @@ export class Db<S extends SchemaDef = SchemaDef> {
       for (const c of refs) if (!scope.fields.includes(c)) throw new AclDenied(from, "read", c);
     }
 
-    const where = this.readWhere(spec.where, scope);
+    const where = this.readWhere(from, spec.where, scope);
     const { sql, params } = compileAggregate({ from, where, groupBy, aggregations: spec.aggregations }, this.dialect);
     return (await this.driver.exec(sql, params)) as AggregateResult<FieldsOf<S[T]>, G, A>[];
   }
 
   // --- read internals shared by find/page ---
 
-  private readWhere(userWhere: unknown, scope: Scope): SqlExpr {
-    const userExpr: SqlExpr = userWhere ? compileWhere(userWhere as Row) : TRUE;
+  private readWhere(from: string, userWhere: unknown, scope: Scope): SqlExpr {
+    // Compiles the user's where relation-aware (relation keys → security-scoped
+    // subqueries), then AND-merges the entity's own ACL row scope.
+    const userExpr: SqlExpr = userWhere ? compileScopedWhere(userWhere as Record<string, unknown>, from, this.acl) : TRUE;
     return scope.where ? and(userExpr, scope.where) : userExpr;
   }
 

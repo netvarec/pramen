@@ -20,6 +20,7 @@ import {
   type Identity,
   type FileRef,
   type JsonValue,
+  type WhereClause,
 } from "@pramen/server";
 import { authSchema, authHandlers } from "@pramen/auth";
 
@@ -127,6 +128,11 @@ const handlers = {
 
   listUsers: query((ctx) => ctx.db.find({ from: "users" })),
 
+  // Relation-aware where: filter users by their notes (hasMany traversal).
+  queryUsers: query((ctx, input: { where?: WhereClause<typeof schema, "users"> }) =>
+    ctx.db.find({ from: "users", where: input.where }),
+  ),
+
   // Cursor pagination: pass the previous page's `cursor` back as `after`.
   pageNotes: query((ctx, input: { after?: string; limit?: number; dir?: "asc" | "desc" }) =>
     ctx.db.page({ from: "notes", orderBy: { column: "id", dir: input.dir ?? "asc" }, limit: input.limit ?? 2, after: input.after }),
@@ -188,7 +194,7 @@ const handlers = {
     (
       ctx,
       input: {
-        where?: Parameters<typeof ctx.db.find>[0]["where"];
+        where?: WhereClause<typeof schema, "notes">;
         orderBy?: Parameters<typeof ctx.db.find>[0]["orderBy"];
         limit?: number;
         offset?: number;
@@ -319,6 +325,13 @@ const acl = [
   // flows through the verifier + ACL (here: read notes, no body).
   role("user", [
     policy("user:read", "notes", "read", { fields: ["id", "title", "ownerId", "createdAt"] }),
+  ]),
+  // owneronly: ACL `where` that TRAVERSES a relation — read notes whose owner is the
+  // caller (`note.owner.id == $identity`). Needs a read grant on the target (users),
+  // since a relation filter respects the target's read ACL; here scoped to self.
+  role("owneronly", [
+    policy("owneronly:read", "notes", "read", { where: { owner: { id: $identity("userId") } } }),
+    policy("owneronly:users", "users", "read", { where: { id: $identity("userId") } }),
   ]),
   // teammate: cell-level ACL via the declarative form. Reads EVERY note but sees
   // `body` only on notes it owns; may edit any title but `body` only on its own.

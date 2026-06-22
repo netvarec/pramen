@@ -122,6 +122,10 @@ Cloudflare services should be added (e.g. email via the Send service as `ctx.mai
   or `$input("path")` (request input — a capability/by-unguessable-key read). Public,
   pre-auth routes go in `app.routes` (matched before auth; use `ctx.callPrivileged`
   to forward a privileged mutation into the DO) — for signature-authed webhooks.
+- `where` can traverse relations: `{ owner: { name: "x" } }` (belongsTo/hasMany)
+  compiles to a subquery in both user queries and policy `where`. The related
+  entity's read scope is AND-merged (traversal can't widen access). Cell-`when`
+  predicates stay single-table.
 - Handlers: `query()` / `mutation()` from `@pramen/server`. Context is
   `{ db, kv, files, env, identity }`. Mutations are auto-wrapped in
   `storage.transaction()` by `runtime/dispatch.ts` (commit on return, rollback on

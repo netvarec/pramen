@@ -228,6 +228,14 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
       HS256 tokens the core verifier accepts; PBKDF2-hashed passwords (WebCrypto, no deps); server-assigned
       roles. Core stays verify-only (BYO IdP via JWKS still works). `authorizeTenant` now treats `main` as
       the open default tenant for any caller (ACL still gates data) so issued tokens need no `tenants` claim.
+- [x] Relation-aware `where` (query + ACL): a `where` key naming a relation takes a nested clause over
+      the related entity (`{ owner: { name: "Alice" } }`), compiled to a subquery — belongsTo →
+      `fk IN (SELECT pk FROM target WHERE …)`, hasMany → `pk IN (SELECT fk FROM target WHERE …)` — via a
+      new `sub` SqlExpr node (inner predicate shares the param sequence, so both dialects work). The
+      target's read scope is AND-merged and filters on non-readable target fields are rejected, so
+      traversal can never widen access. Works in user queries (`WhereClause<S,T>`, depth-bounded type) and
+      in policy `where`/`when`; `$identity`/`$input` markers resolve inside nested clauses. Closes the main
+      expressiveness gap vs kvalt. (Cell-`when` stays single-table — relations need a SQL round-trip.)
 - [ ] Remaining go-live items: rate limiting + request-size caps, map constraint violations to 409,
       single-use upload tokens, error reporting, and a `--env production` deploy with real secrets.
 - [ ] Dynamic deploy: ship the app bundle to the DO instead of static import (a runtime `/deploy`).

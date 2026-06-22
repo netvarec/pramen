@@ -62,6 +62,22 @@ export type WhereInput<F extends EntityFields> = {
   OR?: WhereInput<F>[];
 };
 
+// --- relation-aware where (a relation key takes a nested clause over its target,
+// compiled to a security-scoped subquery). Depth-bounded so the type stays finite
+// under cyclic relations (e.g. user.notes ↔ note.owner). ---
+
+type PrevDepth = [never, 0, 1, 2, 3];
+type RelTargetTable<S extends SchemaDef, R> = R extends { target: infer Tg } ? (Tg extends keyof S ? Tg : never) : never;
+
+/** A `where` clause: column predicates + AND/OR, plus relation keys that take a
+ * nested `WhereClause` over the related entity (traversal). */
+export type WhereClause<S extends SchemaDef, T extends keyof S, D extends number = 3> = WhereInput<FieldsOf<S[T]>> &
+  ([D] extends [never]
+    ? object
+    : {
+        [K in keyof RelationsOf<S[T]>]?: WhereClause<S, RelTargetTable<S, RelationsOf<S[T]>[K]>, PrevDepth[D]>;
+      });
+
 /** Patch input for updates: every column optional, value typed (nullable). */
 export type InferUpdate<F extends EntityFields> = Partial<{ [K in keyof F]: FieldTsType<F[K]> | null }>;
 

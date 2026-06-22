@@ -60,6 +60,7 @@ export type {
   ProjectedRow,
   RelationsOf,
   RelationsResult,
+  WhereClause,
   WhereInput,
   WhereOps,
 } from "./sdk/infer";

@@ -23,7 +23,11 @@ export type SqlExpr =
   | { t: "in"; col: string; values: unknown[]; negate: boolean }
   | { t: "null"; col: string; negate: boolean }
   | { t: "and"; parts: SqlExpr[] }
-  | { t: "or"; parts: SqlExpr[] };
+  | { t: "or"; parts: SqlExpr[] }
+  // Relation traversal: `outerCol IN (SELECT selectCol FROM from WHERE where)`.
+  // Built by the ACL layer (which knows schema + the target's read scope); the
+  // inner predicate compiles inline so placeholders share the outer param sequence.
+  | { t: "sub"; outerCol: string; from: string; selectCol: string; where: SqlExpr; negate: boolean };
 
 export const TRUE: SqlExpr = { t: "true" };
 export const FALSE: SqlExpr = { t: "false" };
@@ -104,6 +108,16 @@ export function compileExpr(expr: SqlExpr, dialect: Dialect, params: unknown[] =
       const sql = expr.parts.map((p) => compileExpr(p, dialect, params).sql).join(sep);
       return { sql: expr.parts.length > 1 ? `(${sql})` : sql, params };
     }
+    case "sub": {
+      // Inner predicate shares `params`, so placeholder numbering stays correct
+      // across dialects (? and $n alike).
+      const inner = compileExpr(expr.where, dialect, params).sql;
+      const op = expr.negate ? "NOT IN" : "IN";
+      return {
+        sql: `${dialect.id(expr.outerCol)} ${op} (SELECT ${dialect.id(expr.selectCol)} FROM ${dialect.id(expr.from)} WHERE ${inner})`,
+        params,
+      };
+    }
   }
 }
 
@@ -161,6 +175,10 @@ export function evalExpr(expr: SqlExpr, row: Record<string, unknown>): boolean {
       return expr.parts.every((p) => evalExpr(p, row));
     case "or":
       return expr.parts.some((p) => evalExpr(p, row));
+    case "sub":
+      // Relation traversal needs a SQL round-trip; it isn't supported in the
+      // in-memory cell-ACL `when` evaluator (those predicates must be single-table).
+      throw new Error("relation predicates are not supported in cell-level `when`");
   }
 }
 
