@@ -11,6 +11,7 @@ import { compileAcl } from "./runtime/acl";
 import { D1Driver, type Driver } from "./runtime/driver";
 import { toResponse } from "./runtime/errors";
 import { Kv } from "./runtime/kv";
+import { listDOs } from "./runtime/registry";
 import { createFiles, handleFileRequest, R2Adapter } from "./runtime/storage";
 import type { Identity } from "./sdk/acl";
 import type { PramenApp } from "./pramen";
@@ -169,11 +170,11 @@ export function makeWorker(app: PramenApp) {
 
     const identity = await resolveIdentity(req, strategyFor(env));
 
-    // --- admin: list known tenants ---
+    // --- admin: list known (tenant, partition) DOs from the registry ---
     if (url.pathname === "/tenants") {
       if (!isAdmin(identity)) return withCors(forbidden("tenants"), cors);
-      const list = await env.KV.list({ prefix: "tenant:" });
-      return withCors(json({ ok: true, result: list.keys.map((k) => k.name.slice("tenant:".length)) }), cors);
+      const result = await listDOs(env.KV);
+      return withCors(json({ ok: true, result }), cors);
     }
 
     // --- admin: point-in-time recovery for a tenant ---

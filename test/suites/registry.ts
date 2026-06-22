@@ -22,7 +22,12 @@ export async function runRegistry(base: string): Promise<void> {
   const asAdmin = await listTenants(admin);
   const body = await asAdmin.json();
   assert(asAdmin.status === 200 && body.ok === true, "admin can list tenants");
-  assert(Array.isArray(body.result) && body.result.includes(probe), "the touched tenant is registered & listed");
+  // /tenants now returns { tenant, partition }[] (was a string array). The probe
+  // touched only the default partition, so it appears as { tenant: probe, partition: "default" }.
+  assert(
+    Array.isArray(body.result) && body.result.some((r: { tenant: string; partition: string }) => r.tenant === probe && r.partition === "default"),
+    "the touched tenant is registered & listed",
+  );
 
   const asReader = await listTenants(reader);
   assert(asReader.status === 403, "non-admin cannot list tenants");

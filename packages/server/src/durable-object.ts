@@ -24,6 +24,7 @@ import { compileAcl, type AclContext, type CompiledAcl } from "./runtime/acl";
 import { DoSqliteDriver, type Driver } from "./runtime/driver";
 import { BadRequest, toResponse, toWsError } from "./runtime/errors";
 import { Kv } from "./runtime/kv";
+import { registryKey } from "./runtime/registry";
 import { createFiles, R2Adapter, type Files } from "./runtime/storage";
 import type { Identity } from "./sdk/acl";
 import type { PramenApp } from "./pramen";
@@ -239,7 +240,10 @@ export class PramenDOBase extends DurableObject<DoEnv> {
       this.registered = true;
       return;
     }
-    await this.env.KV.put(`tenant:${name}`, JSON.stringify({ firstSeen: Date.now() }));
+    // Route the write through registryKey so a later issue only has to supply the
+    // real partition. This DO does not yet learn its partition from a header (that's
+    // a later issue), so default it for now — the key stays the bare `tenant:<name>`.
+    await this.env.KV.put(registryKey(name), JSON.stringify({ firstSeen: Date.now() }));
     await this.driver.exec(`INSERT OR REPLACE INTO _pramen_meta (key, value) VALUES ('registered', ?)`, [name]);
     this.registered = true;
   }
