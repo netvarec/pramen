@@ -1,12 +1,19 @@
 name: release
 
-# Publishes @pramen/* to npm. Trigger by pushing a version tag (e.g. `v0.0.2`)
-# after bumping the package versions, or run manually from the Actions tab.
-# Requires a repo secret NPM_TOKEN (an npm "Automation" access token).
+# Publishes @pramen/* to npm via OIDC **trusted publishing** — no NPM_TOKEN.
+# The packages have this repo + this workflow (release.yml) registered as a
+# trusted publisher on npmjs.com, so npm mints a short-lived OIDC credential at
+# publish time (and attaches provenance automatically). Trigger by pushing a
+# version tag (e.g. `v0.0.2`) after `bun run bump`, or run manually from the
+# Actions tab.
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # required for npm OIDC trusted publishing + provenance
 
 jobs:
   publish:
@@ -16,6 +23,14 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+      # Node + npm do the actual publish: bun publish has no OIDC/trusted-publishing
+      # support, npm (>= 11.5.1) does. Build/typecheck/test still run on bun.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: Use an npm that supports trusted publishing (>= 11.5.1)
+        run: npm install -g npm@latest
       - name: Install (workspaces)
         run: bun install --frozen-lockfile
       - name: Typecheck
@@ -24,10 +39,5 @@ jobs:
         run: bun test
         env:
           WRANGLER_SEND_METRICS: "false"
-      # Write the token via an env var (never interpolate the secret into `run`).
-      - name: Configure npm auth
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
       - name: Publish @pramen/* (build + publish in dependency order)
         run: bun run release
