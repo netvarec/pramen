@@ -34,6 +34,27 @@ Field builders: `id()` (auto-increment integer PK), `textId()` (text PK), `text(
 `defaultTo(value)`, `primaryKey()`, and `generated()` — e.g.
 `code: unique(t.text())`, `status: defaultTo(t.text(), "pending")`.
 
+### Defaults
+
+`defaultTo(field, value)` gives a column a `DEFAULT` and makes it optional on insert.
+Pass a **literal** (rendered as a quoted SQL literal) or a **SQL expression** via the
+`expr` helper, rendered raw:
+
+```ts
+posts: Entity((t) => ({
+  id: t.id(),
+  status: defaultTo(t.text(), "draft"),       // literal  -> DEFAULT 'draft'
+  createdAt: defaultTo(t.text(), expr.now()),  // expr     -> DEFAULT (datetime('now'))
+}));
+
+await ctx.db.insert("posts", { });
+// -> { id: 1, status: "draft", createdAt: "2026-06-22 21:05:00" }  (DB-filled)
+```
+
+`expr.now()` is the current UTC timestamp as TEXT (the `CURRENT_TIMESTAMP` shape);
+`expr.raw(sql)` is an escape hatch for any other SQLite default expression. Expr-default
+columns are filled by the database, so they're optional on insert.
+
 ### UUIDs
 
 `t.uuid()` is a string column. Wrap it with `generated()` to auto-mint a v4 on

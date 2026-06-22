@@ -259,7 +259,14 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
       (compose, like `renamedFrom`). UNIQUE/index emit `CREATE [UNIQUE] INDEX IF NOT EXISTS` (added to an
       existing table without a rebuild); DEFAULT is inline (and `ADD COLUMN ... NOT NULL DEFAULT` backfills),
       and a defaulted column is optional on insert. (`t.json()` already landed; chained `.method()` syntax
-      and a `timestamps()` auto-now helper — which needs SQL-expression defaults — remain.)
+      remains.)
+- [x] SQL-expression defaults (mirrors kvalt's `expr`): `defaultTo(field, expr.now())` / `expr.raw(sql)` —
+      an `ExprDefault` wraps raw SQL, rendered UNQUOTED and parenthesized (`DEFAULT (datetime('now'))`) so a
+      function-call default is legal in SQLite; `expr.now()` is the current UTC timestamp as TEXT
+      (`CURRENT_TIMESTAMP`-shaped). Expr-default columns are optional on insert (DB-filled). SQLite forbids
+      `ALTER ADD COLUMN` with a non-constant default, so adding one to an existing table falls back to a
+      table rebuild — additive (the rebuild's INSERT omits the column, so SQLite backfills existing rows via
+      the column's DEFAULT) and ungated by `PRAMEN_ALLOW_DESTRUCTIVE`. Unblocks a future `timestamps()` helper.
 - [x] `t.uuid()` column + `generated()`/`primaryKey()` modifiers (mirrors kvalt): a TEXT column typed as
       `string`. `generated()` auto-mints a v4 via `crypto.randomUUID()` on insert when omitted (uuid-only —
       rejected at schema construction otherwise) and makes the column optional on insert; the minted value
