@@ -20,7 +20,9 @@ export type FieldTsType<D extends FieldDef> = D["type"] extends "text"
       ? JsonValue
       : D["type"] extends "fileRef"
         ? FileRef
-        : number; // integer | real
+        : D["type"] extends "uuid"
+          ? string
+          : number; // integer | real
 
 /** A column is non-null iff it's NOT NULL or a primary key. */
 type IsNotNull<D extends FieldDef> = D extends { notNull: true }
@@ -89,15 +91,18 @@ export type WhereClause<S extends SchemaDef, T extends keyof S, D extends number
 /** Patch input for updates: every column optional, value typed (nullable). */
 export type InferUpdate<F extends EntityFields> = Partial<{ [K in keyof F]: FieldTsType<F[K]> | null }>;
 
-// Insert: a NOT NULL column is required unless it's auto-generated (autoIncrement)
-// or has a DEFAULT (the DB fills it); everything else is optional.
+// Insert: a NOT NULL column is required unless it's auto-generated (autoIncrement,
+// or a `generated()` uuid the runtime mints) or has a DEFAULT (the DB fills it);
+// everything else is optional.
 type RequiredInsertKeys<F extends EntityFields> = {
   [K in keyof F]: IsNotNull<F[K]> extends true
     ? F[K] extends { autoIncrement: true }
       ? never
-      : F[K] extends { default: DefaultValue }
+      : F[K] extends { generated: true }
         ? never
-        : K
+        : F[K] extends { default: DefaultValue }
+          ? never
+          : K
     : never;
 }[keyof F];
 type OptionalInsertKeys<F extends EntityFields> = Exclude<keyof F, RequiredInsertKeys<F>>;

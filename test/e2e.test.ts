@@ -25,6 +25,7 @@ import { runRecovery } from "./suites/recovery";
 import { runKv } from "./suites/kv";
 import { runClient } from "./suites/client";
 import { runHardening } from "./suites/hardening";
+import { runUuid } from "./suites/uuid";
 
 const ROOT = join(import.meta.dir, "..");
 const PORT = 8788;
@@ -86,4 +87,5 @@ describe("pramen e2e", () => {
   test("@pramen/client (typed RPC + live subscription)", () => runClient(BASE), 30_000);
   test("live queries + row-level invalidation", () => runLive(BASE, WS), 30_000);
   test("hardening: input validation + safe errors", () => runHardening(BASE), 30_000);
+  test("uuid field type (generated PK + non-PK, write validation)", () => runUuid(BASE), 30_000);
 });

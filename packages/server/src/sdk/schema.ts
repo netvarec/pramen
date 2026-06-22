@@ -9,8 +9,9 @@
 
 // "json" and "fileRef" are logical types stored as TEXT (JSON). The value a handler
 // reads/writes is the parsed value (a JsonValue, or a FileRef) — db.ts codecs it
-// to/from the column, and infer.ts types it accordingly.
-export type FieldType = "text" | "integer" | "real" | "boolean" | "json" | "fileRef";
+// to/from the column, and infer.ts types it accordingly. "uuid" is a TEXT column
+// typed as `string`; wrap it with `generated()` to auto-mint a v4 on insert.
+export type FieldType = "text" | "integer" | "real" | "boolean" | "json" | "fileRef" | "uuid";
 
 /** A SQL DEFAULT literal (used by the migrator + DDL). */
 export type DefaultValue = string | number | boolean | null;
@@ -24,6 +25,10 @@ export interface FieldDef {
   readonly unique?: boolean;
   /** A (non-unique) index on this column. */
   readonly index?: boolean;
+  /** Auto-generate the value on insert when the caller omits it (uuid columns only,
+   * minted via crypto.randomUUID()). Set by the `generated()` modifier; makes the
+   * column optional on insert. */
+  readonly generated?: boolean;
   /** A column DEFAULT (a literal). Makes the column optional on insert. */
   readonly default?: DefaultValue;
   /** Migration hint: this column was previously named X. On boot the migrator
@@ -45,6 +50,10 @@ const builders = {
   /** A reference to a stored file (R2 object). Holds JSON metadata (a FileRef),
    * not the bytes — upload/download go through ctx.files + the Worker /files/* route. */
   fileRef: () => ({ type: "fileRef" }) as const,
+  /** A UUID stored in a TEXT column (typed as `string`). Wrap with `generated()` to
+   * auto-mint a v4 on insert, and/or `primaryKey()` to use it as the PK — the kvalt
+   * pattern `id: primaryKey(generated(t.uuid()))`. A provided value is validated. */
+  uuid: () => ({ type: "uuid" }) as const,
 };
 
 export type FieldBuilders = typeof builders;
@@ -113,6 +122,22 @@ export function indexed<F extends FieldDef>(field: F): F & { readonly index: tru
 /** Give the column a DEFAULT (a literal) — also makes it optional on insert. */
 export function defaultTo<F extends FieldDef, D extends DefaultValue>(field: F, value: D): F & { readonly default: D } {
   return { ...field, default: value };
+}
+
+/** Mark a column as the PRIMARY KEY (implies NOT NULL). Composes with any builder,
+ * e.g. `id: primaryKey(generated(t.uuid()))` or `code: primaryKey(t.text())`. */
+export function primaryKey<F extends FieldDef>(field: F): F & { readonly primaryKey: true; readonly notNull: true } {
+  return { ...field, primaryKey: true, notNull: true };
+}
+
+/** Auto-generate the column's value on insert when omitted — uuid only (minted via
+ * crypto.randomUUID()). Makes the column optional on insert. Rejected at schema
+ * construction on a non-uuid column, since the runtime only knows how to mint uuids. */
+export function generated<F extends FieldDef>(field: F): F & { readonly generated: true } {
+  if (field.type !== "uuid") {
+    throw new Error(`generated() is only valid on a uuid column (got '${field.type}')`);
+  }
+  return { ...field, generated: true };
 }
 
 export type SchemaDef = Record<string, EntityDef<EntityFields, RelationDefs>>;

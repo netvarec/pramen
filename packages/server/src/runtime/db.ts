@@ -42,6 +42,7 @@ import {
 import { BadRequest } from "./errors";
 import type { Dialect, Driver } from "./driver";
 import type { EntityFields, FieldDef, RelationDef, SchemaDef } from "../sdk/schema";
+import { isValidUuid } from "../sdk/uuid";
 import type { Cell, FieldsOf, InferInsert, InferRow, InferUpdate, RelationsOf, RelationsResult, WhereClause } from "../sdk/infer";
 
 type Row = Record<string, unknown>;
@@ -365,6 +366,35 @@ export class Db<S extends SchemaDef = SchemaDef> {
       .map(([n]) => n);
   }
 
+  /** Mint a UUID for every `generated()` uuid column the caller omitted, mutating
+   * `vals`. Returns the columns it filled — server-minted, so the insert path treats
+   * them like forced `set` values (bypassing the writable-field ACL check). */
+  private fillGeneratedUuids(table: string, vals: Row): string[] {
+    const fields = this.schema[table]?.fields;
+    if (!fields) return [];
+    const minted: string[] = [];
+    for (const [name, f] of Object.entries(fields)) {
+      const fd = f as FieldDef;
+      if (fd.type === "uuid" && fd.generated && vals[name] == null) {
+        vals[name] = crypto.randomUUID();
+        minted.push(name);
+      }
+    }
+    return minted;
+  }
+
+  /** Reject a malformed value on any uuid column present in `row` (mirrors kvalt's
+   * write-time isValidUuid). Absent columns are not checked. */
+  private assertValidUuids(table: string, row: Row): void {
+    const fields = this.schema[table]?.fields;
+    if (!fields) return;
+    for (const [name, f] of Object.entries(fields)) {
+      if ((f as FieldDef).type !== "uuid") continue;
+      const v = row[name];
+      if (v != null && !isValidUuid(v)) throw new BadRequest(`invalid UUID for '${name}'`);
+    }
+  }
+
   private decodeRows(table: string, rows: Row[]): Row[] {
     const cols = this.jsonColsOf(table);
     if (cols.length === 0) return rows;
@@ -474,8 +504,12 @@ export class Db<S extends SchemaDef = SchemaDef> {
     const vals = { ...(values as Row) };
     const { set, validators } = this.writeRules(table, "create");
     Object.assign(vals, set); // forced server values first, so a conditional `when` can see them
-    this.checkWriteFields(table, "create", scope, Object.keys(vals), vals, new Set(Object.keys(set)));
+    // Auto-mint generated() uuid columns the caller omitted; server-minted, so they
+    // join `set` in the bypass-list for the writable-field check.
+    const generatedCols = this.fillGeneratedUuids(table, vals);
+    this.checkWriteFields(table, "create", scope, Object.keys(vals), vals, new Set([...Object.keys(set), ...generatedCols]));
     this.runValidators(validators, vals);
+    this.assertValidUuids(table, vals);
 
     const cols = Object.keys(vals);
     const jsonCols = new Set(this.jsonColsOf(table));
@@ -530,6 +564,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
     }
     this.checkWriteFields(table, "update", scope, cols, evalRow, new Set(Object.keys(set)));
     this.runValidators(validators, p);
+    this.assertValidUuids(table, p);
 
     const params: unknown[] = [];
     const jsonCols = new Set(this.jsonColsOf(table));
