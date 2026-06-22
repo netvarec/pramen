@@ -53,6 +53,13 @@ a dirty working tree** — the bump must be its own commit.
    ```bash
    git push --follow-tags
    ```
+   Then **confirm the tag actually reached the remote** — the workflow triggers on the
+   tag, not the commit, so a tag that didn't push means nothing publishes:
+   ```bash
+   git ls-remote --tags origin v<X.Y.Z>
+   ```
+   (`bump.ts` creates an *annotated* tag so `--follow-tags` pushes it. If it ever comes
+   up empty, push it explicitly: `git push origin v<X.Y.Z>`.)
 
 5. **Watch the publish.** The tag push runs the `release` workflow. Monitor it and
    report the outcome:
@@ -68,10 +75,20 @@ a dirty working tree** — the bump must be its own commit.
   changesets; don't hand-edit individual versions out of lockstep.
 - **Adding a new `@pramen/*` package to the release set:** add it to the `PKGS` array
   in **both** `scripts/bump.ts` and `scripts/publish.ts` (`publish.ts` lists them in
-  dependency order: `client → server → react → auth → admin`), and register the repo
-  as a trusted publisher for the package on npmjs.com (OIDC). It then joins on the
+  dependency order: `client → server → react → auth → admin`). It then joins on the
   next tag without forcing a version change of the rest (publish skips already-live
   versions).
+  - **Critical npm-side prerequisite (do this BEFORE the first release that includes
+    the new package):** on npmjs.com, configure the package's **Trusted Publisher**
+    (Settings → Trusted Publisher → GitHub Actions: repo `netvarec/pramen`, workflow
+    `release.yml`, no environment) — matching the existing packages. Without it, the
+    OIDC publish is rejected with **`E404` "could not be found or you do not have
+    permission"** (npm returns 404, not 403, for an unauthorized trusted-publish), and
+    the run dies at that package — the ones before it in dependency order still
+    publish, leaving the registry out of lockstep. For a brand-new scoped package the
+    name must also exist first (or have a *pending* trusted publisher configured); this
+    is a manual, owner-only step that cannot be done from CI. After fixing it, just
+    re-run the failed job (`gh run rerun <run-id> --failed`) — no new version needed.
 - **Manual trigger:** `release.yml` also has `workflow_dispatch` — re-run from the
   Actions tab (or `gh workflow run release.yml`) without a new tag, e.g. to retry a
   failed publish on the same version.
@@ -81,5 +98,4 @@ a dirty working tree** — the bump must be its own commit.
 - **Tag = source of truth.** If a bump commits but the push fails, the tag already
   exists locally — fix the issue and `git push --follow-tags` again rather than
   re-bumping (which would skip to the next version).
-</content>
-</invoke>
+
