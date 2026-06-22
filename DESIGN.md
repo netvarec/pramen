@@ -233,9 +233,16 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
       `fk IN (SELECT pk FROM target WHERE …)`, hasMany → `pk IN (SELECT fk FROM target WHERE …)` — via a
       new `sub` SqlExpr node (inner predicate shares the param sequence, so both dialects work). The
       target's read scope is AND-merged and filters on non-readable target fields are rejected, so
-      traversal can never widen access. Works in user queries (`WhereClause<S,T>`, depth-bounded type) and
-      in policy `where`/`when`; `$identity`/`$input` markers resolve inside nested clauses. Closes the main
-      expressiveness gap vs kvalt. (Cell-`when` stays single-table — relations need a SQL round-trip.)
+      traversal can never widen access. Works in user queries (`WhereClause<S,T>`, depth-bounded type — the
+      bound is kept in lockstep with the runtime `MAX_REL_DEPTH`) and in policy `where`/`when`;
+      `$identity`/`$input` markers resolve inside nested clauses. Closes the main expressiveness gap vs
+      kvalt. Two rules make the security model explicit: (1) a user `where` that filters on a column the
+      caller can't read is denied with a 403 — same as ordering/aggregating by a hidden column — since a
+      filter is otherwise an oracle for the hidden value (a relation into a table with no read grant just
+      yields no rows); (2) `AND`/`OR` branches compile independently, so an unresolvable `$identity`/`$input`
+      marker collapses only its own branch (boolean logic), letting a sibling literal branch still match.
+      Cell-`when` stays single-table — a relation key there is rejected at authoring time (relations need a
+      SQL round-trip, which the in-memory per-row evaluator can't do).
 - [ ] Remaining go-live items: rate limiting + request-size caps, map constraint violations to 409,
       single-use upload tokens, error reporting, and a `--env production` deploy with real secrets.
 - [ ] Dynamic deploy: ship the app bundle to the DO instead of static import (a runtime `/deploy`).

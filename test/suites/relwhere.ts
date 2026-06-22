@@ -50,6 +50,25 @@ export async function runRelWhere(base: string): Promise<void> {
     "relwhere: relation filter respects the target's read ACL (no users read → empty)",
   );
 
+  // --- security: filtering on a field the caller can't read is denied (403), the
+  // same as ordering/aggregating by a hidden column — a filter is otherwise an
+  // oracle for the hidden value. reader has no `body` grant. ---
+  const filterHidden = await call("queryNotes", { where: { body: "x" } }, reader);
+  assert(
+    filterHidden.status === 403 && filterHidden.body.code === "forbidden",
+    "relwhere: filtering on a non-readable column is denied (403)",
+  );
+
+  // --- OR-branch marker semantics: an unresolvable $identity marker collapses ONLY
+  // its own branch (boolean logic), so the sibling literal branch still matches. The
+  // `ghost` claim never exists, so the orfallback scope reduces to `title == "a1"`. ---
+  const orcaller = await token("ghosthunter", ["orfallback"], { tenants: [TENANT] });
+  const fallback = await call("queryNotes", {}, orcaller);
+  assert(
+    fallback.body.ok && fallback.body.result.length === 1 && fallback.body.result[0].title === "a1",
+    "relwhere: unresolvable marker in an OR branch collapses only that branch (sibling literal still matches)",
+  );
+
   // --- ACL policy `where` that traverses a relation: owneronly = note.owner.id == me ---
   const aliceOnly = await token("u-alice", ["owneronly"], { tenants: [TENANT] });
   const mine = await call("listNotes", {}, aliceOnly);

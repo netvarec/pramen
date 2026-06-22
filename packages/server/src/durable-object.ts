@@ -342,7 +342,9 @@ export class PramenDOBase extends DurableObject<DoEnv> {
   }
 
   private ctxFor(identity: Identity | null): AclContext {
-    return { acl: this.acl, identity };
+    // Carry the schema so any consumer of this context (not just Db) can compile
+    // relation-aware `where` rules into subqueries.
+    return { acl: this.acl, identity, schema: this.app.schema };
   }
 
   // The DO env (bindings + vars + secrets) handed to handlers as ctx.env. Loosely

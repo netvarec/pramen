@@ -22,7 +22,7 @@ import {
   isInputMarker,
   isResolver,
 } from "../sdk/acl";
-import { and, compileWhere, evalExpr, FALSE, or, type SqlExpr } from "./read-engine";
+import { and, compileWhere, evalExpr, FALSE, or, TRUE, type SqlExpr } from "./read-engine";
 import { BadRequest, PramenError } from "./errors";
 import type { FieldDef, RelationDef, SchemaDef } from "../sdk/schema";
 
@@ -138,7 +138,9 @@ function grantOf(rule: PolicyRules | RelationAclRule, where: SqlExpr | null, ent
     where,
     fields: rule.fields ?? null,
     conditional: (rule.conditionalFields ?? []).map((cf) => ({
-      when: compileScopedWhere(cf.when as Record<string, unknown>, entity, ctx, depth),
+      // Cell-level `when` is evaluated per-row in memory (evalExpr), so it must stay
+      // single-table — `allowRelations: false` rejects a relation key up front.
+      when: compileScopedWhere(cf.when as Record<string, unknown>, entity, ctx, depth, false),
       fields: cf.fields,
     })),
     fieldsFns: rule.fieldsFn ? [rule.fieldsFn] : [],
@@ -176,23 +178,18 @@ function resolveValue(v: unknown, identity: Identity | null, input: unknown): un
   return v;
 }
 
-// Resolve every $identity marker in a policy where-rule (bare values, operator
-// objects, in/notIn arrays, AND/OR groups). Returns a plain WhereInput, or null
-// if any marker is unresolvable — in which case the rule matches nothing.
+// Resolve every $identity/$input marker in a SINGLE level of a where-rule (bare
+// values, operator objects, in/notIn arrays). AND/OR groups are split off by
+// `compileScopedWhere` before this runs, so this only ever sees plain columns.
+// Returns a plain WhereInput, or null if any marker is unresolvable — in which
+// case this branch matches nothing (FALSE). Note: because branches are resolved
+// independently, an unresolvable marker nullifies only its own branch, not the
+// whole rule — so `OR: [{ x: $identity(...) }, { public: true }]` still matches
+// the `public` branch for a caller whose marker can't resolve. (See the comment
+// on `compileScopedWhere`.)
 function resolveMarkers(rule: Record<string, unknown>, identity: Identity | null, input: unknown): Record<string, unknown> | null {
   const out: Record<string, unknown> = {};
   for (const [key, v] of Object.entries(rule)) {
-    if (key === "AND" || key === "OR") {
-      const groups: Record<string, unknown>[] = [];
-      for (const g of v as Record<string, unknown>[]) {
-        const resolved = resolveMarkers(g, identity, input);
-        if (resolved === null) return null;
-        groups.push(resolved);
-      }
-      out[key] = groups;
-      continue;
-    }
-
     const isMarker = isIdentityMarker(v) || isInputMarker(v);
     if (v !== null && typeof v === "object" && !isMarker && !Array.isArray(v)) {
       const ops: Record<string, unknown> = {};
@@ -225,8 +222,10 @@ function resolveMarkers(rule: Record<string, unknown>, identity: Identity | null
   return out;
 }
 
-/** Max relation-traversal nesting depth in a `where` (guards cyclic relations). */
-const MAX_REL_DEPTH = 5;
+/** Max relation-traversal nesting depth in a `where` (guards cyclic relations).
+ * Kept in lockstep with the `WhereClause` type's depth bound in sdk/infer.ts — if
+ * you change one, change the other. */
+export const MAX_REL_DEPTH = 5;
 
 /** Primary-key column of an entity (the column a belongsTo points at / a hasMany
  * joins back to). Defaults to `id`. */
@@ -247,6 +246,13 @@ function relationPredicate(rel: RelationDef, nested: unknown, parentEntity: stri
   let inner = compileScopedWhere(nested as Record<string, unknown>, rel.target, ctx, depth + 1);
 
   // Security: a relation filter must respect the target's read ACL (else it leaks).
+  // Two distinct "no" outcomes, matching how the rest of the read path behaves:
+  //   - No read grant on the target at all  -> the relation simply yields no rows
+  //     to match against (FALSE, empty result) — a valid query over a table you
+  //     can't see.
+  //   - Readable target, but the filter names a column you can't read -> 403, the
+  //     same as ordering/aggregating by a hidden column (you referenced something
+  //     forbidden). Top-level user `where` enforces the same rule (Db.readWhere).
   if (!ctx.system) {
     const tScope = resolveScope(ctx, rel.target, "read", depth + 1);
     if (!tScope.allowed) {
@@ -273,24 +279,48 @@ function relationPredicate(rel: RelationDef, nested: unknown, parentEntity: stri
 /** Compile a where-rule (user query or policy) into a SqlExpr. Plain columns go
  * through the marker-resolving compiler; relation keys (`{ rel: { … } }`) become
  * security-scoped subqueries. Supports operators, AND/OR, and $identity/$input
- * markers; an unresolvable marker makes the rule match nothing. Schema-less
- * contexts (no relations) behave exactly like the flat compiler. */
-export function compileScopedWhere(rule: Record<string, unknown>, entity: string, ctx: AclContext, depth = 0): SqlExpr {
+ * markers; an unresolvable marker makes its branch match nothing. Schema-less
+ * contexts (no relations) behave exactly like the flat compiler.
+ *
+ * Marker semantics: AND/OR branches compile independently, so an unresolvable
+ * marker collapses ONLY its own branch to FALSE — it does not nullify sibling
+ * branches. `OR: [{ ownerId: $identity("userId") }, { public: true }]` therefore
+ * still grants the `public` branch to a caller whose `userId` can't resolve (and,
+ * conversely, an unresolvable marker in one OR branch no longer revokes access the
+ * other branches would grant). This is plain boolean logic; the cases are covered
+ * by the relwhere suite.
+ *
+ * `allowRelations` is false for single-table contexts (cell-level `when`, which is
+ * evaluated in memory and cannot do a SQL round-trip): a relation key then raises a
+ * clear authoring error instead of emitting a `sub` node that throws at read time. */
+export function compileScopedWhere(
+  rule: Record<string, unknown>,
+  entity: string,
+  ctx: AclContext,
+  depth = 0,
+  allowRelations = true,
+): SqlExpr {
   const relations = (ctx.schema?.[entity]?.relations ?? {}) as Record<string, RelationDef>;
   const parts: SqlExpr[] = [];
   const plain: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(rule)) {
     if (k === "AND" || k === "OR") {
-      const groups = (v as Record<string, unknown>[]).map((g) => compileScopedWhere(g, entity, ctx, depth));
+      const groups = (v as Record<string, unknown>[]).map((g) => compileScopedWhere(g, entity, ctx, depth, allowRelations));
       parts.push(k === "AND" ? and(...groups) : or(...groups));
     } else if (relations[k]) {
+      if (!allowRelations) {
+        throw new BadRequest(`cell-level \`when\` cannot traverse relations: '${k}' (relations need a SQL round-trip)`);
+      }
       parts.push(relationPredicate(relations[k]!, v, entity, ctx, depth));
     } else {
       plain[k] = v;
     }
   }
-  const resolvedPlain = resolveMarkers(plain, ctx.identity, ctx.input);
-  parts.push(resolvedPlain === null ? FALSE : compileWhere(resolvedPlain));
+  if (Object.keys(plain).length > 0) {
+    const resolvedPlain = resolveMarkers(plain, ctx.identity, ctx.input);
+    parts.push(resolvedPlain === null ? FALSE : compileWhere(resolvedPlain));
+  }
+  if (parts.length === 0) return TRUE; // empty where -> match all
   return parts.length === 1 ? parts[0]! : and(...parts);
 }
 

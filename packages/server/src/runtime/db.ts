@@ -161,8 +161,9 @@ export class Db<S extends SchemaDef = SchemaDef> {
     acl: AclContext,
     private readonly schema: SchemaDef,
   ) {
-    // Ensure the ACL context carries the schema so `where` rules (user + policy) can
-    // traverse relations into subqueries.
+    // The ACL context normally already carries the schema (set at the dispatch / DO
+    // boundary). Inject it as a safety net so a context built without one can still
+    // compile relation-aware `where` rules into subqueries rather than failing obscurely.
     this.acl = acl.schema ? acl : { ...acl, schema };
     this.dialect = driver.dialect;
   }
@@ -323,8 +324,29 @@ export class Db<S extends SchemaDef = SchemaDef> {
   private readWhere(from: string, userWhere: unknown, scope: Scope): SqlExpr {
     // Compiles the user's where relation-aware (relation keys → security-scoped
     // subqueries), then AND-merges the entity's own ACL row scope.
+    if (userWhere) this.assertReadableWhere(from, scope, userWhere);
     const userExpr: SqlExpr = userWhere ? compileScopedWhere(userWhere as Record<string, unknown>, from, this.acl) : TRUE;
     return scope.where ? and(userExpr, scope.where) : userExpr;
+  }
+
+  /** Reject a user `where` that filters on a column the caller cannot read (closes
+   * the same info-leak as ordering by a hidden column: a filter is an oracle for a
+   * hidden field's values). Mirrors `assertReadableCols`. Relation keys are skipped
+   * here — they're filtered through the TARGET's read scope in acl.relationPredicate
+   * — and AND/OR groups recurse. Operator objects (`{ gt: … }`) sit under the column
+   * key, so checking the top-level keys is sufficient. */
+  private assertReadableWhere(from: string, scope: Scope, where: unknown): void {
+    if (scope.fields === null || where == null || typeof where !== "object") return;
+    const relations = this.schema[from]?.relations ?? {};
+    for (const [k, v] of Object.entries(where as Record<string, unknown>)) {
+      if (k === "AND" || k === "OR") {
+        for (const g of v as unknown[]) this.assertReadableWhere(from, scope, g);
+      } else if (relations[k]) {
+        continue; // relation traversal: enforced against the target's scope downstream
+      } else if (!scope.fields.includes(k)) {
+        throw new AclDenied(from, "read", k);
+      }
+    }
   }
 
   private async selectRaw(from: string, where: SqlExpr, orderBy?: OrderBy[], limit?: number, offset?: number): Promise<Row[]> {

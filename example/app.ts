@@ -333,6 +333,14 @@ const acl = [
     policy("owneronly:read", "notes", "read", { where: { owner: { id: $identity("userId") } } }),
     policy("owneronly:users", "users", "read", { where: { id: $identity("userId") } }),
   ]),
+  // orfallback: OR with a marker on a claim that may be absent. Each OR branch is
+  // resolved independently, so an unresolvable marker collapses only ITS branch —
+  // the literal `title` branch still matches (a "public fallback" pattern).
+  role("orfallback", [
+    policy("orfallback:read", "notes", "read", {
+      where: { OR: [{ ownerId: $identity("ghost") }, { title: "a1" }] },
+    }),
+  ]),
   // teammate: cell-level ACL via the declarative form. Reads EVERY note but sees
   // `body` only on notes it owns; may edit any title but `body` only on its own.
   // On create, `set` forces ownerId to the caller, so a teammate can always set
