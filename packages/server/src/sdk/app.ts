@@ -14,12 +14,12 @@ export function createApp<S extends SchemaDef>(schema: S) {
   const query = <I = unknown, O = unknown>(
     run: (ctx: Ctx, input: I) => O | Promise<O>,
     opts?: HandlerOpts<I>,
-  ): Handler<I, O> => ({ kind: "query", run: run as Handler<I, O>["run"], input: opts?.input });
+  ): Handler<I, O> => ({ kind: "query", run: run as Handler<I, O>["run"], input: opts?.input, partition: opts?.partition });
 
   const mutation = <I = unknown, O = unknown>(
     run: (ctx: Ctx, input: I) => O | Promise<O>,
     opts?: HandlerOpts<I>,
-  ): Handler<I, O> => ({ kind: "mutation", run: run as Handler<I, O>["run"], input: opts?.input });
+  ): Handler<I, O> => ({ kind: "mutation", run: run as Handler<I, O>["run"], input: opts?.input, partition: opts?.partition });
 
   return { schema, query, mutation };
 }

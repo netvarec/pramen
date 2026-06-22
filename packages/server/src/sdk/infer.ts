@@ -64,6 +64,27 @@ export type WhereInput<F extends EntityFields> = {
   OR?: WhereInput<F>[];
 };
 
+// --- partition boundary: runtime-only by decision (Issue 08) ---
+//
+// A relation cannot cross a partition (Durable Object) boundary. That invariant is
+// enforced at runtime/boot by `validateSchema` (sdk/schema.ts) — it throws before
+// migrate if any relation's source and target live in different partitions — and is
+// proven end-to-end by the e2e suite (Issue 09).
+//
+// Issue 08 explored ALSO surfacing the boundary at compile time (dropping cross-
+// partition relation keys out of `WhereClause`'s relation half and `RelationsResult`,
+// so a cross-partition `with`/relation-`where` wouldn't even typecheck). That requires
+// the entity's `partition` to survive inference as a string LITERAL ("audit" vs
+// "default") so a conditional type can compare two literals. It does NOT: `EntityDef`
+// declares `readonly partition: string` and the `Entity()` factory returns
+// `EntityDef<F, R>` with `opts.partition?: string` — the literal is widened to `string`
+// at the factory boundary and is unrecoverable here. Carrying it would mean threading a
+// `P extends string` generic through `EntityDef` / `Entity` / `SchemaDef` and every
+// consumer (FieldsOf, RelationsOf, RelValue, …) in sdk/schema.ts, destabilizing the
+// already depth-bounded `WhereClause`/`RelationsResult`. Per the issue's explicit
+// bail-out, that is disproportionate for optional polish over an already-enforced
+// invariant. Decision: the partition boundary is enforced at runtime/boot only.
+//
 // --- relation-aware where (a relation key takes a nested clause over its target,
 // compiled to a security-scoped subquery). Depth-bounded so the type stays finite
 // under cyclic relations (e.g. user.notes ↔ note.owner). The bound matches the

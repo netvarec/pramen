@@ -41,7 +41,7 @@ import {
 } from "./read-engine";
 import { BadRequest } from "./errors";
 import type { Dialect, Driver } from "./driver";
-import type { EntityFields, FieldDef, RelationDef, SchemaDef } from "../sdk/schema";
+import { partitionOf, type EntityFields, type FieldDef, type RelationDef, type SchemaDef } from "../sdk/schema";
 import { isValidUuid } from "../sdk/uuid";
 import type { Cell, FieldsOf, InferInsert, InferRow, InferUpdate, RelationsOf, RelationsResult, WhereClause } from "../sdk/infer";
 
@@ -169,6 +169,21 @@ export class Db<S extends SchemaDef = SchemaDef> {
     this.dialect = driver.dialect;
   }
 
+  /** Partition guard. When this Db's context carries an active partition (a
+   * partition-DO knows which partition it serves), reject any access to a table
+   * that lives in a different partition — a partition-DO only owns its own tables,
+   * so touching another partition's table is a routing bug, not an empty result.
+   * Unset partition (the D1/Worker shared-store path, or a single-partition app on
+   * the default DO with no header) makes this a no-op. */
+  private assertInPartition(table: string): void {
+    const self = this.acl.partition;
+    if (self === undefined) return;
+    const tablePartition = partitionOf(this.schema, table);
+    if (tablePartition !== self) {
+      throw new BadRequest(`table '${table}' is in partition '${tablePartition}', not this partition '${self}'`);
+    }
+  }
+
   /** Resolve the ACL scope for an operation, or grant everything in SYSTEM mode. */
   private scopeFor(entity: string, action: Action): Scope {
     if (this.acl.system) return ALLOW_ALL;
@@ -227,6 +242,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
   ): Promise<(InferRow<FieldsOf<S[T]>> & RelationsResult<S, T>)[]> {
     const from = spec.from as string;
     this.touched.add(from);
+    this.assertInPartition(from);
     const scope = this.scopeFor(from, "read");
     if (!scope.allowed) throw new AclDenied(from, "read");
 
@@ -246,6 +262,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
   ): Promise<Page<InferRow<FieldsOf<S[T]>> & RelationsResult<S, T>>> {
     const from = spec.from as string;
     this.touched.add(from);
+    this.assertInPartition(from);
     const scope = this.scopeFor(from, "read");
     if (!scope.allowed) throw new AclDenied(from, "read");
 
@@ -270,6 +287,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
   async count<T extends keyof S & string>(spec: { from: T; where?: WhereClause<S, T> }): Promise<number> {
     const from = spec.from as string;
     this.touched.add(from);
+    this.assertInPartition(from);
     const scope = this.scopeFor(from, "read");
     if (!scope.allowed) throw new AclDenied(from, "read");
     const where = this.readWhere(from, spec.where, scope);
@@ -294,6 +312,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
   }): Promise<AggregateResult<FieldsOf<S[T]>, G, A>[]> {
     const from = spec.from as string;
     this.touched.add(from);
+    this.assertInPartition(from);
     const scope = this.scopeFor(from, "read");
     if (!scope.allowed) throw new AclDenied(from, "read");
 
@@ -499,6 +518,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
     values: InferInsert<FieldsOf<S[T]>>,
   ): Promise<InferRow<FieldsOf<S[T]>>> {
     this.touched.add(table);
+    this.assertInPartition(table);
     const scope = this.scopeFor(table, "create");
     if (!scope.allowed) throw new AclDenied(table, "create");
     const vals = { ...(values as Row) };
@@ -546,6 +566,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
     patch: InferUpdate<FieldsOf<S[T]>>,
   ): Promise<InferRow<FieldsOf<S[T]>> | undefined> {
     this.touched.add(table);
+    this.assertInPartition(table);
     const scope = this.scopeFor(table, "update");
     if (!scope.allowed) throw new AclDenied(table, "update");
     const p = { ...(patch as Row) };
@@ -585,6 +606,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
   /** Delete a row by id within scope. Returns whether a row was deleted. */
   async delete<T extends keyof S & string>(table: T, id: Id): Promise<boolean> {
     this.touched.add(table);
+    this.assertInPartition(table);
     const scope = this.scopeFor(table, "delete");
     if (!scope.allowed) throw new AclDenied(table, "delete");
     const params: unknown[] = [this.dialect.encode(id)];

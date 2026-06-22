@@ -55,4 +55,21 @@ export async function runAdmin(base: string): Promise<void> {
   assert(badTable.status === 400, "admin-data: unknown table -> 400");
   const badOp = await data({ tenant: TENANT, table: "notes", op: "frobnicate" });
   assert(badOp.status === 400, "admin-data: unknown op -> 400");
+
+  // --- partition param: an explicit `partition: "default"` routes to the BARE tenant
+  // DO key — byte-for-byte the DO an omitted-partition call hits (back-compat). A row
+  // created without a partition is therefore visible to a list with partition:"default". ---
+  const partCreated = await data({
+    tenant: TENANT,
+    table: "notes",
+    op: "create",
+    values: { title: "default-part", body: "x", ownerId: "someone", createdAt: 2 },
+  });
+  assert(partCreated.body.ok, "admin-data: create (no partition) succeeds");
+  const partId = partCreated.body.result.id;
+  const defaultList = await data({ tenant: TENANT, table: "notes", op: "list", partition: "default" });
+  assert(
+    defaultList.body.ok && defaultList.body.result.some((r: any) => r.id === partId),
+    "admin-data: partition:'default' hits the same (bare-key) DO as omitting partition",
+  );
 }

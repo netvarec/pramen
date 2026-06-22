@@ -24,6 +24,8 @@ import { compileAcl, type AclContext, type CompiledAcl } from "./runtime/acl";
 import { DoSqliteDriver, type Driver } from "./runtime/driver";
 import { BadRequest, toResponse, toWsError } from "./runtime/errors";
 import { Kv } from "./runtime/kv";
+import { registryKey } from "./runtime/registry";
+import { DEFAULT_PARTITION } from "./sdk/schema";
 import { createFiles, R2Adapter, type Files } from "./runtime/storage";
 import type { Identity } from "./sdk/acl";
 import type { PramenApp } from "./pramen";
@@ -33,6 +35,9 @@ interface SocketState {
   identity: Identity | null;
   /** Tenant fixed at connect time (survives hibernation via the attachment). */
   tenant: string;
+  /** Partition fixed at connect time (read from x-pramen-partition at upgrade);
+   * survives hibernation via the attachment, like `tenant`. */
+  partition: string;
   subs: Subscription[];
 }
 
@@ -62,6 +67,13 @@ export class PramenDOBase extends DurableObject<DoEnv> {
   /** Tenant this DO serves (one per idFromName). Learned from the Worker-forwarded
    * x-pramen-tenant header; defaults to "main". */
   private tenant = "main";
+  /** Partition this DO serves (one per idFromName(partitionDoName)). Learned from the
+   * Worker-forwarded x-pramen-partition header on the first fetch; defaults to the
+   * default partition (a single-partition app, or a stray request with no header). */
+  private partition = DEFAULT_PARTITION;
+  /** Boot migration runs on the FIRST fetch (once the partition is known), not in the
+   * constructor — see `ensureMigrated`. Guards against re-running. */
+  private migrated = false;
   private files?: Files;
 
   constructor(ctx: DurableObjectState, env: DoEnv, app: PramenApp) {
@@ -74,19 +86,46 @@ export class PramenDOBase extends DurableObject<DoEnv> {
     // the D1 substrate (D1Driver) lives in the Worker (the "Worker + D1, no DO" path).
     this.driver = new DoSqliteDriver(ctx.storage);
 
-    // Reconcile the store with the schema before any request is served (create/alter
-    // tables; destructive changes rebuild the table). Wrapped in a transaction so a
-    // partial migration can't leave a half-rebuilt table.
-    const allowDestructive = env.PRAMEN_ALLOW_DESTRUCTIVE === "true";
-    ctx.blockConcurrencyWhile(() =>
-      this.driver.transaction(() => migrate(this.driver, this.app.schema, { allowDestructive }).then(() => {})),
-    );
+    // NOTE: the boot migration is NOT run here. The constructor cannot know which
+    // partition this DO serves — that arrives in the x-pramen-partition header on the
+    // first request, after construction. Migrating the full schema here would create
+    // OTHER partitions' tables in this DO (defeating partition isolation), so we defer
+    // the partition-scoped migrate() to the first fetch (`ensureMigrated`), guarded by
+    // ctx.blockConcurrencyWhile so concurrent first requests can't double-migrate.
+  }
+
+  // Reconcile this partition's tables with the schema before the first request is
+  // served. Runs once per DO lifetime: the `migrated` flag + blockConcurrencyWhile
+  // serialize concurrent first fetches (the platform queues other requests while the
+  // block runs), so two in-flight first requests can't both migrate. Scoped to
+  // this.partition — only this partition's tables are created/altered (migrate()
+  // never touches other partitions' tables). Wrapped in a transaction so a partial
+  // migration can't leave a half-rebuilt table. This preserves the single-partition
+  // (default) behavior exactly: a default DO migrates its full default-partition
+  // schema, just lazily on first touch instead of in the constructor.
+  private async ensureMigrated(): Promise<void> {
+    if (this.migrated) return;
+    const allowDestructive = this.env.PRAMEN_ALLOW_DESTRUCTIVE === "true";
+    const partition = this.partition;
+    await this.ctx.blockConcurrencyWhile(async () => {
+      if (this.migrated) return; // a concurrent first request already migrated
+      await this.driver.transaction(() =>
+        migrate(this.driver, this.app.schema, { allowDestructive, partition }).then(() => {}),
+      );
+      this.migrated = true;
+    });
   }
 
   override async fetch(request: Request): Promise<Response> {
-    await this.ensureRegistered(request);
     const tenantHeader = request.headers.get("x-pramen-tenant");
     if (tenantHeader) this.tenant = tenantHeader;
+    // Learn the partition before the boot migration so it migrates the right subset.
+    // Absent header (shouldn't happen post-routing) -> default partition.
+    const partitionHeader = request.headers.get("x-pramen-partition");
+    if (partitionHeader) this.partition = partitionHeader;
+
+    await this.ensureMigrated();
+    await this.ensureRegistered(request);
 
     const path = new URL(request.url).pathname;
     if (path === "/__recover") return this.handleRecover(request);
@@ -98,7 +137,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
     if (request.headers.get("Upgrade") === "websocket") {
       const { 0: client, 1: server } = new WebSocketPair();
       this.ctx.acceptWebSocket(server); // hibernatable
-      this.setState(server, { identity, tenant: this.tenant, subs: [] });
+      this.setState(server, { identity, tenant: this.tenant, partition: this.partition, subs: [] });
       return new Response(null, { status: 101, webSocket: client });
     }
 
@@ -138,6 +177,16 @@ export class PramenDOBase extends DurableObject<DoEnv> {
       return this.send(ws, { type: "error", id: "", error: "invalid JSON" });
     }
 
+    // A hibernated DO can be reconstructed and routed here WITHOUT fetch() running
+    // again, so the boot migration may not have run on this fresh instance. Adopt this
+    // socket's (tenant, partition) — fixed at connect time, survives via the attachment
+    // — and ensure the schema is migrated before any handler/ctx.db work. Idempotent
+    // (the `migrated` flag), so a no-op after the first call.
+    const { tenant, partition } = this.getState(ws);
+    this.tenant = tenant;
+    this.partition = partition;
+    await this.ensureMigrated();
+
     switch (msg.type) {
       case "subscribe":
         return this.onSubscribe(ws, msg.id, msg.name, msg.input);
@@ -175,7 +224,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
       if (!replacing && state.subs.length >= MAX_SUBSCRIPTIONS) {
         return this.send(ws, toWsError(id, new BadRequest("subscription limit reached")));
       }
-      const { result, kind, touched } = await dispatch(this.app.handlers, this.app.schema, this.driver, this.kv, this.filesFor(state.tenant), this.envBag, this.ctxFor(state.identity), name, input);
+      const { result, kind, touched } = await dispatch(this.app.handlers, this.app.schema, this.driver, this.kv, this.filesFor(state.tenant), this.envBag, this.ctxFor(state.identity, state.partition), name, input);
       if (kind !== "query") {
         return this.send(ws, toWsError(id, new BadRequest(`${name} is not a query`)));
       }
@@ -191,7 +240,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
   private async onCall(ws: WebSocket, id: string, name: string, input: unknown): Promise<void> {
     const state = this.getState(ws);
     try {
-      const { result, kind, touched } = await dispatch(this.app.handlers, this.app.schema, this.driver, this.kv, this.filesFor(state.tenant), this.envBag, this.ctxFor(state.identity), name, input);
+      const { result, kind, touched } = await dispatch(this.app.handlers, this.app.schema, this.driver, this.kv, this.filesFor(state.tenant), this.envBag, this.ctxFor(state.identity, state.partition), name, input);
       this.send(ws, { type: "result", id, result });
       if (kind === "mutation" && touched.length > 0) await this.broadcast(touched);
     } catch (err) {
@@ -209,7 +258,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
       for (const sub of state.subs) {
         if (!sub.tables.some((t) => written.has(t))) continue;
         try {
-          const { result } = await dispatch(this.app.handlers, this.app.schema, this.driver, this.kv, this.filesFor(state.tenant), this.envBag, this.ctxFor(state.identity), sub.name, sub.input);
+          const { result } = await dispatch(this.app.handlers, this.app.schema, this.driver, this.kv, this.filesFor(state.tenant), this.envBag, this.ctxFor(state.identity, state.partition), sub.name, sub.input);
           const next = digest(result);
           if (next === sub.digest) continue; // result unchanged for this subscription
           sub.digest = next;
@@ -239,7 +288,9 @@ export class PramenDOBase extends DurableObject<DoEnv> {
       this.registered = true;
       return;
     }
-    await this.env.KV.put(`tenant:${name}`, JSON.stringify({ firstSeen: Date.now() }));
+    // Record under this DO's real (tenant, partition): the default partition keeps the
+    // bare `tenant:<name>` key (backward-compat), a non-default one is `tenant:<name>:<p>`.
+    await this.env.KV.put(registryKey(name, this.partition), JSON.stringify({ firstSeen: Date.now() }));
     await this.driver.exec(`INSERT OR REPLACE INTO _pramen_meta (key, value) VALUES ('registered', ?)`, [name]);
     this.registered = true;
   }
@@ -279,7 +330,11 @@ export class PramenDOBase extends DurableObject<DoEnv> {
   // Introspection: this tenant's applied schema hash + live table/column shape
   // (admin-gated at the Worker). Powers the CLI's `schema status`.
   private async handleSchema(): Promise<Response> {
-    const hashRow = (await this.driver.exec(`SELECT value FROM _pramen_meta WHERE key = 'schema_hash'`, [])) as {
+    // The applied-schema hash is stored per-partition (migrate keys it
+    // `schema_hash:<partition>` whenever a partition is scoped, which the DO always
+    // does). Read this DO's partition's key.
+    const hashKey = `schema_hash:${this.partition}`;
+    const hashRow = (await this.driver.exec(`SELECT value FROM _pramen_meta WHERE key = ?`, [hashKey])) as {
       value: string;
     }[];
     const tableRows = (await this.driver.exec(
@@ -304,7 +359,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
       return Response.json({ ok: false, error: "unknown table", code: "bad_request" }, { status: 400 });
     }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const db = new Db(this.driver, { acl: this.acl, identity: null, system: true }, this.app.schema) as any;
+    const db = new Db(this.driver, { acl: this.acl, identity: null, system: true, partition: this.partition }, this.app.schema) as any;
     try {
       let result: unknown;
       let mutated = false;
@@ -341,10 +396,11 @@ export class PramenDOBase extends DurableObject<DoEnv> {
     }
   }
 
-  private ctxFor(identity: Identity | null): AclContext {
+  private ctxFor(identity: Identity | null, partition: string = this.partition): AclContext {
     // Carry the schema so any consumer of this context (not just Db) can compile
-    // relation-aware `where` rules into subqueries.
-    return { acl: this.acl, identity, schema: this.app.schema };
+    // relation-aware `where` rules into subqueries, and the active partition so Db's
+    // table-access guard rejects any table outside this DO's partition.
+    return { acl: this.acl, identity, schema: this.app.schema, partition };
   }
 
   // The DO env (bindings + vars + secrets) handed to handlers as ctx.env. Loosely
@@ -374,7 +430,14 @@ export class PramenDOBase extends DurableObject<DoEnv> {
   }
 
   private getState(ws: WebSocket): SocketState {
-    return (ws.deserializeAttachment() as SocketState | null) ?? { identity: null, tenant: this.tenant, subs: [] };
+    return (
+      (ws.deserializeAttachment() as SocketState | null) ?? {
+        identity: null,
+        tenant: this.tenant,
+        partition: this.partition,
+        subs: [],
+      }
+    );
   }
 
   private setState(ws: WebSocket, state: SocketState): void {

@@ -36,10 +36,16 @@ export interface Handler<I = unknown, O = unknown> {
   /** Optional boundary validator: parse/validate the raw request input, throwing
    * to reject (surfaced as a 400). Its return type fixes the handler's input. */
   readonly input?: (raw: unknown) => unknown;
+  /** Optional DO partition this handler runs in (static, server-side). The Worker
+   * routes the request to the matching partition-DO before dispatch. Absent ⇒ the
+   * default partition (routed to the bare tenant key). */
+  readonly partition?: string;
 }
 
 export interface HandlerOpts<I> {
   input?: (raw: unknown) => I;
+  /** DO partition this handler runs in. Absent ⇒ the default partition. */
+  partition?: string;
 }
 
 // Standalone (schema-agnostic) handler factories. Prefer createApp(schema) for a
@@ -48,14 +54,14 @@ export function query<I = unknown, O = unknown>(
   run: (ctx: HandlerContext, input: I) => O | Promise<O>,
   opts?: HandlerOpts<I>,
 ): Handler<I, O> {
-  return { kind: "query", run, input: opts?.input };
+  return { kind: "query", run, input: opts?.input, partition: opts?.partition };
 }
 
 export function mutation<I = unknown, O = unknown>(
   run: (ctx: HandlerContext, input: I) => O | Promise<O>,
   opts?: HandlerOpts<I>,
 ): Handler<I, O> {
-  return { kind: "mutation", run, input: opts?.input };
+  return { kind: "mutation", run, input: opts?.input, partition: opts?.partition };
 }
 
 // Registry of handlers keyed by RPC name. Uses `any` for the per-handler input/

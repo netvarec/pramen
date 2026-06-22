@@ -50,10 +50,10 @@ export async function dispatch(
 
   // Warmup: evaluate dynamic resolvers once, reading through a SYSTEM-mode db
   // (separate from the handler's db, so its reads don't pollute `touched`).
-  const systemDb = new Db(driver, { acl: acl.acl, identity: acl.identity, system: true, schema }, schema);
+  const systemDb = new Db(driver, { acl: acl.acl, identity: acl.identity, system: true, schema, partition: acl.partition }, schema);
   const resolved = await warmup(acl.acl, acl.identity, systemDb as unknown as ResolverDb);
 
-  const db = new Db(driver, { acl: acl.acl, identity: acl.identity, input: parsed, resolved, schema }, schema);
+  const db = new Db(driver, { acl: acl.acl, identity: acl.identity, input: parsed, resolved, schema, partition: acl.partition }, schema);
   const ctx: HandlerContext = { db, kv, files, env, identity: acl.identity };
 
   const result =

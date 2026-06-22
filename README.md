@@ -280,6 +280,15 @@ await ctx.db.insert("events", { kind: "signup" });
 // -> { id: "9f1c2e3a-…", kind: "signup" }   (id minted server-side)
 ```
 
+**Partitions.** An entity can opt into a separate Durable Object via a `partition`:
+`Entity((t) => ({ ... }), undefined, { partition: "audit" })`. The default is one DO
+per tenant (`"default"`); a partition gives a slice of the schema its own
+single-writer DO and storage. Migrations, admin, and the CLI are **per-partition**, and
+relations / `with` eager-loads / transactions **may not cross a partition** (a DO can't
+reach into another's SQLite — rejected at boot). The default partition keeps the bare
+`idFromName(tenant)` DO key, so adding partitions to an existing app doesn't move its
+default data.
+
 **Public flows.** An unauthenticated caller is evaluated as the `anonymous` role —
 define it to grant public reads/writes (absent ⇒ deny). A policy `where` can use
 `$input("field")` (alongside `$identity`) for a capability read — authorize a row by
@@ -475,6 +484,9 @@ bun run pramen schema snapshot             # baseline in .pramen/schema.json
 bun run pramen schema diff                 # additive vs destructive changes
 bun run pramen schema status --tenant acme # is a deployed tenant caught up?
 ```
+
+`schema status` reports each partition of the app independently (a single-partition
+app reads as one block), fetching every partition's applied schema from its DO.
 
 `schema diff` flags each change as additive (no data loss) or **destructive**
 (drop / type change — rebuilds the table, may lose data). All are auto-applied on

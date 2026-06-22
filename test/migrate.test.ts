@@ -129,6 +129,24 @@ describe("migrate", () => {
     expect(db.query("SELECT qty FROM items").all()).toEqual([{ qty: 42 }]);
   });
 
+  test("rejects a cross-partition schema before touching the store", async () => {
+    const db = new Database(":memory:");
+    const d = bunSqliteDriver(db);
+    const bad = defineSchema({
+      users: Entity((t) => ({ id: t.id(), name: t.text() }), undefined, { partition: "audit" }),
+      notes: Entity(
+        (t) => ({ id: t.id(), authorId: t.int() }),
+        (r) => ({ author: r.belongsTo("users", "authorId") }),
+      ),
+    });
+    await expect(migrate(d, bad)).rejects.toThrow(
+      "relation 'notes.author' crosses a partition boundary: 'notes' is in partition " +
+        "'default' but target 'users' is in 'audit'.",
+    );
+    // failed fast — no tables created (not even the bookkeeping meta table).
+    expect(db.query("SELECT name FROM sqlite_master WHERE type = 'table'").all()).toEqual([]);
+  });
+
   test("preserves ids across a rebuild and keeps numbering from the max", async () => {
     const db = new Database(":memory:");
     const d = bunSqliteDriver(db);
@@ -139,5 +157,112 @@ describe("migrate", () => {
     db.run("INSERT INTO notes (title, content) VALUES ('c', 'cc')");
     const ids = (db.query("SELECT id FROM notes ORDER BY id").all() as { id: number }[]).map((r) => r.id);
     expect(ids).toEqual([1, 2, 3]); // existing ids kept; new row continues from the max
+  });
+});
+
+// --- partition-scoped migration. A partition-DO runs migrate with `{ partition }`
+// so it only ever creates/alters/drops its OWN tables, and tracks drift under a
+// per-partition hash key (so partitions don't thrash each other).
+
+const tableNames = (db: Database): string[] =>
+  (
+    db
+      .query(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE '\\_%' ESCAPE '\\' AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\'",
+      )
+      .all() as { name: string }[]
+  ).map((r) => r.name);
+
+describe("migrate — partition-scoped", () => {
+  // `notes` in the default partition; `audit` (+ `audit_meta`) in the "audit" partition.
+  const multi = defineSchema({
+    notes: Entity((t) => ({ id: t.id(), title: t.text() })),
+    audit: Entity((t) => ({ id: t.id(), action: t.text() }), undefined, { partition: "audit" }),
+    audit_meta: Entity((t) => ({ id: t.id(), note: t.text() }), undefined, { partition: "audit" }),
+  });
+
+  test("creates only the named partition's tables; default-partition tables absent", async () => {
+    const db = new Database(":memory:");
+    const r = await migrate(bunSqliteDriver(db), multi, { partition: "audit" });
+    expect(r.changed).toBe(true);
+    expect(r.created.sort()).toEqual(["audit", "audit_meta"]);
+    expect(tableNames(db).sort()).toEqual(["audit", "audit_meta"]);
+    // the default partition's table was never created in this DO
+    expect(tableNames(db)).not.toContain("notes");
+  });
+
+  test("default-partition scope creates only default tables", async () => {
+    const db = new Database(":memory:");
+    const r = await migrate(bunSqliteDriver(db), multi, { partition: "default" });
+    expect(r.created).toEqual(["notes"]);
+    expect(tableNames(db)).toEqual(["notes"]);
+  });
+
+  test("no partition (default) creates every partition's tables — unchanged behavior", async () => {
+    const db = new Database(":memory:");
+    const r = await migrate(bunSqliteDriver(db), multi);
+    expect(r.created.sort()).toEqual(["audit", "audit_meta", "notes"]);
+    expect(tableNames(db).sort()).toEqual(["audit", "audit_meta", "notes"]);
+  });
+
+  test("re-running the same partition is a no-op (per-partition hash short-circuit)", async () => {
+    const db = new Database(":memory:");
+    const d = bunSqliteDriver(db);
+    await migrate(d, multi, { partition: "audit" });
+    const again = await migrate(d, multi, { partition: "audit" });
+    expect(again.changed).toBe(false);
+    expect(again.created).toEqual([]);
+  });
+
+  test("changing a DIFFERENT partition's entity does not invalidate this partition's hash", async () => {
+    const db = new Database(":memory:");
+    const d = bunSqliteDriver(db);
+    // Migrate the audit partition; record its applied hash.
+    await migrate(d, multi, { partition: "audit" });
+
+    // A new schema version that only changes the DEFAULT partition (adds a column to
+    // `notes`), leaving the audit entities byte-for-byte identical.
+    const multiV2 = defineSchema({
+      notes: Entity((t) => ({ id: t.id(), title: t.text(), body: t.text() })),
+      audit: Entity((t) => ({ id: t.id(), action: t.text() }), undefined, { partition: "audit" }),
+      audit_meta: Entity((t) => ({ id: t.id(), note: t.text() }), undefined, { partition: "audit" }),
+    });
+    // Re-running the audit partition against the changed app is still a no-op: the
+    // audit subset is unchanged, so its hash matches.
+    const r = await migrate(d, multiV2, { partition: "audit" });
+    expect(r.changed).toBe(false);
+  });
+
+  test("changing THIS partition's entity does invalidate its hash", async () => {
+    const db = new Database(":memory:");
+    const d = bunSqliteDriver(db);
+    await migrate(d, multi, { partition: "audit" });
+    const multiV2 = defineSchema({
+      notes: Entity((t) => ({ id: t.id(), title: t.text() })),
+      audit: Entity((t) => ({ id: t.id(), action: t.text(), at: t.int() }), undefined, { partition: "audit" }),
+      audit_meta: Entity((t) => ({ id: t.id(), note: t.text() }), undefined, { partition: "audit" }),
+    });
+    const r = await migrate(d, multiV2, { partition: "audit" });
+    expect(r.changed).toBe(true);
+    expect(r.added).toContain("audit.at");
+  });
+
+  test("a partition's drop pass never drops another partition's live tables", async () => {
+    const db = new Database(":memory:");
+    const d = bunSqliteDriver(db);
+    // Stand up the full app (all partitions) in one store, as a shared-store test.
+    await migrate(d, multi);
+    expect(tableNames(db).sort()).toEqual(["audit", "audit_meta", "notes"]);
+
+    // Now run a partition-scoped migration where the audit partition has DROPPED
+    // `audit_meta`. With allowDestructive, audit_meta is dropped, but `notes` (a
+    // different partition's live table) must be left untouched.
+    const auditTrimmed = defineSchema({
+      notes: Entity((t) => ({ id: t.id(), title: t.text() })),
+      audit: Entity((t) => ({ id: t.id(), action: t.text() }), undefined, { partition: "audit" }),
+    });
+    const r = await migrate(d, auditTrimmed, { partition: "audit", allowDestructive: true });
+    expect(r.droppedTables).toEqual(["audit_meta"]);
+    expect(tableNames(db).sort()).toEqual(["audit", "notes"]); // notes survived
   });
 });
