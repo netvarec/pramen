@@ -21,7 +21,7 @@
 import { addColumnSql, createTableSql, indexStatements, sqlType } from "./ddl";
 import { digest } from "./digest";
 import type { Driver } from "./driver";
-import { validateSchema } from "../sdk/schema";
+import { entitiesInPartition, validateSchema } from "../sdk/schema";
 import type { EntityFields, FieldDef, SchemaDef } from "../sdk/schema";
 
 export interface MigrationReport {
@@ -42,6 +42,14 @@ export interface MigrateOptions {
    * — data-loss is gated behind an explicit opt-in (env `PRAMEN_ALLOW_DESTRUCTIVE`).
    * Additive changes (create table, add column, add index) always apply. */
   allowDestructive?: boolean;
+  /** Scope the migration to a single partition (Durable Object class). When set,
+   * migrate operates ONLY on entities whose `partition` matches — it creates/alters
+   * just that partition's tables and never drops other partitions' tables (a
+   * partition-DO never sees them). The schema hash is stored under a per-partition
+   * key so partitions don't thrash each other's drift detection. When unset, all
+   * entities are migrated and the legacy single-hash key is used (unchanged — the
+   * D1 path and existing callers). */
+  partition?: string;
 }
 
 /** Internal bookkeeping tables the migrator must never touch — pramen's own, SQLite's,
@@ -117,8 +125,22 @@ export async function migrate(driver: Driver, schema: SchemaDef, opts: MigrateOp
   await driver.exec(`CREATE TABLE IF NOT EXISTS _pramen_meta (key TEXT PRIMARY KEY, value TEXT)`, []);
   const allowDestructive = opts.allowDestructive ?? false;
 
-  const current = schemaHash(schema);
-  if ((await readMeta(driver, "schema_hash")) === current)
+  // When a partition is named, narrow the schema to just that partition's entities —
+  // every later pass (create/alter/rebuild/drop/index/hash) iterates this subset, so
+  // a partition-DO only ever touches its own tables. Unset ⇒ the whole schema, the
+  // legacy (default) behavior.
+  const tables = opts.partition === undefined ? Object.keys(schema) : entitiesInPartition(schema, opts.partition);
+  const entries = tables.map((table) => [table, schema[table]!] as const);
+  const inScope = new Set(tables);
+
+  // The schema hash is computed over the in-scope subset only, and stored under a
+  // per-partition meta key, so two partitions of the same app each detect just their
+  // own drift and never invalidate the other. The unscoped path keeps the original
+  // `schema_hash` key for backward compatibility (existing stores + the D1 path).
+  const subset: SchemaDef = Object.fromEntries(entries);
+  const hashKey = opts.partition === undefined ? "schema_hash" : `schema_hash:${opts.partition}`;
+  const current = schemaHash(subset);
+  if ((await readMeta(driver, hashKey)) === current)
     return { changed: false, created: [], added: [], rebuilt: [], droppedTables: [], skipped: [] };
 
   const created: string[] = [];
@@ -127,7 +149,7 @@ export async function migrate(driver: Driver, schema: SchemaDef, opts: MigrateOp
   const droppedTables: string[] = [];
   const skipped: string[] = [];
 
-  for (const [table, def] of Object.entries(schema)) {
+  for (const [table, def] of entries) {
     const existing = await tableColumns(driver, table);
     if (existing.size === 0) {
       await driver.exec(createTableSql(table, def), []);
@@ -167,14 +189,22 @@ export async function migrate(driver: Driver, schema: SchemaDef, opts: MigrateOp
   // Ensure unique/index declarations (idempotent, via IF NOT EXISTS). Indexes can be
   // added to an existing table without a rebuild; a stale index from a removed
   // declaration is left in place (cleanup is future work).
-  for (const [table, def] of Object.entries(schema)) {
+  for (const [table, def] of entries) {
     for (const stmt of indexStatements(table, def)) await driver.exec(stmt, []);
   }
 
   // Drop tables the schema no longer declares (internal bookkeeping tables skipped).
+  // When scoped to a partition, a live table that belongs to ANOTHER partition's
+  // entity must NOT be dropped — a partition-DO never owns it, and even when several
+  // partitions share a store the other partition's reconciler owns that table. So the
+  // drop candidate set is: live tables that are neither in this scope's declared
+  // entities nor declared by any other partition. (Unscoped: `otherPartitionTables`
+  // is empty and `inScope` is every entity, so this is the original behavior.)
+  const otherPartitionTables =
+    opts.partition === undefined ? new Set<string>() : new Set(Object.keys(schema).filter((t) => !inScope.has(t)));
   const liveTables = (await driver.exec(`SELECT name FROM sqlite_master WHERE type = 'table'`, [])) as { name: string }[];
   for (const { name } of liveTables) {
-    if (isInternalTable(name) || name in schema) continue;
+    if (isInternalTable(name) || inScope.has(name) || otherPartitionTables.has(name)) continue;
     if (allowDestructive) {
       await driver.exec(`DROP TABLE ${ident(name)}`, []);
       droppedTables.push(name);
@@ -187,7 +217,7 @@ export async function migrate(driver: Driver, schema: SchemaDef, opts: MigrateOp
   // were skipped, leave the hash so a later deploy (with allowDestructive) retries —
   // additive work is idempotent, so re-running is safe.
   if (skipped.length === 0) {
-    await writeMeta(driver, "schema_hash", current);
+    await writeMeta(driver, hashKey, current);
   } else {
     console.warn(
       `pramen: ${skipped.length} destructive migration(s) skipped (set PRAMEN_ALLOW_DESTRUCTIVE=true to apply): ${skipped.join("; ")}`,
