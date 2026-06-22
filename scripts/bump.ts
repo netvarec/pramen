@@ -8,12 +8,12 @@
 //   bun run bump 0.2.0-beta.1   explicit version
 //   bun run bump patch --dry-run   show the plan, change nothing
 //
-// Versions are kept in lockstep (one version across all three). For independent
-// per-package versions + changelogs, graduate to changesets.
+// Versions are kept in lockstep (one version across all published packages). For
+// independent per-package versions + changelogs, graduate to changesets.
 
 import { $ } from "bun";
 
-const PKGS = ["packages/server", "packages/client", "packages/react"];
+const PKGS = ["packages/server", "packages/client", "packages/react", "packages/auth", "packages/admin"];
 
 const args = process.argv.slice(2);
 const dryRun = args.includes("--dry-run");
