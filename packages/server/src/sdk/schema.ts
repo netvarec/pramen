@@ -31,6 +31,10 @@ export interface FieldDef {
   readonly generated?: boolean;
   /** A column DEFAULT (a literal). Makes the column optional on insert. */
   readonly default?: DefaultValue;
+  /** A column DEFAULT that is raw SQL, emitted UNQUOTED (e.g. `datetime('now')`) —
+   * set by `defaultTo(field, expr.now())`/`expr.raw(...)`. Distinct from `default`
+   * (a quoted literal). Makes the column optional on insert. */
+  readonly defaultExpr?: string;
   /** Migration hint: this column was previously named X. On boot the migrator
    * rebuilds the table, copying data from the old column. A diff cannot tell a
    * rename from a drop+add, so the rename must be declared explicitly. */
@@ -130,9 +134,28 @@ export function indexed<F extends FieldDef>(field: F): F & { readonly index: tru
   return { ...field, index: true };
 }
 
-/** Give the column a DEFAULT (a literal) — also makes it optional on insert. */
-export function defaultTo<F extends FieldDef, D extends DefaultValue>(field: F, value: D): F & { readonly default: D } {
-  return { ...field, default: value };
+/** A raw-SQL column DEFAULT (emitted unquoted in the DDL), produced by the `expr`
+ * helpers below. Distinct from a literal default so `defaultTo` can render
+ * `DEFAULT datetime('now')` rather than the quoted string `DEFAULT 'datetime(...)'`. */
+export class ExprDefault {
+  constructor(readonly sql: string) {}
+}
+
+/** SQL-expression defaults for `defaultTo(field, expr.now())`. `now()` is the current
+ * UTC timestamp as TEXT (`'YYYY-MM-DD HH:MM:SS'`, like `CURRENT_TIMESTAMP`) — pair it
+ * with `t.text()`. `raw(sql)` is an escape hatch for any other SQLite default expression. */
+export const expr = {
+  now: (): ExprDefault => new ExprDefault("datetime('now')"),
+  raw: (sql: string): ExprDefault => new ExprDefault(sql),
+};
+
+/** Give the column a DEFAULT — also makes it optional on insert. Pass a literal
+ * (rendered as a quoted SQL literal) or an `expr.*()` value (raw SQL, unquoted),
+ * e.g. `defaultTo(t.text(), "pending")` or `defaultTo(t.text(), expr.now())`. */
+export function defaultTo<F extends FieldDef>(field: F, value: ExprDefault): F & { readonly defaultExpr: string };
+export function defaultTo<F extends FieldDef, D extends DefaultValue>(field: F, value: D): F & { readonly default: D };
+export function defaultTo<F extends FieldDef>(field: F, value: DefaultValue | ExprDefault): FieldDef {
+  return value instanceof ExprDefault ? { ...field, defaultExpr: value.sql } : { ...field, default: value };
 }
 
 /** Mark a column as the PRIMARY KEY (implies NOT NULL). Composes with any builder,

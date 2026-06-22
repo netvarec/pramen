@@ -113,7 +113,8 @@ export type WhereClause<S extends SchemaDef, T extends keyof S, D extends number
 export type InferUpdate<F extends EntityFields> = Partial<{ [K in keyof F]: FieldTsType<F[K]> | null }>;
 
 // Insert: a NOT NULL column is required unless it's auto-generated (autoIncrement,
-// or a `generated()` uuid the runtime mints) or has a DEFAULT (the DB fills it);
+// or a `generated()` uuid the runtime mints) or has a DEFAULT — a literal (`default`)
+// or a SQL expression (`defaultExpr`, e.g. expr.now()), both filled by the DB;
 // everything else is optional.
 type RequiredInsertKeys<F extends EntityFields> = {
   [K in keyof F]: IsNotNull<F[K]> extends true
@@ -123,7 +124,9 @@ type RequiredInsertKeys<F extends EntityFields> = {
         ? never
         : F[K] extends { default: DefaultValue }
           ? never
-          : K
+          : F[K] extends { defaultExpr: string }
+            ? never
+            : K
     : never;
 }[keyof F];
 type OptionalInsertKeys<F extends EntityFields> = Exclude<keyof F, RequiredInsertKeys<F>>;

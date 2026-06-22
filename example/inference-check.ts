@@ -2,7 +2,7 @@
 // `bun run typecheck`; every @ts-expect-error must trigger a real error, and the
 // positive cases must compile. It is not imported at runtime.
 
-import { Entity, defineSchema, createApp, primaryKey, generated, type FieldsOf, type ProjectedRow } from "@pramen/server";
+import { Entity, defineSchema, createApp, primaryKey, generated, notNull, defaultTo, expr, type FieldsOf, type ProjectedRow } from "@pramen/server";
 
 const schema = defineSchema({
   users: Entity(
@@ -25,6 +25,8 @@ const schema = defineSchema({
     id: primaryKey(generated(t.uuid())),
     kind: t.text(),
     ref: t.uuid(),
+    // NOT NULL but has a SQL-expression default -> optional on insert (DB fills it).
+    createdAt: notNull(defaultTo(t.text(), expr.now())),
   })),
 });
 
@@ -143,9 +145,11 @@ export const writeChecks = mutation(async (ctx) => {
 export const uuidChecks = mutation(async (ctx) => {
   // The generated() uuid PK is optional on insert (the runtime mints it); `ref` is a
   // plain uuid column, optional+nullable like any non-NOT-NULL column.
-  const ev = await ctx.db.insert("events", { kind: "signup" });
+  const ev = await ctx.db.insert("events", { kind: "signup" }); // createdAt omitted -> ok (expr.now() default)
   const id: string = ev.id; // uuid column -> string
   const ref: string | null = ev.ref;
+  const createdAt: string = ev.createdAt; // NOT NULL text -> string (non-null)
+  void createdAt;
 
   // a caller may still supply the uuid PK as a string
   ctx.db.insert("events", { id: crypto.randomUUID(), kind: "login" });

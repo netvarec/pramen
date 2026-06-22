@@ -8,7 +8,7 @@
 // and codegen load an app.ts for its schema without dragging in the DO runtime.
 
 // --- schema authoring ---
-export { Entity, defineSchema, renamedFrom, notNull, unique, indexed, defaultTo, primaryKey, generated } from "./sdk/schema";
+export { Entity, defineSchema, renamedFrom, notNull, unique, indexed, defaultTo, primaryKey, generated, expr, ExprDefault } from "./sdk/schema";
 export { isValidUuid } from "./sdk/uuid";
 export type {
   DefaultValue,
