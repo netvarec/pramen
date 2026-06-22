@@ -22,10 +22,15 @@ function defaultLiteral(v: DefaultValue): string {
   return `'${v.replace(/'/g, "''")}'`;
 }
 
-/** The ` DEFAULT x` fragment for a column, or "" when it has no default. UNIQUE/
- * index are NOT inline — they're emitted as separate index statements so the same
- * code path serves both CREATE TABLE and ALTER TABLE ADD COLUMN. */
+/** The ` DEFAULT x` fragment for a column, or "" when it has no default. A raw-SQL
+ * `defaultExpr` (e.g. `datetime('now')`) is emitted UNQUOTED; a literal `default` is
+ * quote-escaped. UNIQUE/index are NOT inline — they're emitted as separate index
+ * statements so the same code path serves both CREATE TABLE and ALTER TABLE ADD COLUMN. */
 function defaultSql(f: FieldDef): string {
+  // A raw-SQL default is parenthesized: SQLite's column-DEFAULT grammar only takes a
+  // bare literal/keyword, so a function call (e.g. datetime('now')) must be wrapped —
+  // `DEFAULT (datetime('now'))`. Parens are harmless around a keyword too.
+  if (f.defaultExpr !== undefined) return ` DEFAULT (${f.defaultExpr})`;
   return f.default !== undefined ? ` DEFAULT ${defaultLiteral(f.default)}` : "";
 }
 

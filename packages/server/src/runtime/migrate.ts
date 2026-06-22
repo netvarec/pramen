@@ -157,8 +157,17 @@ export async function migrate(driver: Driver, schema: SchemaDef, opts: MigrateOp
       continue;
     }
     // Pass 1 — additive: add any column the schema declares but the table lacks.
+    // SQLite forbids ALTER ADD COLUMN with a non-constant DEFAULT (e.g. expr.now()),
+    // so such a column is added via a table rebuild instead — which is still additive
+    // (no data loss): the rebuild's INSERT omits the new column, so SQLite applies its
+    // CREATE TABLE default, backfilling existing rows. Flagged here, done in Pass 2.
+    let needsAdditiveRebuild = false;
     for (const [name, field] of Object.entries(def.fields)) {
       if (existing.has(name)) continue;
+      if ((field as FieldDef).defaultExpr !== undefined) {
+        needsAdditiveRebuild = true;
+        continue;
+      }
       await driver.exec(`ALTER TABLE ${ident(table)} ADD COLUMN ${addColumnSql(name, field as FieldDef)}`, []);
       added.push(`${table}.${name}`);
     }
@@ -176,13 +185,16 @@ export async function migrate(driver: Driver, schema: SchemaDef, opts: MigrateOp
     const needsTypeChange = Object.entries(def.fields).some(
       ([n, f]) => live.has(n) && live.get(n) !== sqlType(f as FieldDef),
     );
-    if (needsDrop || needsTypeChange || renamedSources.size > 0) {
-      if (allowDestructive) {
-        await rebuildTable(driver, table, def, live);
-        rebuilt.push(table);
-      } else {
-        skipped.push(`rebuild ${table} (drop/type-change/rename)`);
-      }
+    const destructive = needsDrop || needsTypeChange || renamedSources.size > 0;
+    if (destructive && !allowDestructive) {
+      // The destructive part is gated off — skip the whole rebuild (any pending
+      // expr-default column waits until destructive migrations are allowed).
+      skipped.push(`rebuild ${table} (drop/type-change/rename)`);
+    } else if (destructive || needsAdditiveRebuild) {
+      // An additive-only rebuild (just an expr-default column) needs no permission —
+      // it loses no data.
+      await rebuildTable(driver, table, def, live);
+      rebuilt.push(table);
     }
   }
 

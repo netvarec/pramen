@@ -264,7 +264,10 @@ automatically; a `uuid` value is validated on write (rejected with 400 if
 malformed). **Modifiers** wrap a builder and compose: `notNull()`, `unique()`,
 `indexed()`, `defaultTo(v)`, `primaryKey()`, `generated()` — e.g.
 `code: unique(t.text())`, `status: defaultTo(t.text(), "pending")` (a defaulted
-column is optional on insert).
+column is optional on insert). `defaultTo` also accepts a **SQL-expression default**
+via `expr`: `createdAt: defaultTo(t.text(), expr.now())` emits
+`DEFAULT (datetime('now'))` (current UTC timestamp as TEXT, like `CURRENT_TIMESTAMP`),
+filled by the DB; `expr.raw(sql)` is the escape hatch for any other SQLite default.
 
 **UUIDs.** `t.uuid()` is a string column; `generated()` auto-mints a v4 on insert
 (via `crypto.randomUUID()`) when you omit it, and `primaryKey()` marks any column

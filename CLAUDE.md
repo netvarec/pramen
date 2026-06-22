@@ -151,6 +151,13 @@ log) for independent single-writer serialization and storage.
   `primaryKey()` marks any column the PK (implies NOT NULL); `generated()` auto-mints a
   uuid on insert via `crypto.randomUUID()` (uuid-only) and makes the column optional on
   insert. The canonical UUID primary key is `id: primaryKey(generated(t.uuid()))`.
+  `defaultTo` also takes a SQL-expression default via the `expr` helper — `expr.now()`
+  (current UTC timestamp as TEXT, like `CURRENT_TIMESTAMP`) or `expr.raw(sql)` — emitted
+  unquoted and parenthesized (`DEFAULT (datetime('now'))`), e.g.
+  `createdAt: defaultTo(t.text(), expr.now())`. Expr-default columns are optional on
+  insert (the DB fills them); adding one to an existing table triggers a table rebuild
+  (SQLite forbids `ALTER ADD COLUMN` with a non-constant default), which is additive
+  (backfills existing rows) and ungated.
 - Auth/ACL: an unauthenticated caller is the `anonymous` role (define it for public
   reads/writes; absent ⇒ deny). A policy `where` may use `$identity("path")` (caller)
   or `$input("path")` (request input — a capability/by-unguessable-key read). Public,

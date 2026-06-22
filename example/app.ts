@@ -15,6 +15,7 @@ import {
   $input,
   unique,
   defaultTo,
+  expr,
   primaryKey,
   generated,
   BadRequest,
@@ -72,6 +73,9 @@ const schema = defineSchema({
     id: primaryKey(generated(t.uuid())),
     kind: t.text(),
     traceId: generated(t.uuid()),
+    // SQL-expression default: filled by the DB with the current UTC timestamp
+    // (TEXT, like CURRENT_TIMESTAMP) when the caller omits it. No app-side clock.
+    createdAt: defaultTo(t.text(), expr.now()),
   })),
   // Partitioned entity: an append-only audit log living in its OWN Durable Object
   // (partition "audit"), separate from the default-partition `notes`/`users`. The
