@@ -1,6 +1,6 @@
 {
   "name": "@pramen/admin",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "pramen admin dashboard — a Preact single-page browser client for the pramen admin HTTP API (tenants, schema, and generic row browse/edit).",
   "license": "MIT",
   "private": false,
