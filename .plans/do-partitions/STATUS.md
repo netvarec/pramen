@@ -8,7 +8,6 @@ use `idFromName(`${tenant}:${partition}`)`.
 
 ## Pending
 
-- [ ] 02 — Schema: `partition` on Entity + `partitionOf` helper
 - [ ] 11 — DO registry: track & enumerate all (tenant, partition) DOs
 - [ ] 03 — Schema validation: reject cross-partition relations
 - [ ] 04 — Partition-aware migrate (DDL scoped to a partition)
@@ -24,5 +23,6 @@ use `idFromName(`${tenant}:${partition}`)`.
 ## Completed
 
 - [x] 01 — DESIGN.md: Partitions spec & decisions
+- [x] 02 — Schema: `partition` on Entity + `partitionOf` helper
 
 ## Discoveries

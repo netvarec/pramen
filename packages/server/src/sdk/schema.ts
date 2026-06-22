@@ -82,16 +82,27 @@ const relationBuilders = {
 };
 export type RelationBuilders = typeof relationBuilders;
 
+/** The default partition name for entities that don't declare one. */
+export const DEFAULT_PARTITION = "default";
+
 export interface EntityDef<F extends EntityFields = EntityFields, R extends RelationDefs = Record<string, never>> {
   readonly fields: F;
   readonly relations: R;
+  /** The partition (Durable Object class) this entity lives in. Always populated;
+   * defaults to `"default"` so downstream code never branches on `undefined`. */
+  readonly partition: string;
 }
 
 export function Entity<F extends EntityFields, R extends RelationDefs = Record<string, never>>(
   build: (t: FieldBuilders) => F,
   relations?: (r: RelationBuilders) => R,
+  opts?: { partition?: string },
 ): EntityDef<F, R> {
-  return { fields: build(builders), relations: (relations ? relations(relationBuilders) : {}) as R };
+  return {
+    fields: build(builders),
+    relations: (relations ? relations(relationBuilders) : {}) as R,
+    partition: opts?.partition ?? DEFAULT_PARTITION,
+  };
 }
 
 /** Annotate a field as renamed from a previous column name (migration hint). Wraps
@@ -144,4 +155,31 @@ export type SchemaDef = Record<string, EntityDef<EntityFields, RelationDefs>>;
 
 export function defineSchema<S extends SchemaDef>(entities: S): S {
   return entities;
+}
+
+// --- partition helpers — enumerate / resolve the partition (Durable Object class)
+// an entity lives in. Used by the migrator/admin to group tables per DO.
+
+/** The partition an entity lives in. Defaults to `"default"` for unknown entities. */
+export function partitionOf(schema: SchemaDef, entity: string): string {
+  return schema[entity]?.partition ?? DEFAULT_PARTITION;
+}
+
+/** The distinct partition names in a schema, in stable (first-seen) order. */
+export function partitionsOf(schema: SchemaDef): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const entity of Object.keys(schema)) {
+    const partition = partitionOf(schema, entity);
+    if (!seen.has(partition)) {
+      seen.add(partition);
+      out.push(partition);
+    }
+  }
+  return out;
+}
+
+/** The table names whose partition matches `partition`, in schema (key) order. */
+export function entitiesInPartition(schema: SchemaDef, partition: string): string[] {
+  return Object.keys(schema).filter((entity) => partitionOf(schema, entity) === partition);
 }
