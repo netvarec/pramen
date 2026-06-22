@@ -25,7 +25,7 @@ jobs:
           bun-version: latest
       # Node + npm do the actual publish: bun publish has no OIDC/trusted-publishing
       # support, npm (>= 11.5.1) does. Build/typecheck/test still run on bun.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
