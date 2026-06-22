@@ -8,7 +8,6 @@ use `idFromName(`${tenant}:${partition}`)`.
 
 ## Pending
 
-- [ ] 06 — DO partition awareness + runtime table-access guard
 - [ ] 07 — Admin surface per-partition
 - [ ] 09 — Example partitioned entity + e2e tests
 - [ ] 10 — CLI / codegen + docs
@@ -24,6 +23,7 @@ use `idFromName(`${tenant}:${partition}`)`.
 - [x] 03 — Schema validation: reject cross-partition relations
 - [x] 04 — Partition-aware migrate (DDL scoped to a partition)
 - [x] 05 — Handler partition declaration + Worker routing key
+- [x] 06 — DO partition awareness + runtime table-access guard
 
 ## Discoveries
 
