@@ -26,8 +26,31 @@ const schema = defineSchema({
 ```
 
 Field builders: `id()` (auto-increment integer PK), `textId()` (text PK), `text()`,
-`int()`, `real()`, `bool()`. Relations: `belongsTo(target, column)` and
-`hasMany(target, column)`.
+`int()`, `real()`, `bool()`, `json()` (arbitrary JSON, typed as `JsonValue`),
+`fileRef()` (an R2 file), `uuid()` (a TEXT column typed as `string`). Relations:
+`belongsTo(target, column)` and `hasMany(target, column)`.
+
+**Modifiers** wrap a builder and compose: `notNull()`, `unique()`, `indexed()`,
+`defaultTo(value)`, `primaryKey()`, and `generated()` — e.g.
+`code: unique(t.text())`, `status: defaultTo(t.text(), "pending")`.
+
+### UUIDs
+
+`t.uuid()` is a string column. Wrap it with `generated()` to auto-mint a v4 on
+insert (via `crypto.randomUUID()`) when you omit it, and `primaryKey()` to use it as
+the primary key. A generated column is optional on insert; a value you supply is
+validated and rejected (400) if it isn't a well-formed UUID.
+
+```ts
+events: Entity((t) => ({
+  id: primaryKey(generated(t.uuid())), // auto-minted on insert, optional in the type
+  kind: t.text(),
+  traceId: generated(t.uuid()),        // a generated non-PK uuid
+}));
+
+await ctx.db.insert("events", { kind: "signup" });
+// -> { id: "9f1c2e3a-…", kind: "signup", traceId: "1b7d…" }   (uuids minted server-side)
+```
 
 > SQLite (DO) has no boolean type — booleans are stored as INTEGER 0/1; the runtime
 > handles the coercion for you.
