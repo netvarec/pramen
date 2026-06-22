@@ -73,6 +73,21 @@ const schema = defineSchema({
     kind: t.text(),
     traceId: generated(t.uuid()),
   })),
+  // Partitioned entity: an append-only audit log living in its OWN Durable Object
+  // (partition "audit"), separate from the default-partition `notes`/`users`. The
+  // two partitions are independent DOs (different idFromName) sharing one PramenDO
+  // class — so they migrate, store, and broadcast in isolation. NOTE: this entity
+  // has NO relations on purpose; a relation crossing into a default-partition table
+  // would fail validateSchema at boot (proven in test/schema-validate.test.ts).
+  auditLog: Entity(
+    (t) => ({
+      id: t.id(),
+      action: t.text(),
+      at: t.int(),
+    }),
+    undefined,
+    { partition: "audit" },
+  ),
 });
 
 // Handlers bound to this schema — ctx.db is fully typed against it.
@@ -306,6 +321,29 @@ const handlers = {
     if (!note || !note.attachment) return null;
     return ctx.files.signDownload(note.attachment, { download: true });
   }),
+
+  // --- partitioned handlers (run in the "audit" partition DO) ---
+  // These are declared with { partition: "audit" }, so the Worker routes them to
+  // idFromName(partitionDoName(tenant, "audit")) — a different DO than the default
+  // notes/users handlers above. ctx.db here only sees the audit partition's tables.
+
+  // Append an audit entry. Writing to `notes` (default partition) from here would
+  // hit the partition guard (BadRequest), since this DO only owns `auditLog`.
+  logAudit: mutation(
+    (ctx, input: { action: string }) => ctx.db.insert("auditLog", { action: input.action, at: Date.now() }),
+    {
+      input: (raw): { action: string } => {
+        const o = (raw ?? {}) as Record<string, unknown>;
+        if (typeof o.action !== "string") throw new Error("action must be a string");
+        return { action: o.action };
+      },
+      partition: "audit",
+    },
+  ),
+
+  listAudit: query((ctx) => ctx.db.find({ from: "auditLog", orderBy: { column: "id", dir: "desc" } }), {
+    partition: "audit",
+  }),
 };
 
 // ACL — deny-by-default; roles only grant.
@@ -325,6 +363,10 @@ const acl = [
     policy("admin:signups:create", "signups", "create", allow()),
     policy("admin:events:read", "events", "read", allow()),
     policy("admin:events:create", "events", "create", allow()),
+    // auditLog lives in the "audit" partition; ACL is partition-agnostic (policies
+    // name entities). The audit DO loads this same ACL, so admin can write/read it.
+    policy("admin:audit:read", "auditLog", "read", allow()),
+    policy("admin:audit:create", "auditLog", "create", allow()),
   ]),
   // anonymous: applied to callers with NO verified token. A guest may create a
   // signup (public write) and read one back only by presenting its `code`

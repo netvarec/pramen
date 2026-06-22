@@ -26,6 +26,7 @@ import { runKv } from "./suites/kv";
 import { runClient } from "./suites/client";
 import { runHardening } from "./suites/hardening";
 import { runUuid } from "./suites/uuid";
+import { runPartitions } from "./suites/partitions";
 
 const ROOT = join(import.meta.dir, "..");
 const PORT = 8788;
@@ -88,4 +89,5 @@ describe("pramen e2e", () => {
   test("live queries + row-level invalidation", () => runLive(BASE, WS), 30_000);
   test("hardening: input validation + safe errors", () => runHardening(BASE), 30_000);
   test("uuid field type (generated PK + non-PK, write validation)", () => runUuid(BASE), 30_000);
+  test("DO partitions (isolation + per-partition admin/reactivity)", () => runPartitions(BASE, WS), 30_000);
 });
