@@ -171,9 +171,9 @@ export function makeWorker(app: PramenApp) {
 
     // --- admin: list known tenants ---
     if (url.pathname === "/tenants") {
-      if (!isAdmin(identity)) return forbidden("tenants");
+      if (!isAdmin(identity)) return withCors(forbidden("tenants"), cors);
       const list = await env.KV.list({ prefix: "tenant:" });
-      return json({ ok: true, result: list.keys.map((k) => k.name.slice("tenant:".length)) });
+      return withCors(json({ ok: true, result: list.keys.map((k) => k.name.slice("tenant:".length)) }), cors);
     }
 
     // --- admin: point-in-time recovery for a tenant ---
@@ -193,10 +193,11 @@ export function makeWorker(app: PramenApp) {
 
     // --- admin: a tenant's applied schema (hash + tables) ---
     if (url.pathname === "/admin/schema") {
-      if (!isAdmin(identity)) return forbidden("schema");
+      if (!isAdmin(identity)) return withCors(forbidden("schema"), cors);
       const tenant = url.searchParams.get("tenant") ?? "main";
       const stub = env.PRAMEN.get(env.PRAMEN.idFromName(tenant));
-      return stub.fetch(new Request("https://do/__schema", { headers: { "x-pramen-tenant": tenant } }));
+      const res = await stub.fetch(new Request("https://do/__schema", { headers: { "x-pramen-tenant": tenant } }));
+      return withCors(res, cors);
     }
 
     // --- admin: generic data ops over a tenant's tables (browse/edit any row).

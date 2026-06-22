@@ -6,6 +6,7 @@
       "name": "pramen",
       "devDependencies": {
         "@cloudflare/workers-types": "^4.20250101.0",
+        "@pramen/admin": "workspace:*",
         "@pramen/auth": "workspace:*",
         "@pramen/client": "workspace:*",
         "@pramen/react": "workspace:*",
@@ -16,6 +17,13 @@
         "react": "^19.0.0",
         "typescript": "^5.7.0",
         "wrangler": "^4.101.0",
+      },
+    },
+    "packages/admin": {
+      "name": "@pramen/admin",
+      "version": "0.0.1",
+      "dependencies": {
+        "preact": "^10.25.0",
       },
     },
     "packages/auth": {
@@ -182,6 +190,8 @@
 
     "@poppinss/exception": ["@poppinss/exception@1.2.3", "", {}, "sha512-dCED+QRChTVatE9ibtoaxc+WkdzOSjYTKi/+uacHWIsfodVfpsueo3+DKpgU5Px8qXjgmXkSvhXvSCz3fnP9lw=="],
 
+    "@pramen/admin": ["@pramen/admin@workspace:packages/admin"],
+
     "@pramen/auth": ["@pramen/auth@workspace:packages/auth"],
 
     "@pramen/client": ["@pramen/client@workspace:packages/client"],
@@ -223,6 +233,8 @@
     "path-to-regexp": ["path-to-regexp@6.3.0", "", {}, "sha512-Yhpw4T9C6hPpgPeA28us07OJeqZ5EzQTkbfwuhsUg0c237RomFoETJgmp2sa3F/41gfLE6G5cqcYwznmeEeOlQ=="],
 
     "pathe": ["pathe@2.0.3", "", {}, "sha512-WUjGcAqP1gQacoQe+OBJsFA7Ld4DyXuUIjZ5cc75cLHvJ7dtNsTugphxIADwspS+AraAUePCKrSVtPLFj/F88w=="],
+
+    "preact": ["preact@10.29.2", "", {}, "sha512-7tNmwg/7mzzAoB/8kSg6Hl37JraAZw3Z3A0JSY7VXlZwo82Xn0G7wKbNNs2qoF4ZEEsQGTwDAroNdqKs1ofJxQ=="],
 
     "react": ["react@19.2.7", "", {}, "sha512-HNe9WslTbXmFK8o8cmwgAeJFSBvt1bPdHCVKtaaV+WlAN36mpT4hcRpwbf3fY56ar2oIXzsBpOAiIRHAdY0OlQ=="],
 

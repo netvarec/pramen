@@ -1,0 +1,22 @@
+{
+  "name": "@pramen/admin",
+  "version": "0.0.1",
+  "description": "pramen admin dashboard — a Preact single-page browser client for the pramen admin HTTP API (tenants, schema, and generic row browse/edit).",
+  "license": "MIT",
+  "private": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/netvarec/pramen.git",
+    "directory": "packages/admin"
+  },
+  "homepage": "https://github.com/netvarec/pramen#readme",
+  "bugs": "https://github.com/netvarec/pramen/issues",
+  "type": "module",
+  "scripts": {
+    "build": "bun run scripts/build.ts",
+    "dev": "bun run scripts/build.ts --watch"
+  },
+  "dependencies": {
+    "preact": "^10.25.0"
+  }
+}
