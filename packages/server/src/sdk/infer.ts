@@ -76,7 +76,14 @@ export type WhereClause<S extends SchemaDef, T extends keyof S, D extends number
   ([D] extends [never]
     ? object
     : {
-        [K in keyof RelationsOf<S[T]>]?: WhereClause<S, RelTargetTable<S, RelationsOf<S[T]>[K]>, PrevDepth[D]>;
+        // Remap away the `string`/`number` index keys so a relationless entity
+        // (RelationsOf = Record<string, never>) contributes `{}`, not an index
+        // signature that would reject every column key in the WhereInput half.
+        [K in keyof RelationsOf<S[T]> as string extends K ? never : number extends K ? never : K]?: WhereClause<
+          S,
+          RelTargetTable<S, RelationsOf<S[T]>[K]>,
+          PrevDepth[D]
+        >;
       });
 
 /** Patch input for updates: every column optional, value typed (nullable). */
