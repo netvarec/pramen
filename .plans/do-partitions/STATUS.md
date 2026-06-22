@@ -8,7 +8,6 @@ use `idFromName(`${tenant}:${partition}`)`.
 
 ## Pending
 
-- [ ] 03 — Schema validation: reject cross-partition relations
 - [ ] 04 — Partition-aware migrate (DDL scoped to a partition)
 - [ ] 05 — Handler partition declaration + Worker routing key
 - [ ] 06 — DO partition awareness + runtime table-access guard
@@ -24,5 +23,6 @@ use `idFromName(`${tenant}:${partition}`)`.
 - [x] 01 — DESIGN.md: Partitions spec & decisions
 - [x] 02 — Schema: `partition` on Entity + `partitionOf` helper
 - [x] 11 — DO registry: track & enumerate all (tenant, partition) DOs
+- [x] 03 — Schema validation: reject cross-partition relations
 
 ## Discoveries

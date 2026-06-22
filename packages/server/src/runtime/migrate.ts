@@ -21,6 +21,7 @@
 import { addColumnSql, createTableSql, indexStatements, sqlType } from "./ddl";
 import { digest } from "./digest";
 import type { Driver } from "./driver";
+import { validateSchema } from "../sdk/schema";
 import type { EntityFields, FieldDef, SchemaDef } from "../sdk/schema";
 
 export interface MigrationReport {
@@ -110,6 +111,9 @@ async function rebuildTable(driver: Driver, table: string, def: { fields: Entity
 }
 
 export async function migrate(driver: Driver, schema: SchemaDef, opts: MigrateOptions = {}): Promise<MigrationReport> {
+  // Static schema invariants (relation targets exist, no cross-partition relations) —
+  // checked before any DDL so a bad schema fails fast on boot / the D1 path, not mid-migration.
+  validateSchema(schema);
   await driver.exec(`CREATE TABLE IF NOT EXISTS _pramen_meta (key TEXT PRIMARY KEY, value TEXT)`, []);
   const allowDestructive = opts.allowDestructive ?? false;
 

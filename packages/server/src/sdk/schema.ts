@@ -183,3 +183,39 @@ export function partitionsOf(schema: SchemaDef): string[] {
 export function entitiesInPartition(schema: SchemaDef, partition: string): string[] {
   return Object.keys(schema).filter((entity) => partitionOf(schema, entity) === partition);
 }
+
+// --- schema validation — static invariants checked once before migrate (DO boot
+// + the D1 path) and at codegen. Cloudflare-free, so it stays in sdk/.
+
+/**
+ * Validate a schema's static invariants, throwing on the first violation:
+ *
+ *  - every relation's `target` names an entity that exists in the schema;
+ *  - no relation crosses a partition boundary — a relation's source and target
+ *    must live in the same partition (a Durable Object can't reach into another).
+ *
+ * Relations are static, so these are caught at validation time (boot + codegen),
+ * never as a runtime surprise. Runs even for a single (default) partition — it's
+ * cheap and catches relation-target typos.
+ */
+export function validateSchema(schema: SchemaDef): void {
+  for (const [entity, def] of Object.entries(schema)) {
+    for (const [relName, rel] of Object.entries(def.relations)) {
+      if (!(rel.target in schema)) {
+        throw new Error(
+          `relation '${entity}.${relName}' targets unknown entity '${rel.target}' — ` +
+            `no such entity in the schema. Check the relation target name.`,
+        );
+      }
+      const pE = partitionOf(schema, entity);
+      const pT = partitionOf(schema, rel.target);
+      if (pE !== pT) {
+        throw new Error(
+          `relation '${entity}.${relName}' crosses a partition boundary: '${entity}' is in partition ` +
+            `'${pE}' but target '${rel.target}' is in '${pT}'. Relations cannot cross partitions — ` +
+            `put both entities in the same partition or drop the relation.`,
+        );
+      }
+    }
+  }
+}

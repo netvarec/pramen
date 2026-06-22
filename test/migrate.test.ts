@@ -129,6 +129,24 @@ describe("migrate", () => {
     expect(db.query("SELECT qty FROM items").all()).toEqual([{ qty: 42 }]);
   });
 
+  test("rejects a cross-partition schema before touching the store", async () => {
+    const db = new Database(":memory:");
+    const d = bunSqliteDriver(db);
+    const bad = defineSchema({
+      users: Entity((t) => ({ id: t.id(), name: t.text() }), undefined, { partition: "audit" }),
+      notes: Entity(
+        (t) => ({ id: t.id(), authorId: t.int() }),
+        (r) => ({ author: r.belongsTo("users", "authorId") }),
+      ),
+    });
+    await expect(migrate(d, bad)).rejects.toThrow(
+      "relation 'notes.author' crosses a partition boundary: 'notes' is in partition " +
+        "'default' but target 'users' is in 'audit'.",
+    );
+    // failed fast — no tables created (not even the bookkeeping meta table).
+    expect(db.query("SELECT name FROM sqlite_master WHERE type = 'table'").all()).toEqual([]);
+  });
+
   test("preserves ids across a rebuild and keeps numbering from the max", async () => {
     const db = new Database(":memory:");
     const d = bunSqliteDriver(db);
