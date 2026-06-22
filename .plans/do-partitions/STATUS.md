@@ -8,7 +8,6 @@ use `idFromName(`${tenant}:${partition}`)`.
 
 ## Pending
 
-- [ ] 05 — Handler partition declaration + Worker routing key
 - [ ] 06 — DO partition awareness + runtime table-access guard
 - [ ] 07 — Admin surface per-partition
 - [ ] 09 — Example partitioned entity + e2e tests
@@ -24,5 +23,11 @@ use `idFromName(`${tenant}:${partition}`)`.
 - [x] 11 — DO registry: track & enumerate all (tenant, partition) DOs
 - [x] 03 — Schema validation: reject cross-partition relations
 - [x] 04 — Partition-aware migrate (DDL scoped to a partition)
+- [x] 05 — Handler partition declaration + Worker routing key
 
 ## Discoveries
+
+- Two distinct keyspaces, do not conflate: `registryKey(t,p)` → `tenant:<t>[:<p>]` (KV
+  registry) vs `partitionDoName(t,p)` → `<t>[:<p>]` (DO `idFromName`). Issue 07's admin
+  routing must use `partitionStubFor`/`partitionDoName` (in worker.ts), NOT `registryKey`,
+  or it addresses the wrong (empty) DO. Both live in `runtime/registry.ts`.

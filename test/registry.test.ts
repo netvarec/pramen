@@ -4,7 +4,7 @@
 // hard backward-compat requirement — existing single-partition data depends on it.
 
 import { describe, expect, test } from "bun:test";
-import { listDOs, parseRegistryKey, registryKey } from "../packages/server/src/runtime/registry";
+import { listDOs, parseRegistryKey, partitionDoName, registryKey } from "../packages/server/src/runtime/registry";
 
 describe("registryKey / parseRegistryKey", () => {
   test("default partition → bare key", () => {
@@ -35,6 +35,24 @@ describe("registryKey / parseRegistryKey", () => {
     expect(() => registryKey("a:b")).toThrow(/must not contain ':'/);
     expect(() => registryKey("acme", "a:b")).toThrow(/must not contain ':'/);
     expect(() => registryKey("")).toThrow(/must not be empty/);
+  });
+});
+
+describe("partitionDoName", () => {
+  // The DO NAME (idFromName) — distinct from the KV registry key: no `tenant:` prefix.
+  test("default partition ⇒ bare tenant (byte-for-byte the pre-partition DO name)", () => {
+    expect(partitionDoName("acme")).toBe("acme");
+    expect(partitionDoName("acme", "default")).toBe("acme");
+  });
+
+  test("non-default partition ⇒ <t>:<p>", () => {
+    expect(partitionDoName("acme", "audit")).toBe("acme:audit");
+  });
+
+  test("rejects names containing ':'", () => {
+    expect(() => partitionDoName("a:b")).toThrow(/must not contain ':'/);
+    expect(() => partitionDoName("acme", "a:b")).toThrow(/must not contain ':'/);
+    expect(() => partitionDoName("")).toThrow(/must not be empty/);
   });
 });
 

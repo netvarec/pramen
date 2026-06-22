@@ -11,9 +11,10 @@ import { compileAcl } from "./runtime/acl";
 import { D1Driver, type Driver } from "./runtime/driver";
 import { toResponse } from "./runtime/errors";
 import { Kv } from "./runtime/kv";
-import { listDOs } from "./runtime/registry";
+import { listDOs, partitionDoName } from "./runtime/registry";
 import { createFiles, handleFileRequest, R2Adapter } from "./runtime/storage";
 import type { Identity } from "./sdk/acl";
+import { DEFAULT_PARTITION } from "./sdk/schema";
 import type { PramenApp } from "./pramen";
 
 export interface Env {
@@ -73,22 +74,32 @@ function withCors(res: Response, cors: Record<string, string>): Response {
   return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
 }
 
+/** Resolve the Durable Object stub for a `(tenant, partition)`. The DO name comes from
+ * `partitionDoName`, so routing and the registry stay in lockstep: it returns the BARE
+ * `tenant` for the default partition (so `idFromName(tenant)` is byte-for-byte unchanged
+ * — backward-compat) and `${tenant}:${partition}` for any other partition. */
+function partitionStubFor(env: Env, tenant: string, partition: string = DEFAULT_PARTITION): DurableObjectStub {
+  return env.PRAMEN.get(env.PRAMEN.idFromName(partitionDoName(tenant, partition)));
+}
+
 /** Forward a privileged mutation into a tenant's DO from a public route. The
  * synthetic identity (default `["admin"]`) is trusted because the call originates
  * in the Worker — the same internal mechanism the admin endpoints use. Returns the
  * DO's JSON response (`{ ok, result }` / `{ ok: false, … }`). */
 export async function callPrivileged(
   env: Env,
-  opts: { name: string; input?: unknown; tenant?: string; roles?: string[] },
+  opts: { name: string; input?: unknown; tenant?: string; roles?: string[]; partition?: string },
 ): Promise<Response> {
   const tenant = opts.tenant ?? "main";
-  const stub = env.PRAMEN.get(env.PRAMEN.idFromName(tenant));
+  const partition = opts.partition ?? DEFAULT_PARTITION;
+  const stub = partitionStubFor(env, tenant, partition);
   return stub.fetch(
     new Request(`https://do/rpc/${opts.name}`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
         "x-pramen-tenant": tenant,
+        "x-pramen-partition": partition,
         "x-pramen-identity": JSON.stringify({ roles: opts.roles ?? ["admin"] }),
       },
       body: JSON.stringify(opts.input ?? {}),
@@ -165,6 +176,10 @@ export function makeWorker(app: PramenApp) {
       if (qToken && !h.get("authorization")) h.set("authorization", `Bearer ${qToken}`);
       const qTenant = url.searchParams.get("tenant");
       if (qTenant && !h.get("x-pramen-tenant")) h.set("x-pramen-tenant", qTenant);
+      // A single socket lives in one partition (cross-partition live is out of scope);
+      // accept it via ?partition= and default to the default partition.
+      const qPartition = url.searchParams.get("partition");
+      if (!h.get("x-pramen-partition")) h.set("x-pramen-partition", qPartition || DEFAULT_PARTITION);
       req = new Request(request, { headers: h });
     }
 
@@ -260,12 +275,24 @@ export function makeWorker(app: PramenApp) {
       }
     }
 
+    // Resolve the partition to route to. For /rpc it's declared statically on the
+    // handler; for /live it's the socket's partition (already folded into the header
+    // from ?partition=). Forward it to the DO in x-pramen-partition either way.
+    let partition: string;
+    if (isRpc) {
+      const name = url.pathname.replace(/^\/rpc\//, "");
+      partition = app.handlers[name]?.partition ?? DEFAULT_PARTITION;
+    } else {
+      partition = req.headers.get("x-pramen-partition") || DEFAULT_PARTITION;
+    }
+
     // Forward a trusted identity to the DO (the DO never re-derives it).
     const headers = new Headers(req.headers);
     if (identity) headers.set("x-pramen-identity", JSON.stringify(identity as Identity));
     else headers.delete("x-pramen-identity");
+    headers.set("x-pramen-partition", partition);
 
-    const stub = env.PRAMEN.get(env.PRAMEN.idFromName(tenant));
+    const stub = partitionStubFor(env, tenant, partition);
     // WebSocket upgrades (101) must be returned untouched; only add CORS to HTTP.
     const res = await stub.fetch(new Request(req, { headers }));
     return isWs ? res : withCors(res, cors);

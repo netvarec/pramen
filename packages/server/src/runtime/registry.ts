@@ -51,6 +51,19 @@ export function registryKey(tenant: string, partition: string = DEFAULT_PARTITIO
   return partition === DEFAULT_PARTITION ? `${KEY_PREFIX}${tenant}` : `${KEY_PREFIX}${tenant}:${partition}`;
 }
 
+/** Build the Durable Object NAME for a `(tenant, partition)` — the string passed to
+ * `idFromName`. This is the same default/non-default rule as `registryKey` but WITHOUT
+ * the KV `tenant:` prefix: the DO namespace and the KV registry are distinct keyspaces.
+ * Default partition keeps the BARE `tenant` name (byte-for-byte the pre-partition DO
+ * name — a hard backward-compat requirement: changing it would orphan existing DOs);
+ * any other partition is `${tenant}:${partition}`. Keeping it next to `registryKey`
+ * keeps routing and the registry derived from one place. */
+export function partitionDoName(tenant: string, partition: string = DEFAULT_PARTITION): string {
+  assertValidName("tenant", tenant);
+  assertValidName("partition", partition);
+  return partition === DEFAULT_PARTITION ? tenant : `${tenant}:${partition}`;
+}
+
 /** Parse a registry KV key back into a `(tenant, partition)`. A bare `tenant:<t>`
  * key yields partition `"default"`; `tenant:<t>:<p>` yields `<p>`. Returns null if
  * the key is not a registry key (missing the `tenant:` prefix). */
