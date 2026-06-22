@@ -195,13 +195,14 @@ export function makeWorker(app: PramenApp) {
     // --- admin: point-in-time recovery for a tenant ---
     if (url.pathname === "/admin/recover" && request.method === "POST") {
       if (!isAdmin(identity)) return forbidden("recover");
-      const body = (await request.json().catch(() => ({}))) as { tenant?: unknown; timestamp?: unknown };
+      const body = (await request.json().catch(() => ({}))) as { tenant?: unknown; timestamp?: unknown; partition?: unknown };
       if (typeof body.tenant !== "string" || !body.tenant) return badRequest("tenant required");
       if (typeof body.timestamp !== "number" && typeof body.timestamp !== "string") return badRequest("timestamp required");
-      const stub = env.PRAMEN.get(env.PRAMEN.idFromName(body.tenant));
+      const partition = typeof body.partition === "string" && body.partition ? body.partition : DEFAULT_PARTITION;
+      const stub = partitionStubFor(env, body.tenant, partition);
       const internal = new Request("https://do/__recover", {
         method: "POST",
-        headers: { "content-type": "application/json", "x-pramen-tenant": body.tenant },
+        headers: { "content-type": "application/json", "x-pramen-tenant": body.tenant, "x-pramen-partition": partition },
         body: JSON.stringify({ timestamp: body.timestamp }),
       });
       return stub.fetch(internal);
@@ -211,8 +212,11 @@ export function makeWorker(app: PramenApp) {
     if (url.pathname === "/admin/schema") {
       if (!isAdmin(identity)) return withCors(forbidden("schema"), cors);
       const tenant = url.searchParams.get("tenant") ?? "main";
-      const stub = env.PRAMEN.get(env.PRAMEN.idFromName(tenant));
-      const res = await stub.fetch(new Request("https://do/__schema", { headers: { "x-pramen-tenant": tenant } }));
+      const partition = url.searchParams.get("partition") || DEFAULT_PARTITION;
+      const stub = partitionStubFor(env, tenant, partition);
+      const res = await stub.fetch(
+        new Request("https://do/__schema", { headers: { "x-pramen-tenant": tenant, "x-pramen-partition": partition } }),
+      );
       return withCors(res, cors);
     }
 
@@ -221,13 +225,14 @@ export function makeWorker(app: PramenApp) {
     // in the DO under SYSTEM scope (ACL bypassed) — gated to admins here. ---
     if (url.pathname === "/admin/data" && request.method === "POST") {
       if (!isAdmin(identity)) return forbidden("data");
-      const body = (await request.json().catch(() => ({}))) as { tenant?: unknown };
+      const body = (await request.json().catch(() => ({}))) as { tenant?: unknown; partition?: unknown };
       const tenant = typeof body.tenant === "string" && body.tenant ? body.tenant : "main";
-      const stub = env.PRAMEN.get(env.PRAMEN.idFromName(tenant));
+      const partition = typeof body.partition === "string" && body.partition ? body.partition : DEFAULT_PARTITION;
+      const stub = partitionStubFor(env, tenant, partition);
       const res = await stub.fetch(
         new Request("https://do/__admin/data", {
           method: "POST",
-          headers: { "content-type": "application/json", "x-pramen-tenant": tenant },
+          headers: { "content-type": "application/json", "x-pramen-tenant": tenant, "x-pramen-partition": partition },
           body: JSON.stringify(body),
         }),
       );
@@ -241,8 +246,9 @@ export function makeWorker(app: PramenApp) {
       return new Response(
         "pramen — POST /rpc/<handler> (JSON body), or WebSocket /live for live queries. " +
           "Header X-Pramen-Tenant selects the store (default: main). " +
-          "Admin: GET /tenants, POST /admin/recover {tenant,timestamp}, GET /admin/schema?tenant=, " +
-          "POST /admin/data {tenant,table,op}.\n",
+          "Admin (optional partition selects the partition DO, default: " + DEFAULT_PARTITION + "): " +
+          "GET /tenants, POST /admin/recover {tenant,timestamp,partition?}, GET /admin/schema?tenant=&partition=, " +
+          "POST /admin/data {tenant,table,op,partition?}.\n",
         { headers: { "content-type": "text/plain" } },
       );
     }

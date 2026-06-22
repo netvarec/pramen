@@ -8,7 +8,6 @@ use `idFromName(`${tenant}:${partition}`)`.
 
 ## Pending
 
-- [ ] 07 — Admin surface per-partition
 - [ ] 09 — Example partitioned entity + e2e tests
 - [ ] 10 — CLI / codegen + docs
 - [ ] 08 — Type-level cross-partition rejection (relations / `with`) [low priority, optional]
@@ -24,8 +23,14 @@ use `idFromName(`${tenant}:${partition}`)`.
 - [x] 04 — Partition-aware migrate (DDL scoped to a partition)
 - [x] 05 — Handler partition declaration + Worker routing key
 - [x] 06 — DO partition awareness + runtime table-access guard
+- [x] 07 — Admin surface per-partition
 
 ## Discoveries
+
+- e2e flake (environment, not code): a failed `test/e2e.test.ts` run leaks a `bun`
+  child holding port 8788 (afterAll kills the `bunx wrangler` wrapper, not its child),
+  so subsequent runs hang on "wrangler dev did not become ready in time". Recovery:
+  `lsof -iTCP:8788` → `kill -9 <pid>`. Check this before blaming an e2e regression.
 
 - Two distinct keyspaces, do not conflate: `registryKey(t,p)` → `tenant:<t>[:<p>]` (KV
   registry) vs `partitionDoName(t,p)` → `<t>[:<p>]` (DO `idFromName`). Issue 07's admin

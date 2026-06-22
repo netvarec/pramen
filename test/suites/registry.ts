@@ -42,4 +42,16 @@ export async function runRegistry(base: string): Promise<void> {
   assert(Array.isArray(schemaBody.result.tables?.notes), "schema introspection lists tables/columns");
   const schemaDenied = await fetch(`${base}/admin/schema?tenant=${probe}`, { headers: { authorization: `Bearer ${reader}` } });
   assert(schemaDenied.status === 403, "non-admin cannot read schema");
+
+  // partition param: &partition=default must address the BARE tenant DO key —
+  // byte-for-byte the same DO the omitted-partition call hits (back-compat). So the
+  // applied-schema hash is identical.
+  const schemaDefault = await fetch(`${base}/admin/schema?tenant=${probe}&partition=default`, {
+    headers: { authorization: `Bearer ${admin}` },
+  });
+  const schemaDefaultBody = await schemaDefault.json();
+  assert(
+    schemaDefault.status === 200 && schemaDefaultBody.result?.hash === schemaBody.result.hash,
+    "schema ?partition=default hits the same (bare-key) DO as omitting partition",
+  );
 }
