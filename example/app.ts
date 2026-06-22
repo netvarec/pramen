@@ -15,6 +15,8 @@ import {
   $input,
   unique,
   defaultTo,
+  primaryKey,
+  generated,
   BadRequest,
   Forbidden,
   type Identity,
@@ -62,6 +64,14 @@ const schema = defineSchema({
     email: t.text(),
     code: unique(t.text()), // unique constraint (a unique index) — like a unique slug
     status: defaultTo(t.text(), "pending"), // DEFAULT — optional on insert, DB fills it
+  })),
+  // UUID columns. `id` is a generated UUID primary key (the kvalt pattern); `traceId`
+  // is a generated non-PK UUID. Both are minted server-side on insert when omitted
+  // (crypto.randomUUID()); a value supplied by the caller is validated (isValidUuid).
+  events: Entity((t) => ({
+    id: primaryKey(generated(t.uuid())),
+    kind: t.text(),
+    traceId: generated(t.uuid()),
   })),
 });
 
@@ -173,6 +183,23 @@ const handlers = {
     const rows = await ctx.db.find({ from: "signups", limit: 1 });
     return rows[0] ?? null;
   }),
+
+  // UUID demo. `id` and `traceId` are omitted on insert, so the runtime mints them
+  // (the echoed row carries the generated uuids). Passing an `id` is allowed too, as
+  // long as it's a valid uuid — otherwise the write is rejected (400).
+  logEvent: mutation(
+    (ctx, input: { kind: string; id?: string }) =>
+      ctx.db.insert("events", { kind: input.kind, ...(input.id !== undefined ? { id: input.id } : {}) }),
+    {
+      input: (raw): { kind: string; id?: string } => {
+        const o = (raw ?? {}) as Record<string, unknown>;
+        if (typeof o.kind !== "string") throw new Error("kind must be a string");
+        return { kind: o.kind, id: typeof o.id === "string" ? o.id : undefined };
+      },
+    },
+  ),
+
+  listEvents: query((ctx) => ctx.db.find({ from: "events", orderBy: { column: "id", dir: "asc" } })),
 
   // ctx.env — Worker/DO env (bindings + vars + secrets). Real handlers use it to
   // call external APIs (Stripe, Resend, …). Here we only report presence, never the
@@ -296,6 +323,8 @@ const acl = [
     policy("admin:users:create", "users", "create", allow()),
     policy("admin:signups:read", "signups", "read", allow()),
     policy("admin:signups:create", "signups", "create", allow()),
+    policy("admin:events:read", "events", "read", allow()),
+    policy("admin:events:create", "events", "create", allow()),
   ]),
   // anonymous: applied to callers with NO verified token. A guest may create a
   // signup (public write) and read one back only by presenting its `code`

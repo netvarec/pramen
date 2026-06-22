@@ -4,11 +4,15 @@
 
 import type { DefaultValue, EntityFields, FieldDef } from "../sdk/schema";
 
-// SQLite has no boolean type; store as INTEGER 0/1. json + fileRef are stored as
-// TEXT (JSON). Exported for the migrator, which compares declared column types
+// SQLite has no boolean type; store as INTEGER 0/1. json + fileRef + uuid are
+// stored as TEXT. Exported for the migrator, which compares declared column types
 // (and CASTs on a type change).
 export const sqlType = (f: FieldDef): string =>
-  f.type === "boolean" ? "INTEGER" : f.type === "json" || f.type === "fileRef" ? "TEXT" : f.type.toUpperCase();
+  f.type === "boolean"
+    ? "INTEGER"
+    : f.type === "json" || f.type === "fileRef" || f.type === "uuid"
+      ? "TEXT"
+      : f.type.toUpperCase();
 
 /** Render a DEFAULT literal. Strings are single-quote-escaped; booleans → 0/1. */
 function defaultLiteral(v: DefaultValue): string {

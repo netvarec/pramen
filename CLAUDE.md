@@ -112,11 +112,16 @@ Cloudflare services should be added (e.g. email via the Send service as `ctx.mai
 ## Conventions
 
 - Schema: `Entity(t => ({ id: t.id(), ... }))` + `defineSchema({ table: Entity })`.
-  Field builders: `id`/`textId`/`text`/`int`/`real`/`bool`/`json`/`fileRef`. `json`
+  Field builders: `id`/`textId`/`text`/`int`/`real`/`bool`/`json`/`fileRef`/`uuid`. `json`
   and `fileRef` are stored as TEXT and object↔JSON-codec'd at the `Db` chokepoint —
-  handlers read/write the parsed value (a `JsonValue` / `FileRef`). Modifiers are
-  wrapper helpers (compose like `renamedFrom`): `notNull()`, `unique()`, `indexed()`,
-  `defaultTo(v)` — e.g. `code: unique(t.text())`, `status: defaultTo(t.text(), "pending")`.
+  handlers read/write the parsed value (a `JsonValue` / `FileRef`). `uuid` is a TEXT
+  column typed as `string`; a supplied value is validated (`isValidUuid`) on write and
+  rejected (400) if malformed. Modifiers are wrapper helpers (compose like
+  `renamedFrom`): `notNull()`, `unique()`, `indexed()`, `defaultTo(v)`, `primaryKey()`,
+  `generated()` — e.g. `code: unique(t.text())`, `status: defaultTo(t.text(), "pending")`.
+  `primaryKey()` marks any column the PK (implies NOT NULL); `generated()` auto-mints a
+  uuid on insert via `crypto.randomUUID()` (uuid-only) and makes the column optional on
+  insert. The canonical UUID primary key is `id: primaryKey(generated(t.uuid()))`.
 - Auth/ACL: an unauthenticated caller is the `anonymous` role (define it for public
   reads/writes; absent ⇒ deny). A policy `where` may use `$identity("path")` (caller)
   or `$input("path")` (request input — a capability/by-unguessable-key read). Public,

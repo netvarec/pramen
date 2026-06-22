@@ -258,11 +258,27 @@ const listNotes = query((ctx) =>
 
 The handler context is `{ db, kv, files, env, identity }`. **Field builders:**
 `id`, `textId`, `text`, `int`, `real`, `bool`, `json` (arbitrary JSON, typed as
-`JsonValue`), `fileRef` (an R2 file). `json`/`fileRef` are stored as TEXT and
-codec'd to/from the parsed value automatically. **Modifiers** wrap a builder and
-compose: `notNull()`, `unique()`, `indexed()`, `defaultTo(v)` — e.g.
+`JsonValue`), `fileRef` (an R2 file), `uuid` (a TEXT column typed as `string`).
+`json`/`fileRef` are stored as TEXT and codec'd to/from the parsed value
+automatically; a `uuid` value is validated on write (rejected with 400 if
+malformed). **Modifiers** wrap a builder and compose: `notNull()`, `unique()`,
+`indexed()`, `defaultTo(v)`, `primaryKey()`, `generated()` — e.g.
 `code: unique(t.text())`, `status: defaultTo(t.text(), "pending")` (a defaulted
 column is optional on insert).
+
+**UUIDs.** `t.uuid()` is a string column; `generated()` auto-mints a v4 on insert
+(via `crypto.randomUUID()`) when you omit it, and `primaryKey()` marks any column
+the primary key. The canonical UUID primary key is:
+
+```ts
+events: Entity((t) => ({
+  id: primaryKey(generated(t.uuid())),  // auto-minted on insert, optional in the type
+  kind: t.text(),
+}));
+
+await ctx.db.insert("events", { kind: "signup" });
+// -> { id: "9f1c2e3a-…", kind: "signup" }   (id minted server-side)
+```
 
 **Public flows.** An unauthenticated caller is evaluated as the `anonymous` role —
 define it to grant public reads/writes (absent ⇒ deny). A policy `where` can use

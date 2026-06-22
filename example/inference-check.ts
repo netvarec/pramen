@@ -2,7 +2,7 @@
 // `bun run typecheck`; every @ts-expect-error must trigger a real error, and the
 // positive cases must compile. It is not imported at runtime.
 
-import { Entity, defineSchema, createApp, type FieldsOf, type ProjectedRow } from "@pramen/server";
+import { Entity, defineSchema, createApp, primaryKey, generated, type FieldsOf, type ProjectedRow } from "@pramen/server";
 
 const schema = defineSchema({
   users: Entity(
@@ -19,6 +19,13 @@ const schema = defineSchema({
     }),
     (r) => ({ owner: r.belongsTo("users", "ownerId") }),
   ),
+  // uuid column type: a generated() uuid PK (optional on insert, typed string) and a
+  // plain uuid column (string, caller-supplied).
+  events: Entity((t) => ({
+    id: primaryKey(generated(t.uuid())),
+    kind: t.text(),
+    ref: t.uuid(),
+  })),
 });
 
 const { query, mutation } = createApp(schema);
@@ -131,4 +138,22 @@ export const writeChecks = mutation(async (ctx) => {
   ctx.db.update("notes", newId, { pinned: "yes" });
 
   return newId;
+});
+
+export const uuidChecks = mutation(async (ctx) => {
+  // The generated() uuid PK is optional on insert (the runtime mints it); `ref` is a
+  // plain uuid column, optional+nullable like any non-NOT-NULL column.
+  const ev = await ctx.db.insert("events", { kind: "signup" });
+  const id: string = ev.id; // uuid column -> string
+  const ref: string | null = ev.ref;
+
+  // a caller may still supply the uuid PK as a string
+  ctx.db.insert("events", { id: crypto.randomUUID(), kind: "login" });
+  // @ts-expect-error the uuid PK is a string, not a number
+  ctx.db.insert("events", { id: 123, kind: "x" });
+  // @ts-expect-error `kind` is NOT NULL-less text but still must be a string when given
+  ctx.db.insert("events", { kind: 7 });
+
+  void ref;
+  return id;
 });
