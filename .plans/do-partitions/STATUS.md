@@ -8,8 +8,6 @@ use `idFromName(`${tenant}:${partition}`)`.
 
 ## Pending
 
-- [ ] 08 — Type-level cross-partition rejection (relations / `with`) [low priority, optional]
-
 ## In Progress
 
 ## Completed
@@ -24,6 +22,7 @@ use `idFromName(`${tenant}:${partition}`)`.
 - [x] 07 — Admin surface per-partition
 - [x] 09 — Example partitioned entity + e2e tests
 - [x] 10 — CLI / codegen + docs
+- [x] 08 — Type-level cross-partition rejection — runtime-only by decision (see below)
 
 ## Discoveries
 
@@ -34,6 +33,13 @@ use `idFromName(`${tenant}:${partition}`)`.
 - Issue 05 wired `partition` into the standalone `query`/`mutation` (sdk/handlers.ts) but
   NOT the typed `createApp` factories (sdk/app.ts) the example uses — partitioned handlers
   routed to the default DO. Caught by the issue-09 integration suite; fixed in sdk/app.ts.
+- Issue 08 deferred to runtime-only: a compile-time cross-partition relation/`with`
+  rejection needs the entity `partition` to survive inference as a string literal, but
+  `EntityDef.partition` is widened to `string` at the `Entity()` factory. Doing it means
+  threading a `P extends string` generic through EntityDef/Entity/SchemaDef + all
+  consumers (FieldsOf/RelationsOf/RelValue/WhereClause/RelationsResult) — out of scope
+  and would destabilize the depth-bounded WhereClause. Enforcement stays at runtime/boot
+  (validateSchema) + e2e. Candidate future issue if the type-level guard is wanted.
 
 - Two distinct keyspaces, do not conflate: `registryKey(t,p)` → `tenant:<t>[:<p>]` (KV
   registry) vs `partitionDoName(t,p)` → `<t>[:<p>]` (DO `idFromName`). Issue 07's admin
