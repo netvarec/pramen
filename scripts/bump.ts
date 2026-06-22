@@ -68,5 +68,7 @@ for (const dir of PKGS) {
 
 await $`git add ${files}`;
 await $`git commit -m ${`release: v${next}`}`;
-await $`git tag ${`v${next}`}`;
+// Annotated tag (not lightweight): `git push --follow-tags` only pushes annotated
+// tags, and the tag push is what triggers the release workflow.
+await $`git tag -a ${`v${next}`} -m ${`release: v${next}`}`;
 console.log(`\nTagged v${next}. Push to publish:\n  git push --follow-tags`);
