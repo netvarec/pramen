@@ -15,8 +15,15 @@ import { dirname, resolve } from "node:path";
 import { createTableSql } from "../packages/server/src/runtime/ddl";
 import { schemaHash } from "../packages/server/src/runtime/migrate";
 import { diffSchemaShape, schemaShape, type SchemaShape } from "../packages/server/src/runtime/schema-diff";
-import type { SchemaDef } from "../packages/server/src/sdk/schema";
+import { entitiesInPartition, partitionsOf, type SchemaDef } from "../packages/server/src/sdk/schema";
 import { sign } from "./jwt";
+
+/** The sub-schema of a single partition (used to mirror the DO's per-partition hash,
+ * which migrate() computes over exactly this subset). For a single-partition app the
+ * subset equals the whole schema, so the hash is identical to the unpartitioned case. */
+function partitionSchema(schema: SchemaDef, partition: string): SchemaDef {
+  return Object.fromEntries(entitiesInPartition(schema, partition).map((t) => [t, schema[t]!]));
+}
 
 const argv = process.argv.slice(2);
 
@@ -117,27 +124,40 @@ async function schemaCmd(sub: string | undefined): Promise<void> {
     const url = flag("url") ?? "http://localhost:8787";
     const tenant = flag("tenant") ?? "main";
     const token = flag("token") ?? (await sign({ sub: "cli", roles: ["admin"] }));
-    const res = await fetch(`${url}/admin/schema?tenant=${encodeURIComponent(tenant)}`, {
-      headers: { authorization: `Bearer ${token}` },
-    });
-    const body = (await res.json().catch(() => ({}))) as {
-      ok?: boolean;
-      result?: { hash: string | null; tables: Record<string, string[]> };
-      error?: string;
-    };
-    if (!res.ok || !body.ok || !body.result) fail(`status failed: ${body.error ?? res.status}`);
-    const live = body.result!;
-    const current = schemaHash(schema);
+    // Each partition is a distinct Durable Object class, migrated and hashed
+    // independently — so compare them one at a time, fetching each partition's applied
+    // schema from its DO. A single-(default-)partition app loops exactly once and reads
+    // identically to before. The default partition is addressed with no partition param.
+    const partitions = partitionsOf(schema);
     console.log(`tenant:  ${tenant}`);
-    console.log(`live:    ${live.hash ?? "(none)"}`);
-    console.log(`current: ${current}`);
-    console.log(live.hash === current ? "✓ up to date" : "⚠ BEHIND — migrates on the tenant's next boot");
-    const want = schemaShape(schema);
-    for (const table of Object.keys(want)) {
-      const liveCols = new Set(live.tables[table] ?? []);
-      const missing = Object.keys(want[table]!).filter((col) => !liveCols.has(col));
-      if (!live.tables[table]) console.log(`  + table ${table} (not yet created live)`);
-      else if (missing.length) console.log(`  + ${table}: ${missing.join(", ")} (not yet added live)`);
+    for (const partition of partitions) {
+      if (partitions.length > 1) console.log(`\npartition: ${partition}`);
+      const qs = partition === "default" ? "" : `&partition=${encodeURIComponent(partition)}`;
+      const res = await fetch(`${url}/admin/schema?tenant=${encodeURIComponent(tenant)}${qs}`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      const body = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        result?: { hash: string | null; tables: Record<string, string[]> };
+        error?: string;
+      };
+      if (!res.ok || !body.ok || !body.result) fail(`status failed (partition ${partition}): ${body.error ?? res.status}`);
+      const live = body.result!;
+      // The DO hashes only its partition's entities — mirror that here so the compared
+      // hashes line up (for a single partition this equals the whole-schema hash).
+      const subset = partitionSchema(schema, partition);
+      const current = schemaHash(subset);
+      const upToDate = live.hash === current;
+      console.log(`live:    ${live.hash ?? "(none)"}`);
+      console.log(`current: ${current}`);
+      console.log(upToDate ? "✓ up to date" : "⚠ BEHIND — migrates on the tenant's next boot");
+      const want = schemaShape(subset);
+      for (const table of Object.keys(want)) {
+        const liveCols = new Set(live.tables[table] ?? []);
+        const missing = Object.keys(want[table]!).filter((col) => !liveCols.has(col));
+        if (!live.tables[table]) console.log(`  + table ${table} (not yet created live)`);
+        else if (missing.length) console.log(`  + ${table}: ${missing.join(", ")} (not yet added live)`);
+      }
     }
     return;
   }

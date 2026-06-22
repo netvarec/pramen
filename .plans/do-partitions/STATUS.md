@@ -8,7 +8,6 @@ use `idFromName(`${tenant}:${partition}`)`.
 
 ## Pending
 
-- [ ] 10 — CLI / codegen + docs
 - [ ] 08 — Type-level cross-partition rejection (relations / `with`) [low priority, optional]
 
 ## In Progress
@@ -24,6 +23,7 @@ use `idFromName(`${tenant}:${partition}`)`.
 - [x] 06 — DO partition awareness + runtime table-access guard
 - [x] 07 — Admin surface per-partition
 - [x] 09 — Example partitioned entity + e2e tests
+- [x] 10 — CLI / codegen + docs
 
 ## Discoveries
 

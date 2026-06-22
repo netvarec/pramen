@@ -109,6 +109,35 @@ store is behind a `StorageAdapter` seam (`R2Adapter`/`MemoryAdapter` in
 The same shape (adapter + `ctx.<service>` facade + Worker glue) is how other
 Cloudflare services should be added (e.g. email via the Send service as `ctx.mail`).
 
+## Partitions
+
+An entity may declare a **`partition`** — the Durable Object class it lives in:
+`Entity(t => ({...}), undefined, { partition: "audit" })`. The default is a single
+partition (`"default"`), i.e. **one DO per tenant** — the original model. Partitioning
+splits a tenant's data across multiple DOs (e.g. a hot path vs. an append-only audit
+log) for independent single-writer serialization and storage.
+
+- A partition-DO **only sees its own partition's tables**: migrate/admin/CLI are all
+  **per-partition** — each partition is migrated, hashed (`schema_hash:<partition>` in
+  `_pramen_meta`), and reported independently. `sdk/schema.ts` provides
+  `partitionsOf(schema)` / `entitiesInPartition(schema, p)` / `partitionOf(schema, e)`
+  / `DEFAULT_PARTITION` to enumerate/resolve them; `validateSchema(schema)` enforces the
+  static invariants (relation targets exist; no relation crosses a partition).
+- **Cross-partition relations, `with` eager-loads, and transactions are rejected** — a
+  DO can't reach into another DO's SQLite. A relation whose source and target are in
+  different partitions fails `validateSchema` at boot (and codegen). Keep related
+  entities in the same partition.
+- **Backward-compat invariant — DO NOT break:** the default partition uses the **bare**
+  DO key `idFromName(tenant)` (NOT `idFromName(tenant:default)`), so a pre-partitions
+  store is byte-for-byte the same DO. `partitionDoName(tenant, partition)` in
+  `runtime/registry.ts` encodes this: bare `tenant` for `"default"`, `${tenant}:${partition}`
+  otherwise. Routing and the tenant registry both go through it, so they stay in lockstep —
+  any future change to DO addressing must preserve the bare-key form for the default partition.
+- Admin/CLI address one partition at a time: `/admin/schema?tenant=&partition=` returns
+  that partition's applied schema; `/tenants` returns `{ tenant, partition }[]`. The CLI's
+  `schema status` loops `partitionsOf(app.schema)`, fetching + comparing each partition
+  (a single-partition app reads identically to before).
+
 ## Conventions
 
 - Schema: `Entity(t => ({ id: t.id(), ... }))` + `defineSchema({ table: Entity })`.
