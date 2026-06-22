@@ -202,6 +202,12 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
       existing table without a rebuild); DEFAULT is inline (and `ADD COLUMN ... NOT NULL DEFAULT` backfills),
       and a defaulted column is optional on insert. (`t.json()` already landed; chained `.method()` syntax
       and a `timestamps()` auto-now helper — which needs SQL-expression defaults — remain.)
+- [x] `t.uuid()` column + `generated()`/`primaryKey()` modifiers (mirrors kvalt): a TEXT column typed as
+      `string`. `generated()` auto-mints a v4 via `crypto.randomUUID()` on insert when omitted (uuid-only —
+      rejected at schema construction otherwise) and makes the column optional on insert; the minted value
+      is treated like a forced `set` (bypasses the writable-field check). `primaryKey()` marks any column the
+      PK (implies NOT NULL). A caller-supplied uuid is validated (`isValidUuid`) on insert/update and rejected
+      (400) if malformed. Canonical PK: `id: primaryKey(generated(t.uuid()))`.
 - [x] Go-live hardening (1/3): destructive migrations are gated. The boot migrator applies additive
       changes always, but drops/rebuilds/type-changes/table-drops only when `PRAMEN_ALLOW_DESTRUCTIVE=true`
       (off by default). Skipped ops are logged and the schema hash is left unwritten so a later opt-in
