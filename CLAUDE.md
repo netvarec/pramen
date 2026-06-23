@@ -183,7 +183,7 @@ log) for independent single-writer serialization and storage.
   entity's read scope is AND-merged (traversal can't widen access). Cell-`when`
   predicates stay single-table.
 - Handlers: `query()` / `mutation()` from `@pramen/server`. Context is
-  `{ db, kv, files, env, identity, tasks }`. Mutations are auto-wrapped in
+  `{ db, kv, files, env, identity, tasks, mail }`. Mutations are auto-wrapped in
   `storage.transaction()` by `runtime/dispatch.ts` (commit on return, rollback on
   throw) — do not write transaction control in handler code. Raw `BEGIN`/`COMMIT`
   via `sql.exec` is rejected by DO SQLite.
@@ -202,6 +202,11 @@ log) for independent single-writer serialization and storage.
   on an actual value CHANGE; `hidden()` columns are stripped from the payload; raw
   `ctx.db.exec` and task-handler writes (suppressTriggers) don't fire triggers (no
   cascade); `createPramen` rejects a trigger whose `task` has no `app.tasks` handler.
+- Email: `ctx.mail.send({ to, subject, text/html, from?, replyTo? })` (`runtime/mail.ts`)
+  — a facade + adapter seam (like `ctx.files`). Transport from env: `EMAIL` binding +
+  `MAIL_FROM` → Cloudflare Email Sending (no API keys); `MAIL_CAPTURE=true` → capture to
+  KV (`mail:<to>`, dev inbox); else `send` FAILS CLOSED (throws) so a misconfigured prod
+  doesn't silently stash security emails. Built in dispatch + the task-drain contexts.
 - `ctx.env` is the Worker/DO environment (bindings + vars + secrets), loosely typed —
   use it to call external services from handlers (`ctx.env.STRIPE_SECRET_KEY as string`).
 - No raw SQL in handlers — go through `ctx.db` (`find` is compiled by

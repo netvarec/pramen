@@ -78,16 +78,11 @@ token lifecycle (a 256-bit token stored only as a SHA-256 hash, default 15-min T
 import { magicLinkSchema, createMagicLinkAuth } from "@pramen/auth";
 
 const magic = createMagicLinkAuth({
-  // On Cloudflare, the recommended transport is Cloudflare Email Sending — the
-  // `send_email` binding (no API keys). Read ctx.env for the binding / config.
+  // Deliver via ctx.mail — Cloudflare Email Sending when configured (MAIL_FROM + the
+  // EMAIL binding), captured in dev. See the Deferred Tasks page for ctx.mail.
   sendEmail: async (ctx, { email, token }) => {
     const link = `${ctx.env.APP_URL}/auth?token=${token}`;
-    await (ctx.env.EMAIL as SendEmail).send({
-      to: email,
-      from: { email: ctx.env.EMAIL_FROM as string, name: "Acme" },
-      subject: "Your sign-in link",
-      text: `Sign in: ${link}`,
-    });
+    await ctx.mail.send({ to: email, subject: "Your sign-in link", text: `Sign in: ${link}` });
   },
 });
 

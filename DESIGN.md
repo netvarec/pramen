@@ -234,7 +234,14 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
       self-drains via an alarm scheduled at the next due `runAt` (a backed-off retry re-arms itself); the
       D1/Worker store (no alarm) drains via a Cron Trigger (`createPramen().scheduled`) or
       `POST /admin/tasks/drain`. Admin `/admin/tasks/drain` + `/admin/tasks/list` (both stores); 'done' rows
-      are pruned. Next: a `ctx.mail` facade as the first built-in target.
+      are pruned.
+- [x] `ctx.mail` (email facade, same shape as `ctx.files`): `ctx.mail.send({ to, subject, text/html, from?,
+      replyTo? })` over a `MailAdapter` seam (`runtime/mail.ts`) chosen from env — `CloudflareEmailAdapter`
+      (the `EMAIL`/send_email binding, when `MAIL_FROM` is set; no API keys), `KvMailAdapter`/`MemoryMailAdapter`
+      (capture, gated on an explicit `MAIL_CAPTURE=true` dev opt-in), else `UnconfiguredMailAdapter` which FAILS
+      CLOSED (a send throws) so a misconfigured prod can't silently stash a security email in KV. Built in
+      `dispatch` from env (+kv) and on the task-drain contexts, so a task handler can `ctx.mail.send(...)` — the
+      canonical "notification email on a write" path (with `ctx.tasks`). Next: a `ctx.queue` seam; more targets.
 - [x] Declarative triggers (layered on the outbox): an entity declares
       `triggers: [trigger({ task, on: { create?, update?: true | string[], delete? } })]`; the `Db` write
       path auto-enqueues `task` (payload `{ entity, op, id, row }`) in the write's transaction — no

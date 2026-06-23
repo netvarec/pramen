@@ -1,7 +1,7 @@
 ---
 title: Deferred Tasks
 order: 8
-summary: A transactional outbox for side effects after a write — send a notification email, fire a webhook — off the single-writer path, with retry and at-least-once delivery, plus declarative per-entity triggers.
+summary: A transactional outbox for side effects after a write — send a notification email (ctx.mail), fire a webhook — off the single-writer path, with retry and at-least-once delivery, plus declarative per-entity triggers.
 ---
 
 To run a side effect after a write — send a notification email, call a webhook —
@@ -29,8 +29,7 @@ const app = {
   tasks: {
     "invite-email": async (ctx, payload, meta) => {
       const { to } = payload as { to: string };
-      // Send via Cloudflare Email Sending (the `send_email` binding) — no API keys.
-      await (ctx.env.EMAIL as SendEmail).send({ to, from: { email: "hi@acme.com" }, subject: "…", text: "…" });
+      await ctx.mail.send({ to, subject: "You're invited", text: "…" }); // ctx.mail — see below
     },
   },
 };
@@ -38,8 +37,31 @@ const app = {
 
 - **`ctx.tasks.enqueue({ kind, payload?, delayMs? })`** — `delayMs` defers when the
   task becomes due. Atomic with the surrounding mutation.
-- **A task handler** gets a privileged (system-scoped) `ctx` — `ctx.env` for bindings
-  like `EMAIL`, plus `ctx.db`/`ctx.kv` — and `meta` (see idempotency below).
+- **A task handler** gets a privileged (system-scoped) `ctx` — `ctx.mail`/`ctx.env`/
+  `ctx.db`/`ctx.kv` — and `meta` (see idempotency below).
+
+## Sending email (`ctx.mail`)
+
+`ctx.mail` is the email facade — handlers send without touching the binding directly:
+
+```ts
+await ctx.mail.send({ to: "u@x.com", from?, subject: "Welcome", text?, html?, replyTo? });
+```
+
+The transport is chosen from the environment:
+
+- **`EMAIL` binding + `MAIL_FROM`** → **Cloudflare Email Sending** (no API keys; `from`
+  defaults to `MAIL_FROM`, override per message). Declare the `send_email` binding in
+  `oblaka.ts` (`EmailService`) and onboard the domain
+  (`wrangler email sending enable yourdomain.com`).
+- **`MAIL_CAPTURE=true`** (dev opt-in) → mail is **captured** to KV (`mail:<recipient>`)
+  instead of sent, so a dashboard / e2e can read the "inbox".
+- **neither** → `send` **fails closed** (throws), so a misconfigured production never
+  silently stashes a security email instead of delivering it.
+
+Prefer enqueuing the send as a **task** (above) so it runs off the single-writer write
+path with retry — `ctx.tasks` + `ctx.mail` together are the "send a notification email
+on a write" pattern.
 
 ## Delivery: at-least-once + retry
 

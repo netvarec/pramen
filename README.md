@@ -485,7 +485,7 @@ const app = {
   tasks: {
     "invite-email": async (ctx, payload, meta) => {
       const { to } = payload as { to: string };
-      await (ctx.env.EMAIL as SendEmail).send({ to, from: { email: "hi@acme.com" }, subject: "…", text: "…" });
+      await ctx.mail.send({ to, subject: "You're invited", text: "…" }); // ctx.mail — see below
     },
   },
 };
@@ -494,6 +494,11 @@ const app = {
 At-least-once with retry/backoff + dead-letter; handlers get `meta.id` as an
 idempotency key. The DO store **self-drains via an alarm**; the D1 store drains via a
 Cron Trigger (`createPramen().scheduled`) or `POST /admin/tasks/drain`.
+
+**Email** goes through `ctx.mail.send({ to, subject, text/html })` — a facade over an
+adapter seam. With the `EMAIL` binding + `MAIL_FROM` it's **Cloudflare Email Sending**
+(no API keys); `MAIL_CAPTURE=true` captures to a dev inbox; otherwise it **fails closed**
+(a send throws) so a misconfigured prod never silently stashes a security email.
 
 Or declare it once on the entity — a **trigger** auto-enqueues a task on a matching
 write (still in the write's transaction), no `ctx.tasks.enqueue` in the handler:
