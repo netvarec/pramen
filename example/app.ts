@@ -25,7 +25,7 @@ import {
   type JsonValue,
   type WhereClause,
 } from "@pramen/server";
-import { authSchema, authHandlers, magicLinkSchema, createMagicLinkAuth } from "@pramen/auth";
+import { authSchema, authHandlers, magicLinkSchema, createMagicLinkAuth, userHandlers, authPolicies } from "@pramen/auth";
 
 // Reusable write rule: force ownerId to the authenticated caller (a client cannot
 // forge it), even if the request body tries to set a different owner.
@@ -142,6 +142,9 @@ const handlers = {
   ...authHandlers,
   // @pramen/auth: requestMagicLink / loginWithMagicLink (passwordless).
   ...magicLink,
+  // @pramen/auth: user management — listUsers / setUserRoles / setUserActive (admin),
+  // changeEmail / changePassword (self). Gated by authPolicies() in the ACL below.
+  ...userHandlers,
   // Dev-only: lets the e2e suite read the token the demo "emailed". NOT for production.
   __magicInbox: query(async (ctx, input: { email: string }) => ({
     token: await ctx.kv.get(`magiclink:${input.email}`),
@@ -201,7 +204,9 @@ const handlers = {
     return rows[0] ?? null;
   }),
 
-  listUsers: query((ctx) => ctx.db.find({ from: "users" })),
+  // Demo handler over the app's own `users` entity (distinct from @pramen/auth's
+  // auth_users). Named listProfiles to avoid colliding with userHandlers.listUsers.
+  listProfiles: query((ctx) => ctx.db.find({ from: "users" })),
 
   // Relation-aware where: filter users by their notes (hasMany traversal).
   queryUsers: query((ctx, input: { where?: WhereClause<typeof schema, "users"> }) =>
@@ -417,6 +422,9 @@ const acl = [
     // name entities). The audit DO loads this same ACL, so admin can write/read it.
     policy("admin:audit:read", "auditLog", "read", allow()),
     policy("admin:audit:create", "auditLog", "create", allow()),
+    // @pramen/auth user management: admin reads (projected — no passwordHash) and
+    // updates roles/email/active on any user.
+    ...authPolicies().admin,
   ]),
   // anonymous: applied to callers with NO verified token. A guest may create a
   // signup (public write) and read one back only by presenting its `code`
@@ -446,6 +454,9 @@ const acl = [
   // flows through the verifier + ACL (here: read notes, no body).
   role("user", [
     policy("user:read", "notes", "read", { fields: ["id", "title", "ownerId", "createdAt"] }),
+    // @pramen/auth user management: a user reads + changes the email of ONLY its own
+    // auth_users row (changePassword is a self-scoped credential op, no policy needed).
+    ...authPolicies().self,
   ]),
   // owneronly: ACL `where` that TRAVERSES a relation — read notes whose owner is the
   // caller (`note.owner.id == $identity`). Needs a read grant on the target (users),

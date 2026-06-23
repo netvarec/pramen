@@ -13,6 +13,7 @@ import { runExtras } from "./suites/extras";
 import { runAdmin } from "./suites/admin";
 import { runAuth } from "./suites/auth";
 import { runMagicLink } from "./suites/magic-link";
+import { runUserManagement } from "./suites/user-management";
 import { runRelWhere } from "./suites/relwhere";
 import { runResolver } from "./suites/resolver";
 import { runRelation } from "./suites/relation";
@@ -77,6 +78,7 @@ describe("pramen e2e", () => {
   test("admin data API (generic per-tenant CRUD, admin-gated)", () => runAdmin(BASE), 30_000);
   test("@pramen/auth (signup/login issue verifiable tokens)", () => runAuth(BASE), 30_000);
   test("@pramen/auth magic link (passwordless one-time login)", () => runMagicLink(BASE), 30_000);
+  test("@pramen/auth user management (admin + self, ACL-gated)", () => runUserManagement(BASE), 30_000);
   test("relation-aware where (belongsTo/hasMany traversal + ACL scoping)", () => runRelWhere(BASE), 30_000);
   test("dynamic resolvers", () => runResolver(BASE), 30_000);
   test("relations + nested ACL", () => runRelation(BASE), 30_000);

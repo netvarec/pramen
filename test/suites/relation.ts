@@ -22,7 +22,7 @@ export async function runRelation(base: string): Promise<void> {
   assert(owner?.id === "alice" && owner?.name === "Alice", "owner is eager-loaded (belongsTo)");
   assert(!("email" in owner), "directAccess projection hides owner.email");
 
-  const aliceUsers = await post("listUsers", {}, alice);
+  const aliceUsers = await post("listProfiles", {}, alice);
   assert(aliceUsers.status === 403, "author cannot flat-read users");
 
   const adminView = await post("listNotesWithOwner", {}, admin);

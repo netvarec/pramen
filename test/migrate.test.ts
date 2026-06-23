@@ -5,7 +5,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { Entity, defineSchema, renamedFrom } from "../packages/server/src/sdk/schema";
+import { Entity, defineSchema, renamedFrom, hidden, unique, defaultTo } from "../packages/server/src/sdk/schema";
 import { migrate } from "../packages/server/src/runtime/migrate";
 import { bunSqliteDriver } from "./sqlite-driver";
 
@@ -264,5 +264,46 @@ describe("migrate — partition-scoped", () => {
     const r = await migrate(d, auditTrimmed, { partition: "audit", allowDestructive: true });
     expect(r.droppedTables).toEqual(["audit_meta"]);
     expect(tableNames(db).sort()).toEqual(["audit", "notes"]); // notes survived
+  });
+
+  // Mirrors upgrading a deployed @pramen/auth store (0.0.7 -> the email/active shape):
+  // adding a nullable UNIQUE column + a bool column with a DEFAULT to a populated table.
+  test("adds nullable unique + defaulted columns to a populated table, backfilling", async () => {
+    const db = new Database(":memory:");
+    const d = bunSqliteDriver(db);
+    // v0: the shipped auth_users (no email/active).
+    const v0 = defineSchema({
+      auth_users: Entity((t) => ({ username: t.textId(), passwordHash: t.text(), roles: t.json(), createdAt: t.int() })),
+    });
+    await migrate(d, v0);
+    db.run("INSERT INTO auth_users (username, passwordHash, roles, createdAt) VALUES ('alice', 'h', '[\"user\"]', 1)");
+
+    // v1: + email (unique, nullable) + active (bool DEFAULT true), like the new schema.
+    const v1auth = defineSchema({
+      auth_users: Entity((t) => ({
+        username: t.textId(),
+        passwordHash: hidden(t.text()),
+        roles: t.json(),
+        email: unique(t.text()),
+        active: defaultTo(t.bool(), true),
+        createdAt: t.int(),
+      })),
+    });
+    const r = await migrate(d, v1auth);
+    expect(r.changed).toBe(true);
+    expect(r.added).toEqual(expect.arrayContaining(["auth_users.email", "auth_users.active"]));
+
+    const row = db.query("SELECT email, active FROM auth_users WHERE username = 'alice'").get() as {
+      email: unknown;
+      active: unknown;
+    };
+    expect(row.email).toBe(null); // backfilled NULL
+    expect(row.active).toBe(1); // backfilled to the DEFAULT (active)
+
+    // the UNIQUE index allows multiple NULL emails...
+    db.run("INSERT INTO auth_users (username, passwordHash, roles, createdAt) VALUES ('bob', 'h', '[\"user\"]', 2)");
+    db.run("UPDATE auth_users SET email = 'x@y.com' WHERE username = 'alice'");
+    // ...but rejects a duplicate non-null email.
+    expect(() => db.run("UPDATE auth_users SET email = 'x@y.com' WHERE username = 'bob'")).toThrow();
   });
 });
