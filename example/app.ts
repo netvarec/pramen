@@ -25,7 +25,7 @@ import {
   type JsonValue,
   type WhereClause,
 } from "@pramen/server";
-import { authSchema, authHandlers } from "@pramen/auth";
+import { authSchema, authHandlers, magicLinkSchema, createMagicLinkAuth } from "@pramen/auth";
 
 // Reusable write rule: force ownerId to the authenticated caller (a client cannot
 // forge it), even if the request body tries to set a different owner.
@@ -34,6 +34,8 @@ const ownedByCaller = { set: { ownerId: (i: Identity | null) => i?.userId ?? nul
 const schema = defineSchema({
   // @pramen/auth's user table (signup/login) — migrated alongside the app's own.
   ...authSchema,
+  // @pramen/auth's passwordless magic-link table (requestMagicLink/loginWithMagicLink).
+  ...magicLinkSchema,
   users: Entity(
     (t) => ({
       id: t.textId(), // PK = the JWT subject (e.g. "alice")
@@ -97,9 +99,53 @@ const schema = defineSchema({
 // Handlers bound to this schema — ctx.db is fully typed against it.
 const { query, mutation } = createApp(schema);
 
+// @pramen/auth: passwordless magic-link login. Delivery uses Cloudflare Email
+// Sending — the `EMAIL` (send_email) binding declared in oblaka.ts, no API keys.
+// When a verified sender (EMAIL_FROM) is configured, the link is emailed via
+// `ctx.env.EMAIL.send(...)`; otherwise (local/dev) the raw token is stashed in KV
+// so you can grab it from the dashboard / e2e suite instead of actually sending.
+interface SendEmailBinding {
+  send(message: {
+    to: string;
+    from: { email: string; name?: string };
+    subject: string;
+    text?: string;
+    html?: string;
+  }): Promise<void>;
+}
+
+const magicLink = createMagicLinkAuth({
+  sendEmail: async (ctx, { email, token }) => {
+    const appUrl = (ctx.env.APP_URL as string) ?? "http://localhost:8787";
+    const link = `${appUrl}/auth?token=${encodeURIComponent(token)}`;
+    const from = ctx.env.EMAIL_FROM as string | undefined;
+    const emailBinding = ctx.env.EMAIL as SendEmailBinding | undefined;
+
+    if (emailBinding && from) {
+      // Cloudflare Email Sending: the binding sends from your onboarded domain.
+      await emailBinding.send({
+        to: email,
+        from: { email: from, name: "pramen" },
+        subject: "Your sign-in link",
+        text: `Sign in to pramen: ${link}\n\nThis link expires in 15 minutes and can be used once.`,
+        html: `<p><a href="${link}">Sign in to pramen</a></p><p>This link expires in 15 minutes and can be used once.</p>`,
+      });
+    } else {
+      // No verified sender (local/dev): stash the token so the e2e suite can read it.
+      await ctx.kv.put(`magiclink:${email}`, token, { expirationTtl: 900 });
+    }
+  },
+});
+
 const handlers = {
   // @pramen/auth: signup / login / me (issue + use HS256 tokens, no third-party IdP).
   ...authHandlers,
+  // @pramen/auth: requestMagicLink / loginWithMagicLink (passwordless).
+  ...magicLink,
+  // Dev-only: lets the e2e suite read the token the demo "emailed". NOT for production.
+  __magicInbox: query(async (ctx, input: { email: string }) => ({
+    token: await ctx.kv.get(`magiclink:${input.email}`),
+  })),
   listNotes: query((ctx) =>
     ctx.db.find({ from: "notes", orderBy: { column: "id", dir: "desc" } }),
   ),

@@ -19,7 +19,8 @@ export interface HandlerContext<S extends SchemaDef = SchemaDef> {
   readonly files: Files;
   /** The Worker/DO environment — bindings (KV, R2, DB, …) plus vars and secrets
    * (AUTH_SECRET, plus anything in wrangler.jsonc / .dev.vars / `wrangler secret`).
-   * Use it to call external APIs from handlers (Stripe, Resend, …). Loosely typed;
+   * Use it to call external services from handlers — Cloudflare bindings (e.g. the
+   * `send_email` binding for Cloudflare Email Sending) or third-party APIs (Stripe, …). Loosely typed;
    * cast a value at the use site, e.g. `ctx.env.STRIPE_SECRET_KEY as string`. */
   readonly env: Readonly<Record<string, unknown>>;
   /** Resolved identity for this request (null = anonymous). */

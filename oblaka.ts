@@ -8,7 +8,7 @@
 // + Durable Object (and the SQLite DO migration) on Cloudflare; it uploads only a
 // placeholder module, so `wrangler deploy` does the actual code bundle + upload.
 
-import { define, D1Database, DurableObject, KVNamespace, R2Bucket, Worker } from "oblaka-iac";
+import { define, D1Database, DurableObject, EmailService, KVNamespace, R2Bucket, Worker } from "oblaka-iac";
 
 // One name to namespace every resource this project owns. Cloudflare resource
 // names are account-global, so set a unique PROJECT per app and all its resources
@@ -26,8 +26,19 @@ export default define(({ env }) => {
           CORS_ORIGINS: "*",
           // Local dev applies destructive migrations freely; production must opt in.
           PRAMEN_ALLOW_DESTRUCTIVE: "true",
+          // Where the magic-link lands in your frontend (the example builds
+          // `${APP_URL}/auth?token=…`). EMAIL_FROM is intentionally unset locally,
+          // so the demo stashes the token for the dashboard/e2e instead of emailing.
+          APP_URL: "http://localhost:8787",
         }
-      : {};
+      : {
+          // Production magic-link email: set EMAIL_FROM to an address on a domain
+          // onboarded to Cloudflare Email Sending (`wrangler email sending enable
+          // yourdomain.com`), and APP_URL to your frontend origin. With both set, the
+          // example sends via the EMAIL binding below — no API keys.
+          // EMAIL_FROM: "login@yourdomain.com",
+          // APP_URL: "https://app.yourdomain.com",
+        };
 
   return new Worker({
     dir: ".",
@@ -49,6 +60,10 @@ export default define(({ env }) => {
       // R2 bucket backing file storage — `fileRef` columns + ctx.files + the Worker
       // /files/* upload/download route. Bytes live here; the DB holds only metadata.
       FILES: new R2Bucket({ name: `${PROJECT}-files` }),
+      // Cloudflare Email Sending — the transactional-email binding (no API keys).
+      // Used by @pramen/auth's magic-link demo (ctx.env.EMAIL.send(...)). The `from`
+      // domain must be onboarded: `wrangler email sending enable yourdomain.com`.
+      EMAIL: new EmailService(),
     },
     vars,
   });
