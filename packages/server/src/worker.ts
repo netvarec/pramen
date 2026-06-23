@@ -5,15 +5,18 @@
 // returned fetch with the matching DO class; a consumer just re-exports both.
 
 import { authorizeTenant, HmacStrategy, isAdmin, JwksStrategy, resolveIdentity, type VerifyStrategy } from "./auth";
-import { dispatch } from "./runtime/dispatch";
+import { dispatch, tasksFacade, bindTasks } from "./runtime/dispatch";
+import { ensureOutbox, drainOutbox } from "./runtime/outbox";
 import { migrate } from "./runtime/migrate";
 import { compileAcl } from "./runtime/acl";
+import { Db } from "./runtime/db";
 import { D1Driver, type Driver } from "./runtime/driver";
 import { toResponse } from "./runtime/errors";
 import { Kv } from "./runtime/kv";
 import { listDOs, partitionDoName } from "./runtime/registry";
 import { createFiles, handleFileRequest, R2Adapter } from "./runtime/storage";
 import type { Identity } from "./sdk/acl";
+import type { HandlerContext } from "./sdk/handlers";
 import { DEFAULT_PARTITION } from "./sdk/schema";
 import type { PramenApp } from "./pramen";
 
@@ -129,6 +132,7 @@ export function makeWorker(app: PramenApp) {
   const ensureD1Migrated = (driver: Driver, allowDestructive: boolean): Promise<void> => {
     if (!d1Ready) {
       d1Ready = migrate(driver, app.schema, { allowDestructive })
+        .then(() => ensureOutbox(driver)) // the deferred-tasks table also lives in D1
         .then(() => undefined)
         .catch((e) => {
           d1Ready = undefined;
@@ -136,6 +140,25 @@ export function makeWorker(app: PramenApp) {
         });
     }
     return d1Ready;
+  };
+
+  // A privileged, system-scoped context for running task handlers on the D1 (Worker)
+  // path — mirrors the DO's taskCtx. No live socket, so no DO; drained by a Cron / the
+  // /admin/tasks/drain route, never a DO alarm.
+  const d1TaskCtx = (driver: Driver, env: Env): HandlerContext => {
+    const identity: Identity = { roles: ["admin"] };
+    const files = createFiles({ tenant: "main", secret: filesSecret(env), adapter: new R2Adapter(env.FILES) });
+    const db = new Db(driver, { acl: d1Acl, identity, system: true, schema: app.schema }, app.schema);
+    return { db, kv: new Kv(env.KV), files, env: env as unknown as Record<string, unknown>, identity, tasks: tasksFacade(driver) };
+  };
+
+  /** Drain the D1 outbox in the Worker (no DO/alarm on this path) — called by the
+   * /admin/tasks/drain route with `x-pramen-store: d1`, and by `scheduled()` (Cron). */
+  const drainD1 = async (env: Env): Promise<unknown> => {
+    if (!env.DB) throw new Error("D1 store is not configured");
+    const driver = new D1Driver(env.DB);
+    await ensureD1Migrated(driver, env.PRAMEN_ALLOW_DESTRUCTIVE === "true");
+    return drainOutbox(driver, bindTasks(app.tasks, d1TaskCtx(driver, env)), Date.now());
   };
 
   return {
@@ -239,6 +262,32 @@ export function makeWorker(app: PramenApp) {
       return withCors(res, cors);
     }
 
+    // --- admin: drain the deferred-task outbox now (the DO also self-drains via an
+    // alarm; this is the manual / Cron entry, and the ONLY drain for the D1 path).
+    // `x-pramen-store: d1` drains the D1 outbox in the Worker; else the tenant's DO. ---
+    if (url.pathname === "/admin/tasks/drain" && request.method === "POST") {
+      if (!isAdmin(identity)) return forbidden("tasks");
+      if (request.headers.get("x-pramen-store") === "d1") {
+        try {
+          return withCors(json({ ok: true, result: await drainD1(env) }), cors);
+        } catch (err) {
+          const { status, body } = toResponse(err);
+          return withCors(json(body, status), cors);
+        }
+      }
+      const body = (await request.json().catch(() => ({}))) as { tenant?: unknown; partition?: unknown };
+      const tenant = typeof body.tenant === "string" && body.tenant ? body.tenant : "main";
+      const partition = typeof body.partition === "string" && body.partition ? body.partition : DEFAULT_PARTITION;
+      const stub = partitionStubFor(env, tenant, partition);
+      const res = await stub.fetch(
+        new Request("https://do/__admin/tasks/drain", {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-pramen-tenant": tenant, "x-pramen-partition": partition },
+        }),
+      );
+      return withCors(res, cors);
+    }
+
     const isRpc = url.pathname.startsWith("/rpc/");
     const isLive = url.pathname === "/live";
 
@@ -302,6 +351,12 @@ export function makeWorker(app: PramenApp) {
     // WebSocket upgrades (101) must be returned untouched; only add CORS to HTTP.
     const res = await stub.fetch(new Request(req, { headers }));
     return isWs ? res : withCors(res, cors);
+    },
+
+    // Cron Trigger entry: drains the D1 outbox (the DO path self-drains via an alarm,
+    // so it needs no cron). Wire a `[triggers] crons` in wrangler/oblaka to call this.
+    async scheduled(_event: unknown, env: Env): Promise<void> {
+      if (env.DB) await drainD1(env);
     },
   };
 }

@@ -15,7 +15,7 @@
 import { makeWorker, type Env } from "./worker";
 import { pramenDO, type DoEnv } from "./durable-object";
 import type { SchemaDef } from "./sdk/schema";
-import type { HandlerMap } from "./sdk/handlers";
+import type { AppTaskMap, HandlerMap } from "./sdk/handlers";
 import type { Role } from "./sdk/acl";
 
 /** Injected into a public route's handler — forward a privileged mutation into the
@@ -45,14 +45,21 @@ export interface PramenApp {
   handlers: HandlerMap;
   acl?: Role[];
   routes?: PublicRoute[];
+  /** Deferred side-effect handlers keyed by `kind` — drained from the outbox after a
+   * mutation enqueues via `ctx.tasks.enqueue`. For notification email, webhooks, etc. */
+  tasks?: AppTaskMap;
 }
 
 export type { Env, DoEnv };
 
-/** Build the deployable pair for an app. */
+/** Build the deployable pair for an app. `scheduled` is a Cron Trigger entry that
+ * drains the D1 outbox (the DO path self-drains via an alarm) — wire it only if you
+ * use the D1 store with deferred tasks. */
 export function createPramen(app: PramenApp): {
   fetch: (request: Request, env: Env) => Promise<Response>;
+  scheduled: (event: unknown, env: Env) => Promise<void>;
   PramenDO: ReturnType<typeof pramenDO>;
 } {
-  return { fetch: makeWorker(app).fetch, PramenDO: pramenDO(app) };
+  const worker = makeWorker(app);
+  return { fetch: worker.fetch, scheduled: worker.scheduled, PramenDO: pramenDO(app) };
 }

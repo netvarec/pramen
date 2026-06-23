@@ -17,7 +17,8 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { migrate } from "./runtime/migrate";
-import { dispatch } from "./runtime/dispatch";
+import { dispatch, tasksFacade, bindTasks } from "./runtime/dispatch";
+import { ensureOutbox, drainOutbox } from "./runtime/outbox";
 import { Db } from "./runtime/db";
 import { digest } from "./runtime/digest";
 import { compileAcl, type AclContext, type CompiledAcl } from "./runtime/acl";
@@ -28,6 +29,7 @@ import { registryKey } from "./runtime/registry";
 import { DEFAULT_PARTITION } from "./sdk/schema";
 import { createFiles, R2Adapter, type Files } from "./runtime/storage";
 import type { Identity } from "./sdk/acl";
+import type { HandlerContext } from "./sdk/handlers";
 import type { PramenApp } from "./pramen";
 import type { ClientMsg, ServerMsg, Subscription } from "./runtime/protocol";
 
@@ -112,6 +114,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
       await this.driver.transaction(() =>
         migrate(this.driver, this.app.schema, { allowDestructive, partition }).then(() => {}),
       );
+      await ensureOutbox(this.driver); // the deferred-tasks table (internal, all partitions)
       this.migrated = true;
     });
   }
@@ -131,6 +134,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
     if (path === "/__recover") return this.handleRecover(request);
     if (path === "/__schema") return this.handleSchema();
     if (path === "/__admin/data") return this.handleAdminData(request);
+    if (path === "/__admin/tasks/drain") return this.handleDrain();
 
     const identity = this.identityOf(request);
 
@@ -148,7 +152,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
     }
 
     try {
-      const { result, kind, touched } = await dispatch(
+      const { result, kind, touched, enqueued } = await dispatch(
         this.app.handlers,
         this.app.schema,
         this.driver,
@@ -160,11 +164,47 @@ export class PramenDOBase extends DurableObject<DoEnv> {
         input,
       );
       if (kind === "mutation" && touched.length > 0) await this.broadcast(touched);
+      if (enqueued > 0) await this.armDrain();
       return Response.json({ ok: true, result });
     } catch (err) {
       const { status, body } = toResponse(err);
       return Response.json(body, { status });
     }
+  }
+
+  /** Arm the drain alarm soon after a mutation enqueued task(s). setAlarm replaces any
+   * pending alarm; a near-future time batches a burst of enqueues into one drain. */
+  private async armDrain(): Promise<void> {
+    await this.ctx.storage.setAlarm(Date.now() + 50);
+  }
+
+  /** A privileged, system-scoped context for running task handlers (outside a request).
+   * Task handlers get full db access + env (e.g. ctx.env.EMAIL) + their own ctx.tasks. */
+  private taskCtx(): HandlerContext {
+    const identity: Identity = { roles: ["admin"] };
+    const db = new Db(
+      this.driver,
+      { acl: this.acl, identity, system: true, schema: this.app.schema, partition: this.partition },
+      this.app.schema,
+    );
+    return { db, kv: this.kv, files: this.filesFor(this.tenant), env: this.envBag, identity, tasks: tasksFacade(this.driver) };
+  }
+
+  /** Drain due tasks. Called by the alarm (DO path) and the /__admin/tasks/drain route
+   * (manual / cron). Returns the drain stats. */
+  private async drainTasks(): Promise<{ processed: number; succeeded: number; failed: number; remaining: number }> {
+    await ensureOutbox(this.driver); // idempotent — the table may predate this instance (cold alarm)
+    return drainOutbox(this.driver, bindTasks(this.app.tasks, this.taskCtx()), Date.now());
+  }
+
+  override async alarm(): Promise<void> {
+    const { remaining } = await this.drainTasks();
+    // More due (a task failed → backoff, or the batch hit the limit) → check again soon.
+    if (remaining > 0) await this.ctx.storage.setAlarm(Date.now() + 2000);
+  }
+
+  private async handleDrain(): Promise<Response> {
+    return Response.json({ ok: true, result: await this.drainTasks() });
   }
 
   // --- Hibernatable WebSocket handlers ---
@@ -240,9 +280,10 @@ export class PramenDOBase extends DurableObject<DoEnv> {
   private async onCall(ws: WebSocket, id: string, name: string, input: unknown): Promise<void> {
     const state = this.getState(ws);
     try {
-      const { result, kind, touched } = await dispatch(this.app.handlers, this.app.schema, this.driver, this.kv, this.filesFor(state.tenant), this.envBag, this.ctxFor(state.identity, state.partition), name, input);
+      const { result, kind, touched, enqueued } = await dispatch(this.app.handlers, this.app.schema, this.driver, this.kv, this.filesFor(state.tenant), this.envBag, this.ctxFor(state.identity, state.partition), name, input);
       this.send(ws, { type: "result", id, result });
       if (kind === "mutation" && touched.length > 0) await this.broadcast(touched);
+      if (enqueued > 0) await this.armDrain();
     } catch (err) {
       this.send(ws, toWsError(id, err));
     }

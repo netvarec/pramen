@@ -84,4 +84,17 @@ export async function runD1(base: string): Promise<void> {
   // --- live queries are not available on the D1 path ---
   const live = await post("listNotes", {}, T.alice); // sanity: RPC still fine; WS path is DO-only
   assert(live.body.ok, "D1: RPC remains available (live queries require the DO store)");
+
+  // --- deferred tasks over D1: enqueue in a D1 mutation, drain the D1 outbox in the
+  // Worker (no DO alarm on this path — drained via /admin/tasks/drain or a Cron). ---
+  const notif = await post("createNoteAndNotify", { title: "d1-note", to: "d1@example.com" }, T.admin);
+  assert(notif.body.ok, "D1: createNoteAndNotify enqueues a task into the D1 outbox");
+  const drained = (await fetch(`${base}/admin/tasks/drain`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-pramen-store": "d1", authorization: `Bearer ${T.admin}` },
+    body: "{}",
+  }).then((r) => r.json())) as { ok?: boolean; result?: { processed: number } };
+  assert(drained.ok === true, "D1: /admin/tasks/drain (x-pramen-store: d1) drains the Worker outbox");
+  const inbox = await post("__notifyInbox", { to: "d1@example.com" }, T.admin);
+  assert(inbox.body.result?.body === "New note: d1-note", "D1: the deferred task delivered from the D1 outbox");
 }

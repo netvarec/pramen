@@ -22,6 +22,7 @@ import {
   BadRequest,
   Forbidden,
   type Identity,
+  type HandlerContext,
   type FileRef,
   type JsonValue,
   type WhereClause,
@@ -182,6 +183,18 @@ const handlers = {
   __magicInbox: query(async (ctx, input: { email: string }) => ({
     token: await ctx.kv.get(`magiclink:${input.email}`),
   })),
+
+  // Deferred side-effect demo: write a note AND enqueue a notification, atomically.
+  // The email is sent later by the `notify` task handler (app.tasks), off the write
+  // path. A failing enqueue would roll the note back; a `throw` here proves atomicity.
+  createNoteAndNotify: mutation(async (ctx, input: { title: string; to: string; fail?: boolean }) => {
+    const note = await ctx.db.insert("notes", { title: input.title, body: "", ownerId: String(ctx.identity?.userId ?? "anon"), createdAt: 1 });
+    await ctx.tasks.enqueue({ kind: "notify", payload: { to: input.to, title: input.title } });
+    if (input.fail) throw new BadRequest("forced failure — note + task must both roll back");
+    return note;
+  }),
+  // Dev-only: read what the `notify` task "delivered" (stashed in KV instead of emailed).
+  __notifyInbox: query(async (ctx, input: { to: string }) => ({ body: await ctx.kv.get(`notify:${input.to}`) })),
   listNotes: query((ctx) =>
     ctx.db.find({ from: "notes", orderBy: { column: "id", dir: "desc" } }),
   ),
@@ -579,4 +592,14 @@ const routes = [
   },
 ];
 
-export const app = { schema, handlers, acl, routes };
+// Deferred side-effect handlers, drained from the outbox after a mutation enqueues.
+// A real `notify` would send via Cloudflare Email Sending (ctx.env.EMAIL.send(...));
+// this demo stashes the "delivered" message in KV so the e2e suite can read the inbox.
+const tasks = {
+  notify: async (ctx: HandlerContext, payload: unknown) => {
+    const { to, title } = payload as { to: string; title: string };
+    await ctx.kv.put(`notify:${to}`, `New note: ${title}`, { expirationTtl: 900 });
+  },
+};
+
+export const app = { schema, handlers, acl, routes, tasks };

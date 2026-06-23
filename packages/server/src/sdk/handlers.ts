@@ -25,7 +25,26 @@ export interface HandlerContext<S extends SchemaDef = SchemaDef> {
   readonly env: Readonly<Record<string, unknown>>;
   /** Resolved identity for this request (null = anonymous). */
   readonly identity: Identity | null;
+  /** Deferred side-effects (a transactional outbox). `tasks.enqueue` persists a task
+   * row in the SAME transaction as a mutation (atomic with the data write); a drainer
+   * runs the matching `app.tasks` handler after commit, off the write path, with
+   * retry. For notification email, webhooks, etc. — see `app.tasks`. */
+  readonly tasks: Tasks;
 }
+
+/** The deferred-side-effects facade handed to handlers as `ctx.tasks`. */
+export interface Tasks {
+  /** Enqueue a task to run after commit. `kind` selects the `app.tasks` handler;
+   * `payload` is JSON-serialized. `delayMs` defers when it becomes due. */
+  enqueue(opts: { kind: string; payload?: unknown; delayMs?: number }): Promise<void>;
+}
+
+/** An app task handler — runs a deferred side effect for one `kind` (e.g. send an
+ * email via `ctx.env.EMAIL`). Throwing schedules a retry (capped, then dead-lettered).
+ * It receives a privileged, system-scoped context. Register handlers in `app.tasks`. */
+export type TaskHandler = (ctx: HandlerContext, payload: unknown) => void | Promise<void>;
+/** Map of `kind` → handler. Set as `app.tasks`; drained by the DO alarm / a Cron. */
+export type AppTaskMap = Record<string, TaskHandler>;
 
 export type HandlerKind = "query" | "mutation";
 

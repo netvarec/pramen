@@ -7,5 +7,7 @@ import { app } from "./app";
 
 const pramen = createPramen(app);
 
-export default { fetch: pramen.fetch };
+// `scheduled` drains the D1-store task outbox on a Cron Trigger (the DO store
+// self-drains via an alarm and needs no cron).
+export default { fetch: pramen.fetch, scheduled: pramen.scheduled };
 export const PramenDO = pramen.PramenDO;
