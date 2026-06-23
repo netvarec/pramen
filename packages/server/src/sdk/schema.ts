@@ -39,6 +39,12 @@ export interface FieldDef {
    * rebuilds the table, copying data from the old column. A diff cannot tell a
    * rename from a drop+add, so the rename must be declared explicitly. */
   readonly renamedFrom?: string;
+  /** Never project this column on any ORM read — find/get, mutation echoes, relation
+   * loads, and the SYSTEM-mode admin data API all strip it, even under a full-access
+   * (allow()) or SYSTEM scope. Writable on insert/update, and still visible to raw
+   * `ctx.db.exec` (the escape hatch credential code uses). For secrets/internal
+   * columns like a password hash. Set by the `hidden()` modifier. */
+  readonly hidden?: boolean;
 }
 
 const builders = {
@@ -132,6 +138,14 @@ export function unique<F extends FieldDef>(field: F): F & { readonly unique: tru
 /** Add a (non-unique) index on the column. */
 export function indexed<F extends FieldDef>(field: F): F & { readonly index: true } {
   return { ...field, index: true };
+}
+
+/** Mark a column never-readable through the ORM: stripped from every read projection
+ * (find/get, mutation echoes, relation loads, admin data) even under full/SYSTEM
+ * access. Still writable, and still visible to raw `ctx.db.exec`. For secrets such as
+ * a password hash, e.g. `passwordHash: hidden(t.text())`. */
+export function hidden<F extends FieldDef>(field: F): F & { readonly hidden: true } {
+  return { ...field, hidden: true };
 }
 
 /** A raw-SQL column DEFAULT (emitted unquoted in the DDL), produced by the `expr`

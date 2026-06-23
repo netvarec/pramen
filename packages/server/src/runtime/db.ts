@@ -385,6 +385,24 @@ export class Db<S extends SchemaDef = SchemaDef> {
       .map(([n]) => n);
   }
 
+  /** Columns marked `hidden()` — never projected on an ORM read (even SYSTEM/full). */
+  private hiddenColsOf(table: string): string[] {
+    const fields = this.schema[table]?.fields;
+    if (!fields) return [];
+    return Object.entries(fields)
+      .filter(([, f]) => (f as FieldDef).hidden)
+      .map(([n]) => n);
+  }
+
+  /** Drop hidden columns from a row (copying only if any are present). */
+  private stripHidden(table: string, row: Row): Row {
+    const hidden = this.hiddenColsOf(table);
+    if (hidden.length === 0) return row;
+    const out = { ...row };
+    for (const c of hidden) delete out[c];
+    return out;
+  }
+
   /** Mint a UUID for every `generated()` uuid column the caller omitted, mutating
    * `vals`. Returns the columns it filled — server-minted, so the insert path treats
    * them like forced `set` values (bypassing the writable-field ACL check). */
@@ -444,7 +462,8 @@ export class Db<S extends SchemaDef = SchemaDef> {
 
   /** Fetch one row by id within an ACL row-scope (for per-row write evaluation). */
   private async fetchOne(from: string, id: Id, scopeWhere: SqlExpr | null): Promise<Row | undefined> {
-    const where = scopeWhere ? and(eq("id", id), scopeWhere) : eq("id", id);
+    const pk = this.pkOf(from);
+    const where = scopeWhere ? and(eq(pk, id), scopeWhere) : eq(pk, id);
     const { sql, params } = compileSelect({ from, where, limit: 1 }, this.dialect);
     return this.decodeRow(from, (await this.driver.exec(sql, params))[0] as Row | undefined);
   }
@@ -452,9 +471,10 @@ export class Db<S extends SchemaDef = SchemaDef> {
   private async finishRows(from: string, raw: Row[], scope: Scope, withSel: Selected): Promise<Row[]> {
     const relNames = withSel ? Object.keys(withSel).filter((k) => withSel[k]) : [];
     for (const relName of relNames) await this.loadRelation(from, raw, relName);
-    if (scope.fields === null) return raw; // base unrestricted -> no per-row narrowing possible
+    // Hidden columns are stripped even under an unrestricted/SYSTEM scope (never readable).
+    if (scope.fields === null) return raw.map((r) => this.stripHidden(from, r));
     return raw.map((r) => {
-      const projected = projectRow(r, effectiveFields(scope, r, this.acl.identity));
+      const projected = this.stripHidden(from, projectRow(r, effectiveFields(scope, r, this.acl.identity)));
       for (const relName of relNames) projected[relName] = r[relName]; // relations survive projection
       return projected;
     });
@@ -498,7 +518,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
       // parent[column] -> target.id
       const keys = [...new Set(rows.map((r) => r[rel.column]).filter((v) => v != null))];
       const byId = new Map<unknown, Row>();
-      for (const { key, row } of await fetchBy("id", keys)) byId.set(key, row);
+      for (const { key, row } of await fetchBy(this.pkOf(rel.target), keys)) byId.set(key, row);
       for (const r of rows) r[relName] = r[rel.column] != null ? (byId.get(r[rel.column]) ?? null) : null;
     } else {
       // hasMany: target[column] -> parent.id
@@ -545,16 +565,18 @@ export class Db<S extends SchemaDef = SchemaDef> {
    * would: the caller's readable fields for this row, PLUS the columns they just
    * wrote (which they already know) and the primary key (so a write-only caller
    * still gets the generated id). Full read access -> the whole row; SYSTEM -> as-is.
-   * This makes create/update echoes field-ACL-safe without ever collapsing to {}. */
+   * This makes create/update echoes field-ACL-safe without ever collapsing to {}.
+   * Hidden columns are never echoed, even when written or under SYSTEM. */
   private projectWrite(table: string, row: Row, writtenCols: string[]): Row {
-    if (this.acl.system) return row;
+    if (this.acl.system) return this.stripHidden(table, row);
     const visible = new Set<string>([this.pkOf(table), ...writtenCols]);
     const readScope = this.scopeFor(table, "read");
     if (readScope.allowed) {
       const readable = effectiveFields(readScope, row, this.acl.identity);
-      if (readable === null) return row; // unrestricted read -> echo everything
+      if (readable === null) return this.stripHidden(table, row); // unrestricted read -> echo everything (minus hidden)
       for (const f of readable) visible.add(f);
     }
+    for (const c of this.hiddenColsOf(table)) visible.delete(c);
     return projectRow(row, [...visible]);
   }
 
@@ -596,7 +618,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
       })
       .join(", ");
     params.push(this.dialect.encode(id));
-    let sql = `UPDATE ${this.dialect.id(table)} SET ${assignments} WHERE ${this.dialect.id("id")} = ${this.dialect.placeholder(params.length)}`;
+    let sql = `UPDATE ${this.dialect.id(table)} SET ${assignments} WHERE ${this.dialect.id(this.pkOf(table))} = ${this.dialect.placeholder(params.length)}`;
     sql += this.scopeClause(scope.where, params);
     sql += this.returningClause("*");
     const updated = this.decodeRow(table, (await this.driver.exec(sql, params))[0]);
@@ -610,9 +632,9 @@ export class Db<S extends SchemaDef = SchemaDef> {
     const scope = this.scopeFor(table, "delete");
     if (!scope.allowed) throw new AclDenied(table, "delete");
     const params: unknown[] = [this.dialect.encode(id)];
-    let sql = `DELETE FROM ${this.dialect.id(table)} WHERE ${this.dialect.id("id")} = ${this.dialect.placeholder(1)}`;
+    let sql = `DELETE FROM ${this.dialect.id(table)} WHERE ${this.dialect.id(this.pkOf(table))} = ${this.dialect.placeholder(1)}`;
     sql += this.scopeClause(scope.where, params);
-    sql += this.returningClause("id");
+    sql += this.returningClause("*");
     return (await this.driver.exec(sql, params)).length > 0;
   }
 
