@@ -39,10 +39,18 @@ export interface Tasks {
   enqueue(opts: { kind: string; payload?: unknown; delayMs?: number }): Promise<void>;
 }
 
+/** Idempotency metadata for a task delivery. `id` is stable across retries — record it
+ * to dedupe the rare duplicate (delivery is at-least-once). `attempts` is 1-based. */
+export interface TaskMeta {
+  id: string;
+  attempts: number;
+}
+
 /** An app task handler — runs a deferred side effect for one `kind` (e.g. send an
  * email via `ctx.env.EMAIL`). Throwing schedules a retry (capped, then dead-lettered).
- * It receives a privileged, system-scoped context. Register handlers in `app.tasks`. */
-export type TaskHandler = (ctx: HandlerContext, payload: unknown) => void | Promise<void>;
+ * Receives a privileged, system-scoped context plus the task's idempotency `meta`.
+ * Register handlers in `app.tasks`. */
+export type TaskHandler = (ctx: HandlerContext, payload: unknown, meta: TaskMeta) => void | Promise<void>;
 /** Map of `kind` → handler. Set as `app.tasks`; drained by the DO alarm / a Cron. */
 export type AppTaskMap = Record<string, TaskHandler>;
 

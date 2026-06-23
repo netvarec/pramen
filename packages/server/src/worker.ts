@@ -6,7 +6,7 @@
 
 import { authorizeTenant, HmacStrategy, isAdmin, JwksStrategy, resolveIdentity, type VerifyStrategy } from "./auth";
 import { dispatch, tasksFacade, bindTasks } from "./runtime/dispatch";
-import { ensureOutbox, drainOutbox } from "./runtime/outbox";
+import { ensureOutbox, drainOutbox, listTasks } from "./runtime/outbox";
 import { migrate } from "./runtime/migrate";
 import { compileAcl } from "./runtime/acl";
 import { Db } from "./runtime/db";
@@ -161,6 +161,13 @@ export function makeWorker(app: PramenApp) {
     return drainOutbox(driver, bindTasks(app.tasks, d1TaskCtx(driver, env)), Date.now());
   };
 
+  const listD1Tasks = async (env: Env, status?: string, limit?: number): Promise<unknown> => {
+    if (!env.DB) throw new Error("D1 store is not configured");
+    const driver = new D1Driver(env.DB);
+    await ensureD1Migrated(driver, env.PRAMEN_ALLOW_DESTRUCTIVE === "true");
+    return listTasks(driver, { status, limit });
+  };
+
   return {
     async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -283,6 +290,34 @@ export function makeWorker(app: PramenApp) {
         new Request("https://do/__admin/tasks/drain", {
           method: "POST",
           headers: { "content-type": "application/json", "x-pramen-tenant": tenant, "x-pramen-partition": partition },
+        }),
+      );
+      return withCors(res, cors);
+    }
+
+    // --- admin: list outbox tasks (inspect dead-letters etc.). ?status=&limit=,
+    // ?tenant=&partition= (DO store) or x-pramen-store: d1 (Worker outbox). ---
+    if (url.pathname === "/admin/tasks/list") {
+      if (!isAdmin(identity)) return withCors(forbidden("tasks"), cors);
+      const status = url.searchParams.get("status") ?? undefined;
+      const limit = Number(url.searchParams.get("limit")) || undefined;
+      if (request.headers.get("x-pramen-store") === "d1") {
+        try {
+          return withCors(json({ ok: true, result: await listD1Tasks(env, status, limit) }), cors);
+        } catch (err) {
+          const { status: s, body } = toResponse(err);
+          return withCors(json(body, s), cors);
+        }
+      }
+      const tenant = url.searchParams.get("tenant") ?? "main";
+      const partition = url.searchParams.get("partition") || DEFAULT_PARTITION;
+      const q = new URLSearchParams();
+      if (status) q.set("status", status);
+      if (limit) q.set("limit", String(limit));
+      const stub = partitionStubFor(env, tenant, partition);
+      const res = await stub.fetch(
+        new Request(`https://do/__admin/tasks/list?${q}`, {
+          headers: { "x-pramen-tenant": tenant, "x-pramen-partition": partition },
         }),
       );
       return withCors(res, cors);

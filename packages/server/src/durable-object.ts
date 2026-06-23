@@ -18,7 +18,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { migrate } from "./runtime/migrate";
 import { dispatch, tasksFacade, bindTasks } from "./runtime/dispatch";
-import { ensureOutbox, drainOutbox } from "./runtime/outbox";
+import { ensureOutbox, drainOutbox, listTasks } from "./runtime/outbox";
 import { Db } from "./runtime/db";
 import { digest } from "./runtime/digest";
 import { compileAcl, type AclContext, type CompiledAcl } from "./runtime/acl";
@@ -77,6 +77,11 @@ export class PramenDOBase extends DurableObject<DoEnv> {
    * constructor — see `ensureMigrated`. Guards against re-running. */
   private migrated = false;
   private files?: Files;
+  /** Have we persisted (tenant, partition) to DO storage this instance? They're
+   * persisted so a COLD alarm wake (no request header) can build a correctly-scoped
+   * task context — a DO can't introspect its own idFromName. */
+  private identityPersisted = false;
+  private identityLoaded = false;
 
   constructor(ctx: DurableObjectState, env: DoEnv, app: PramenApp) {
     super(ctx, env);
@@ -129,12 +134,25 @@ export class PramenDOBase extends DurableObject<DoEnv> {
 
     await this.ensureMigrated();
     await this.ensureRegistered(request);
+    // Persist (tenant, partition) once per instance so a cold alarm can rebuild the
+    // right task context (it has no request header to learn them from). Stored in the
+    // SQL store (_pramen_meta), NOT ctx.storage.put — mixing the KV-style storage API
+    // with raw `PRAGMA` trips workerd's DO SQLite authorizer (SQLITE_AUTH).
+    if (!this.identityPersisted) {
+      await this.driver.exec(
+        `INSERT OR REPLACE INTO _pramen_meta (key, value) VALUES (?, ?), (?, ?)`,
+        ["_pramen_tenant", this.tenant, "_pramen_partition", this.partition].map((v) => this.driver.dialect.encode(v)),
+      );
+      this.identityPersisted = true;
+      this.identityLoaded = true;
+    }
 
     const path = new URL(request.url).pathname;
     if (path === "/__recover") return this.handleRecover(request);
     if (path === "/__schema") return this.handleSchema();
     if (path === "/__admin/data") return this.handleAdminData(request);
     if (path === "/__admin/tasks/drain") return this.handleDrain();
+    if (path === "/__admin/tasks/list") return this.handleTasksList(request);
 
     const identity = this.identityOf(request);
 
@@ -190,21 +208,52 @@ export class PramenDOBase extends DurableObject<DoEnv> {
     return { db, kv: this.kv, files: this.filesFor(this.tenant), env: this.envBag, identity, tasks: tasksFacade(this.driver) };
   }
 
+  /** Restore (tenant, partition) on a cold wake (e.g. an alarm with no request) so the
+   * task context is scoped correctly. No-op once loaded/persisted this instance. */
+  private async loadIdentity(): Promise<void> {
+    if (this.identityLoaded) return;
+    // _pramen_meta exists: an alarm only fires after a fetch armed it, and that fetch
+    // ran the boot migration which creates the table.
+    const rows = (await this.driver.exec(
+      `SELECT key, value FROM _pramen_meta WHERE key IN ('_pramen_tenant', '_pramen_partition')`,
+      [],
+    )) as { key: string; value: string }[];
+    for (const r of rows) {
+      if (r.key === "_pramen_tenant" && r.value) this.tenant = r.value;
+      if (r.key === "_pramen_partition" && r.value) this.partition = r.value;
+    }
+    this.identityLoaded = true;
+  }
+
   /** Drain due tasks. Called by the alarm (DO path) and the /__admin/tasks/drain route
-   * (manual / cron). Returns the drain stats. */
-  private async drainTasks(): Promise<{ processed: number; succeeded: number; failed: number; remaining: number }> {
+   * (manual / cron). Returns the drain stats incl. `nextRunAt` for rescheduling. */
+  private async drainTasks(): Promise<Awaited<ReturnType<typeof drainOutbox>>> {
     await ensureOutbox(this.driver); // idempotent — the table may predate this instance (cold alarm)
     return drainOutbox(this.driver, bindTasks(this.app.tasks, this.taskCtx()), Date.now());
   }
 
   override async alarm(): Promise<void> {
-    const { remaining } = await this.drainTasks();
-    // More due (a task failed → backoff, or the batch hit the limit) → check again soon.
-    if (remaining > 0) await this.ctx.storage.setAlarm(Date.now() + 2000);
+    await this.loadIdentity(); // cold wake: restore tenant/partition before building taskCtx
+    const { nextRunAt } = await this.drainTasks();
+    // Reschedule to the NEXT task's due time (a backed-off retry, or the next batch if
+    // the drain hit its limit) so a failed task can't stall waiting for a new enqueue.
+    if (nextRunAt != null) await this.ctx.storage.setAlarm(Math.max(nextRunAt, Date.now() + 250));
   }
 
   private async handleDrain(): Promise<Response> {
-    return Response.json({ ok: true, result: await this.drainTasks() });
+    await this.loadIdentity();
+    const result = await this.drainTasks();
+    // Keep the alarm honest even when drained manually: ensure a backed-off retry wakes.
+    if (result.nextRunAt != null) await this.ctx.storage.setAlarm(Math.max(result.nextRunAt, Date.now() + 250));
+    return Response.json({ ok: true, result });
+  }
+
+  private async handleTasksList(request: Request): Promise<Response> {
+    await ensureOutbox(this.driver);
+    const url = new URL(request.url);
+    const status = url.searchParams.get("status") ?? undefined;
+    const limit = Number(url.searchParams.get("limit")) || undefined;
+    return Response.json({ ok: true, result: await listTasks(this.driver, { status, limit }) });
   }
 
   // --- Hibernatable WebSocket handlers ---
@@ -379,11 +428,13 @@ export class PramenDOBase extends DurableObject<DoEnv> {
       value: string;
     }[];
     const tableRows = (await this.driver.exec(
-      `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name <> '_pramen_meta'`,
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`,
       [],
     )) as { name: string }[];
     const tables: Record<string, string[]> = {};
     for (const { name } of tableRows) {
+      // Skip pramen's internal bookkeeping tables (_pramen_meta, _pramen_outbox, …).
+      if (name.toLowerCase().startsWith("_pramen") || name.toLowerCase().startsWith("__pramen")) continue;
       tables[name] = ((await this.driver.exec(`PRAGMA table_info(${name})`, [])) as { name: string }[]).map((r) => r.name);
     }
     return Response.json({ ok: true, result: { hash: hashRow[0]?.value ?? null, tables } });

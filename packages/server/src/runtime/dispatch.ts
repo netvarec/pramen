@@ -41,7 +41,7 @@ export function tasksFacade(driver: Driver, onEnqueue?: () => void): Tasks {
 /** Bind `app.tasks` (which take a ctx) into the ctx-free `TaskMap` the drainer calls. */
 export function bindTasks(appTasks: AppTaskMap | undefined, ctx: HandlerContext): TaskMap {
   const out: TaskMap = {};
-  for (const [kind, handler] of Object.entries(appTasks ?? {})) out[kind] = (payload) => handler(ctx, payload);
+  for (const [kind, handler] of Object.entries(appTasks ?? {})) out[kind] = (payload, meta) => handler(ctx, payload, meta);
   return out;
 }
 

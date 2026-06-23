@@ -3,7 +3,7 @@
 // to KV instead of emailing) and is drained via /admin/tasks/drain. Proves delivery
 // and the outbox's atomicity (a rolled-back mutation enqueues nothing).
 
-import { assert, http, token } from "../lib";
+import { assert, http, token, sleep } from "../lib";
 
 async function drain(base: string, admin: string): Promise<{ processed: number; succeeded: number; remaining: number }> {
   const r = await fetch(`${base}/admin/tasks/drain`, {
@@ -43,4 +43,26 @@ export async function runTasks(base: string): Promise<void> {
     body: JSON.stringify({ tenant: "main" }),
   });
   assert(anon.status === 403, "tasks: /admin/tasks/drain is admin-only (403 without a token)");
+
+  // the DO ALARM auto-drains (no manual drain): enqueue, then poll the inbox until the
+  // alarm fires and delivers. Proves the primary DO-path wake-up actually works.
+  await call("createNoteAndNotify", { title: "auto", to: "auto@example.com" }, admin);
+  let autoBody: string | null = null;
+  for (let i = 0; i < 50; i++) {
+    const r = await call("__notifyInbox", { to: "auto@example.com" }, admin);
+    if (r.body.result?.body) {
+      autoBody = r.body.result.body as string;
+      break;
+    }
+    await sleep(100);
+  }
+  assert(autoBody === "New note: auto", "tasks: the DO alarm auto-drains (no manual drain needed)");
+
+  // admin can list outbox tasks (dead-letter visibility); anon is denied.
+  const list = (await fetch(`${base}/admin/tasks/list?tenant=main`, {
+    headers: { authorization: `Bearer ${admin}` },
+  }).then((r) => r.json())) as { ok?: boolean; result?: unknown[] };
+  assert(list.ok === true && Array.isArray(list.result), "tasks: /admin/tasks/list returns rows for admin");
+  const anonList = await fetch(`${base}/admin/tasks/list?tenant=main`);
+  assert(anonList.status === 403, "tasks: /admin/tasks/list is admin-only (403)");
 }
