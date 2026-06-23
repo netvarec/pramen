@@ -1,7 +1,7 @@
 ---
 title: Access Control (ACL)
 order: 3
-summary: Deny-by-default roles and policies, row-level scopes, cell-level field permissions, and write rules.
+summary: Deny-by-default roles and policies, row-level scopes, cell-level field permissions, write rules, and per-handler call authorization.
 ---
 
 Access is **deny-by-default**; roles only ever grant. An `Identity` (from the
@@ -105,3 +105,29 @@ policy("member:read", "notes", "read", resolve(({ identity, db }) => {
   return owned.length > 0 ? allow() : deny();
 }));
 ```
+
+## Authorizing handlers
+
+The policies above gate **`ctx.db`** — they decide which rows/fields a role can
+read/write. They do **not** gate a handler that reaches `ctx.kv` / `ctx.env` /
+`ctx.mail` / `ctx.tasks` directly: those bypass the row-ACL, so an un-gated such
+handler is callable by **anyone** (including anonymous) on an open tenant.
+
+Gate the *call* with the `auth` option — enforced **before** the handler runs (and
+before input parsing); it throws `403` on failure:
+
+```ts
+// Only an admin can call this — even though it never touches ctx.db.
+adminStats: query(async (ctx) => ctx.kv.get("stats", "json"), { auth: ["admin"] }),
+
+// Any authenticated caller:
+whoami: query((ctx) => ctx.identity, { auth: "authenticated" }),
+
+// Custom predicate:
+beta: query(run, { auth: (id) => id?.flags?.beta === true }),
+```
+
+`auth` is `"authenticated"` (any non-anonymous identity), a **role list** (the caller
+must hold one), or a `(identity) => boolean` predicate. Absent ⇒ open (a `ctx.db`
+handler is still ACL-gated). Rule of thumb: **if a handler uses `ctx.kv`/`ctx.env`/
+`ctx.mail` for anything privileged, give it an `auth`.**

@@ -280,6 +280,13 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
       marker in a policy `where` resolves against the request input — a capability / by-unguessable-key
       grant (read a row only by presenting its secret id; can't enumerate). Threaded through ACL resolution
       alongside `$identity`.
+- [x] Per-handler authorization: `query(fn, { auth })` / `mutation(fn, { auth })` — `auth` is
+      `"authenticated"` | `string[]` (one-of role) | `(identity) => boolean`, enforced in `runtime/dispatch.ts`
+      BEFORE the handler runs (throws 403). The row-ACL only gates `ctx.db`; a handler that touches
+      `ctx.kv`/`ctx.env`/`ctx.mail`/`ctx.tasks` directly bypasses it, so un-gated it's callable by anyone on
+      an open tenant (the security-audit root cause). Absent ⇒ open (a `ctx.db` handler stays ACL-gated);
+      `createApp` forwards `auth`. Next (considered, not done): a default-deny mode (handlers require auth
+      unless marked public) — a breaking change that interacts with the `anonymous`-role pattern.
 - [x] Mutation echo projection (P6): `insert`/`update` now project the RETURNING row through the
       caller's readable fields PLUS the columns they just wrote PLUS the primary key — so the echo never
       leaks a field a `find` wouldn't show (e.g. a teammate editing another's note title no longer gets

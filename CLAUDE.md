@@ -166,6 +166,12 @@ log) for independent single-writer serialization and storage.
   or `$input("path")` (request input — a capability/by-unguessable-key read). Public,
   pre-auth routes go in `app.routes` (matched before auth; use `ctx.callPrivileged`
   to forward a privileged mutation into the DO) — for signature-authed webhooks.
+- Per-handler call authorization (the ACL only gates `ctx.db`): `query(fn, { auth })` /
+  `mutation(fn, { auth })` where `auth` is `"authenticated"` | `string[]` (one-of role) |
+  `(identity) => boolean`, enforced in `runtime/dispatch.ts` BEFORE the handler runs
+  (throws 403). Gate any handler that touches `ctx.kv`/`ctx.env`/`ctx.mail`/`ctx.tasks`
+  directly — those bypass the row-ACL, so un-gated they're callable by anyone. Absent ⇒
+  open. `authorizeHandler(auth, identity)` is the pure check. `createApp` forwards `auth`.
 - `@pramen/auth` (optional, verify-only core stays BYO-IdP): `authSchema` + `authHandlers`
   (`signup`/`login`/`me`, PBKDF2, server-assigned roles, HS256 tokens via `AUTH_SECRET`).
   `auth_users` columns: `username` (PK = JWT `sub`), `passwordHash` (`hidden()`), `roles`,

@@ -143,6 +143,17 @@ policy("author:create", "notes", "create", {
 });
 ```
 
+**Authorizing handlers.** Policies gate `ctx.db`; a handler that reaches `ctx.kv` /
+`ctx.env` / `ctx.mail` directly bypasses them. Gate the *call* with `auth` (enforced
+before the handler runs, `403` on failure):
+
+```ts
+adminStats: query((ctx) => ctx.kv.get("stats", "json"), { auth: ["admin"] });
+whoami: query((ctx) => ctx.identity, { auth: "authenticated" });
+```
+
+`auth` is `"authenticated"`, a role list, or a `(identity) => boolean` predicate.
+
 ```bash
 bun test    # boots wrangler dev once and runs all e2e suites
 ```
