@@ -53,6 +53,15 @@ const handlers = { ...authHandlers, /* your handlers */ };
 // client: const { token } = await pramen.call("login", { username, password });
 ```
 
+`@pramen/auth` also provides **passwordless magic-link login** —
+`createMagicLinkAuth({ sendEmail })` + `magicLinkSchema`, with a pluggable `sendEmail`
+(wire **Cloudflare Email Sending** via the `send_email` binding, no API keys) — and
+**user management** — `createUserHandlers()` + `authPolicies()` for ACL-gated admin
+(`listUsers`/`setUserRoles`/`setUserActive`/`deleteUser`) and self-service
+(`changeEmail`/`changePassword`), over `auth_users` or your own authSchema-shaped
+table (e.g. with an extra `tenants` column). See the
+[Auth & Tenancy docs](docs/src/content/docs/auth-and-tenancy.md).
+
 ### ACL
 
 Access is **deny-by-default**; roles grant it. Define roles/policies on the app
@@ -262,9 +271,12 @@ The handler context is `{ db, kv, files, env, identity }`. **Field builders:**
 `json`/`fileRef` are stored as TEXT and codec'd to/from the parsed value
 automatically; a `uuid` value is validated on write (rejected with 400 if
 malformed). **Modifiers** wrap a builder and compose: `notNull()`, `unique()`,
-`indexed()`, `defaultTo(v)`, `primaryKey()`, `generated()` — e.g.
+`indexed()`, `defaultTo(v)`, `primaryKey()`, `generated()`, `hidden()` — e.g.
 `code: unique(t.text())`, `status: defaultTo(t.text(), "pending")` (a defaulted
-column is optional on insert). `defaultTo` also accepts a **SQL-expression default**
+column is optional on insert). `hidden()` marks a column never-readable through the
+ORM — stripped from every read projection (find/get, mutation echoes, relation loads,
+SYSTEM-mode `/admin/data`) even under `allow()`/SYSTEM, while staying writable and
+visible to raw `ctx.db.exec` (for secrets like a password hash). `defaultTo` also accepts a **SQL-expression default**
 via `expr`: `createdAt: defaultTo(t.text(), expr.now())` emits
 `DEFAULT (datetime('now'))` (current UTC timestamp as TEXT, like `CURRENT_TIMESTAMP`),
 filled by the DB; `expr.raw(sql)` is the escape hatch for any other SQLite default.

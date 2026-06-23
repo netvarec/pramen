@@ -147,8 +147,11 @@ log) for independent single-writer serialization and storage.
   column typed as `string`; a supplied value is validated (`isValidUuid`) on write and
   rejected (400) if malformed. Modifiers are wrapper helpers (compose like
   `renamedFrom`): `notNull()`, `unique()`, `indexed()`, `defaultTo(v)`, `primaryKey()`,
-  `generated()` — e.g. `code: unique(t.text())`, `status: defaultTo(t.text(), "pending")`.
-  `primaryKey()` marks any column the PK (implies NOT NULL); `generated()` auto-mints a
+  `generated()`, `hidden()` — e.g. `code: unique(t.text())`, `status: defaultTo(t.text(), "pending")`.
+  `hidden()` marks a column never-readable through the ORM (stripped from every read
+  projection — find/get, mutation echoes, relation loads, SYSTEM-mode `/admin/data` —
+  even under `allow()`/SYSTEM; still writable + visible to raw `ctx.db.exec`). For
+  secrets like a password hash. `primaryKey()` marks any column the PK (implies NOT NULL); `generated()` auto-mints a
   uuid on insert via `crypto.randomUUID()` (uuid-only) and makes the column optional on
   insert. The canonical UUID primary key is `id: primaryKey(generated(t.uuid()))`.
   `defaultTo` also takes a SQL-expression default via the `expr` helper — `expr.now()`
@@ -163,6 +166,18 @@ log) for independent single-writer serialization and storage.
   or `$input("path")` (request input — a capability/by-unguessable-key read). Public,
   pre-auth routes go in `app.routes` (matched before auth; use `ctx.callPrivileged`
   to forward a privileged mutation into the DO) — for signature-authed webhooks.
+- `@pramen/auth` (optional, verify-only core stays BYO-IdP): `authSchema` + `authHandlers`
+  (`signup`/`login`/`me`, PBKDF2, server-assigned roles, HS256 tokens via `AUTH_SECRET`).
+  `auth_users` columns: `username` (PK = JWT `sub`), `passwordHash` (`hidden()`), `roles`,
+  unique mutable `email`, `active` (deactivation flag — blocks login). Also:
+  `createMagicLinkAuth({ sendEmail })` (passwordless one-time links; transport is the
+  app's — Cloudflare Email Sending via the `send_email`/`EMAIL` binding declared in
+  `oblaka.ts`; magic-link users keyed on the immutable `username`, never the mutable
+  `email`); and `createUserHandlers({ table })` + `authPolicies({ table, prefix, adminReadFields, … })`
+  for ACL-gated admin (`listUsers`/`setUserRoles`/`setUserActive`/`deleteUser`) + self
+  (`changeEmail`/`changePassword`) management — over `auth_users` or your own
+  authSchema-shaped table. Session TTL via `AUTH_SESSION_TTL_SECONDS` (role/active
+  changes take effect on next login — no session store).
 - `where` can traverse relations: `{ owner: { name: "x" } }` (belongsTo/hasMany)
   compiles to a subquery in both user queries and policy `where`. The related
   entity's read scope is AND-merged (traversal can't widen access). Cell-`when`

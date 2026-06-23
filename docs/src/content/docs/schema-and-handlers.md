@@ -31,8 +31,27 @@ Field builders: `id()` (auto-increment integer PK), `textId()` (text PK), `text(
 `belongsTo(target, column)` and `hasMany(target, column)`.
 
 **Modifiers** wrap a builder and compose: `notNull()`, `unique()`, `indexed()`,
-`defaultTo(value)`, `primaryKey()`, and `generated()` — e.g.
+`defaultTo(value)`, `primaryKey()`, `generated()`, and `hidden()` — e.g.
 `code: unique(t.text())`, `status: defaultTo(t.text(), "pending")`.
+
+### Hidden columns
+
+`hidden()` marks a column **never readable through the ORM**: it's stripped from every
+read projection — `find`/`get`, mutation echoes, relation loads, and even the
+SYSTEM-scope admin data API — regardless of ACL, including a full `allow()` grant. It
+stays writable on insert/update and visible to the raw `ctx.db.exec` escape hatch, so
+credential code can still read it. Use it for secrets like a password hash:
+
+```ts
+accounts: Entity((t) => ({
+  username: t.textId(),
+  passwordHash: hidden(t.text()), // writable + readable via exec; never via find/get
+  email: t.text(),
+}));
+
+await ctx.db.find({ from: "accounts" });
+// -> [{ username: "alice", email: "a@x.com" }]   // no passwordHash, ever
+```
 
 ### Defaults
 

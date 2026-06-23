@@ -218,9 +218,12 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
       currently re-PUTtable within the token's TTL — random key + short TTL + attachment/nosniff
       bound the risk, but a KV-backed nonce would close it); delete-on-row-delete + orphan sweeper
       (wants a durable job queue); content-type allow-lists on `fileRef`; per-tenant buckets.
-- [ ] More Cloudflare service seams (same shape as `ctx.files`): email via the Cloudflare Email/Send
-      service as `ctx.mail`, Queues as `ctx.queue`, etc. — a small pluggable adapter + a `ctx.<service>`
-      facade + Worker glue. Lean on platform primitives rather than reimplementing them.
+- [~] More Cloudflare service seams (same shape as `ctx.files`): email + Queues as `ctx.queue`, etc. —
+      a small pluggable adapter + a `ctx.<service>` facade + Worker glue. Lean on platform primitives
+      rather than reimplementing them. Email is partly here: `@pramen/auth`'s `createMagicLinkAuth`
+      takes a pluggable `sendEmail(ctx, {email, token})` and the example/oblaka wire **Cloudflare Email
+      Sending** (the `send_email`/`EMAIL` binding, no API keys). Still future: a first-class `ctx.mail`
+      facade (so delivery moves off the DO's single-writer write path), and `ctx.queue`.
 - [x] Server library entry: the runtime is the publishable `@pramen/server` package (was `packages/server/src/`).
       `createPramen(app)` returns `{ fetch, PramenDO }`, so a project is just `app.ts` + `oblaka.ts` +
       a 3-line `worker.ts` (`export default { fetch }; export const PramenDO = …`). The DO + Worker are
@@ -260,6 +263,12 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
       existing table without a rebuild); DEFAULT is inline (and `ADD COLUMN ... NOT NULL DEFAULT` backfills),
       and a defaulted column is optional on insert. (`t.json()` already landed; chained `.method()` syntax
       remains.)
+- [x] `hidden()` column modifier: a column marked `hidden()` is stripped from every ORM read projection —
+      `find`/`get`, mutation echoes, relation loads, and the SYSTEM-mode `/admin/data` — even under a full
+      `allow()`/SYSTEM scope, while staying writable and visible to raw `ctx.db.exec`. Enforced at the `Db`
+      chokepoint (`finishRows` + `projectWrite`). For secrets like `@pramen/auth`'s `passwordHash`. Same pass
+      fixed `Db.update`/`delete`/belongsTo-load to resolve the real PK via `pkOf()` (they hardcoded `id`), so
+      an entity with a non-`id` `textId`/`primaryKey()` PK (e.g. `auth_users` keyed by `username`) works.
 - [x] SQL-expression defaults (mirrors kvalt's `expr`): `defaultTo(field, expr.now())` / `expr.raw(sql)` —
       an `ExprDefault` wraps raw SQL, rendered UNQUOTED and parenthesized (`DEFAULT (datetime('now'))`) so a
       function-call default is legal in SQLite; `expr.now()` is the current UTC timestamp as TEXT
@@ -299,6 +308,19 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
       HS256 tokens the core verifier accepts; PBKDF2-hashed passwords (WebCrypto, no deps); server-assigned
       roles. Core stays verify-only (BYO IdP via JWKS still works). `authorizeTenant` now treats `main` as
       the open default tenant for any caller (ACL still gates data) so issued tokens need no `tenants` claim.
+- [x] `@pramen/auth` magic link (passwordless): `createMagicLinkAuth({ sendEmail })` + `magicLinkSchema` —
+      `requestMagicLink({email})` / `loginWithMagicLink({token})`. One-time, single-use, time-boxed; the
+      token is stored only as a SHA-256 hash (15-min default). Transport is the app's via a pluggable
+      `sendEmail(ctx, {email, token})`; the example/oblaka wire **Cloudflare Email Sending** (the
+      `send_email`/`EMAIL` binding, no API keys). Keyed on the immutable `username` (a magic-link user's
+      username IS their email) — never on the mutable `email` column (which would let a `changeEmail` squat
+      another address). `auth_users` gains a unique mutable `email` (contact) and an `active` flag.
+- [x] `@pramen/auth` user management: `createUserHandlers({ table })` + `authPolicies({ table, prefix,
+      adminReadFields, … })` — ACL-gated admin (`listUsers`/`setUserRoles`/`setUserActive`/`deleteUser`)
+      + self (`changeEmail`/`changePassword`) over `auth_users` or any authSchema-shaped table (e.g. one
+      with an extra `tenants` column). Authorized declaratively by the ACL (not imperative role checks);
+      `passwordHash` is `hidden()` so it's never projected. `active` blocks login; role/active changes take
+      effect on next login (no session store) — `AUTH_SESSION_TTL_SECONDS` tunes the window.
 - [x] Relation-aware `where` (query + ACL): a `where` key naming a relation takes a nested clause over
       the related entity (`{ owner: { name: "Alice" } }`), compiled to a subquery — belongsTo →
       `fk IN (SELECT pk FROM target WHERE …)`, hasMany → `pk IN (SELECT fk FROM target WHERE …)` — via a
