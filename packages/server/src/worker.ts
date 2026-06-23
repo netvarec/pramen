@@ -148,7 +148,7 @@ export function makeWorker(app: PramenApp) {
   const d1TaskCtx = (driver: Driver, env: Env): HandlerContext => {
     const identity: Identity = { roles: ["admin"] };
     const files = createFiles({ tenant: "main", secret: filesSecret(env), adapter: new R2Adapter(env.FILES) });
-    const db = new Db(driver, { acl: d1Acl, identity, system: true, schema: app.schema }, app.schema);
+    const db = new Db(driver, { acl: d1Acl, identity, system: true, schema: app.schema, suppressTriggers: true }, app.schema);
     return { db, kv: new Kv(env.KV), files, env: env as unknown as Record<string, unknown>, identity, tasks: tasksFacade(driver) };
   };
 

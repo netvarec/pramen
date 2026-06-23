@@ -53,6 +53,15 @@ type Selected = Partial<Record<string, true>> | undefined;
 
 const DEFAULT_PAGE_SIZE = 50;
 
+/** Compare two decoded cell values for trigger change-detection. Primitives by ===;
+ * json/object cells (already parsed) by structural JSON equality. */
+function cellEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (a == null || b == null) return false;
+  if (typeof a === "object" || typeof b === "object") return JSON.stringify(a) === JSON.stringify(b);
+  return false;
+}
+
 function normalizeOrder(orderBy: unknown): OrderBy[] | undefined {
   if (!orderBy) return undefined;
   return (Array.isArray(orderBy) ? orderBy : [orderBy]) as OrderBy[];
@@ -413,14 +422,36 @@ export class Db<S extends SchemaDef = SchemaDef> {
   /** Fire declarative write-triggers for `op` on `entity`: enqueue a task per matching
    * trigger into the outbox, in THIS mutation's transaction (atomic with the write).
    * `row` is the affected row (decoded — new values for create/update, the removed row
-   * for delete); `writtenCols` are the columns the write touched (for update filters). */
-  private async fireTriggers(entity: string, op: TriggerOp, row: Row, writtenCols: string[]): Promise<void> {
+   * for delete); `writtenCols` are the columns the write touched; `before` is the prior
+   * row (update only) for value-change detection on a field-filtered trigger.
+   *
+   * - Hidden columns are STRIPPED from the payload row — `hidden()` ("never readable via
+   *   the ORM, even under SYSTEM") must hold here too, or a secret like passwordHash
+   *   would leak to a task handler / webhook.
+   * - A field-filtered update trigger fires only when a watched column's value actually
+   *   CHANGED (not merely was written to the same value).
+   * - Suppressed in the task-drain context, so a task's own writes don't re-fire
+   *   triggers (preventing a trigger→task→write→trigger cascade). */
+  private async fireTriggers(
+    entity: string,
+    op: TriggerOp,
+    row: Row,
+    writtenCols: string[],
+    before?: Row,
+  ): Promise<void> {
+    if (this.acl.suppressTriggers) return;
     const triggers = triggersOf(this.schema, entity);
     if (triggers.length === 0) return;
     const id = row[this.pkOf(entity)];
+    let safeRow: Row | undefined;
     for (const t of triggers) {
       if (!triggerFires(t, op, writtenCols)) continue;
-      await enqueueTask(this.driver, Date.now(), { kind: t.task, payload: { entity, op, id, row } });
+      if (op === "update" && Array.isArray(t.on.update) && before) {
+        const changed = t.on.update.some((c) => writtenCols.includes(c) && !cellEqual(before[c], row[c]));
+        if (!changed) continue; // watched column(s) written, but value unchanged
+      }
+      if (!safeRow) safeRow = this.stripHidden(entity, row); // never leak hidden columns
+      await enqueueTask(this.driver, Date.now(), { kind: t.task, payload: { entity, op, id, row: safeRow } });
       this.taskEnqueueCount++;
     }
   }
@@ -621,13 +652,18 @@ export class Db<S extends SchemaDef = SchemaDef> {
     const cols = Object.keys(p);
     if (cols.length === 0) return undefined;
 
-    // Per-row field permission is evaluated against the FINAL (post-merge) row, so
-    // fetch the existing row within update scope when any cell-level rule applies.
+    // Fetch the existing row when we need it: for per-row field permission (evaluated
+    // against the FINAL post-merge row) OR for a field-filtered update trigger's
+    // value-change detection (so it fires only on an actual change, not a same-value write).
+    const needCellEval = scope.fields !== null && (scope.conditional.length > 0 || scope.fieldsFns.length > 0);
+    const needBefore = !this.acl.suppressTriggers && triggersOf(this.schema, table).some((t) => Array.isArray(t.on.update));
     let evalRow: Row = p;
-    if (scope.fields !== null && (scope.conditional.length > 0 || scope.fieldsFns.length > 0)) {
+    let before: Row | undefined;
+    if (needCellEval || needBefore) {
       const existing = await this.fetchOne(table, id, scope.where);
       if (!existing) return undefined; // out of update scope -> no-op
-      evalRow = { ...existing, ...p };
+      before = existing;
+      if (needCellEval) evalRow = { ...existing, ...p };
     }
     this.checkWriteFields(table, "update", scope, cols, evalRow, new Set(Object.keys(set)));
     this.runValidators(validators, p);
@@ -646,7 +682,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
     sql += this.scopeClause(scope.where, params);
     sql += this.returningClause("*");
     const updated = this.decodeRow(table, (await this.driver.exec(sql, params))[0]);
-    if (updated) await this.fireTriggers(table, "update", updated, cols);
+    if (updated) await this.fireTriggers(table, "update", updated, cols, before);
     return (updated ? this.projectWrite(table, updated, cols) : undefined) as InferRow<FieldsOf<S[T]>> | undefined;
   }
 

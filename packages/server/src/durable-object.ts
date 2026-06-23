@@ -202,7 +202,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
     const identity: Identity = { roles: ["admin"] };
     const db = new Db(
       this.driver,
-      { acl: this.acl, identity, system: true, schema: this.app.schema, partition: this.partition },
+      { acl: this.acl, identity, system: true, schema: this.app.schema, partition: this.partition, suppressTriggers: true },
       this.app.schema,
     );
     return { db, kv: this.kv, files: this.filesFor(this.tenant), env: this.envBag, identity, tasks: tasksFacade(this.driver) };

@@ -3,7 +3,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { Entity, defineSchema, trigger } from "../packages/server/src/sdk/schema";
+import { Entity, defineSchema, trigger, hidden, validateTriggerTasks } from "../packages/server/src/sdk/schema";
 import { allow, policy, role, type Identity } from "../packages/server/src/sdk/acl";
 import { compileAcl, type AclContext } from "../packages/server/src/runtime/acl";
 import { Db } from "../packages/server/src/runtime/db";
@@ -85,5 +85,55 @@ describe("declarative write-triggers", () => {
     await db.insert("items", { id: "a", name: "Apple" });
     expect((await outbox(driver)).length).toBe(0);
     expect(db.taskEnqueues).toBe(0);
+  });
+
+  // Security: a hidden() column must NEVER reach the trigger payload (hidden = "never
+  // readable via the ORM, even under SYSTEM" — a leak here would ship secrets to a webhook).
+  test("hidden() columns are stripped from the trigger payload", async () => {
+    const secretSchema = defineSchema({
+      users: Entity((t) => ({ id: t.textId(), name: t.text(), passwordHash: hidden(t.text()) }), undefined, {
+        triggers: [trigger({ task: "on-create", on: { create: true } })],
+      }),
+    });
+    const sqlite = new Database(":memory:");
+    const driver = bunSqliteDriver(sqlite);
+    await migrate(driver, secretSchema);
+    await ensureOutbox(driver);
+    const ctx: AclContext = { acl: compileAcl(roles), identity: admin, schema: secretSchema, partition: undefined, system: true };
+    const db = new Db(driver, ctx, secretSchema);
+    await db.insert("users", { id: "u", name: "Zoe", passwordHash: "pbkdf2$secret" });
+    const payload = (await outbox(driver))[0].payload as { row: Record<string, unknown> };
+    expect(payload.row).toMatchObject({ id: "u", name: "Zoe" });
+    expect("passwordHash" in payload.row).toBe(false); // the secret never leaves the ORM
+  });
+
+  // A field-filtered update trigger fires on an actual VALUE CHANGE, not a same-value write.
+  test("a field-filtered update fires only on a real value change", async () => {
+    const { driver, db } = await freshDb();
+    await db.insert("items", { id: "a", name: "Apple", status: "draft" }); // on-create
+    await db.update("items", "a", { status: "draft" }); // written but UNCHANGED → no fire
+    await db.update("items", "a", { status: "published" }); // changed → fires
+    expect((await outbox(driver)).map((r) => r.kind)).toEqual(["on-create", "on-status"]);
+  });
+
+  // Loop guard: a Db with suppressTriggers (the task-drain context) fires NO triggers,
+  // so a task handler's writes can't cascade into a trigger→task→write loop.
+  test("suppressTriggers (task-drain context) fires no triggers", async () => {
+    const sqlite = new Database(":memory:");
+    const driver = bunSqliteDriver(sqlite);
+    await migrate(driver, schema);
+    await ensureOutbox(driver);
+    const ctx: AclContext = { acl: compileAcl(roles), identity: admin, schema, partition: undefined, system: true, suppressTriggers: true };
+    const db = new Db(driver, ctx, schema);
+    await db.insert("items", { id: "a", name: "Apple", status: "draft" });
+    await db.update("items", "a", { status: "published" });
+    expect((await outbox(driver)).length).toBe(0);
+    expect(db.taskEnqueues).toBe(0);
+  });
+
+  // validateTriggerTasks rejects a trigger whose task has no app.tasks handler (fail-fast).
+  test("validateTriggerTasks throws on a trigger with an unknown task", () => {
+    expect(() => validateTriggerTasks(schema, ["on-create", "on-status", "on-gone"])).not.toThrow();
+    expect(() => validateTriggerTasks(schema, ["on-create"])).toThrow(/on-status/);
   });
 });

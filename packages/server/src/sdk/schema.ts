@@ -157,6 +157,20 @@ export function triggersOf(schema: SchemaDef, entity: string): readonly TriggerD
   return schema[entity]?.triggers ?? [];
 }
 
+/** Throw if any declarative trigger names a `task` not in `taskNames` — caught at
+ * deploy/load by createPramen, so a typo can't silently enqueue a task that never runs
+ * (it would retry then dead-letter). */
+export function validateTriggerTasks(schema: SchemaDef, taskNames: Iterable<string>): void {
+  const known = new Set(taskNames);
+  for (const [entity, def] of Object.entries(schema)) {
+    for (const t of def.triggers) {
+      if (!known.has(t.task)) {
+        throw new Error(`trigger on '${entity}' references task '${t.task}', but app.tasks has no such handler.`);
+      }
+    }
+  }
+}
+
 /** Annotate a field as renamed from a previous column name (migration hint). Wraps
  * a builder result, preserving its literal field type: `title: renamedFrom(t.text(), "name")`. */
 export function renamedFrom<F extends FieldDef>(field: F, from: string): F & { readonly renamedFrom: string } {

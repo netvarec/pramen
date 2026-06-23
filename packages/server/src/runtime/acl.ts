@@ -64,6 +64,11 @@ export interface AclContext {
    * lives in a different partition (a partition-DO only owns its own tables). Unset
    * (e.g. the D1/Worker shared-store path) disables the guard — a no-op. */
   readonly partition?: string;
+  /** Suppress declarative write-triggers for this Db. Set on the privileged context
+   * that DRAINS tasks, so a task handler's writes don't re-fire triggers (which would
+   * cascade — a trigger → task → write → trigger loop). Triggers fire on request-path
+   * writes, not on task-handler writes. */
+  readonly suppressTriggers?: boolean;
 }
 
 /** Evaluate every resolver reachable by the identity's roles, once per request.
