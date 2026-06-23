@@ -4,10 +4,11 @@
 // the core verifier accepts, single-use (replay rejected), expiry validation, bad
 // tokens rejected, and that re-requesting invalidates the prior link.
 
-import { assert, http } from "../lib";
+import { assert, http, token } from "../lib";
 
 export async function runMagicLink(base: string): Promise<void> {
   const call = http(base, "main"); // request/login are anonymous → the open default tenant
+  const admin = await token("admin", ["admin"]); // the dev __magicInbox is admin-gated
   const email = "casey@example.com";
 
   // input validation: a malformed email is rejected at the boundary
@@ -19,9 +20,13 @@ export async function runMagicLink(base: string): Promise<void> {
   assert(req.body.ok && req.body.result?.ok === true, "magic: requestMagicLink returns ok");
 
   // read the "inbox" (dev-only handler in the example app) to get the emailed token
-  const inbox = await call("__magicInbox", { email });
+  const inbox = await call("__magicInbox", { email }, admin);
   const linkToken = inbox.body.result?.token as string;
   assert(typeof linkToken === "string" && linkToken.length > 0, "magic: a token was emailed");
+
+  // hardening: the dev inbox is admin-gated — an anonymous caller can't read the token.
+  const anonInbox = await call("__magicInbox", { email });
+  assert(anonInbox.status === 403, "magic: __magicInbox is admin-only (anonymous denied — no token leak)");
 
   // a bad token → 401 (same shape as expired)
   const wrong = await call("loginWithMagicLink", { token: "deadbeef-not-real" });
@@ -49,7 +54,7 @@ export async function runMagicLink(base: string): Promise<void> {
   // OLD token (already consumed above) plus any prior pending link no longer works.
   const req2 = await call("requestMagicLink", { email });
   assert(req2.body.ok, "magic: re-request returns ok");
-  const inbox2 = await call("__magicInbox", { email });
+  const inbox2 = await call("__magicInbox", { email }, admin);
   const linkToken2 = inbox2.body.result?.token as string;
   assert(linkToken2 !== linkToken, "magic: re-request mints a distinct token");
   const login2 = await call("loginWithMagicLink", { token: linkToken2 });

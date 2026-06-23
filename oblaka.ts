@@ -27,9 +27,12 @@ export default define(({ env }) => {
           // Local dev applies destructive migrations freely; production must opt in.
           PRAMEN_ALLOW_DESTRUCTIVE: "true",
           // Where the magic-link lands in your frontend (the example builds
-          // `${APP_URL}/auth?token=…`). MAIL_FROM is intentionally unset locally, so
-          // ctx.mail CAPTURES email (dev inbox) instead of really sending it.
+          // `${APP_URL}/auth?token=…`). MAIL_FROM is intentionally unset locally;
+          // MAIL_CAPTURE opts ctx.mail into the dev inbox (capture to KV) instead of
+          // sending. Without MAIL_CAPTURE and MAIL_FROM, ctx.mail FAILS CLOSED (a send
+          // throws) — so a misconfigured prod can't silently stash emails in KV.
           APP_URL: "http://localhost:8787",
+          MAIL_CAPTURE: "true",
         }
       : {
           // Production email (ctx.mail): set MAIL_FROM to an address on a domain

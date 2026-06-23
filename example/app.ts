@@ -150,6 +150,14 @@ const magicLink = createMagicLinkAuth({
 // the same handlers, pointed at a different table, exposed under prefixed RPC names.
 const orgAccounts = createUserHandlers({ table: "org_accounts" });
 
+// The `__*Inbox` handlers below read captured email / magic-link tokens straight from
+// KV. ctx.db ACL doesn't apply to ctx.kv, and handlers run for any caller (no per-handler
+// auth), so without this gate an anonymous caller could read another address's token →
+// account takeover. Gate them to admins. They're dev/e2e affordances — not for production.
+function devInboxOnly(ctx: HandlerContext): void {
+  if (!ctx.identity?.roles?.includes("admin")) throw new Forbidden("dev inbox is admin-only");
+}
+
 const handlers = {
   // @pramen/auth: signup / login / me (issue + use HS256 tokens, no third-party IdP).
   ...authHandlers,
@@ -166,10 +174,11 @@ const handlers = {
   setOrgAccountTenants: mutation((ctx, input: { username: string; tenants: string[] }) =>
     ctx.db.update("org_accounts", input.username, { tenants: input.tenants }),
   ),
-  // Dev-only: lets the e2e suite read the token the demo "emailed". NOT for production.
-  __magicInbox: query(async (ctx, input: { email: string }) => ({
-    token: await ctx.kv.get(`magiclink:${input.email}`),
-  })),
+  // Dev-only (admin-gated): lets the e2e suite read the token the demo "emailed".
+  __magicInbox: query(async (ctx, input: { email: string }) => {
+    devInboxOnly(ctx);
+    return { token: await ctx.kv.get(`magiclink:${input.email}`) };
+  }),
 
   // Deferred side-effect demo: write a note AND enqueue a notification, atomically.
   // The email is sent later by the `notify` task handler (app.tasks), off the write
@@ -180,14 +189,18 @@ const handlers = {
     if (input.fail) throw new BadRequest("forced failure — note + task must both roll back");
     return note;
   }),
-  // Dev-only: read the ctx.mail "inbox" (the dev KvMailAdapter stashes under mail:<to>)
-  // — returns the email text the `notify` task sent.
+  // Dev-only (admin-gated): read the ctx.mail "inbox" (the dev KvMailAdapter stashes
+  // under mail:<to>) — returns the email text the `notify` task sent.
   __notifyInbox: query(async (ctx, input: { to: string }) => {
+    devInboxOnly(ctx);
     const raw = (await ctx.kv.get(`mail:${input.to}`)) as string | null;
     return { body: raw ? (JSON.parse(raw).text as string) : null };
   }),
-  // Dev-only: read what the `note-changed` TRIGGER task recorded for a note.
-  __noteChangedInbox: query(async (ctx, input: { id: number }) => ({ body: await ctx.kv.get(`note-changed:${input.id}`) })),
+  // Dev-only (admin-gated): read what the `note-changed` TRIGGER task recorded for a note.
+  __noteChangedInbox: query(async (ctx, input: { id: number }) => {
+    devInboxOnly(ctx);
+    return { body: await ctx.kv.get(`note-changed:${input.id}`) };
+  }),
   listNotes: query((ctx) =>
     ctx.db.find({ from: "notes", orderBy: { column: "id", dir: "desc" } }),
   ),

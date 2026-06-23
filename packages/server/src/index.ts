@@ -73,7 +73,7 @@ export { R2Adapter, MemoryAdapter, createFiles, handleFileRequest } from "./runt
 export type { StorageAdapter, PutResult, GetResult } from "./runtime/storage";
 
 // --- mail (ctx.mail) ---
-export { Mail, CloudflareEmailAdapter, KvMailAdapter, MemoryMailAdapter, createMail } from "./runtime/mail";
+export { Mail, CloudflareEmailAdapter, KvMailAdapter, MemoryMailAdapter, UnconfiguredMailAdapter, createMail } from "./runtime/mail";
 export type { MailMessage, MailAddress, MailAdapter, SendEmailBinding } from "./runtime/mail";
 
 // --- errors ---

@@ -101,9 +101,25 @@ export class MemoryMailAdapter implements MailAdapter {
   }
 }
 
-/** Build `ctx.mail` from the environment: Cloudflare Email Sending when both the
- * `EMAIL` binding and a `MAIL_FROM` sender are present; otherwise capture (KV if a Kv
- * is given, else in-memory) with a synthetic dev sender so handlers work unconfigured. */
+/** Fail-closed transport: no real sender and no explicit dev-capture opt-in, so a
+ * `send` THROWS rather than silently capturing. Prevents a misconfigured production
+ * (no MAIL_FROM) from writing security emails — magic-link tokens, resets — into KV
+ * instead of delivering them. Mirrors how files fail closed without FILES_SECRET. */
+export class UnconfiguredMailAdapter implements MailAdapter {
+  async send(): Promise<void> {
+    throw new Error(
+      "ctx.mail: no transport configured — set MAIL_FROM (with the EMAIL binding) to send, " +
+        "or MAIL_CAPTURE=true to capture in dev.",
+    );
+  }
+}
+
+/** Build `ctx.mail` from the environment:
+ *  - `EMAIL` binding + `MAIL_FROM` → Cloudflare Email Sending (real send).
+ *  - else `MAIL_CAPTURE=true` → capture (KV inbox if a Kv is given, else in-memory) with
+ *    a synthetic dev sender — an EXPLICIT dev opt-in, never the production default.
+ *  - else → fail closed: a `send` throws (so a missing-MAIL_FROM prod doesn't silently
+ *    stash security emails in KV). */
 export function createMail(env: Readonly<Record<string, unknown>>, kv?: Kv): Mail {
   const binding = env.EMAIL as SendEmailBinding | undefined;
   const fromAddr = typeof env.MAIL_FROM === "string" && env.MAIL_FROM ? env.MAIL_FROM : undefined;
@@ -111,6 +127,10 @@ export function createMail(env: Readonly<Record<string, unknown>>, kv?: Kv): Mai
     const name = typeof env.MAIL_FROM_NAME === "string" ? env.MAIL_FROM_NAME : undefined;
     return new Mail(new CloudflareEmailAdapter(binding), { email: fromAddr, name });
   }
-  const devFrom: MailAddress = { email: "dev@pramen.local", name: "pramen (dev)" };
-  return new Mail(kv ? new KvMailAdapter(kv) : new MemoryMailAdapter(), devFrom);
+  if (env.MAIL_CAPTURE === "true") {
+    const devFrom: MailAddress = { email: "dev@pramen.local", name: "pramen (dev)" };
+    return new Mail(kv ? new KvMailAdapter(kv) : new MemoryMailAdapter(), devFrom);
+  }
+  // Sentinel `from` so the facade delegates to the adapter, which throws the clear error.
+  return new Mail(new UnconfiguredMailAdapter(), { email: "unconfigured@invalid" });
 }

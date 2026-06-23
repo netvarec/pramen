@@ -42,14 +42,23 @@ describe("ctx.mail facade", () => {
     expect(sent[0]).toMatchObject({ to: "a@x.com", from: { email: "hi@acme.com", name: "Acme" }, subject: "Hi" });
   });
 
-  test("createMail captures (KV) with a synthetic dev sender when unconfigured", async () => {
+  test("createMail captures to KV only with the explicit MAIL_CAPTURE opt-in", async () => {
     const store = new Map<string, string>();
     const kv = { put: async (k: string, v: string) => void store.set(k, v) } as unknown as ConstructorParameters<
       typeof KvMailAdapter
     >[0];
-    // No EMAIL binding / no MAIL_FROM → KvMailAdapter + a synthetic dev sender (no throw).
-    await createMail({}, kv).send({ to: ["a@x.com", "b@x.com"], subject: "Hi", text: "yo" });
+    await createMail({ MAIL_CAPTURE: "true" }, kv).send({ to: ["a@x.com", "b@x.com"], subject: "Hi", text: "yo" });
     expect(JSON.parse(store.get("mail:a@x.com")!)).toMatchObject({ subject: "Hi", text: "yo" });
     expect(store.has("mail:b@x.com")).toBe(true);
+  });
+
+  test("createMail FAILS CLOSED when unconfigured (no MAIL_FROM, no MAIL_CAPTURE)", async () => {
+    // A misconfigured prod must NOT silently capture security emails into KV.
+    const store = new Map<string, string>();
+    const kv = { put: async (k: string, v: string) => void store.set(k, v) } as unknown as ConstructorParameters<
+      typeof KvMailAdapter
+    >[0];
+    await expect(createMail({}, kv).send({ to: "a@x.com", subject: "Hi", text: "yo" })).rejects.toThrow(/no transport/);
+    expect(store.size).toBe(0); // nothing stashed
   });
 });
