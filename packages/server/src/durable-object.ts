@@ -18,6 +18,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { migrate } from "./runtime/migrate";
 import { dispatch, tasksFacade, bindTasks } from "./runtime/dispatch";
+import { createMail } from "./runtime/mail";
 import { ensureOutbox, drainOutbox, listTasks } from "./runtime/outbox";
 import { Db } from "./runtime/db";
 import { digest } from "./runtime/digest";
@@ -205,7 +206,15 @@ export class PramenDOBase extends DurableObject<DoEnv> {
       { acl: this.acl, identity, system: true, schema: this.app.schema, partition: this.partition, suppressTriggers: true },
       this.app.schema,
     );
-    return { db, kv: this.kv, files: this.filesFor(this.tenant), env: this.envBag, identity, tasks: tasksFacade(this.driver) };
+    return {
+      db,
+      kv: this.kv,
+      files: this.filesFor(this.tenant),
+      env: this.envBag,
+      identity,
+      tasks: tasksFacade(this.driver),
+      mail: createMail(this.envBag, this.kv),
+    };
   }
 
   /** Restore (tenant, partition) on a cold wake (e.g. an alarm with no request) so the

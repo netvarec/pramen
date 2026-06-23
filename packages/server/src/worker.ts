@@ -7,6 +7,7 @@
 import { authorizeTenant, HmacStrategy, isAdmin, JwksStrategy, resolveIdentity, type VerifyStrategy } from "./auth";
 import { dispatch, tasksFacade, bindTasks } from "./runtime/dispatch";
 import { ensureOutbox, drainOutbox, listTasks } from "./runtime/outbox";
+import { createMail } from "./runtime/mail";
 import { migrate } from "./runtime/migrate";
 import { compileAcl } from "./runtime/acl";
 import { Db } from "./runtime/db";
@@ -149,7 +150,8 @@ export function makeWorker(app: PramenApp) {
     const identity: Identity = { roles: ["admin"] };
     const files = createFiles({ tenant: "main", secret: filesSecret(env), adapter: new R2Adapter(env.FILES) });
     const db = new Db(driver, { acl: d1Acl, identity, system: true, schema: app.schema, suppressTriggers: true }, app.schema);
-    return { db, kv: new Kv(env.KV), files, env: env as unknown as Record<string, unknown>, identity, tasks: tasksFacade(driver) };
+    const kv = new Kv(env.KV);
+    return { db, kv, files, env: env as unknown as Record<string, unknown>, identity, tasks: tasksFacade(driver), mail: createMail(env as unknown as Record<string, unknown>, kv) };
   };
 
   /** Drain the D1 outbox in the Worker (no DO/alarm on this path) — called by the

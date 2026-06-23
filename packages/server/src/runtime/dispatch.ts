@@ -12,6 +12,7 @@ import { Db } from "./db";
 import { warmup, type AclContext } from "./acl";
 import { BadRequest } from "./errors";
 import { enqueueTask, type TaskMap } from "./outbox";
+import { createMail } from "./mail";
 import type { Driver } from "./driver";
 import type { Kv } from "./kv";
 import type { Files } from "../sdk/files";
@@ -76,7 +77,15 @@ export async function dispatch(
 
   const db = new Db(driver, { acl: acl.acl, identity: acl.identity, input: parsed, resolved, schema, partition: acl.partition }, schema);
   let enqueued = 0;
-  const ctx: HandlerContext = { db, kv, files, env, identity: acl.identity, tasks: tasksFacade(driver, () => enqueued++) };
+  const ctx: HandlerContext = {
+    db,
+    kv,
+    files,
+    env,
+    identity: acl.identity,
+    tasks: tasksFacade(driver, () => enqueued++),
+    mail: createMail(env, kv),
+  };
 
   const result =
     handler.kind === "query"

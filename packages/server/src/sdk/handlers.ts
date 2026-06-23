@@ -4,6 +4,7 @@
 
 import type { Db } from "../runtime/db";
 import type { Kv } from "../runtime/kv";
+import type { Mail } from "../runtime/mail";
 import type { Identity } from "./acl";
 import type { Files } from "./files";
 import type { SchemaDef } from "./schema";
@@ -17,6 +18,11 @@ export interface HandlerContext<S extends SchemaDef = SchemaDef> {
   /** Per-tenant file storage: mint signed upload/download urls, head/delete blobs.
    * Bytes flow through the Worker /files/* route, never through the DO. */
   readonly files: Files;
+  /** Send email: `ctx.mail.send({ to, subject, text/html })`. On Cloudflare this is
+   * Cloudflare Email Sending (the `send_email` binding); off-platform / unconfigured it
+   * captures instead of sending. Prefer enqueuing the send as a task (see `ctx.tasks`)
+   * so it runs off the single-writer write path. */
+  readonly mail: Mail;
   /** The Worker/DO environment — bindings (KV, R2, DB, …) plus vars and secrets
    * (AUTH_SECRET, plus anything in wrangler.jsonc / .dev.vars / `wrangler secret`).
    * Use it to call external services from handlers — Cloudflare bindings (e.g. the

@@ -72,6 +72,10 @@ export type { FileRef, Files, SignUploadOpts, SignDownloadOpts, HeadResult } fro
 export { R2Adapter, MemoryAdapter, createFiles, handleFileRequest } from "./runtime/storage";
 export type { StorageAdapter, PutResult, GetResult } from "./runtime/storage";
 
+// --- mail (ctx.mail) ---
+export { Mail, CloudflareEmailAdapter, KvMailAdapter, MemoryMailAdapter, createMail } from "./runtime/mail";
+export type { MailMessage, MailAddress, MailAdapter, SendEmailBinding } from "./runtime/mail";
+
 // --- errors ---
 export { PramenError, BadRequest, Unauthorized, Forbidden } from "./runtime/errors";
 

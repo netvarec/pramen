@@ -128,41 +128,21 @@ const schema = defineSchema({
 // Handlers bound to this schema — ctx.db is fully typed against it.
 const { query, mutation } = createApp(schema);
 
-// @pramen/auth: passwordless magic-link login. Delivery uses Cloudflare Email
-// Sending — the `EMAIL` (send_email) binding declared in oblaka.ts, no API keys.
-// When a verified sender (EMAIL_FROM) is configured, the link is emailed via
-// `ctx.env.EMAIL.send(...)`; otherwise (local/dev) the raw token is stashed in KV
-// so you can grab it from the dashboard / e2e suite instead of actually sending.
-interface SendEmailBinding {
-  send(message: {
-    to: string;
-    from: { email: string; name?: string };
-    subject: string;
-    text?: string;
-    html?: string;
-  }): Promise<void>;
-}
-
+// @pramen/auth: passwordless magic-link login. Delivery goes through `ctx.mail` — on
+// Cloudflare that's Cloudflare Email Sending (the `EMAIL`/send_email binding, when a
+// MAIL_FROM sender is configured); local/dev captures it instead. We also stash the raw
+// token in KV so the e2e suite can complete the login without parsing the email.
 const magicLink = createMagicLinkAuth({
   sendEmail: async (ctx, { email, token }) => {
     const appUrl = (ctx.env.APP_URL as string) ?? "http://localhost:8787";
     const link = `${appUrl}/auth?token=${encodeURIComponent(token)}`;
-    const from = ctx.env.EMAIL_FROM as string | undefined;
-    const emailBinding = ctx.env.EMAIL as SendEmailBinding | undefined;
-
-    if (emailBinding && from) {
-      // Cloudflare Email Sending: the binding sends from your onboarded domain.
-      await emailBinding.send({
-        to: email,
-        from: { email: from, name: "pramen" },
-        subject: "Your sign-in link",
-        text: `Sign in to pramen: ${link}\n\nThis link expires in 15 minutes and can be used once.`,
-        html: `<p><a href="${link}">Sign in to pramen</a></p><p>This link expires in 15 minutes and can be used once.</p>`,
-      });
-    } else {
-      // No verified sender (local/dev): stash the token so the e2e suite can read it.
-      await ctx.kv.put(`magiclink:${email}`, token, { expirationTtl: 900 });
-    }
+    await ctx.mail.send({
+      to: email,
+      subject: "Your sign-in link",
+      text: `Sign in to pramen: ${link}\n\nThis link expires in 15 minutes and can be used once.`,
+      html: `<p><a href="${link}">Sign in to pramen</a></p><p>This link expires in 15 minutes and can be used once.</p>`,
+    });
+    await ctx.kv.put(`magiclink:${email}`, token, { expirationTtl: 900 }); // dev-only: token for the e2e
   },
 });
 
@@ -200,8 +180,12 @@ const handlers = {
     if (input.fail) throw new BadRequest("forced failure — note + task must both roll back");
     return note;
   }),
-  // Dev-only: read what the `notify` task "delivered" (stashed in KV instead of emailed).
-  __notifyInbox: query(async (ctx, input: { to: string }) => ({ body: await ctx.kv.get(`notify:${input.to}`) })),
+  // Dev-only: read the ctx.mail "inbox" (the dev KvMailAdapter stashes under mail:<to>)
+  // — returns the email text the `notify` task sent.
+  __notifyInbox: query(async (ctx, input: { to: string }) => {
+    const raw = (await ctx.kv.get(`mail:${input.to}`)) as string | null;
+    return { body: raw ? (JSON.parse(raw).text as string) : null };
+  }),
   // Dev-only: read what the `note-changed` TRIGGER task recorded for a note.
   __noteChangedInbox: query(async (ctx, input: { id: number }) => ({ body: await ctx.kv.get(`note-changed:${input.id}`) })),
   listNotes: query((ctx) =>
@@ -607,7 +591,8 @@ const routes = [
 const tasks = {
   notify: async (ctx: HandlerContext, payload: unknown) => {
     const { to, title } = payload as { to: string; title: string };
-    await ctx.kv.put(`notify:${to}`, `New note: ${title}`, { expirationTtl: 900 });
+    // The canonical use: a task sends a notification email via ctx.mail (off the write path).
+    await ctx.mail.send({ to, subject: "New note", text: `New note: ${title}` });
   },
   // Fired by the `notes` declarative trigger (create + title change). The payload is
   // the framework's `{ entity, op, id, row }`.

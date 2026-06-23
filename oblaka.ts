@@ -27,16 +27,17 @@ export default define(({ env }) => {
           // Local dev applies destructive migrations freely; production must opt in.
           PRAMEN_ALLOW_DESTRUCTIVE: "true",
           // Where the magic-link lands in your frontend (the example builds
-          // `${APP_URL}/auth?token=…`). EMAIL_FROM is intentionally unset locally,
-          // so the demo stashes the token for the dashboard/e2e instead of emailing.
+          // `${APP_URL}/auth?token=…`). MAIL_FROM is intentionally unset locally, so
+          // ctx.mail CAPTURES email (dev inbox) instead of really sending it.
           APP_URL: "http://localhost:8787",
         }
       : {
-          // Production magic-link email: set EMAIL_FROM to an address on a domain
+          // Production email (ctx.mail): set MAIL_FROM to an address on a domain
           // onboarded to Cloudflare Email Sending (`wrangler email sending enable
-          // yourdomain.com`), and APP_URL to your frontend origin. With both set, the
-          // example sends via the EMAIL binding below — no API keys.
-          // EMAIL_FROM: "login@yourdomain.com",
+          // yourdomain.com`); with the EMAIL binding below + MAIL_FROM, ctx.mail sends
+          // for real — no API keys. APP_URL is your frontend origin (magic-link).
+          // MAIL_FROM: "login@yourdomain.com",
+          // MAIL_FROM_NAME: "Acme",
           // APP_URL: "https://app.yourdomain.com",
         };
 
