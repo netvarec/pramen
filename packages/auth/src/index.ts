@@ -339,119 +339,156 @@ function requireUserId(ctx: HandlerContext): string {
 }
 
 // `ctx.db` is schema-typed against the *app's* composed schema, which this package
-// can't import — so address auth_users through a minimal structural view of the ACL'd
-// Db. This is the same ctx.db at runtime: row-scope + field projection still apply.
-interface AuthUsersDb {
-  update(table: "auth_users", id: string, patch: Record<string, unknown>): Promise<Record<string, unknown> | undefined>;
-  delete(table: "auth_users", id: string): Promise<boolean>;
+// can't import — so address the users table through a minimal structural view of the
+// ACL'd Db. This is the same ctx.db at runtime: row-scope + field projection still apply.
+interface UsersDb {
+  update(table: string, id: string, patch: Record<string, unknown>): Promise<Record<string, unknown> | undefined>;
+  delete(table: string, id: string): Promise<boolean>;
 }
-const usersDb = (ctx: HandlerContext): AuthUsersDb => ctx.db as unknown as AuthUsersDb;
+const usersDb = (ctx: HandlerContext): UsersDb => ctx.db as unknown as UsersDb;
 
-/** Admin + self-service handlers over `auth_users`. Spread into your handler map
- * alongside `authHandlers`; gate them by spreading `authPolicies()` into your roles. */
-export const userHandlers = {
-  /** Admin: list users (ACL projects out passwordHash). A non-admin caller granted
-   * only the self policy sees just their own row; ungranted callers get a 403. */
-  listUsers: query(async (ctx, input: { limit?: number; offset?: number }) => {
-    const limit = Math.min(Math.max(Math.trunc(Number(input?.limit ?? 50)) || 50, 1), 200);
-    const offset = Math.max(Math.trunc(Number(input?.offset ?? 0)) || 0, 0);
-    return ctx.db.find({ from: "auth_users", orderBy: { column: "createdAt", dir: "desc" }, limit, offset });
-  }),
+// The users table must be a valid SQL identifier (it's interpolated into the raw exec
+// strings below). It's app config, never request input, but guard it anyway.
+function assertIdentifier(table: string): string {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(table)) throw new Error(`@pramen/auth: invalid table name ${JSON.stringify(table)}`);
+  return table;
+}
 
-  /** Admin: replace a user's roles. The ACL admin update policy permits writing
-   * `roles`; a self-only caller can't (so this is admin-gated declaratively). */
-  setUserRoles: mutation(async (ctx, input: { username: string; roles: string[] }) => {
-    if (typeof input?.username !== "string" || input.username.length === 0) throw new BadRequest("username is required");
-    if (!Array.isArray(input.roles) || !input.roles.every((r) => typeof r === "string" && r.length > 0)) {
-      throw new BadRequest("roles must be a non-empty string[]");
-    }
-    const updated = await usersDb(ctx).update("auth_users", input.username, { roles: input.roles });
-    if (!updated) throw new BadRequest("user not found"); // (or out of the caller's update scope)
-    return updated;
-  }),
+/** Build admin + self-service handlers over a users table (default `auth_users`).
+ * Pass `table` to operate over your OWN authSchema-shaped table — e.g. one with an
+ * extra `tenants` column — without renaming it: the handlers manage username/roles/
+ * email/active/delete and ignore any extra columns. Spread the result into your
+ * handler map and gate it with the matching `authPolicies({ table })`. The table must
+ * have a `username` primary key and (for changeEmail/changePassword) `email`/
+ * `passwordHash` columns. */
+export function createUserHandlers(opts: { table?: string } = {}) {
+  const table = assertIdentifier(opts.table ?? "auth_users");
+  return {
+    /** Admin: list users (ACL projects out passwordHash). A non-admin caller granted
+     * only the self policy sees just their own row; ungranted callers get a 403. */
+    listUsers: query(async (ctx, input: { limit?: number; offset?: number }) => {
+      const limit = Math.min(Math.max(Math.trunc(Number(input?.limit ?? 50)) || 50, 1), 200);
+      const offset = Math.max(Math.trunc(Number(input?.offset ?? 0)) || 0, 0);
+      return ctx.db.find({ from: table, orderBy: { column: "createdAt", dir: "desc" }, limit, offset });
+    }),
 
-  /** Admin: activate / deactivate a user. Deactivating blocks future logins (and
-   * token refresh); existing tokens still expire naturally within the TTL. */
-  setUserActive: mutation(async (ctx, input: { username: string; active: boolean }) => {
-    if (typeof input?.username !== "string" || input.username.length === 0) throw new BadRequest("username is required");
-    if (typeof input?.active !== "boolean") throw new BadRequest("active must be a boolean");
-    if (input.active === false && input.username === ctx.identity?.userId) {
-      throw new BadRequest("cannot deactivate your own account");
-    }
-    const updated = await usersDb(ctx).update("auth_users", input.username, { active: input.active });
-    if (!updated) throw new BadRequest("user not found");
-    return updated;
-  }),
+    /** Admin: replace a user's roles. The ACL admin update policy permits writing
+     * `roles`; a self-only caller can't (so this is admin-gated declaratively). */
+    setUserRoles: mutation(async (ctx, input: { username: string; roles: string[] }) => {
+      if (typeof input?.username !== "string" || input.username.length === 0) throw new BadRequest("username is required");
+      if (!Array.isArray(input.roles) || !input.roles.every((r) => typeof r === "string" && r.length > 0)) {
+        throw new BadRequest("roles must be a non-empty string[]");
+      }
+      const updated = await usersDb(ctx).update(table, input.username, { roles: input.roles });
+      if (!updated) throw new BadRequest("user not found"); // (or out of the caller's update scope)
+      return updated;
+    }),
 
-  /** Admin: permanently delete a user. ACL-gated by the admin delete policy; a caller
-   * cannot delete their own account. Deactivation (setUserActive) is usually preferable. */
-  deleteUser: mutation(async (ctx, input: { username: string }) => {
-    if (typeof input?.username !== "string" || input.username.length === 0) throw new BadRequest("username is required");
-    if (input.username === ctx.identity?.userId) throw new BadRequest("cannot delete your own account");
-    const deleted = await usersDb(ctx).delete("auth_users", input.username);
-    if (!deleted) throw new BadRequest("user not found");
-    return { ok: true };
-  }),
+    /** Admin: activate / deactivate a user. Deactivating blocks future logins (and
+     * token refresh); existing tokens still expire naturally within the TTL. */
+    setUserActive: mutation(async (ctx, input: { username: string; active: boolean }) => {
+      if (typeof input?.username !== "string" || input.username.length === 0) throw new BadRequest("username is required");
+      if (typeof input?.active !== "boolean") throw new BadRequest("active must be a boolean");
+      if (input.active === false && input.username === ctx.identity?.userId) {
+        throw new BadRequest("cannot deactivate your own account");
+      }
+      const updated = await usersDb(ctx).update(table, input.username, { active: input.active });
+      if (!updated) throw new BadRequest("user not found");
+      return updated;
+    }),
 
-  /** Self-service: change the caller's contact email. The ACL self policy scopes the
-   * write to the caller's own row and permits only the `email` field. Email is unique,
-   * so a clash is reported as a clean 400 rather than surfacing the DB constraint as a 500. */
-  changeEmail: mutation(async (ctx, input: { email: string }) => {
-    const userId = requireUserId(ctx);
-    const { email } = parseEmail(input); // validates + normalizes; 400 on a bad address
-    const taken = await ctx.db.exec("SELECT 1 FROM auth_users WHERE email = ? AND username != ? LIMIT 1", email, userId);
-    if (taken.length > 0) throw new BadRequest("email already in use");
-    const updated = await usersDb(ctx).update("auth_users", userId, { email });
-    if (!updated) throw new Unauthorized("authentication required");
-    return updated;
-  }),
+    /** Admin: permanently delete a user. ACL-gated by the admin delete policy; a caller
+     * cannot delete their own account. Deactivation (setUserActive) is usually preferable. */
+    deleteUser: mutation(async (ctx, input: { username: string }) => {
+      if (typeof input?.username !== "string" || input.username.length === 0) throw new BadRequest("username is required");
+      if (input.username === ctx.identity?.userId) throw new BadRequest("cannot delete your own account");
+      const deleted = await usersDb(ctx).delete(table, input.username);
+      if (!deleted) throw new BadRequest("user not found");
+      return { ok: true };
+    }),
 
-  /** Self-service: change the caller's password. A credential op — it reads the
-   * caller's OWN hash (passwordHash is never ACL-readable) to verify the current
-   * password, then writes the new one. Self-scoped by the verified identity, so it
-   * never touches another row; passwordless (magic-link) users have no current
-   * password and are rejected. */
-  changePassword: mutation(async (ctx, input: { currentPassword: string; newPassword: string }) => {
-    const userId = requireUserId(ctx);
-    const current = typeof input?.currentPassword === "string" ? input.currentPassword : "";
-    const next = typeof input?.newPassword === "string" ? input.newPassword : "";
-    if (next.length < 8) throw new BadRequest("newPassword must be at least 8 characters");
-    const rows = await ctx.db.exec("SELECT passwordHash FROM auth_users WHERE username = ? LIMIT 1", userId);
-    const stored = rows[0] ? String(rows[0].passwordHash ?? "") : "";
-    if (stored === "" || !(await verifyPassword(current, stored))) {
-      throw new Unauthorized("current password is incorrect");
-    }
-    await ctx.db.exec("UPDATE auth_users SET passwordHash = ? WHERE username = ?", await hashPassword(next), userId);
-    return { ok: true };
-  }),
-};
+    /** Self-service: change the caller's contact email. The ACL self policy scopes the
+     * write to the caller's own row and permits only the `email` field. Email is unique,
+     * so a clash is reported as a clean 400 rather than surfacing the DB constraint as a 500. */
+    changeEmail: mutation(async (ctx, input: { email: string }) => {
+      const userId = requireUserId(ctx);
+      const { email } = parseEmail(input); // validates + normalizes; 400 on a bad address
+      const taken = await ctx.db.exec(`SELECT 1 FROM ${table} WHERE email = ? AND username != ? LIMIT 1`, email, userId);
+      if (taken.length > 0) throw new BadRequest("email already in use");
+      const updated = await usersDb(ctx).update(table, userId, { email });
+      if (!updated) throw new Unauthorized("authentication required");
+      return updated;
+    }),
+
+    /** Self-service: change the caller's password. A credential op — it reads the
+     * caller's OWN hash (passwordHash is never ACL-readable) to verify the current
+     * password, then writes the new one. Self-scoped by the verified identity, so it
+     * never touches another row; passwordless (magic-link) users have no current
+     * password and are rejected. */
+    changePassword: mutation(async (ctx, input: { currentPassword: string; newPassword: string }) => {
+      const userId = requireUserId(ctx);
+      const current = typeof input?.currentPassword === "string" ? input.currentPassword : "";
+      const next = typeof input?.newPassword === "string" ? input.newPassword : "";
+      if (next.length < 8) throw new BadRequest("newPassword must be at least 8 characters");
+      const rows = await ctx.db.exec(`SELECT passwordHash FROM ${table} WHERE username = ? LIMIT 1`, userId);
+      const stored = rows[0] ? String(rows[0].passwordHash ?? "") : "";
+      if (stored === "" || !(await verifyPassword(current, stored))) {
+        throw new Unauthorized("current password is incorrect");
+      }
+      await ctx.db.exec(`UPDATE ${table} SET passwordHash = ? WHERE username = ?`, await hashPassword(next), userId);
+      return { ok: true };
+    }),
+  };
+}
+
+/** The default user-management handlers over `auth_users`. Equivalent to
+ * `createUserHandlers()`; spread alongside `authHandlers`. */
+export const userHandlers = createUserHandlers();
 
 // Fields a self-service caller may see of their own row (never passwordHash/roles).
 const SELF_READ_FIELDS = ["username", "email", "active", "createdAt"];
 // Fields an admin may see of any user (never passwordHash).
 const ADMIN_READ_FIELDS = ["username", "roles", "email", "active", "createdAt"];
 
-/** ACL policy fragments that turn on `userHandlers`. Spread `admin` into your admin
- * role and `self` into your authenticated-user role:
+/** ACL policy fragments that turn on the user-management handlers. Spread `admin`
+ * into your admin role and `self` into your authenticated-user role:
  *
  *   role("admin", [...authPolicies().admin, ...yourAdminPolicies])
  *   role("user",  [...authPolicies().self,  ...yourUserPolicies])
  *
  * `admin` grants read (projected) + update of roles/email/active on every user.
  * `self` grants each user read + email-update of ONLY their own row (matched on the
- * `userId` identity claim). passwordHash is in no policy, so it is never exposed. */
-export function authPolicies(opts: { table?: string; identityPath?: string } = {}): { admin: Policy[]; self: Policy[] } {
+ * `userId` identity claim). passwordHash is in no policy, so it is never exposed.
+ *
+ * For a custom table, pass the same `table` you gave `createUserHandlers`, a unique
+ * `prefix` (policy names must be unique across roles when you wire more than one
+ * instance), and `adminReadFields`/`adminWriteFields` to expose/permit extra columns
+ * (e.g. a `tenants` column managed by your own setUserTenants handler). */
+export function authPolicies(opts: {
+  table?: string;
+  identityPath?: string;
+  prefix?: string;
+  adminReadFields?: string[];
+  adminWriteFields?: string[];
+  selfReadFields?: string[];
+  selfWriteFields?: string[];
+} = {}): { admin: Policy[]; self: Policy[] } {
   const table = opts.table ?? "auth_users";
   const idPath = opts.identityPath ?? "userId";
+  const p = opts.prefix ?? "auth";
+  const adminRead = opts.adminReadFields ?? ADMIN_READ_FIELDS;
+  const adminWrite = opts.adminWriteFields ?? ["roles", "email", "active"];
+  const selfRead = opts.selfReadFields ?? SELF_READ_FIELDS;
+  const selfWrite = opts.selfWriteFields ?? ["email"];
   return {
     admin: [
-      policy("auth:admin:read", table, "read", { fields: ADMIN_READ_FIELDS }),
-      policy("auth:admin:update", table, "update", { fields: ["roles", "email", "active"] }),
-      policy("auth:admin:delete", table, "delete", allow()),
+      policy(`${p}:admin:read`, table, "read", { fields: adminRead }),
+      policy(`${p}:admin:update`, table, "update", { fields: adminWrite }),
+      policy(`${p}:admin:delete`, table, "delete", allow()),
     ],
     self: [
-      policy("auth:self:read", table, "read", { where: { username: $identity(idPath) }, fields: SELF_READ_FIELDS }),
-      policy("auth:self:update", table, "update", { where: { username: $identity(idPath) }, fields: ["email"] }),
+      policy(`${p}:self:read`, table, "read", { where: { username: $identity(idPath) }, fields: selfRead }),
+      policy(`${p}:self:update`, table, "update", { where: { username: $identity(idPath) }, fields: selfWrite }),
     ],
   };
 }

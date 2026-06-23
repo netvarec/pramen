@@ -126,4 +126,36 @@ export async function runUserManagement(base: string): Promise<void> {
     (adminData.body.result as Record<string, unknown>[]).every((r) => !("passwordHash" in r)),
     "um: hidden() — /admin/data never returns passwordHash even under SYSTEM scope",
   );
+
+  // --- factory over a CUSTOM table (the multi-tenant accounts / Tah pattern) ---
+  // createUserHandlers({ table: "org_accounts" }) + authPolicies({ table, prefix,
+  // adminReadFields/adminWriteFields incl "tenants" }) manage a table the package
+  // doesn't own, exposing + permitting an extra column.
+  const adminData2 = (body: unknown) =>
+    fetch(`${base}/admin/data`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${admin}` },
+      body: JSON.stringify(body),
+    }).then(async (r) => ({ status: r.status, body: (await r.json()) as any }));
+
+  await adminData2({
+    tenant: "main",
+    table: "org_accounts",
+    op: "create",
+    values: { username: "acct1", passwordHash: "", roles: ["member"], tenants: ["t1"], createdAt: 1 },
+  });
+  const orgList = await call("listOrgAccounts", { limit: 50 }, admin);
+  const acct = (orgList.body.result as Record<string, unknown>[]).find((r) => r.username === "acct1");
+  assert(
+    acct != null && JSON.stringify(acct.tenants) === JSON.stringify(["t1"]),
+    "um(factory): listOrgAccounts over a custom table projects the extra `tenants` column",
+  );
+  assert(acct != null && !("passwordHash" in acct), "um(factory): passwordHash stays hidden on the custom table");
+  const setTenants = await call("setOrgAccountTenants", { username: "acct1", tenants: ["t1", "t2"] }, admin);
+  assert(
+    setTenants.body.ok && JSON.stringify(setTenants.body.result.tenants) === JSON.stringify(["t1", "t2"]),
+    "um(factory): admin can write the extra `tenants` column (authPolicies adminWriteFields)",
+  );
+  const setRoles = await call("setOrgAccountRoles", { username: "acct1", roles: ["member", "lead"] }, admin);
+  assert(setRoles.body.ok, "um(factory): the prefixed setUserRoles works over the custom table");
 }

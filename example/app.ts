@@ -14,6 +14,7 @@ import {
   role,
   $input,
   unique,
+  hidden,
   defaultTo,
   expr,
   primaryKey,
@@ -25,7 +26,15 @@ import {
   type JsonValue,
   type WhereClause,
 } from "@pramen/server";
-import { authSchema, authHandlers, magicLinkSchema, createMagicLinkAuth, userHandlers, authPolicies } from "@pramen/auth";
+import {
+  authSchema,
+  authHandlers,
+  magicLinkSchema,
+  createMagicLinkAuth,
+  userHandlers,
+  createUserHandlers,
+  authPolicies,
+} from "@pramen/auth";
 
 // Reusable write rule: force ownerId to the authenticated caller (a client cannot
 // forge it), even if the request body tries to set a different owner.
@@ -36,6 +45,18 @@ const schema = defineSchema({
   ...authSchema,
   // @pramen/auth's passwordless magic-link table (requestMagicLink/loginWithMagicLink).
   ...magicLinkSchema,
+  // A custom, authSchema-shaped users table with an EXTRA `tenants` column — the
+  // multi-tenant accounts pattern. createUserHandlers({ table: "org_accounts" }) +
+  // authPolicies({ table: "org_accounts", ... }) manage it without a rename.
+  org_accounts: Entity((t) => ({
+    username: t.textId(),
+    passwordHash: hidden(t.text()),
+    roles: t.json(),
+    email: unique(t.text()),
+    active: defaultTo(t.bool(), true),
+    tenants: t.json(), // string[] — the extra column the built-in handlers ignore
+    createdAt: t.int(),
+  })),
   users: Entity(
     (t) => ({
       id: t.textId(), // PK = the JWT subject (e.g. "alice")
@@ -137,6 +158,10 @@ const magicLink = createMagicLinkAuth({
   },
 });
 
+// User management over the CUSTOM org_accounts table (the multi-tenant pattern):
+// the same handlers, pointed at a different table, exposed under prefixed RPC names.
+const orgAccounts = createUserHandlers({ table: "org_accounts" });
+
 const handlers = {
   // @pramen/auth: signup / login / me (issue + use HS256 tokens, no third-party IdP).
   ...authHandlers,
@@ -145,6 +170,14 @@ const handlers = {
   // @pramen/auth: user management — listUsers / setUserRoles / setUserActive (admin),
   // changeEmail / changePassword (self). Gated by authPolicies() in the ACL below.
   ...userHandlers,
+  // The same handlers over the custom org_accounts table, under prefixed names, plus
+  // an app-owned setOrgAccountTenants writing the extra `tenants` column (the Tah
+  // setUserTenants analog) — permitted by authPolicies adminWriteFields below.
+  listOrgAccounts: orgAccounts.listUsers,
+  setOrgAccountRoles: orgAccounts.setUserRoles,
+  setOrgAccountTenants: mutation((ctx, input: { username: string; tenants: string[] }) =>
+    ctx.db.update("org_accounts", input.username, { tenants: input.tenants }),
+  ),
   // Dev-only: lets the e2e suite read the token the demo "emailed". NOT for production.
   __magicInbox: query(async (ctx, input: { email: string }) => ({
     token: await ctx.kv.get(`magiclink:${input.email}`),
@@ -425,6 +458,15 @@ const acl = [
     // @pramen/auth user management: admin reads (projected — no passwordHash) and
     // updates roles/email/active on any user.
     ...authPolicies().admin,
+    // Same, for the custom org_accounts table — distinct `prefix` (unique policy
+    // names) and `tenants` added to the read/write fields so the admin can see and
+    // set it (powering setOrgAccountTenants).
+    ...authPolicies({
+      table: "org_accounts",
+      prefix: "org",
+      adminReadFields: ["username", "roles", "email", "active", "tenants", "createdAt"],
+      adminWriteFields: ["roles", "email", "active", "tenants"],
+    }).admin,
   ]),
   // anonymous: applied to callers with NO verified token. A guest may create a
   // signup (public write) and read one back only by presenting its `code`
