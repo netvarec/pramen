@@ -122,6 +122,13 @@ export const handlers = {
   write transaction control in handler code.
 - **No raw SQL in handlers** — go through `ctx.db`. (`ctx.db.exec` is an escape
   hatch and is *not* ACL-checked.)
+- **Side effects after a write** (send an email, fire a webhook) go through
+  `ctx.tasks.enqueue` — a transactional outbox, not an inline call. See
+  [Deferred Tasks](/docs/tasks).
+
+The context is `{ db, kv, files, env, identity, tasks }` — `ctx.kv` (global config
+cache), `ctx.files` (R2, see [File Storage](/docs/file-storage)), `ctx.env` (bindings
++ secrets), `ctx.identity` (the verified caller), and `ctx.tasks` (deferred work).
 
 ## Input validation
 

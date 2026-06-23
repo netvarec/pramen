@@ -183,10 +183,18 @@ log) for independent single-writer serialization and storage.
   entity's read scope is AND-merged (traversal can't widen access). Cell-`when`
   predicates stay single-table.
 - Handlers: `query()` / `mutation()` from `@pramen/server`. Context is
-  `{ db, kv, files, env, identity }`. Mutations are auto-wrapped in
+  `{ db, kv, files, env, identity, tasks }`. Mutations are auto-wrapped in
   `storage.transaction()` by `runtime/dispatch.ts` (commit on return, rollback on
   throw) — do not write transaction control in handler code. Raw `BEGIN`/`COMMIT`
   via `sql.exec` is rejected by DO SQLite.
+- Deferred side-effects (notification email, webhooks): `ctx.tasks.enqueue({ kind,
+  payload, delayMs? })` writes to the `_pramen_outbox` table in the SAME transaction
+  as the mutation (atomic), and `app.tasks[kind]` runs it after commit, off the write
+  path — at-least-once with retry/backoff, dead-letter, and a `meta.id` idempotency key
+  (`runtime/outbox.ts`). The DO self-drains via an alarm scheduled at the next due time;
+  the D1/Worker store (no alarm) drains via a Cron Trigger (`createPramen().scheduled`)
+  or `POST /admin/tasks/drain` (`x-pramen-store: d1`). Admin: `/admin/tasks/drain`,
+  `/admin/tasks/list` (both stores). Concurrent drains claim disjoint batches.
 - `ctx.env` is the Worker/DO environment (bindings + vars + secrets), loosely typed —
   use it to call external services from handlers (`ctx.env.STRIPE_SECRET_KEY as string`).
 - No raw SQL in handlers — go through `ctx.db` (`find` is compiled by

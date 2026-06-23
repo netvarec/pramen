@@ -1,6 +1,6 @@
 ---
 title: Clients
-order: 9
+order: 10
 summary: Typed RPC and live subscriptions from the browser with @pramen/client and @pramen/react.
 ---
 

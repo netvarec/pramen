@@ -224,6 +224,18 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
       takes a pluggable `sendEmail(ctx, {email, token})` and the example/oblaka wire **Cloudflare Email
       Sending** (the `send_email`/`EMAIL` binding, no API keys). Still future: a first-class `ctx.mail`
       facade (so delivery moves off the DO's single-writer write path), and `ctx.queue`.
+- [x] Deferred tasks (transactional outbox): `ctx.tasks.enqueue({ kind, payload, delayMs? })` writes a
+      `_pramen_outbox` row through the SAME Driver as the mutation (atomic — no dual-write window);
+      `app.tasks[kind]` runs it after commit, off the single-writer write path. This is how a side effect
+      like a notification email is done without blocking the transaction. `drainOutbox` (`runtime/outbox.ts`)
+      is substrate-agnostic: at-least-once with retry/exponential-backoff + dead-letter; a `claim` step
+      (pending→processing via UPDATE…RETURNING) makes concurrent drainers safe and reclaims a crashed
+      drainer's batch after a stale window; handlers get a `meta.id` idempotency key. Two wake-ups: the DO
+      self-drains via an alarm scheduled at the next due `runAt` (a backed-off retry re-arms itself); the
+      D1/Worker store (no alarm) drains via a Cron Trigger (`createPramen().scheduled`) or
+      `POST /admin/tasks/drain`. Admin `/admin/tasks/drain` + `/admin/tasks/list` (both stores); 'done' rows
+      are pruned. Next: declarative `$triggers` (fire-on-field-change) layered on this outbox; a `ctx.mail`
+      facade as the first built-in target.
 - [x] Server library entry: the runtime is the publishable `@pramen/server` package (was `packages/server/src/`).
       `createPramen(app)` returns `{ fetch, PramenDO }`, so a project is just `app.ts` + `oblaka.ts` +
       a 3-line `worker.ts` (`export default { fetch }; export const PramenDO = …`). The DO + Worker are

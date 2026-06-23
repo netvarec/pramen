@@ -464,6 +464,38 @@ so each project sets a unique `PROJECT` in `oblaka.ts` — it names the Worker, 
 DO, and the KV namespace, so projects never collide. Within a project, one KV
 namespace holds both the registry (`tenant:`) and app (`app:`) keys.
 
+### Deferred tasks (ctx.tasks)
+
+To run a side effect after a write — a **notification email**, a webhook — enqueue a
+task instead of calling out inline (which would block the single-writer transaction
+and couldn't be rolled back). `ctx.tasks.enqueue` writes to a transactional outbox **in
+the same transaction** as your data, and `app.tasks` runs it after commit, off the
+write path:
+
+```ts
+const handlers = {
+  invite: mutation(async (ctx, input: { email: string }) => {
+    const row = await ctx.db.insert("invites", { email: input.email });
+    await ctx.tasks.enqueue({ kind: "invite-email", payload: { to: input.email } });
+    return row; // a throw rolls back BOTH the row and the task
+  }),
+};
+const app = {
+  schema, handlers,
+  tasks: {
+    "invite-email": async (ctx, payload, meta) => {
+      const { to } = payload as { to: string };
+      await (ctx.env.EMAIL as SendEmail).send({ to, from: { email: "hi@acme.com" }, subject: "…", text: "…" });
+    },
+  },
+};
+```
+
+At-least-once with retry/backoff + dead-letter; handlers get `meta.id` as an
+idempotency key. The DO store **self-drains via an alarm**; the D1 store drains via a
+Cron Trigger (`createPramen().scheduled`) or `POST /admin/tasks/drain`. See the
+[Deferred Tasks docs](docs/src/content/docs/tasks.md).
+
 ### Client (frontend)
 
 `@pramen/client` is a typed client — `call()` is RPC over HTTP, `subscribe()` is a
