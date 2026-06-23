@@ -282,34 +282,30 @@ export function createMagicLinkAuth(opts: MagicLinkOptions) {
         await ctx.db.exec("UPDATE auth_magic_links SET consumedAt = ? WHERE tokenHash = ?", Date.now(), tokenHash);
 
         const email = String(link.email);
-        // Match on the EMAIL column (not username), so a magic link for an address a
-        // password user later set via changeEmail logs into THAT account — username
-        // (the JWT sub) stays the user's stable identity. New users key username = email.
-        const existing = await ctx.db.exec(
-          "SELECT username, roles, active FROM auth_users WHERE email = ? LIMIT 1",
-          email,
-        );
-        let username: string;
+        // Key on the USERNAME (the immutable identity = the JWT sub), NOT the mutable
+        // `email` column: a magic-link user's username IS their email address, so this
+        // both matches existing users and avoids resolving login by a mutable, unverified
+        // field (which would let a changeEmail squat another address — and would miss
+        // pre-`email`-column users on upgrade, colliding on the username PK).
+        const existing = await ctx.db.exec("SELECT roles, active FROM auth_users WHERE username = ? LIMIT 1", email);
         let roles: string[];
         if (existing.length > 0) {
           if (!isActive(existing[0].active)) throw new Unauthorized("account is deactivated");
-          username = String(existing[0].username);
           roles = JSON.parse(String(existing[0].roles)) as string[];
         } else {
-          username = email;
           roles = defaultRoles;
+          // No email column set: it stays a pure contact attribute (set via changeEmail),
+          // so a new passwordless user can never collide with a password user's contact email.
           await ctx.db.exec(
-            // Empty passwordHash can never verify → the user stays passwordless.
-            "INSERT INTO auth_users (username, passwordHash, roles, email, createdAt) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO auth_users (username, passwordHash, roles, createdAt) VALUES (?, ?, ?, ?)",
             email,
             "",
             JSON.stringify(roles),
-            email,
             Date.now(),
           );
         }
-        const token = await signToken({ sub: username, roles }, secretOf(ctx), { ttlSeconds: sessionTtl });
-        return { token, user: { username, roles } };
+        const token = await signToken({ sub: email, roles }, secretOf(ctx), { ttlSeconds: sessionTtl });
+        return { token, user: { username: email, roles } };
       },
       { input: parseLinkToken },
     ),

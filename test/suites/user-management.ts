@@ -91,6 +91,17 @@ export async function runUserManagement(base: string): Promise<void> {
   const clash = await call("changeEmail", { email: "alice@new.example.com" }, bobTok);
   assert(clash.status === 400, "um: changeEmail rejects an email already in use (400, not 500)");
 
+  // regression: a magic link for an address a password user holds as CONTACT email must
+  // NOT resolve to that account — login keys on the immutable username, not the mutable
+  // email — so this makes a separate passwordless account (no squatting / takeover, no 500).
+  await call("requestMagicLink", { email: "alice@new.example.com" });
+  const mlTok = (await call("__magicInbox", { email: "alice@new.example.com" })).body.result.token;
+  const mlLogin = await call("loginWithMagicLink", { token: mlTok });
+  assert(
+    mlLogin.body.ok && mlLogin.body.result.user.username === "alice@new.example.com",
+    "um: magic-link keys on username — a contact-email match does NOT take over the password account",
+  );
+
   // --- admin: deleteUser (delete by a non-`id` PK) ---------------------------
   const noSelfDelete = await call("deleteUser", { username: "admin" }, admin);
   assert(noSelfDelete.status === 400, "um: an admin cannot delete their own account (400)");
