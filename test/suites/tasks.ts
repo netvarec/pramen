@@ -65,4 +65,17 @@ export async function runTasks(base: string): Promise<void> {
   assert(list.ok === true && Array.isArray(list.result), "tasks: /admin/tasks/list returns rows for admin");
   const anonList = await fetch(`${base}/admin/tasks/list?tenant=main`);
   assert(anonList.status === 403, "tasks: /admin/tasks/list is admin-only (403)");
+
+  // declarative $triggers: createNote / updateNote(title) auto-enqueue a `note-changed`
+  // task via the Db write path — no ctx.tasks.enqueue in the handler.
+  const created = await call("createNote", { title: "trig", body: "b" }, admin);
+  const noteId = created.body.result.id as number;
+  await drain(base, admin);
+  const onCreate = await call("__noteChangedInbox", { id: noteId }, admin);
+  assert(onCreate.body.result?.body === "create:trig", "tasks: a declarative trigger fired on create (no explicit enqueue)");
+
+  await call("updateNote", { id: noteId, title: "trig2" }, admin); // watched column → fires
+  await drain(base, admin);
+  const onUpdate = await call("__noteChangedInbox", { id: noteId }, admin);
+  assert(onUpdate.body.result?.body === "update:trig2", "tasks: the trigger fired on a watched-column (title) update");
 }

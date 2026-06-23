@@ -417,27 +417,21 @@ export class PramenDOBase extends DurableObject<DoEnv> {
     }
   }
 
-  // Introspection: this tenant's applied schema hash + live table/column shape
-  // (admin-gated at the Worker). Powers the CLI's `schema status`.
+  // Introspection: this tenant's applied schema hash + table/column shape (admin-gated
+  // at the Worker). Powers the CLI's `schema status`. Both are read from _pramen_meta
+  // (written by migrate on boot) — NOT a request-time `PRAGMA`/introspection: once the
+  // DO-storage alarm API has run in this object, workerd's SQLite authorizer rejects
+  // PRAGMA (SQLITE_AUTH), so the outbox's alarm would otherwise break this endpoint.
   private async handleSchema(): Promise<Response> {
-    // The applied-schema hash is stored per-partition (migrate keys it
-    // `schema_hash:<partition>` whenever a partition is scoped, which the DO always
-    // does). Read this DO's partition's key.
     const hashKey = `schema_hash:${this.partition}`;
-    const hashRow = (await this.driver.exec(`SELECT value FROM _pramen_meta WHERE key = ?`, [hashKey])) as {
-      value: string;
-    }[];
-    const tableRows = (await this.driver.exec(
-      `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`,
-      [],
-    )) as { name: string }[];
-    const tables: Record<string, string[]> = {};
-    for (const { name } of tableRows) {
-      // Skip pramen's internal bookkeeping tables (_pramen_meta, _pramen_outbox, …).
-      if (name.toLowerCase().startsWith("_pramen") || name.toLowerCase().startsWith("__pramen")) continue;
-      tables[name] = ((await this.driver.exec(`PRAGMA table_info(${name})`, [])) as { name: string }[]).map((r) => r.name);
-    }
-    return Response.json({ ok: true, result: { hash: hashRow[0]?.value ?? null, tables } });
+    const tablesKey = `schema_tables:${this.partition}`;
+    const rows = (await this.driver.exec(`SELECT key, value FROM _pramen_meta WHERE key IN (?, ?)`, [
+      hashKey,
+      tablesKey,
+    ])) as { key: string; value: string }[];
+    const byKey = new Map(rows.map((r) => [r.key, r.value]));
+    const tables = byKey.has(tablesKey) ? (JSON.parse(byKey.get(tablesKey)!) as Record<string, string[]>) : {};
+    return Response.json({ ok: true, result: { hash: byKey.get(hashKey) ?? null, tables } });
   }
 
   // Generic admin data ops (admin-gated at the Worker). Runs through a SYSTEM-mode

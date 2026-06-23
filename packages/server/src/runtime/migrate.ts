@@ -139,9 +139,15 @@ export async function migrate(driver: Driver, schema: SchemaDef, opts: MigrateOp
   // `schema_hash` key for backward compatibility (existing stores + the D1 path).
   const subset: SchemaDef = Object.fromEntries(entries);
   const hashKey = opts.partition === undefined ? "schema_hash" : `schema_hash:${opts.partition}`;
+  const tablesKey = opts.partition === undefined ? "schema_tables" : `schema_tables:${opts.partition}`;
+  const tablesValue = () => JSON.stringify(Object.fromEntries(entries.map(([table, def]) => [table, Object.keys(def.fields)])));
   const current = schemaHash(subset);
-  if ((await readMeta(driver, hashKey)) === current)
+  if ((await readMeta(driver, hashKey)) === current) {
+    // Backfill the table map for stores migrated before this key existed (the schema
+    // is unchanged, so it's exactly what's applied).
+    if ((await readMeta(driver, tablesKey)) == null) await writeMeta(driver, tablesKey, tablesValue());
     return { changed: false, created: [], added: [], rebuilt: [], droppedTables: [], skipped: [] };
+  }
 
   const created: string[] = [];
   const added: string[] = [];
@@ -230,6 +236,10 @@ export async function migrate(driver: Driver, schema: SchemaDef, opts: MigrateOp
   // additive work is idempotent, so re-running is safe.
   if (skipped.length === 0) {
     await writeMeta(driver, hashKey, current);
+    // Persist the applied table→columns so /admin/schema reports it without a raw
+    // PRAGMA at request time — workerd's SQLite authorizer rejects PRAGMA once the
+    // DO-storage alarm API has run in the object. Migrate runs on boot, before any.
+    await writeMeta(driver, tablesKey, tablesValue());
   } else {
     console.warn(
       `pramen: ${skipped.length} destructive migration(s) skipped (set PRAMEN_ALLOW_DESTRUCTIVE=true to apply): ${skipped.join("; ")}`,

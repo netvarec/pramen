@@ -83,5 +83,6 @@ export async function dispatch(
       ? await handler.run(ctx, parsed)
       : await driver.transaction(async () => handler.run(ctx, parsed));
 
-  return { result, kind: handler.kind, touched: [...db.touched], enqueued };
+  // Both explicit ctx.tasks.enqueue and declarative trigger enqueues (in db) count.
+  return { result, kind: handler.kind, touched: [...db.touched], enqueued: enqueued + db.taskEnqueues };
 }

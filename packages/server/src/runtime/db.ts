@@ -40,8 +40,9 @@ import {
   type SqlExpr,
 } from "./read-engine";
 import { BadRequest } from "./errors";
+import { enqueueTask } from "./outbox";
 import type { Dialect, Driver } from "./driver";
-import { partitionOf, type EntityFields, type FieldDef, type RelationDef, type SchemaDef } from "../sdk/schema";
+import { partitionOf, triggersOf, triggerFires, type EntityFields, type FieldDef, type RelationDef, type SchemaDef, type TriggerOp } from "../sdk/schema";
 import { isValidUuid } from "../sdk/uuid";
 import type { Cell, FieldsOf, InferInsert, InferRow, InferUpdate, RelationsOf, RelationsResult, WhereClause } from "../sdk/infer";
 
@@ -154,6 +155,12 @@ function keysetAfter(order: OrderBy[], values: unknown[]): SqlExpr {
 export class Db<S extends SchemaDef = SchemaDef> {
   /** Tables read or written during this Db's lifetime. */
   readonly touched = new Set<string>();
+  /** Tasks enqueued by declarative triggers during this Db's lifetime — the DO adds
+   * this to ctx.tasks enqueues to decide whether to arm its drain alarm. */
+  private taskEnqueueCount = 0;
+  get taskEnqueues(): number {
+    return this.taskEnqueueCount;
+  }
   private readonly dialect: Dialect;
   private readonly acl: AclContext;
 
@@ -403,6 +410,21 @@ export class Db<S extends SchemaDef = SchemaDef> {
     return out;
   }
 
+  /** Fire declarative write-triggers for `op` on `entity`: enqueue a task per matching
+   * trigger into the outbox, in THIS mutation's transaction (atomic with the write).
+   * `row` is the affected row (decoded — new values for create/update, the removed row
+   * for delete); `writtenCols` are the columns the write touched (for update filters). */
+  private async fireTriggers(entity: string, op: TriggerOp, row: Row, writtenCols: string[]): Promise<void> {
+    const triggers = triggersOf(this.schema, entity);
+    if (triggers.length === 0) return;
+    const id = row[this.pkOf(entity)];
+    for (const t of triggers) {
+      if (!triggerFires(t, op, writtenCols)) continue;
+      await enqueueTask(this.driver, Date.now(), { kind: t.task, payload: { entity, op, id, row } });
+      this.taskEnqueueCount++;
+    }
+  }
+
   /** Mint a UUID for every `generated()` uuid column the caller omitted, mutating
    * `vals`. Returns the columns it filled — server-minted, so the insert path treats
    * them like forced `set` values (bypassing the writable-field ACL check). */
@@ -558,7 +580,9 @@ export class Db<S extends SchemaDef = SchemaDef> {
     const params = cols.map((c) => this.encodeCell(jsonCols, c, vals[c]));
     const sql = `INSERT INTO ${this.dialect.id(table)} (${colList}) VALUES (${phs})${this.returningClause("*")}`;
     const rows = await this.driver.exec(sql, params);
-    return this.projectWrite(table, this.decodeRow(table, rows[0])!, cols) as InferRow<FieldsOf<S[T]>>;
+    const persisted = this.decodeRow(table, rows[0])!;
+    await this.fireTriggers(table, "create", persisted, cols);
+    return this.projectWrite(table, persisted, cols) as InferRow<FieldsOf<S[T]>>;
   }
 
   /** Project a mutation's RETURNING row so the echo never reveals more than a read
@@ -622,6 +646,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
     sql += this.scopeClause(scope.where, params);
     sql += this.returningClause("*");
     const updated = this.decodeRow(table, (await this.driver.exec(sql, params))[0]);
+    if (updated) await this.fireTriggers(table, "update", updated, cols);
     return (updated ? this.projectWrite(table, updated, cols) : undefined) as InferRow<FieldsOf<S[T]>> | undefined;
   }
 
@@ -635,7 +660,9 @@ export class Db<S extends SchemaDef = SchemaDef> {
     let sql = `DELETE FROM ${this.dialect.id(table)} WHERE ${this.dialect.id(this.pkOf(table))} = ${this.dialect.placeholder(1)}`;
     sql += this.scopeClause(scope.where, params);
     sql += this.returningClause("*");
-    return (await this.driver.exec(sql, params)).length > 0;
+    const deleted = this.decodeRow(table, (await this.driver.exec(sql, params))[0]);
+    if (deleted) await this.fireTriggers(table, "delete", deleted, []);
+    return deleted != null;
   }
 
   /** Escape hatch — raw SQL, NOT ACL-checked. For system/internal use only. */

@@ -15,6 +15,7 @@ import {
   $input,
   unique,
   hidden,
+  trigger,
   defaultTo,
   expr,
   primaryKey,
@@ -81,6 +82,12 @@ const schema = defineSchema({
       attachment: t.fileRef(),
     }),
     (r) => ({ owner: r.belongsTo("users", "ownerId") }),
+    {
+      // Declarative trigger: when a note is created or its `title` changes, the Db
+      // write path auto-enqueues a `note-changed` task (atomic with the write) — no
+      // ctx.tasks.enqueue in the handler. Runs the side effect off the write path.
+      triggers: [trigger({ task: "note-changed", on: { create: true, update: ["title"] } })],
+    },
   ),
   // Public-write entity for the anonymous-role + capability-read demo: a guest can
   // create a signup and read one back only by presenting its unguessable `code`.
@@ -195,6 +202,8 @@ const handlers = {
   }),
   // Dev-only: read what the `notify` task "delivered" (stashed in KV instead of emailed).
   __notifyInbox: query(async (ctx, input: { to: string }) => ({ body: await ctx.kv.get(`notify:${input.to}`) })),
+  // Dev-only: read what the `note-changed` TRIGGER task recorded for a note.
+  __noteChangedInbox: query(async (ctx, input: { id: number }) => ({ body: await ctx.kv.get(`note-changed:${input.id}`) })),
   listNotes: query((ctx) =>
     ctx.db.find({ from: "notes", orderBy: { column: "id", dir: "desc" } }),
   ),
@@ -599,6 +608,12 @@ const tasks = {
   notify: async (ctx: HandlerContext, payload: unknown) => {
     const { to, title } = payload as { to: string; title: string };
     await ctx.kv.put(`notify:${to}`, `New note: ${title}`, { expirationTtl: 900 });
+  },
+  // Fired by the `notes` declarative trigger (create + title change). The payload is
+  // the framework's `{ entity, op, id, row }`.
+  "note-changed": async (ctx: HandlerContext, payload: unknown) => {
+    const { op, id, row } = payload as { op: string; id: number; row: { title: string } };
+    await ctx.kv.put(`note-changed:${id}`, `${op}:${row.title}`, { expirationTtl: 900 });
   },
 };
 
