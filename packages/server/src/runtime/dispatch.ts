@@ -10,7 +10,7 @@
 
 import { Db } from "./db";
 import { warmup, type AclContext } from "./acl";
-import { BadRequest } from "./errors";
+import { BadRequest, Forbidden } from "./errors";
 import { enqueueTask, type TaskMap } from "./outbox";
 import { createMail } from "./mail";
 import type { Driver } from "./driver";
@@ -18,7 +18,7 @@ import type { Kv } from "./kv";
 import type { Files } from "../sdk/files";
 import type { ResolverDb } from "../sdk/acl";
 import type { SchemaDef } from "../sdk/schema";
-import type { AppTaskMap, HandlerContext, HandlerKind, HandlerMap, Tasks } from "../sdk/handlers";
+import { authorizeHandler, type AppTaskMap, type HandlerContext, type HandlerKind, type HandlerMap, type Tasks } from "../sdk/handlers";
 
 export interface DispatchResult {
   readonly result: unknown;
@@ -59,6 +59,12 @@ export async function dispatch(
 ): Promise<DispatchResult> {
   const handler = handlers[name];
   if (!handler) throw new BadRequest(`unknown handler: ${name}`);
+
+  // Per-handler authorization, enforced before any work (input parse / handler body) —
+  // gates handlers that bypass the row-ACL by touching ctx.kv/ctx.env/ctx.mail directly.
+  if (handler.auth && !authorizeHandler(handler.auth, acl.identity)) {
+    throw new Forbidden(`not authorized to call '${name}'`);
+  }
 
   // Validate/parse the request input at the boundary, if the handler declares it.
   let parsed = input;

@@ -26,8 +26,8 @@ export type {
 
 // --- app + handlers ---
 export { createApp } from "./sdk/app";
-export { query, mutation } from "./sdk/handlers";
-export type { Handler, HandlerContext, HandlerKind, HandlerMap, HandlerOpts, Tasks, TaskHandler, AppTaskMap } from "./sdk/handlers";
+export { query, mutation, authorizeHandler } from "./sdk/handlers";
+export type { Handler, HandlerContext, HandlerKind, HandlerMap, HandlerOpts, HandlerAuth, Tasks, TaskHandler, AppTaskMap } from "./sdk/handlers";
 
 // --- ACL ---
 export { $identity, $input, allow, deny, policy, resolve, role, isAllow, isDeny, isResolver, isIdentityMarker, isInputMarker } from "./sdk/acl";

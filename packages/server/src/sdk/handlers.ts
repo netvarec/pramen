@@ -62,6 +62,26 @@ export type AppTaskMap = Record<string, TaskHandler>;
 
 export type HandlerKind = "query" | "mutation";
 
+/** Authorization required to CALL a handler, enforced BEFORE its body runs. This is
+ * distinct from the row-level ACL (which gates `ctx.db`): use it to gate handlers that
+ * touch `ctx.kv`/`ctx.env`/`ctx.mail`/`ctx.tasks` directly — those bypass the ACL, so an
+ * un-gated such handler is callable by anyone (incl. anonymous) on an open tenant. Forms:
+ *   - `"authenticated"` — any non-anonymous caller (identity != null)
+ *   - `string[]`        — the caller must hold one of these roles
+ *   - `(identity) => boolean` — a custom predicate
+ * Absent ⇒ open (the prior behavior; a `ctx.db` handler is still ACL-gated). */
+export type HandlerAuth = "authenticated" | readonly string[] | ((identity: Identity | null) => boolean);
+
+/** Evaluate a handler's `auth` requirement against the caller's identity. */
+export function authorizeHandler(auth: HandlerAuth, identity: Identity | null): boolean {
+  if (auth === "authenticated") return identity != null;
+  if (typeof auth === "function") return auth(identity);
+  if (!identity) return false; // a role list can never be satisfied by an anonymous caller
+  const roles = Array.isArray(identity.roles) ? identity.roles : [];
+  const held = identity.role ? [identity.role, ...roles] : roles;
+  return auth.some((r) => held.includes(r));
+}
+
 export interface Handler<I = unknown, O = unknown> {
   readonly kind: HandlerKind;
   // Stored handlers are schema-agnostic; createApp() binds the typed surface.
@@ -74,12 +94,16 @@ export interface Handler<I = unknown, O = unknown> {
    * routes the request to the matching partition-DO before dispatch. Absent ⇒ the
    * default partition (routed to the bare tenant key). */
   readonly partition?: string;
+  /** Optional call-authorization, enforced before the handler runs (see HandlerAuth). */
+  readonly auth?: HandlerAuth;
 }
 
 export interface HandlerOpts<I> {
   input?: (raw: unknown) => I;
   /** DO partition this handler runs in. Absent ⇒ the default partition. */
   partition?: string;
+  /** Authorization to CALL this handler (see HandlerAuth) — gate non-`ctx.db` handlers. */
+  auth?: HandlerAuth;
 }
 
 // Standalone (schema-agnostic) handler factories. Prefer createApp(schema) for a
@@ -88,14 +112,14 @@ export function query<I = unknown, O = unknown>(
   run: (ctx: HandlerContext, input: I) => O | Promise<O>,
   opts?: HandlerOpts<I>,
 ): Handler<I, O> {
-  return { kind: "query", run, input: opts?.input, partition: opts?.partition };
+  return { kind: "query", run, input: opts?.input, partition: opts?.partition, auth: opts?.auth };
 }
 
 export function mutation<I = unknown, O = unknown>(
   run: (ctx: HandlerContext, input: I) => O | Promise<O>,
   opts?: HandlerOpts<I>,
 ): Handler<I, O> {
-  return { kind: "mutation", run, input: opts?.input, partition: opts?.partition };
+  return { kind: "mutation", run, input: opts?.input, partition: opts?.partition, auth: opts?.auth };
 }
 
 // Registry of handlers keyed by RPC name. Uses `any` for the per-handler input/
