@@ -493,8 +493,19 @@ const app = {
 
 At-least-once with retry/backoff + dead-letter; handlers get `meta.id` as an
 idempotency key. The DO store **self-drains via an alarm**; the D1 store drains via a
-Cron Trigger (`createPramen().scheduled`) or `POST /admin/tasks/drain`. See the
-[Deferred Tasks docs](docs/src/content/docs/tasks.md).
+Cron Trigger (`createPramen().scheduled`) or `POST /admin/tasks/drain`.
+
+Or declare it once on the entity — a **trigger** auto-enqueues a task on a matching
+write (still in the write's transaction), no `ctx.tasks.enqueue` in the handler:
+
+```ts
+notes: Entity(fields, relations, {
+  triggers: [trigger({ task: "note-changed", on: { create: true, update: ["title"] } })],
+});
+```
+
+A field-filtered update fires only on an actual value change; `hidden()` columns are
+stripped from the payload. See the [Deferred Tasks docs](docs/src/content/docs/tasks.md).
 
 ### Client (frontend)
 

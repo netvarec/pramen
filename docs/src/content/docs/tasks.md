@@ -1,7 +1,7 @@
 ---
 title: Deferred Tasks
 order: 8
-summary: A transactional outbox for side effects after a write — send a notification email, fire a webhook — off the single-writer path, with retry and at-least-once delivery.
+summary: A transactional outbox for side effects after a write — send a notification email, fire a webhook — off the single-writer path, with retry and at-least-once delivery, plus declarative per-entity triggers.
 ---
 
 To run a side effect after a write — send a notification email, call a webhook —
@@ -56,6 +56,47 @@ idempotency key:
   await markProcessed(ctx, meta.id); // meta.attempts is the 1-based try number
 }
 ```
+
+## Declarative triggers
+
+Instead of calling `ctx.tasks.enqueue` by hand in every handler, declare a **trigger**
+on an entity — the `Db` write path then enqueues the task automatically (still in the
+same transaction as the write):
+
+```ts
+notes: Entity(
+  (t) => ({ id: t.id(), title: t.text(), publishedAt: t.int() /* … */ }),
+  (r) => ({ /* relations */ }),
+  {
+    triggers: [
+      trigger({ task: "note-changed", on: { create: true, update: ["title"] } }),
+      trigger({ task: "on-publish", on: { update: ["publishedAt"] } }),
+    ],
+  },
+);
+```
+
+The matching `app.tasks` handler receives the framework payload `{ entity, op, id, row }`:
+
+```ts
+tasks: {
+  "note-changed": async (ctx, payload, meta) => {
+    const { op, id, row } = payload as { op: "create" | "update" | "delete"; id: number; row: { title: string } };
+    // … send the email / webhook
+  },
+}
+```
+
+- **`on`** — `create` / `delete` are booleans; `update` is `true` (any update) or a
+  **field list**. A field-filtered update fires only when one of those columns'
+  values actually **changes** (not on a same-value write).
+- **Only ORM writes fire triggers** — `ctx.db` insert/update/delete. The raw
+  `ctx.db.exec` escape hatch does not, and neither do a task handler's own writes (so a
+  trigger can't cascade into a loop).
+- **`hidden()` columns are stripped** from the payload `row` — a secret never reaches
+  the task handler.
+- A trigger whose `task` has no `app.tasks` handler is rejected at deploy by
+  `createPramen` (fail-fast, not a silent dead-letter).
 
 ## Draining — and the two store paths
 

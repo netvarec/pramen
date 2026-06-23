@@ -234,8 +234,16 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
       self-drains via an alarm scheduled at the next due `runAt` (a backed-off retry re-arms itself); the
       D1/Worker store (no alarm) drains via a Cron Trigger (`createPramen().scheduled`) or
       `POST /admin/tasks/drain`. Admin `/admin/tasks/drain` + `/admin/tasks/list` (both stores); 'done' rows
-      are pruned. Next: declarative `$triggers` (fire-on-field-change) layered on this outbox; a `ctx.mail`
-      facade as the first built-in target.
+      are pruned. Next: a `ctx.mail` facade as the first built-in target.
+- [x] Declarative triggers (layered on the outbox): an entity declares
+      `triggers: [trigger({ task, on: { create?, update?: true | string[], delete? } })]`; the `Db` write
+      path auto-enqueues `task` (payload `{ entity, op, id, row }`) in the write's transaction — no
+      `ctx.tasks.enqueue` in the handler. A field-filtered update fires only on an actual value change (the
+      update path fetches the prior row to compare); `hidden()` columns are stripped from the payload
+      (the hidden guarantee holds here too); only ORM writes fire triggers, and the task-drain context sets
+      `suppressTriggers` so a task's writes can't cascade into a trigger loop; `createPramen` rejects a
+      trigger whose `task` has no `app.tasks` handler. Next: a relation-aware `selection` payload (vs the
+      flat row); value-change for `update: true`.
 - [x] Server library entry: the runtime is the publishable `@pramen/server` package (was `packages/server/src/`).
       `createPramen(app)` returns `{ fetch, PramenDO }`, so a project is just `app.ts` + `oblaka.ts` +
       a 3-line `worker.ts` (`export default { fetch }; export const PramenDO = …`). The DO + Worker are

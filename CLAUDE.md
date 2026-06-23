@@ -195,6 +195,13 @@ log) for independent single-writer serialization and storage.
   the D1/Worker store (no alarm) drains via a Cron Trigger (`createPramen().scheduled`)
   or `POST /admin/tasks/drain` (`x-pramen-store: d1`). Admin: `/admin/tasks/drain`,
   `/admin/tasks/list` (both stores). Concurrent drains claim disjoint batches.
+- Declarative triggers: an entity may declare `triggers: [trigger({ task, on: { create?,
+  update?: true | string[], delete? } })]` (3rd `Entity` arg). On a matching ORM write the
+  `Db` write path auto-enqueues `task` (payload `{ entity, op, id, row }`) in the write's
+  transaction — no `ctx.tasks.enqueue` in the handler. A field-filtered update fires only
+  on an actual value CHANGE; `hidden()` columns are stripped from the payload; raw
+  `ctx.db.exec` and task-handler writes (suppressTriggers) don't fire triggers (no
+  cascade); `createPramen` rejects a trigger whose `task` has no `app.tasks` handler.
 - `ctx.env` is the Worker/DO environment (bindings + vars + secrets), loosely typed —
   use it to call external services from handlers (`ctx.env.STRIPE_SECRET_KEY as string`).
 - No raw SQL in handlers — go through `ctx.db` (`find` is compiled by
