@@ -51,6 +51,11 @@ export default define(({ env }) => {
     compatibility_date: "2026-06-18",
     compatibility_flags: ["nodejs_compat"],
     observability: { enabled: true },
+    // Cron Trigger → createPramen().scheduled, which drains the D1-store task outbox.
+    // REQUIRED for the D1 store with deferred tasks (the DO store self-drains via an
+    // alarm and needs no cron). Every minute here; widen for production as needed. In
+    // local `wrangler dev` this also enables the `/cdn-cgi/handler/scheduled` test hook.
+    triggers: { crons: ["* * * * *"] },
     bindings: {
       // The DO is the database. oblaka emits the binding + the SQLite migration
       // (new_sqlite_classes: ["PramenDO"]) into wrangler.jsonc automatically.

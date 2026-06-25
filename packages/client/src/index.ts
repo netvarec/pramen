@@ -79,6 +79,13 @@ export function createClient<Api = Record<string, never>>(opts: ClientOptions): 
   const WS = opts.WebSocketImpl ?? (globalThis as { WebSocket?: typeof WebSocket }).WebSocket;
   let token = opts.token;
 
+  // D1 read-your-writes: when the backend runs on the D1 store it returns an
+  // `x-pramen-d1-bookmark` header marking the latest write this client has observed.
+  // We stash it and echo it on the next request so a fresh D1 session anchors there and
+  // reads our own writes (even off a lagging replica). The DO path never sets the
+  // header, so `d1Bookmark` stays undefined there and nothing changes.
+  let d1Bookmark: string | undefined;
+
   const subs = new Map<string, Sub>();
   let ws: WebSocket | null = null;
   let counter = 0;
@@ -90,11 +97,15 @@ export function createClient<Api = Record<string, never>>(opts: ClientOptions): 
     const headers: Record<string, string> = { "content-type": "application/json" };
     if (token) headers.authorization = `Bearer ${token}`;
     if (opts.tenant) headers["x-pramen-tenant"] = opts.tenant;
+    if (d1Bookmark) headers["x-pramen-d1-bookmark"] = d1Bookmark;
     const res = await doFetch(`${opts.url}/rpc/${name}`, {
       method: "POST",
       headers,
       body: JSON.stringify(input ?? {}),
     });
+    // Capture the D1 read-your-writes bookmark (D1 store only; absent on the DO path).
+    const bookmark = res.headers.get("x-pramen-d1-bookmark");
+    if (bookmark) d1Bookmark = bookmark;
     const body = (await res.json().catch(() => ({}))) as { ok?: boolean; result?: unknown; error?: string; code?: string };
     if (!res.ok || body.ok === false) {
       throw new PramenError(body.error ?? `request failed (${res.status})`, body.code ?? "error", res.status);

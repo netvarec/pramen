@@ -86,19 +86,52 @@ export class DoSqliteDriver implements Driver {
   }
 }
 
-/** D1 — SQLite over RPC. Async by nature. D1 has no interactive transactions, so
- * `transaction()` runs `fn` without one (a documented limitation: mutations don't
- * roll back on throw the way they do on a DO). Use a DO when you need that. */
+/** How a D1Driver's session is anchored (passed to `db.withSession`):
+ *   - `"first-primary"`       — first query hits the primary (current data), the rest
+ *                               read replicas consistent with the session bookmark. Use
+ *                               for a MUTATION (reads must see current data; writes go
+ *                               to primary anyway).
+ *   - `"first-unconstrained"` — first query may hit the nearest replica. Use for a QUERY.
+ *   - a bookmark string       — anchor at a prior write's bookmark for read-your-writes
+ *                               (the client carries it forward via a header).
+ * A bookmark always wins over a constraint when one is supplied. */
+export type D1SessionStart = "first-primary" | "first-unconstrained" | (string & {});
+
+/** D1 — SQLite over RPC. Async by nature.
+ *
+ * Read replicas (Sessions API): every D1Driver opens ONE `db.withSession(start)` and
+ * runs all `exec` through it. Writes in a session always land on the primary; the
+ * `start` only chooses where the FIRST read may begin. The session maintains a
+ * bookmark (`getBookmark()`) so later reads are sequentially consistent with earlier
+ * writes — read-your-writes when the bookmark is threaded across requests.
+ *
+ * ATOMICITY LIMIT (intentional): D1 has NO interactive transactions — a session can't
+ * read mid-`batch()`, and pramen mutations interleave reads + writes + RETURNING +
+ * trigger-into-outbox inside one `transaction()`. So `transaction(fn) = fn()`: each
+ * statement auto-commits on its own, and a multi-statement mutation does NOT roll back
+ * on throw the way it does on a DO. Single-statement mutations are atomic; anything
+ * multi-statement is not. Use the DO store when you need atomic mutations. */
 export class D1Driver implements Driver {
   readonly dialect = sqliteDialect;
-  constructor(private readonly db: D1Database) {}
+  private readonly session: D1DatabaseSession;
+  constructor(db: D1Database, opts?: { start?: D1SessionStart }) {
+    this.session = db.withSession(opts?.start ?? "first-unconstrained");
+  }
 
   async exec(sql: string, params: unknown[]): Promise<Row[]> {
-    const stmt = params.length ? this.db.prepare(sql).bind(...params) : this.db.prepare(sql);
+    const stmt = params.length ? this.session.prepare(sql).bind(...params) : this.session.prepare(sql);
     const { results } = await stmt.all<Row>();
     return results ?? [];
   }
 
+  /** The session's latest bookmark (null before any query). Threaded back to the client
+   * via the `x-pramen-d1-bookmark` response header so a subsequent request can anchor a
+   * fresh session at it and read its own writes. */
+  getBookmark(): string | null {
+    return this.session.getBookmark();
+  }
+
+  // D1 has no interactive/atomic transactions — see the class doc. Run `fn` as-is.
   transaction<T>(fn: () => Promise<T>): Promise<T> {
     return fn();
   }

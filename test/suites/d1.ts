@@ -11,7 +11,10 @@ export async function runD1(base: string): Promise<void> {
 
   // Like the shared `http` helper, but adds `x-pramen-store: d1` so the Worker runs
   // dispatch over D1 instead of routing to the Durable Object.
-  const post = (name: string, input: unknown, bearer?: string) =>
+  // `bookmark` (when set) is echoed as the read-your-writes session anchor, mirroring
+  // what @pramen/client does transparently. Returns the response bookmark header too,
+  // so the suite can assert the Sessions-API plumbing is threaded end-to-end.
+  const postH = (name: string, input: unknown, bearer?: string, bookmark?: string) =>
     fetch(`${base}/rpc/${name}`, {
       method: "POST",
       headers: {
@@ -19,9 +22,12 @@ export async function runD1(base: string): Promise<void> {
         "x-pramen-tenant": TENANT,
         "x-pramen-store": "d1",
         ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
+        ...(bookmark ? { "x-pramen-d1-bookmark": bookmark } : {}),
       },
       body: JSON.stringify(input ?? {}),
-    }).then(async (r) => ({ status: r.status, body: (await r.json()) as any }));
+    }).then(async (r) => ({ status: r.status, body: (await r.json()) as any, bookmark: r.headers.get("x-pramen-d1-bookmark") }));
+
+  const post = (name: string, input: unknown, bearer?: string) => postH(name, input, bearer).then(({ status, body }) => ({ status, body }));
 
   const T = {
     admin: await token("admin", ["admin"]),
@@ -97,4 +103,38 @@ export async function runD1(base: string): Promise<void> {
   assert(drained.ok === true, "D1: /admin/tasks/drain (x-pramen-store: d1) drains the Worker outbox");
   const inbox = await post("__notifyInbox", { to: "d1@example.com" }, T.admin);
   assert(inbox.body.result?.body === "New note: d1-note", "D1: the deferred task delivered from the D1 outbox");
+
+  // --- read replicas (Sessions API) + read-your-writes via the bookmark round-trip.
+  // Every D1-path response carries `x-pramen-d1-bookmark` (the session's latest
+  // bookmark), so we can assert the session plumbing is wired and thread it forward.
+  // Local D1/miniflare is single-node, so true replica lag isn't observable — we assert
+  // the PLUMBING (session used, bookmark set + honored), not latency. ---
+  const q = await postH("listNotes", {}, T.alice);
+  assert(typeof q.bookmark === "string" && q.bookmark.length > 0, "D1: a query runs via a D1 session and returns an x-pramen-d1-bookmark header");
+
+  // A mutation pins the primary (server picks `first-primary` by handler kind) and
+  // advances the bookmark. Capture it and use it to anchor the follow-up read.
+  const wrote = await postH("createNote", { title: "d1-ryw", body: "ryw-secret" }, T.alice);
+  assert(wrote.body.ok && typeof wrote.body.result.id === "number", "D1: mutation over a D1 session persists (RETURNING)");
+  assert(typeof wrote.bookmark === "string" && wrote.bookmark.length > 0, "D1: a mutation sets the x-pramen-d1-bookmark response header");
+
+  // Read-your-writes: a fresh request that echoes the write's bookmark MUST see the
+  // just-written row (the session is anchored at-or-after that write). This is exactly
+  // what @pramen/client does automatically by capturing + replaying the header.
+  const ryw = await postH("listNotes", {}, T.alice, wrote.bookmark!);
+  assert(
+    Array.isArray(ryw.body.result) && ryw.body.result.some((n: any) => n.id === wrote.body.result.id),
+    "D1: read-your-writes — a read anchored at the write's bookmark sees the new row",
+  );
+  assert(typeof ryw.bookmark === "string" && ryw.bookmark.length > 0, "D1: the bookmarked read also returns a fresh bookmark to carry forward");
+
+  // --- Cron task drain on D1: scheduled() drains the D1 outbox the same as the manual
+  // /admin/tasks/drain route. wrangler dev exposes the Cron entry at
+  // /cdn-cgi/handler/scheduled (enabled because oblaka emits `triggers.crons`). ---
+  const cronNote = await post("createNoteAndNotify", { title: "d1-cron", to: "d1-cron@example.com" }, T.admin);
+  assert(cronNote.body.ok, "D1: enqueue a task into the D1 outbox for the Cron drain");
+  const cron = await fetch(`${base}/cdn-cgi/handler/scheduled`, { method: "POST" });
+  assert(cron.ok, "D1: Cron entry (/cdn-cgi/handler/scheduled → scheduled()) returns ok");
+  const cronInbox = await post("__notifyInbox", { to: "d1-cron@example.com" }, T.admin);
+  assert(cronInbox.body.result?.body === "New note: d1-cron", "D1: the Cron drain ran the task on D1 (delivered from the outbox)");
 }

@@ -13,7 +13,7 @@ import { dispatchQueueBatch, type QueueBatch, type QueueContext } from "./runtim
 import { migrate } from "./runtime/migrate";
 import { compileAcl } from "./runtime/acl";
 import { Db } from "./runtime/db";
-import { D1Driver, type Driver } from "./runtime/driver";
+import { D1Driver, type D1SessionStart, type Driver } from "./runtime/driver";
 import { toResponse } from "./runtime/errors";
 import { Kv } from "./runtime/kv";
 import { listDOs, partitionDoName } from "./runtime/registry";
@@ -47,6 +47,11 @@ export interface Env {
   CORS_ORIGINS?: string;
   /** "true" to apply destructive schema migrations on the D1 path. Off by default. */
   PRAMEN_ALLOW_DESTRUCTIVE?: string;
+  /** Default store for /rpc when no `x-pramen-store` header is sent: `"d1"` runs the
+   * Worker+D1 path by default (requires DB bound); `"do"` (the default) routes to the
+   * per-tenant Durable Object. The header still overrides per-request. /live always
+   * needs the DO regardless of this setting. */
+  PRAMEN_STORE?: string;
   /** Cloudflare Queues producer binding for ctx.queue (declared in oblaka.ts). Optional —
    * ctx.queue discovers any producer binding by name; this just types the common one. */
   JOBS?: QueueProducerBinding;
@@ -55,6 +60,11 @@ export interface Env {
 /** The secret used to sign/verify file tokens — a dedicated FILES_SECRET if set,
  * else AUTH_SECRET (so HS256 setups work out of the box). */
 const filesSecret = (env: Env): string => env.FILES_SECRET || env.AUTH_SECRET;
+
+/** Request/response header carrying the D1 session bookmark for read-your-writes: a
+ * client echoes the last response's value on its next request, anchoring a fresh
+ * session at that write so it reads its own writes (even off a lagging replica). */
+const D1_BOOKMARK_HEADER = "x-pramen-d1-bookmark";
 
 const json = (body: unknown, status = 200) => Response.json(body, { status });
 const forbidden = (what: string) => json({ ok: false, error: `access denied: ${what}`, code: "forbidden" }, 403);
@@ -70,7 +80,10 @@ function corsHeaders(origin: string | null, env: Env): Record<string, string> {
   return {
     "access-control-allow-origin": allow.includes("*") ? "*" : origin,
     "access-control-allow-methods": "GET, POST, OPTIONS",
-    "access-control-allow-headers": "content-type, authorization, x-pramen-tenant, x-pramen-store",
+    "access-control-allow-headers": "content-type, authorization, x-pramen-tenant, x-pramen-store, x-pramen-d1-bookmark",
+    // Expose the D1 read-your-writes bookmark so a browser client can read it off the
+    // response and carry it forward on the next request.
+    "access-control-expose-headers": "x-pramen-d1-bookmark",
     vary: "origin",
   };
 }
@@ -163,14 +176,17 @@ export function makeWorker(app: PramenApp) {
    * /admin/tasks/drain route with `x-pramen-store: d1`, and by `scheduled()` (Cron). */
   const drainD1 = async (env: Env): Promise<unknown> => {
     if (!env.DB) throw new Error("D1 store is not configured");
-    const driver = new D1Driver(env.DB);
+    // The drain reads due tasks then writes their status — pin the primary so it sees
+    // and updates current outbox state (not a lagging replica).
+    const driver = new D1Driver(env.DB, { start: "first-primary" });
     await ensureD1Migrated(driver, env.PRAMEN_ALLOW_DESTRUCTIVE === "true");
     return drainOutbox(driver, bindTasks(app.tasks, d1TaskCtx(driver, env)), Date.now());
   };
 
   const listD1Tasks = async (env: Env, status?: string, limit?: number): Promise<unknown> => {
     if (!env.DB) throw new Error("D1 store is not configured");
-    const driver = new D1Driver(env.DB);
+    // Inspection listing — pin the primary so it reflects current outbox state.
+    const driver = new D1Driver(env.DB, { start: "first-primary" });
     await ensureD1Migrated(driver, env.PRAMEN_ALLOW_DESTRUCTIVE === "true");
     return listTasks(driver, { status, limit });
   };
@@ -349,23 +365,42 @@ export function makeWorker(app: PramenApp) {
     const tenant = req.headers.get("x-pramen-tenant") ?? "main";
     if (!authorizeTenant(identity, tenant)) return withCors(forbidden(`tenant '${tenant}'`), cors);
 
-    // --- Worker + D1 (no DO): the same schema/ACL/read engine over a D1 binding,
-    // selected per-request via `x-pramen-store: d1`. RPC only — live queries need the
-    // DO (single writer + a socket host). This proof uses ONE shared D1 database
-    // across tenants; a real product would add a tenant column or a per-tenant DB.
-    if (req.headers.get("x-pramen-store") === "d1") {
+    // --- Worker + D1 (no DO): the same schema/ACL/read engine over a D1 binding.
+    // Selected per-request via `x-pramen-store: d1`, OR as the app-wide default when
+    // PRAMEN_STORE=d1 (the header still overrides: `x-pramen-store: do` forces the DO).
+    // RPC only — live queries need the DO (single writer + a socket host). This proof
+    // uses ONE shared D1 database across tenants; a real product would add a tenant
+    // column or a per-tenant DB.
+    const storeHeader = req.headers.get("x-pramen-store");
+    const useD1 = storeHeader === "d1" || (storeHeader !== "do" && env.PRAMEN_STORE === "d1");
+    if (useD1) {
       if (!env.DB) return badRequest("D1 store is not configured");
       if (isLive) return badRequest("live queries require the default (DO) store");
       const name = url.pathname.replace(/^\/rpc\//, "");
       let input: unknown;
       if (request.method === "POST") input = await request.json().catch(() => undefined);
-      const driver = new D1Driver(env.DB);
+
+      // Pick where the D1 session may start its first read. A client-supplied bookmark
+      // wins (read-your-writes); otherwise default by handler kind: a mutation pins the
+      // primary so its reads see current data, a query may begin at the nearest replica.
+      const inboundBookmark = req.headers.get(D1_BOOKMARK_HEADER);
+      const kind = app.handlers[name]?.kind;
+      let start: D1SessionStart;
+      if (inboundBookmark) start = inboundBookmark;
+      else if (kind === "mutation") start = "first-primary";
+      else start = "first-unconstrained";
+
+      const driver = new D1Driver(env.DB, { start });
       const files = createFiles({ tenant, secret: filesSecret(env), adapter: new R2Adapter(env.FILES) });
       const envBag = env as unknown as Record<string, unknown>;
       try {
         await ensureD1Migrated(driver, env.PRAMEN_ALLOW_DESTRUCTIVE === "true");
         const { result } = await dispatch(app.handlers, app.schema, driver, new Kv(env.KV), files, envBag, { acl: d1Acl, identity }, name, input);
-        return withCors(json({ ok: true, result }), cors);
+        const res = json({ ok: true, result });
+        // Thread the session's latest bookmark back so the client can read its own writes.
+        const bookmark = driver.getBookmark();
+        if (bookmark) res.headers.set(D1_BOOKMARK_HEADER, bookmark);
+        return withCors(res, cors);
       } catch (err) {
         const { status, body } = toResponse(err);
         return withCors(json(body, status), cors);
