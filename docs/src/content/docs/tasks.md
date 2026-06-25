@@ -184,8 +184,10 @@ the wake-up differs by store:
   const pramen = createPramen(app);
   export default { fetch: pramen.fetch, scheduled: pramen.scheduled };
   ```
-  Add a `[triggers] crons` entry (in `oblaka.ts` / wrangler) to call it. Concurrent
-  drains are safe — each claims a disjoint batch.
+  Add a `triggers.crons` entry (in `oblaka.ts` / wrangler) to call it — the example
+  wires `triggers: { crons: ["* * * * *"] }`. This Cron is **required** for the D1 store
+  with deferred tasks (the DO store needs none). Concurrent drains are safe — each claims
+  a disjoint batch.
 
 You can also drain **on demand** (admin-gated): `POST /admin/tasks/drain`
 (`{ tenant, partition? }`, or `x-pramen-store: d1`).

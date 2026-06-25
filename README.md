@@ -175,6 +175,42 @@ over the socket. Single-writer DOs see every write, so invalidation is exact.
 { "type": "error",  "id": "s1", "error": "..." }
 ```
 
+### D1 store (Worker + D1, no DO)
+
+The same schema / ACL / read engine runs over a **D1 database** instead of a Durable
+Object — selected per-request with the header `x-pramen-store: d1`, or made the app
+default with `PRAMEN_STORE=d1` (the header still overrides per-request; `x-pramen-store:
+do` forces the DO). Set the default and you don't sprinkle the header on every client:
+
+```jsonc
+// wrangler.jsonc / oblaka vars
+"vars": { "PRAMEN_STORE": "d1" }   // requires the DB binding bound
+```
+
+**Read replicas + read-your-writes (D1 Sessions API).** Each request opens one D1
+**session** (`db.withSession(...)`) and runs all SQL through it. The Worker picks where
+the session's first read may start by handler **kind**: a **mutation** anchors
+`first-primary` (its reads see current data; writes go to the primary regardless), a
+**query** anchors `first-unconstrained` (the nearest replica). The response carries the
+session's bookmark as `x-pramen-d1-bookmark`; **`@pramen/client` captures it and replays
+it** on the next request, so a client transparently **reads its own writes** even off a
+lagging replica (a supplied bookmark wins over the kind default). Bare `fetch` users can
+thread the header themselves.
+
+**Cron drain (required for D1 + deferred tasks).** The DO store self-drains via an
+alarm; the D1 store has no alarm, so its task outbox is drained by a **Cron Trigger**
+(`createPramen().scheduled`) — wire `triggers.crons` in `oblaka.ts` (the example does, at
+`* * * * *`) — or manually via `POST /admin/tasks/drain` with `x-pramen-store: d1`.
+
+**Limits (intentional).** Live queries are **DO-only** (they need a single writer + a
+socket host) — `/live` errors on the D1 path. And **D1 has no interactive/atomic
+transactions**: pramen mutations interleave reads + writes + RETURNING + trigger-into-
+outbox inside one `transaction()`, which D1 can't do atomically (no interactive txns;
+`batch()` can't read mid-batch). So on the D1 path each statement auto-commits on its own
+— a single-statement mutation is atomic, but a **multi-statement mutation does NOT roll
+back on throw** the way it does on a DO. Use the **DO store** when you need atomic
+mutations or live queries.
+
 ## Layout
 
 The runtime is the **`@pramen/server`** package; a project is just `app.ts`,

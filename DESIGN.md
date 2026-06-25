@@ -100,9 +100,21 @@ cost of those cross-entity guarantees *for the partitioned entity*. The contract
    prepared statements.
 2. **CPU/memory limits.** DOs relax the Worker CPU cap but aren't a dedicated OS
    thread. Heavy eager-loading needs budgeting.
-3. **D1's role.** D1 is *not* the write path (it's over-RPC, not in-process). It
-   fits read-replicas / cross-tenant analytics. The trap is "use D1 as the DB" —
-   the DO's SQLite is the database.
+3. **D1's role.** D1 is a *first-class alternate store*, not the primary write path
+   (it's over-RPC, not in-process). Selected via `x-pramen-store: d1` or the
+   `PRAMEN_STORE=d1` default; same schema/ACL/read engine over a D1 binding. Its sweet
+   spot is **read-scale**: every request opens a D1 **session** (`db.withSession`) so
+   reads can fan out to **read replicas** while staying sequentially consistent via the
+   session bookmark. A mutation anchors `first-primary` (current data); a query anchors
+   `first-unconstrained` (nearest replica); the response returns `x-pramen-d1-bookmark`
+   and `@pramen/client` replays it for **read-your-writes**. Two hard limits keep the DO
+   primary: **live queries are DO-only** (single writer + socket host), and **D1 has no
+   interactive/atomic transactions** — pramen mutations interleave reads + writes +
+   RETURNING + trigger-into-outbox in one `transaction()`, which D1 can't do atomically
+   (no interactive txns; `batch()` can't read mid-batch), so on D1 `transaction(fn) =
+   fn()`: single statements auto-commit, a **multi-statement mutation does NOT roll back
+   on throw**. The trap is "use D1 as *the* DB" — the DO's SQLite is the write/atomic/live
+   database; D1 is the read-replica/no-DO path.
 
 ## v0 architecture (this skeleton)
 

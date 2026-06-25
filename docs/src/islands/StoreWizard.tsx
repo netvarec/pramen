@@ -38,10 +38,11 @@ const STORES: Record<StoreId, Store> = {
     tagline: "The same engine over D1 — no Durable Object. A shared relational store.",
     best: [
       "One shared dataset you query across everything (reports, joins, search)",
+      "Read-scale: reads fan out to D1 read replicas (Sessions API), read-your-writes",
       "You don't need live queries",
       "Cloudflare-native — no database to operate",
     ],
-    setup: "Send the header x-pramen-store: d1. Same schema, ACL and handlers; RPC only.",
+    setup: "Send x-pramen-store: d1 (or set PRAMEN_STORE=d1 as the default). Same schema, ACL and handlers; RPC only. @pramen/client carries the read-your-writes bookmark for you.",
     watch: [
       "No live queries (those need a Durable Object)",
       "No interactive transactions / rollback-on-throw (D1 limitation)",
