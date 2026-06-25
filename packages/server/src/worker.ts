@@ -66,6 +66,18 @@ const filesSecret = (env: Env): string => env.FILES_SECRET || env.AUTH_SECRET;
  * session at that write so it reads its own writes (even off a lagging replica). */
 const D1_BOOKMARK_HEADER = "x-pramen-d1-bookmark";
 
+/** Decide whether an /rpc request runs on the D1 store. **Live queries ALWAYS use the
+ * DO** (they need a single writer + a socket host), regardless of header or default —
+ * so enabling `PRAMEN_STORE=d1` never silently breaks `/live`. Otherwise an explicit
+ * `x-pramen-store` header wins (`d1`/`do`), then the `PRAMEN_STORE` default. Pure +
+ * exported for unit testing. */
+export function useD1Store(opts: { storeHeader: string | null; isLive: boolean; defaultStore: string | undefined }): boolean {
+  if (opts.isLive) return false; // live is DO-only — never the D1 path
+  if (opts.storeHeader === "d1") return true;
+  if (opts.storeHeader === "do") return false;
+  return opts.defaultStore === "d1";
+}
+
 const json = (body: unknown, status = 200) => Response.json(body, { status });
 const forbidden = (what: string) => json({ ok: false, error: `access denied: ${what}`, code: "forbidden" }, 403);
 const badRequest = (msg: string) => json({ ok: false, error: msg, code: "bad_request" }, 400);
@@ -372,10 +384,10 @@ export function makeWorker(app: PramenApp) {
     // uses ONE shared D1 database across tenants; a real product would add a tenant
     // column or a per-tenant DB.
     const storeHeader = req.headers.get("x-pramen-store");
-    const useD1 = storeHeader === "d1" || (storeHeader !== "do" && env.PRAMEN_STORE === "d1");
+    const useD1 = useD1Store({ storeHeader, isLive, defaultStore: env.PRAMEN_STORE });
     if (useD1) {
       if (!env.DB) return badRequest("D1 store is not configured");
-      if (isLive) return badRequest("live queries require the default (DO) store");
+      // (isLive is excluded by useD1Store — live always routes to the DO below.)
       const name = url.pathname.replace(/^\/rpc\//, "");
       let input: unknown;
       if (request.method === "POST") input = await request.json().catch(() => undefined);
