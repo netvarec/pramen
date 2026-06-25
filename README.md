@@ -187,6 +187,12 @@ do` forces the DO). Set the default and you don't sprinkle the header on every c
 "vars": { "PRAMEN_STORE": "d1" }   // requires the DB binding bound
 ```
 
+> **The header is the reliable way to pin the store.** `PRAMEN_STORE` is convenient, but
+> some adapters' `cloudflare:workers` env proxies (e.g. Astro's) don't surface a `vars`
+> default in-process, so the Worker may not see it. `x-pramen-store: d1` per request is
+> always honored. If a request routes to the DO with no DO bound, you now get a clear
+> `400` ("no Durable Object (PRAMEN) is bound — pin the D1 store…") instead of a crash.
+
 **Read replicas + read-your-writes (D1 Sessions API).** Each request opens one D1
 **session** (`db.withSession(...)`) and runs all SQL through it. The Worker picks where
 the session's first read may start by handler **kind**: a **mutation** anchors
@@ -593,6 +599,13 @@ const pramen = createClient<typeof app.handlers>({ url, token, tenant: "acme" })
 const note = await pramen.call("createNote", { title: "hi", body: "..." }); // typed
 const stop = pramen.subscribe("listNotes", undefined, { onData: (notes) => render(notes) });
 ```
+
+> **Fronting pramen with a meta-framework?** RPC handlers are matched at the exact path
+> `POST /rpc/<handler>`. A framework that enforces trailing slashes (e.g. Astro's
+> `trailingSlash: 'always'`) will **308-redirect** `/rpc/x` → `/rpc/x/` — and browsers
+> **drop the POST body on the redirect**, so the call silently arrives empty. Set
+> `trailingSlash: 'ignore'` (or `'never'`) for the API routes, or call the canonical
+> path your adapter expects.
 
 `@pramen/react` adds hooks that re-render on every server push:
 

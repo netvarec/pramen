@@ -113,6 +113,15 @@ function withCors(res: Response, cors: Record<string, string>): Response {
  * `tenant` for the default partition (so `idFromName(tenant)` is byte-for-byte unchanged
  * — backward-compat) and `${tenant}:${partition}` for any other partition. */
 function partitionStubFor(env: Env, tenant: string, partition: string = DEFAULT_PARTITION): DurableObjectStub {
+  // Fail with a clear message rather than a cryptic `Cannot read 'get' of undefined`
+  // when the Durable Object isn't bound (e.g. a D1-only deployment that fell through to
+  // the DO path). The Worker RPC surface depends on this binding existing.
+  if (!env.PRAMEN) {
+    throw new Error(
+      "pramen: no Durable Object bound (PRAMEN). Pin the D1 store per request with the " +
+        "'x-pramen-store: d1' header (or set PRAMEN_STORE=d1), or bind the PramenDO.",
+    );
+  }
   return env.PRAMEN.get(env.PRAMEN.idFromName(partitionDoName(tenant, partition)));
 }
 
@@ -435,6 +444,21 @@ export function makeWorker(app: PramenApp) {
     if (identity) headers.set("x-pramen-identity", JSON.stringify(identity as Identity));
     else headers.delete("x-pramen-identity");
     headers.set("x-pramen-partition", partition);
+
+    // Routed to the DO but no DO is bound — return a clear, actionable error instead of
+    // crashing the whole RPC surface. (A D1-only deployment should pin the D1 store with
+    // the `x-pramen-store: d1` header; the `PRAMEN_STORE` env default can be dropped by
+    // some adapters' env proxies, so the header is the reliable way to pin it.)
+    if (!env.PRAMEN) {
+      return withCors(
+        badRequest(
+          isLive
+            ? "live queries require a Durable Object, but no PRAMEN binding is configured"
+            : "no Durable Object (PRAMEN) is bound — pin the D1 store with the 'x-pramen-store: d1' header (or bind the DO)",
+        ),
+        cors,
+      );
+    }
 
     const stub = partitionStubFor(env, tenant, partition);
     // WebSocket upgrades (101) must be returned untouched; only add CORS to HTTP.
