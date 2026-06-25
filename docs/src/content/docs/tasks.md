@@ -1,7 +1,7 @@
 ---
 title: Deferred Tasks
 order: 8
-summary: A transactional outbox for side effects after a write — send a notification email (ctx.mail), fire a webhook — off the single-writer path, with retry and at-least-once delivery, plus declarative per-entity triggers.
+summary: A transactional outbox for side effects after a write — send a notification email (ctx.mail), fire a webhook — off the single-writer path, with retry and at-least-once delivery, plus declarative per-entity triggers and native Cloudflare Queues (ctx.queue).
 ---
 
 To run a side effect after a write — send a notification email, call a webhook —
@@ -62,6 +62,56 @@ The transport is chosen from the environment:
 Prefer enqueuing the send as a **task** (above) so it runs off the single-writer write
 path with retry — `ctx.tasks` + `ctx.mail` together are the "send a notification email
 on a write" pattern.
+
+## Native queues (`ctx.queue`)
+
+`ctx.tasks` is a **transactional outbox** — atomic with your write, drained in-process.
+For **decoupled, high-throughput fan-out** there's `ctx.queue`, a facade over native
+**Cloudflare Queues**: platform-level batching, retry, and dead-letter, with a consumer
+that can even run in a *different* Worker.
+
+```ts
+// Produce: address the queue by its BINDING name (declared in oblaka.ts).
+await ctx.queue.send("JOBS", { kind: "resize", id });
+await ctx.queue.sendBatch("JOBS", [{ body: a }, { body: b, delaySeconds: 30 }]);
+```
+
+Declare the queue in `oblaka.ts` and make this Worker both producer and consumer:
+
+```ts
+import { Queue } from "oblaka-iac";
+// bindings: { … }
+JOBS: new Queue({ name: "pramen-jobs", binding: "both",
+  consumer: { maxBatchSize: 10, maxRetries: 3, deadLetterQueue: "pramen-dlq" } }),
+```
+
+Consume with **`app.queues`** (keyed by the queue **name**), dispatched by
+`createPramen(app).queue` — wire it into your Worker entry next to `fetch`:
+
+```ts
+const app = { schema, handlers, /* … */, queues: {
+  "pramen-jobs": async (ctx, message) => {
+    const { tenant, id } = message.body as { tenant: string; id: string };
+    // A consumer is Worker-level — no ctx.db. Reach a tenant's DO via callPrivileged
+    // (the message carries the tenant), and/or ctx.mail / ctx.queue / ctx.kv.
+    await ctx.callPrivileged({ name: "markDone", input: { id }, tenant });
+  },
+}};
+
+const pramen = createPramen(app);
+export default { fetch: pramen.fetch, scheduled: pramen.scheduled, queue: pramen.queue };
+```
+
+A handler **resolves → the message is ACKed**; it **throws → the message is RETRIED**
+(per message, up to the queue's `maxRetries`, then dead-lettered). Queue names are
+env-prefixed remotely (`production-pramen-jobs`) but bare locally — `app.queues` is
+matched leniently (exact, then suffix, then the single-queue fallback).
+
+**`ctx.queue` vs `ctx.tasks`:** use `ctx.tasks` when the side-effect must commit *with*
+the data (it's in the transaction, and a rollback un-enqueues it). Use `ctx.queue` for
+volume / decoupling / a cross-Worker consumer — a send is **not** transactional (the
+message goes out regardless of whether the mutation later rolls back). Sending to a
+queue that isn't declared **fails closed** (throws) rather than dropping the message.
 
 ## Delivery: at-least-once + retry
 

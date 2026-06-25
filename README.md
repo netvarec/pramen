@@ -523,6 +523,24 @@ notes: Entity(fields, relations, {
 A field-filtered update fires only on an actual value change; `hidden()` columns are
 stripped from the payload. See the [Deferred Tasks docs](docs/src/content/docs/tasks.md).
 
+**Native queues (`ctx.queue`).** For decoupled, high-throughput fan-out (rather than an
+in-transaction outbox) there's `ctx.queue` — a facade over **Cloudflare Queues**:
+
+```ts
+await ctx.queue.send("JOBS", { tenant, id });          // produce (by binding name)
+const app = { /* … */, queues: {                        // consume (by queue name)
+  "pramen-jobs": async (ctx, message) => {
+    const { tenant, id } = message.body as { tenant: string; id: string };
+    await ctx.callPrivileged({ name: "markDone", input: { id }, tenant }); // no ctx.db in a consumer
+  },
+}};
+export default { fetch: pramen.fetch, scheduled: pramen.scheduled, queue: pramen.queue };
+```
+
+Declare `new Queue({ name, binding: "both", consumer })` in `oblaka.ts`. A handler resolves
+→ ACK, throws → RETRY (platform retry/DLQ). Unlike `ctx.tasks`, a send is **not**
+transactional with the write; sending to an undeclared queue **fails closed**.
+
 ### Client (frontend)
 
 `@pramen/client` is a typed client — `call()` is RPC over HTTP, `subscribe()` is a

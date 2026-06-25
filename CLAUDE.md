@@ -189,7 +189,7 @@ log) for independent single-writer serialization and storage.
   entity's read scope is AND-merged (traversal can't widen access). Cell-`when`
   predicates stay single-table.
 - Handlers: `query()` / `mutation()` from `@pramen/server`. Context is
-  `{ db, kv, files, env, identity, tasks, mail }`. Mutations are auto-wrapped in
+  `{ db, kv, files, env, identity, tasks, mail, queue }`. Mutations are auto-wrapped in
   `storage.transaction()` by `runtime/dispatch.ts` (commit on return, rollback on
   throw) — do not write transaction control in handler code. Raw `BEGIN`/`COMMIT`
   via `sql.exec` is rejected by DO SQLite.
@@ -208,6 +208,20 @@ log) for independent single-writer serialization and storage.
   on an actual value CHANGE; `hidden()` columns are stripped from the payload; raw
   `ctx.db.exec` and task-handler writes (suppressTriggers) don't fire triggers (no
   cascade); `createPramen` rejects a trigger whose `task` has no `app.tasks` handler.
+- Native queues: `ctx.queue.send(binding, body, { delaySeconds?, contentType? })` /
+  `sendBatch(binding, msgs, opts?)` (`runtime/queue.ts`) — a facade + adapter seam (like
+  `ctx.mail`) over **Cloudflare Queues**, distinct from `ctx.tasks` (NOT transactional with
+  the write, but higher-throughput with platform batching/retry/DLQ and a cross-Worker
+  consumer). Producer addressed by BINDING name; `createQueue` discovers any env binding
+  with both `send`+`sendBatch`; an undeclared queue FAILS CLOSED (throws). Declare a
+  `new Queue({ name, binding: "both", consumer })` in `oblaka.ts`. Consume via `app.queues`
+  (keyed by queue NAME — env-prefixed remotely, matched leniently by `routeQueue`:
+  exact→suffix→single-handler), dispatched by `createPramen().queue` (the CF
+  `queue(batch,env)` entry; wire it next to `fetch`/`scheduled`). A consumer is
+  Worker-level (no `ctx.db`): its ctx is `{ env, kv, mail, queue, callPrivileged }` — reach a
+  tenant DO via `callPrivileged` (the message carries the tenant). Per-message ack on
+  resolve / retry on throw; an unrouted batch is retried whole, never silently acked
+  (`runtime/queue-consumer.ts`).
 - Email: `ctx.mail.send({ to, subject, text/html, from?, replyTo? })` (`runtime/mail.ts`)
   — a facade + adapter seam (like `ctx.files`). Transport from env: `EMAIL` binding +
   `MAIL_FROM` → Cloudflare Email Sending (no API keys); `MAIL_CAPTURE=true` → capture to

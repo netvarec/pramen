@@ -21,6 +21,7 @@ backend would otherwise build from scratch:
 | ACL resolver, schema, ORM, handlers | TS SDK (`packages/server/src/sdk/`) | ✅ |
 | Global config/cache | Workers KV | ✅ |
 | File / object storage | R2 + `ctx.files` (signed urls) | ✅ wired |
+| Deferred work / fan-out | transactional outbox (`ctx.tasks`) + Queues (`ctx.queue`) | ✅ wired |
 
 ## What the platform gives us for free
 
@@ -218,12 +219,10 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
       currently re-PUTtable within the token's TTL — random key + short TTL + attachment/nosniff
       bound the risk, but a KV-backed nonce would close it); delete-on-row-delete + orphan sweeper
       (wants a durable job queue); content-type allow-lists on `fileRef`; per-tenant buckets.
-- [~] More Cloudflare service seams (same shape as `ctx.files`): email + Queues as `ctx.queue`, etc. —
+- [~] More Cloudflare service seams (same shape as `ctx.files`): email + Queues, etc. —
       a small pluggable adapter + a `ctx.<service>` facade + Worker glue. Lean on platform primitives
-      rather than reimplementing them. Email is partly here: `@pramen/auth`'s `createMagicLinkAuth`
-      takes a pluggable `sendEmail(ctx, {email, token})` and the example/oblaka wire **Cloudflare Email
-      Sending** (the `send_email`/`EMAIL` binding, no API keys). Still future: a first-class `ctx.mail`
-      facade (so delivery moves off the DO's single-writer write path), and `ctx.queue`.
+      rather than reimplementing them. Email (`ctx.mail`) and native queues (`ctx.queue`) are now wired
+      (below); still future: more targets (e.g. Hyperdrive/Postgres `Driver`, Vectorize).
 - [x] Deferred tasks (transactional outbox): `ctx.tasks.enqueue({ kind, payload, delayMs? })` writes a
       `_pramen_outbox` row through the SAME Driver as the mutation (atomic — no dual-write window);
       `app.tasks[kind]` runs it after commit, off the single-writer write path. This is how a side effect
@@ -241,7 +240,17 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
       (capture, gated on an explicit `MAIL_CAPTURE=true` dev opt-in), else `UnconfiguredMailAdapter` which FAILS
       CLOSED (a send throws) so a misconfigured prod can't silently stash a security email in KV. Built in
       `dispatch` from env (+kv) and on the task-drain contexts, so a task handler can `ctx.mail.send(...)` — the
-      canonical "notification email on a write" path (with `ctx.tasks`). Next: a `ctx.queue` seam; more targets.
+      canonical "notification email on a write" path (with `ctx.tasks`).
+- [x] `ctx.queue` (native Cloudflare Queues, same shape as `ctx.mail`): `ctx.queue.send(binding, body, opts?)` /
+      `sendBatch(...)` over a `QueueAdapter` seam (`runtime/queue.ts`) — `CloudflareQueueAdapter` resolves the
+      producer binding by name (`createQueue` discovers any env binding with both `send`+`sendBatch`), `MemoryQueueAdapter`
+      for tests; an undeclared queue FAILS CLOSED (throws), no silent drop. Distinct from `ctx.tasks`: NOT transactional
+      with the write, but higher-throughput with platform batching/retry/DLQ and a consumer that can live in another
+      Worker. Consumed via `app.queues` (keyed by queue name; `routeQueue` matches exact→suffix→single to absorb the
+      remote env-prefix), dispatched by `createPramen().queue` — the CF `queue(batch,env)` entry. A consumer is
+      Worker-level (no `ctx.db`): ctx is `{ env, kv, mail, queue, callPrivileged }`, reaching a tenant DO via
+      `callPrivileged`. Per-message ACK on resolve / RETRY on throw; an unrouted batch is retried whole, never silently
+      acked (`runtime/queue-consumer.ts`). Proven end-to-end under miniflare by `test/suites/queue.ts`. Next: more targets.
 - [x] Declarative triggers (layered on the outbox): an entity declares
       `triggers: [trigger({ task, on: { create?, update?: true | string[], delete? } })]`; the `Db` write
       path auto-enqueues `task` (payload `{ entity, op, id, row }`) in the write's transaction — no
