@@ -66,10 +66,10 @@ describe("Dialect seam", () => {
     expect(params).toEqual(["alice", 5]);
   });
 
-  test("sqliteDialect emits bare identifiers and ? placeholders", () => {
+  test("sqliteDialect emits double-quoted identifiers (reserved-word safe) and ? placeholders", () => {
     const { sql } = compileSelect({ from: "notes", where: eq("ownerId", "alice"), limit: 5 }, sqliteDialect);
-    expect(sql).toContain("FROM notes");
-    expect(sql).toContain("ownerId = ?");
+    expect(sql).toContain(`FROM "notes"`);
+    expect(sql).toContain(`"ownerId" = ?`);
     expect(sql).toContain("LIMIT ?");
   });
 });

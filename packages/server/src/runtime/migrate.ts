@@ -20,7 +20,7 @@
 
 import { addColumnSql, createTableSql, indexStatements, sqlType } from "./ddl";
 import { digest } from "./digest";
-import type { Driver } from "./driver";
+import { quoteIdent, type Driver } from "./driver";
 import { entitiesInPartition, validateSchema } from "../sdk/schema";
 import type { EntityFields, FieldDef, SchemaDef } from "../sdk/schema";
 
@@ -66,11 +66,6 @@ function isInternalTable(name: string): boolean {
   );
 }
 
-function ident(name: string): string {
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) throw new Error(`invalid identifier: ${name}`);
-  return name;
-}
-
 export function schemaHash(schema: SchemaDef): string {
   const canon: Record<string, unknown> = {};
   for (const [table, def] of Object.entries(schema)) canon[table] = def.fields;
@@ -80,7 +75,7 @@ export function schemaHash(schema: SchemaDef): string {
 /** Live columns of a table -> their declared SQL type (uppercased). Empty if the
  * table doesn't exist. */
 async function tableColumns(driver: Driver, table: string): Promise<Map<string, string>> {
-  const rows = (await driver.exec(`PRAGMA table_info(${ident(table)})`, [])) as { name: string; type: string }[];
+  const rows = (await driver.exec(`PRAGMA table_info(${quoteIdent(table)})`, [])) as { name: string; type: string }[];
   return new Map(rows.map((r) => [r.name, (r.type || "").toUpperCase()]));
 }
 
@@ -98,7 +93,7 @@ async function writeMeta(driver: Driver, key: string, value: string): Promise<vo
  * type change; brand-new columns left NULL), drop the old table, rename the temp. */
 async function rebuildTable(driver: Driver, table: string, def: { fields: EntityFields }, live: Map<string, string>): Promise<void> {
   const tmp = `__pramen_rebuild_${table}`;
-  await driver.exec(`DROP TABLE IF EXISTS ${ident(tmp)}`, []);
+  await driver.exec(`DROP TABLE IF EXISTS ${quoteIdent(tmp)}`, []);
   await driver.exec(createTableSql(tmp, def), []);
 
   const destCols: string[] = [];
@@ -108,14 +103,14 @@ async function rebuildTable(driver: Driver, table: string, def: { fields: Entity
     const src = f.renamedFrom && live.has(f.renamedFrom) ? f.renamedFrom : live.has(name) ? name : undefined;
     if (!src) continue; // brand-new column with no source -> leave NULL
     const target = sqlType(f);
-    destCols.push(ident(name));
-    srcExprs.push(live.get(src) === target ? ident(src) : `CAST(${ident(src)} AS ${target})`);
+    destCols.push(quoteIdent(name));
+    srcExprs.push(live.get(src) === target ? quoteIdent(src) : `CAST(${quoteIdent(src)} AS ${target})`);
   }
   if (destCols.length > 0) {
-    await driver.exec(`INSERT INTO ${ident(tmp)} (${destCols.join(", ")}) SELECT ${srcExprs.join(", ")} FROM ${ident(table)}`, []);
+    await driver.exec(`INSERT INTO ${quoteIdent(tmp)} (${destCols.join(", ")}) SELECT ${srcExprs.join(", ")} FROM ${quoteIdent(table)}`, []);
   }
-  await driver.exec(`DROP TABLE ${ident(table)}`, []);
-  await driver.exec(`ALTER TABLE ${ident(tmp)} RENAME TO ${ident(table)}`, []);
+  await driver.exec(`DROP TABLE ${quoteIdent(table)}`, []);
+  await driver.exec(`ALTER TABLE ${quoteIdent(tmp)} RENAME TO ${quoteIdent(table)}`, []);
 }
 
 export async function migrate(driver: Driver, schema: SchemaDef, opts: MigrateOptions = {}): Promise<MigrationReport> {
@@ -174,7 +169,7 @@ export async function migrate(driver: Driver, schema: SchemaDef, opts: MigrateOp
         needsAdditiveRebuild = true;
         continue;
       }
-      await driver.exec(`ALTER TABLE ${ident(table)} ADD COLUMN ${addColumnSql(name, field as FieldDef)}`, []);
+      await driver.exec(`ALTER TABLE ${quoteIdent(table)} ADD COLUMN ${addColumnSql(name, field as FieldDef)}`, []);
       added.push(`${table}.${name}`);
     }
 
@@ -224,7 +219,7 @@ export async function migrate(driver: Driver, schema: SchemaDef, opts: MigrateOp
   for (const { name } of liveTables) {
     if (isInternalTable(name) || inScope.has(name) || otherPartitionTables.has(name)) continue;
     if (allowDestructive) {
-      await driver.exec(`DROP TABLE ${ident(name)}`, []);
+      await driver.exec(`DROP TABLE ${quoteIdent(name)}`, []);
       droppedTables.push(name);
     } else {
       skipped.push(`drop table ${name}`);

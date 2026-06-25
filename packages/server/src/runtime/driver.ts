@@ -33,10 +33,20 @@ function checkIdent(name: string): string {
   return name;
 }
 
-/** SQLite (DO SQLite and D1 both speak this). Bare identifiers, `?` placeholders,
- * booleans stored as INTEGER 0/1, RETURNING supported. */
+/** Render an identifier as a standard double-quoted name (`"order"`), guarding its
+ * shape first. SQLite (DO SQLite + D1) and Postgres all accept double-quoted
+ * identifiers, so a column/table named after a reserved word (`order`, `group`, …)
+ * is safe and case is preserved. The single source of truth for both dialects and
+ * the DDL generator — keep every emitted identifier going through this. */
+export function quoteIdent(name: string): string {
+  return `"${checkIdent(name)}"`;
+}
+
+/** SQLite (DO SQLite and D1 both speak this). Double-quoted identifiers (so reserved
+ * words like `order` work), `?` placeholders, booleans stored as INTEGER 0/1,
+ * RETURNING supported. */
 export const sqliteDialect: Dialect = {
-  id: checkIdent,
+  id: quoteIdent,
   placeholder: () => "?",
   returning: true,
   encode: (v) => (typeof v === "boolean" ? (v ? 1 : 0) : v),
@@ -46,7 +56,7 @@ export const sqliteDialect: Dialect = {
  * `ownerId` doesn't fold to `ownerid`), `$n` placeholders, native booleans,
  * RETURNING supported. */
 export const postgresDialect: Dialect = {
-  id: (name) => `"${checkIdent(name)}"`,
+  id: quoteIdent,
   placeholder: (n) => `$${n}`,
   returning: true,
   encode: (v) => v, // the pg driver handles type encoding

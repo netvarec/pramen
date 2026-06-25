@@ -18,8 +18,8 @@ describe("pramen cli", () => {
 
   test("schema sql prints CREATE TABLE", () => {
     const { out } = run("schema", "sql", "--app", "example/app.ts");
-    expect(out).toContain("CREATE TABLE IF NOT EXISTS notes");
-    expect(out).toContain("CREATE TABLE IF NOT EXISTS users");
+    expect(out).toContain(`CREATE TABLE IF NOT EXISTS "notes"`);
+    expect(out).toContain(`CREATE TABLE IF NOT EXISTS "users"`);
   });
 
   test("schema hash is stable hex", () => {

@@ -3,6 +3,7 @@
 // these are applied.
 
 import type { DefaultValue, EntityFields, FieldDef } from "../sdk/schema";
+import { quoteIdent } from "./driver";
 
 // SQLite has no boolean type; store as INTEGER 0/1. json + fileRef + uuid are
 // stored as TEXT. Exported for the migrator, which compares declared column types
@@ -35,7 +36,7 @@ function defaultSql(f: FieldDef): string {
 }
 
 function columnSql(name: string, f: FieldDef): string {
-  let s = `${name} ${sqlType(f)}`;
+  let s = `${quoteIdent(name)} ${sqlType(f)}`;
   if (f.primaryKey) s += " PRIMARY KEY";
   if (f.autoIncrement) s += " AUTOINCREMENT";
   if (f.notNull && !f.primaryKey) s += " NOT NULL";
@@ -45,14 +46,14 @@ function columnSql(name: string, f: FieldDef): string {
 
 export function createTableSql(table: string, def: { fields: EntityFields }): string {
   const cols = Object.entries(def.fields).map(([n, f]) => columnSql(n, f));
-  return `CREATE TABLE IF NOT EXISTS ${table} (${cols.join(", ")})`;
+  return `CREATE TABLE IF NOT EXISTS ${quoteIdent(table)} (${cols.join(", ")})`;
 }
 
 /** Column definition for ALTER TABLE ADD COLUMN. No PRIMARY KEY / AUTOINCREMENT.
  * NOT NULL is only emitted alongside a DEFAULT (SQLite can't add a bare NOT NULL to
  * a populated table); a DEFAULT alone backfills existing rows. */
 export function addColumnSql(name: string, f: FieldDef): string {
-  let s = `${name} ${sqlType(f)}`;
+  let s = `${quoteIdent(name)} ${sqlType(f)}`;
   if (f.notNull && f.default !== undefined) s += " NOT NULL";
   s += defaultSql(f);
   return s;
@@ -70,7 +71,7 @@ export function indexStatements(table: string, def: { fields: EntityFields }): s
   for (const [col, f] of Object.entries(def.fields)) {
     if (!f.unique && !f.index) continue;
     const kind = f.unique ? "UNIQUE INDEX" : "INDEX";
-    out.push(`CREATE ${kind} IF NOT EXISTS ${indexName(table, col)} ON ${table} (${col})`);
+    out.push(`CREATE ${kind} IF NOT EXISTS ${quoteIdent(indexName(table, col))} ON ${quoteIdent(table)} (${quoteIdent(col)})`);
   }
   return out;
 }
