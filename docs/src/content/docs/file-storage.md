@@ -1,6 +1,6 @@
 ---
 title: File storage
-order: 9
+order: 10
 summary: Store files in R2 with a fileRef column, ctx.files signed URLs, and direct-to-storage uploads — bytes never touch the database.
 ---
 

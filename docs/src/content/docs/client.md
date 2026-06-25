@@ -1,6 +1,6 @@
 ---
 title: Clients
-order: 10
+order: 11
 summary: Typed RPC and live subscriptions from the browser with @pramen/client and @pramen/react.
 ---
 
@@ -19,6 +19,12 @@ const pramen = createClient<typeof app.handlers>({ url, token, tenant: "acme" })
 const note = await pramen.call("createNote", { title: "hi", body: "..." }); // typed
 const stop = pramen.subscribe("listNotes", undefined, { onData: (notes) => render(notes) });
 ```
+
+> **Fronting pramen with a meta-framework?** Handlers are matched at the exact path
+> `POST /rpc/<handler>`. A framework that enforces trailing slashes (e.g. Astro's
+> `trailingSlash: 'always'`) **308-redirects** `/rpc/x` → `/rpc/x/`, and browsers **drop
+> the POST body on the redirect** — so the call silently arrives empty. Set
+> `trailingSlash: 'ignore'` (or `'never'`) for the API routes.
 
 ## @pramen/react
 

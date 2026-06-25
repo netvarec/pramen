@@ -110,8 +110,8 @@ policy("member:read", "notes", "read", resolve(({ identity, db }) => {
 
 The policies above gate **`ctx.db`** — they decide which rows/fields a role can
 read/write. They do **not** gate a handler that reaches `ctx.kv` / `ctx.env` /
-`ctx.mail` / `ctx.tasks` directly: those bypass the row-ACL, so an un-gated such
-handler is callable by **anyone** (including anonymous) on an open tenant.
+`ctx.mail` / `ctx.tasks` / `ctx.queue` directly: those bypass the row-ACL, so an
+un-gated such handler is callable by **anyone** (including anonymous) on an open tenant.
 
 Gate the *call* with the `auth` option — enforced **before** the handler runs (and
 before input parsing); it throws `403` on failure:
@@ -130,4 +130,4 @@ beta: query(run, { auth: (id) => id?.flags?.beta === true }),
 `auth` is `"authenticated"` (any non-anonymous identity), a **role list** (the caller
 must hold one), or a `(identity) => boolean` predicate. Absent ⇒ open (a `ctx.db`
 handler is still ACL-gated). Rule of thumb: **if a handler uses `ctx.kv`/`ctx.env`/
-`ctx.mail` for anything privileged, give it an `auth`.**
+`ctx.mail`/`ctx.tasks`/`ctx.queue` for anything privileged, give it an `auth`.**

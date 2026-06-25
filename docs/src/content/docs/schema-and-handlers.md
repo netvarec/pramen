@@ -30,6 +30,9 @@ Field builders: `id()` (auto-increment integer PK), `textId()` (text PK), `text(
 `fileRef()` (an R2 file), `uuid()` (a TEXT column typed as `string`). Relations:
 `belongsTo(target, column)` and `hasMany(target, column)`.
 
+Any column or table name is safe, **including SQL reserved words** (`order`, `group`,
+`select`, …) — pramen double-quotes every identifier it emits.
+
 **Modifiers** wrap a builder and compose: `notNull()`, `unique()`, `indexed()`,
 `defaultTo(value)`, `primaryKey()`, `generated()`, and `hidden()` — e.g.
 `code: unique(t.text())`, `status: defaultTo(t.text(), "pending")`.
