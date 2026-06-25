@@ -19,6 +19,7 @@ import { DurableObject } from "cloudflare:workers";
 import { migrate } from "./runtime/migrate";
 import { dispatch, tasksFacade, bindTasks } from "./runtime/dispatch";
 import { createMail } from "./runtime/mail";
+import { createQueue } from "./runtime/queue";
 import { ensureOutbox, drainOutbox, listTasks } from "./runtime/outbox";
 import { Db } from "./runtime/db";
 import { digest } from "./runtime/digest";
@@ -214,6 +215,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
       identity,
       tasks: tasksFacade(this.driver),
       mail: createMail(this.envBag, this.kv),
+      queue: createQueue(this.envBag),
     };
   }
 

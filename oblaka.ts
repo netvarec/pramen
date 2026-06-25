@@ -8,7 +8,7 @@
 // + Durable Object (and the SQLite DO migration) on Cloudflare; it uploads only a
 // placeholder module, so `wrangler deploy` does the actual code bundle + upload.
 
-import { define, D1Database, DurableObject, EmailService, KVNamespace, R2Bucket, Worker } from "oblaka-iac";
+import { define, D1Database, DurableObject, EmailService, KVNamespace, Queue, R2Bucket, Worker } from "oblaka-iac";
 
 // One name to namespace every resource this project owns. Cloudflare resource
 // names are account-global, so set a unique PROJECT per app and all its resources
@@ -68,6 +68,16 @@ export default define(({ env }) => {
       // Used by @pramen/auth's magic-link demo (ctx.env.EMAIL.send(...)). The `from`
       // domain must be onboarded: `wrangler email sending enable yourdomain.com`.
       EMAIL: new EmailService(),
+      // Cloudflare Queues — native message queue for ctx.queue. `binding: "both"` makes
+      // this Worker BOTH the producer (env.JOBS, used by ctx.queue.send("JOBS", …)) AND
+      // the consumer (createPramen().queue routes the batch to app.queues["pramen-jobs"]).
+      // `ctx.queue` is decoupled, high-throughput fan-out — distinct from ctx.tasks (the
+      // transactional outbox). Tune batching/retry here; add `deadLetterQueue` for a DLQ.
+      JOBS: new Queue({
+        name: `${PROJECT}-jobs`,
+        binding: "both",
+        consumer: { maxBatchSize: 10, maxBatchTimeout: 1, maxRetries: 3 },
+      }),
     },
     vars,
   });

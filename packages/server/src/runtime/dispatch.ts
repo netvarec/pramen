@@ -13,6 +13,7 @@ import { warmup, type AclContext } from "./acl";
 import { BadRequest, Forbidden } from "./errors";
 import { enqueueTask, type TaskMap } from "./outbox";
 import { createMail } from "./mail";
+import { createQueue } from "./queue";
 import type { Driver } from "./driver";
 import type { Kv } from "./kv";
 import type { Files } from "../sdk/files";
@@ -91,6 +92,7 @@ export async function dispatch(
     identity: acl.identity,
     tasks: tasksFacade(driver, () => enqueued++),
     mail: createMail(env, kv),
+    queue: createQueue(env),
   };
 
   const result =

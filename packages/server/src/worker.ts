@@ -8,6 +8,8 @@ import { authorizeTenant, HmacStrategy, isAdmin, JwksStrategy, resolveIdentity, 
 import { dispatch, tasksFacade, bindTasks } from "./runtime/dispatch";
 import { ensureOutbox, drainOutbox, listTasks } from "./runtime/outbox";
 import { createMail } from "./runtime/mail";
+import { createQueue, type QueueProducerBinding } from "./runtime/queue";
+import { dispatchQueueBatch, type QueueBatch, type QueueContext } from "./runtime/queue-consumer";
 import { migrate } from "./runtime/migrate";
 import { compileAcl } from "./runtime/acl";
 import { Db } from "./runtime/db";
@@ -45,6 +47,9 @@ export interface Env {
   CORS_ORIGINS?: string;
   /** "true" to apply destructive schema migrations on the D1 path. Off by default. */
   PRAMEN_ALLOW_DESTRUCTIVE?: string;
+  /** Cloudflare Queues producer binding for ctx.queue (declared in oblaka.ts). Optional —
+   * ctx.queue discovers any producer binding by name; this just types the common one. */
+  JOBS?: QueueProducerBinding;
 }
 
 /** The secret used to sign/verify file tokens — a dedicated FILES_SECRET if set,
@@ -151,7 +156,7 @@ export function makeWorker(app: PramenApp) {
     const files = createFiles({ tenant: "main", secret: filesSecret(env), adapter: new R2Adapter(env.FILES) });
     const db = new Db(driver, { acl: d1Acl, identity, system: true, schema: app.schema, suppressTriggers: true }, app.schema);
     const kv = new Kv(env.KV);
-    return { db, kv, files, env: env as unknown as Record<string, unknown>, identity, tasks: tasksFacade(driver), mail: createMail(env as unknown as Record<string, unknown>, kv) };
+    return { db, kv, files, env: env as unknown as Record<string, unknown>, identity, tasks: tasksFacade(driver), mail: createMail(env as unknown as Record<string, unknown>, kv), queue: createQueue(env as unknown as Record<string, unknown>) };
   };
 
   /** Drain the D1 outbox in the Worker (no DO/alarm on this path) — called by the
@@ -394,6 +399,22 @@ export function makeWorker(app: PramenApp) {
     // so it needs no cron). Wire a `[triggers] crons` in wrangler/oblaka to call this.
     async scheduled(_event: unknown, env: Env): Promise<void> {
       if (env.DB) await drainD1(env);
+    },
+
+    // Cloudflare Queues consumer entry: routes a batch to the matching `app.queues`
+    // handler (ACK on success / RETRY on throw, per message). A consumer is Worker-level
+    // (no tenant DO): its ctx carries env/kv/mail/queue + callPrivileged to reach a DO.
+    async queue(batch: QueueBatch, env: Env): Promise<void> {
+      const envBag = env as unknown as Record<string, unknown>;
+      const kv = new Kv(env.KV);
+      const ctx: QueueContext = {
+        env: envBag,
+        kv,
+        mail: createMail(envBag, kv),
+        queue: createQueue(envBag),
+        callPrivileged: (opts) => callPrivileged(env, opts),
+      };
+      await dispatchQueueBatch(app.queues ?? {}, ctx, batch);
     },
   };
 }

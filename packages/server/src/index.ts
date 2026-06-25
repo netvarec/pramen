@@ -76,6 +76,12 @@ export type { StorageAdapter, PutResult, GetResult } from "./runtime/storage";
 export { Mail, CloudflareEmailAdapter, KvMailAdapter, MemoryMailAdapter, UnconfiguredMailAdapter, createMail } from "./runtime/mail";
 export type { MailMessage, MailAddress, MailAdapter, SendEmailBinding } from "./runtime/mail";
 
+// --- queue (ctx.queue — Cloudflare Queues) ---
+export { Queue, CloudflareQueueAdapter, MemoryQueueAdapter, createQueue, discoverQueueBindings } from "./runtime/queue";
+export type { QueueAdapter, QueueProducerBinding, QueueSendOptions, QueueSendRequest, QueueBatchOptions, QueueContentType } from "./runtime/queue";
+export { routeQueue, dispatchQueueBatch } from "./runtime/queue-consumer";
+export type { QueueContext, QueueHandler, QueueMessage, QueueBatch, AppQueueMap } from "./runtime/queue-consumer";
+
 // --- errors ---
 export { PramenError, BadRequest, Unauthorized, Forbidden } from "./runtime/errors";
 

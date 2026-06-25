@@ -5,6 +5,7 @@
 import type { Db } from "../runtime/db";
 import type { Kv } from "../runtime/kv";
 import type { Mail } from "../runtime/mail";
+import type { Queue } from "../runtime/queue";
 import type { Identity } from "./acl";
 import type { Files } from "./files";
 import type { SchemaDef } from "./schema";
@@ -36,6 +37,12 @@ export interface HandlerContext<S extends SchemaDef = SchemaDef> {
    * runs the matching `app.tasks` handler after commit, off the write path, with
    * retry. For notification email, webhooks, etc. — see `app.tasks`. */
   readonly tasks: Tasks;
+  /** Enqueue onto a native Cloudflare Queue: `ctx.queue.send("jobs", body)`. Unlike
+   * `ctx.tasks` (a transactional outbox, atomic with the mutation, drained in-process),
+   * a queue send is NOT transactional with the write but is higher-throughput, with
+   * platform-native batching/retry/DLQ and a consumer that may live in another Worker.
+   * Declare queues in oblaka.ts; consume them via `app.queues`. */
+  readonly queue: Queue;
 }
 
 /** The deferred-side-effects facade handed to handlers as `ctx.tasks`. */

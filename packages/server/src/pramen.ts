@@ -16,6 +16,7 @@ import { makeWorker, type Env } from "./worker";
 import { pramenDO, type DoEnv } from "./durable-object";
 import { validateTriggerTasks, type SchemaDef } from "./sdk/schema";
 import type { AppTaskMap, HandlerMap } from "./sdk/handlers";
+import type { AppQueueMap, QueueBatch } from "./runtime/queue-consumer";
 import type { Role } from "./sdk/acl";
 
 /** Injected into a public route's handler — forward a privileged mutation into the
@@ -48,6 +49,10 @@ export interface PramenApp {
   /** Deferred side-effect handlers keyed by `kind` — drained from the outbox after a
    * mutation enqueues via `ctx.tasks.enqueue`. For notification email, webhooks, etc. */
   tasks?: AppTaskMap;
+  /** Cloudflare Queues consumers keyed by queue name — process messages produced via
+   * `ctx.queue.send(...)`. Dispatched by `createPramen(app).queue` (a consumer is
+   * Worker-level: no `ctx.db`, reach a tenant via `ctx.callPrivileged`). */
+  queues?: AppQueueMap;
 }
 
 export type { Env, DoEnv };
@@ -58,9 +63,10 @@ export type { Env, DoEnv };
 export function createPramen(app: PramenApp): {
   fetch: (request: Request, env: Env) => Promise<Response>;
   scheduled: (event: unknown, env: Env) => Promise<void>;
+  queue: (batch: QueueBatch, env: Env) => Promise<void>;
   PramenDO: ReturnType<typeof pramenDO>;
 } {
   validateTriggerTasks(app.schema, Object.keys(app.tasks ?? {})); // fail fast on a typo'd trigger task
   const worker = makeWorker(app);
-  return { fetch: worker.fetch, scheduled: worker.scheduled, PramenDO: pramenDO(app) };
+  return { fetch: worker.fetch, scheduled: worker.scheduled, queue: worker.queue, PramenDO: pramenDO(app) };
 }

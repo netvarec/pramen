@@ -24,6 +24,8 @@ import {
   Forbidden,
   type Identity,
   type HandlerContext,
+  type QueueContext,
+  type QueueMessage,
   type FileRef,
   type JsonValue,
   type WhereClause,
@@ -194,6 +196,24 @@ const handlers = {
   ),
   // Dev-only (admin-gated): read what the `note-changed` TRIGGER task recorded for a note.
   __noteChangedInbox: query(async (ctx, input: { id: number }) => ({ body: await ctx.kv.get(`note-changed:${input.id}`) }), {
+    auth: ["admin"],
+  }),
+
+  // ctx.queue (Cloudflare Queues) demo: enqueue a job onto the NATIVE queue. Unlike
+  // ctx.tasks (the transactional outbox, atomic with a DB write), a queue send is NOT
+  // transactional — it's decoupled, high-throughput fan-out with a consumer (app.queues)
+  // that could even live in another Worker. Send addresses the queue by its BINDING name
+  // ("JOBS", declared in oblaka.ts). Gated, as it touches ctx.queue directly (bypasses ACL).
+  enqueueJob: mutation(
+    async (ctx, input: { id: string }) => {
+      await ctx.queue.send("JOBS", { id: input.id, tenant: "main" });
+      return { queued: input.id };
+    },
+    { auth: ["admin"] },
+  ),
+  // Dev-only (admin-gated): read what the queue CONSUMER recorded for a job (proves the
+  // produce → consume round-trip end-to-end).
+  __jobInbox: query(async (ctx, input: { id: string }) => ({ body: await ctx.kv.get(`job:${input.id}`) }), {
     auth: ["admin"],
   }),
   listNotes: query((ctx) =>
@@ -610,4 +630,16 @@ const tasks = {
   },
 };
 
-export const app = { schema, handlers, acl, routes, tasks };
+// Cloudflare Queues consumers, keyed by QUEUE name (the oblaka `Queue` name —
+// env-prefixed in remote envs, matched leniently by createPramen().queue). A consumer is
+// Worker-level: no ctx.db, so it reaches tenant data via ctx.callPrivileged (the message
+// body carries the tenant). Here it just records the job in KV so the e2e can read it back;
+// a real one might ctx.callPrivileged into a DO and/or ctx.mail.send a notification.
+const queues = {
+  "pramen-jobs": async (ctx: QueueContext, message: QueueMessage) => {
+    const { id } = message.body as { id: string; tenant: string };
+    await ctx.kv.put(`job:${id}`, `done:${id}`, { expirationTtl: 900 });
+  },
+};
+
+export const app = { schema, handlers, acl, routes, tasks, queues };

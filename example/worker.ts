@@ -8,6 +8,7 @@ import { app } from "./app";
 const pramen = createPramen(app);
 
 // `scheduled` drains the D1-store task outbox on a Cron Trigger (the DO store
-// self-drains via an alarm and needs no cron).
-export default { fetch: pramen.fetch, scheduled: pramen.scheduled };
+// self-drains via an alarm and needs no cron). `queue` is the Cloudflare Queues
+// consumer entry — it routes a batch to the matching `app.queues` handler.
+export default { fetch: pramen.fetch, scheduled: pramen.scheduled, queue: pramen.queue };
 export const PramenDO = pramen.PramenDO;
