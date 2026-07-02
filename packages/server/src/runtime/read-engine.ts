@@ -91,7 +91,12 @@ export function compileExpr(expr: SqlExpr, dialect: Dialect, params: unknown[] =
     case "false":
       return { sql: "0", params };
     case "cmp":
-      if (expr.value === null) return { sql: `${dialect.id(expr.col)} IS NULL`, params };
+      // A comparison against NULL is never TRUE in SQL (=, !=, <, > all yield NULL).
+      // Only the dedicated `null` node produces `IS NULL`; a `cmp` with a null operand
+      // matches nothing. (`eq()` already routes an equality-to-null to the `null` node,
+      // and the keyset comparator handles null order-keys explicitly — so no legitimate
+      // caller reaches here with a null value.)
+      if (expr.value === null) return { sql: "0", params };
       params.push(dialect.encode(expr.value));
       return { sql: `${dialect.id(expr.col)} ${expr.op} ${dialect.placeholder(params.length)}`, params };
     case "null":
@@ -145,7 +150,7 @@ export function evalExpr(expr: SqlExpr, row: Record<string, unknown>): boolean {
       return false;
     case "cmp": {
       const left = bind(row[expr.col]);
-      if (expr.value === null) return left === null || left === undefined;
+      if (expr.value === null) return false; // comparison against NULL is never true (use the `null` node for IS NULL)
       if (left === null || left === undefined) return false; // NULL compared to a value -> false
       const right = bind(expr.value);
       switch (expr.op) {

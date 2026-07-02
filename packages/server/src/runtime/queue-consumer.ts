@@ -62,14 +62,33 @@ export type AppQueueMap = Record<string, QueueHandler>;
 
 /** Resolve the handler for a batch's queue. Queue names are env-prefixed in remote
  * environments (`production-pramen-jobs`) but bare locally (`pramen-jobs`), so match
- * leniently: exact, then suffix (`…-<key>`), then — if there's exactly one handler —
- * fall through to it (the common single-queue app). Returns null if nothing matches. */
+ * leniently: exact, then the LONGEST `…-<key>` suffix, then — if there's exactly one
+ * handler — fall through to it (the common single-queue app). Returns null if nothing
+ * matches.
+ *
+ * The suffix match must prefer the longest key so `email-jobs` wins over `jobs` for
+ * `prod-email-jobs` (a plain `find` was insertion-order dependent and could misroute).
+ * We only match a handler key that is a `-`-delimited suffix of the incoming queue name
+ * (env prefix stripped) — never the reverse (a handler key ending in `-<queueName>`),
+ * which let a shorter queue name grab a longer, unrelated handler. */
 export function routeQueue(queues: AppQueueMap, queueName: string): QueueHandler | null {
   const keys = Object.keys(queues);
   if (queues[queueName]) return queues[queueName];
-  const suffix = keys.find((k) => queueName.endsWith(`-${k}`) || k.endsWith(`-${queueName}`));
-  if (suffix) return queues[suffix];
-  if (keys.length === 1) return queues[keys[0]];
+  let best: string | null = null;
+  for (const k of keys) {
+    if (queueName.endsWith(`-${k}`) && (best === null || k.length > best.length)) best = k;
+  }
+  if (best !== null) return queues[best];
+  // Single-handler fallback: a lone queue whose env-prefixed name we couldn't suffix-
+  // match. Kept for the common single-queue app, but LOG it — otherwise a dead-letter
+  // queue (a distinct name) would silently route to the one handler and hide the misroute.
+  if (keys.length === 1) {
+    console.warn(
+      `pramen: routing queue '${queueName}' to the sole handler '${keys[0]}' by fallback ` +
+        `(no exact/suffix match — verify this isn't a dead-letter or foreign queue)`,
+    );
+    return queues[keys[0]];
+  }
   return null;
 }
 

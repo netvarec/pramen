@@ -26,6 +26,12 @@ export default define(({ env }) => {
           CORS_ORIGINS: "*",
           // Local dev applies destructive migrations freely; production must opt in.
           PRAMEN_ALLOW_DESTRUCTIVE: "true",
+          // The D1 store is a single shared DB with no tenant column (a proof-of-concept
+          // read-scale path), so it commingles tenants. It fails closed for any non-`main`
+          // tenant unless this is set. The e2e D1 suite runs on a dedicated tenant, so opt
+          // in locally; a real multi-tenant deployment must add a tenant column / per-tenant
+          // DB before enabling this.
+          PRAMEN_D1_ALLOW_MULTITENANT: "true",
           // Where the magic-link lands in your frontend (the example builds
           // `${APP_URL}/auth?token=…`). MAIL_FROM is intentionally unset locally;
           // MAIL_CAPTURE opts ctx.mail into the dev inbox (capture to KV) instead of

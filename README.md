@@ -255,7 +255,11 @@ test/
 
 ## Building & publishing
 
-The three packages build to `dist` (JS + `.d.ts`) with `tsc` — `bun run build`.
+There are **five** publishable packages: `@pramen/server`, `@pramen/client`,
+`@pramen/react`, `@pramen/auth`, and `@pramen/admin`. The first four build to `dist`
+(JS + `.d.ts`) with `tsc` — `bun run build`. (`@pramen/admin` is a Preact single-page
+admin client built by its own bundler script — note it publishes without an npm entry
+point and the runtime does not serve it; it's currently a scaffold, not wired in.)
 They use **conditional `exports`**: the `development`/`bun`/`workerd` conditions
 resolve to `src`, so in-repo typecheck, tests, dev, and deploy run straight off
 source with no build step (tsconfigs set `customConditions: ["development"]`).
@@ -265,7 +269,7 @@ consumer bundling with wrangler — the `workerd` condition — gets the source,
 esbuild bundles directly; every real pramen consumer bundles for Workers anyway.)
 No `publishConfig` field overrides (npm is deprecating those).
 
-**Releasing.** The three packages are versioned in lockstep. Bump + tag in one step,
+**Releasing.** All five packages are versioned in lockstep. Bump + tag in one step,
 then push — the `release` workflow (`.github/workflows/release.yml`) runs typecheck +
 tests and publishes on the tag (needs an `NPM_TOKEN` repo secret):
 
@@ -318,7 +322,7 @@ const listNotes = query((ctx) =>
 // ctx.db.find({ where: { title: 123 } })   -> type error: title is string
 ```
 
-The handler context is `{ db, kv, files, env, identity }`. **Field builders:**
+The handler context is `{ db, kv, files, env, identity, tasks, mail, queue }`. **Field builders:**
 `id`, `textId`, `text`, `int`, `real`, `bool`, `json` (arbitrary JSON, typed as
 `JsonValue`), `fileRef` (an R2 file), `uuid` (a TEXT column typed as `string`).
 `json`/`fileRef` are stored as TEXT and codec'd to/from the parsed value
@@ -630,9 +634,12 @@ bun run pramen schema status --tenant acme # is a deployed tenant caught up?
 app reads as one block), fetching every partition's applied schema from its DO.
 
 `schema diff` flags each change as additive (no data loss) or **destructive**
-(drop / type change — rebuilds the table, may lose data). All are auto-applied on
-the next DO boot; declare a `renamedFrom` hint to migrate a renamed column's data
-instead of dropping it.
+(drop / type change — rebuilds the table, may lose data). On the next DO boot, additive
+changes auto-apply; destructive changes are **skipped unless `PRAMEN_ALLOW_DESTRUCTIVE=true`**
+(the schema hash is then left unwritten so a later opt-in deploy retries). The diff also
+reports modifier changes on an existing column and partition moves, which the boot
+migrator does **not** apply (both are flagged `[NOT applied on boot]`). Declare a
+`renamedFrom` hint to migrate a renamed column's data instead of dropping it.
 
 ### Migrations
 
@@ -641,10 +648,14 @@ transaction. Two passes:
 
 - **Additive** (no data loss): new tables are created and new columns added
   (`ALTER TABLE ADD COLUMN`, nullable).
-- **Destructive** (auto-applied): a column the schema no longer declares is
-  dropped, a type change is applied, and a table absent from the schema is dropped
-  — all via the standard SQLite table-rebuild (create new, copy, drop, rename),
-  preserving rows and ids. This **can lose data** on a bad deploy, by design.
+- **Destructive** (opt-in — **off by default**): a column the schema no longer
+  declares is dropped, a type change is applied, and a table absent from the schema is
+  dropped — all via the standard SQLite table-rebuild (create new, copy, drop, rename),
+  preserving rows and ids. This pass runs **only when the deploy sets
+  `PRAMEN_ALLOW_DESTRUCTIVE=true`** (local dev sets it on). Otherwise each destructive
+  change is skipped and logged, and the schema hash is left unwritten so a later opt-in
+  deploy retries — so a schema edit can't silently drop a column. When enabled it **can
+  lose data** on a bad deploy, by design.
 
 A schema hash in `_pramen_meta` skips the work when nothing changed. A **rename**
 can't be inferred from a diff (a removed + added column is ambiguous), so declare

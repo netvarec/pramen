@@ -7,8 +7,12 @@
 //      ALTER TABLE ADD COLUMN (nullable).
 //   2. destructive: a live column the schema no longer declares is DROPPED, a type
 //      change is applied, and a `renamedFrom` column is renamed — all via the
-//      standard SQLite table-rebuild (create new, copy, drop old, rename). This is
-//      auto-applied: a bad deploy CAN lose data, by design (WIP, no backward-compat).
+//      standard SQLite table-rebuild (create new, copy, drop old, rename). This pass
+//      is GATED: it runs only when the deploy opts in with PRAMEN_ALLOW_DESTRUCTIVE
+//      (off by default). When a destructive change is detected but not allowed it is
+//      SKIPPED (recorded in report.skipped) and the schema hash is left UNWRITTEN, so a
+//      later opt-in deploy retries. Local dev sets the flag on; a bad deploy CAN then
+//      lose data (WIP, no backward-compat).
 //
 // A schema hash in the internal `_pramen_meta` table lets an unchanged schema skip
 // introspection entirely on warm boots. The live table (PRAGMA) is the ground

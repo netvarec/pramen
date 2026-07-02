@@ -1,56 +1,156 @@
-// Schema shape + diff — powers the CLI's `schema diff`. migrate() applies every
-// change on the next DO boot, additive AND destructive. A diff classifies each as
-// `destructive` (drop / type change — rebuilds the table and CAN lose data) or not
-// (add table/column — no data loss). A rename can't be detected from a shape diff;
-// it shows as drop+add unless declared with `renamedFrom` in the schema.
+// Schema shape + diff — powers the CLI's `schema diff`. The diff is a REPORTING tool; it
+// does not itself migrate. On the next DO boot migrate() applies ADDITIVE changes only
+// (new table -> CREATE TABLE; new column -> ALTER TABLE ADD COLUMN). DESTRUCTIVE changes
+// (drop column/table, type change, table rebuild) are SKIPPED unless the deploy sets
+// PRAMEN_ALLOW_DESTRUCTIVE=true — and when skipped the schema hash is left unwritten so a
+// later opt-in deploy retries. A rename can't be detected from a shape diff; it shows as
+// drop+add unless declared with `renamedFrom` in the schema.
+//
+// The shape records column type + the migration-relevant modifiers (notNull, unique,
+// primaryKey, generated, default, hidden) and the entity's partition, so the diff REPORTS
+// modifier and partition changes too. IMPORTANT: migrate() only rebuilds on a TYPE change —
+// it does NOT alter a modifier on an existing column, and it cannot move a table between
+// partitions (a partition is a separate Durable Object). Such changes are reported with
+// `appliesOnBoot: false` so the tool is honest that boot migration won't enact them.
 
 import type { FieldDef, SchemaDef } from "../sdk/schema";
+import { partitionOf } from "../sdk/schema";
 
-/** table -> column -> field type. The comparable surface of a schema. */
-export type SchemaShape = Record<string, Record<string, string>>;
+/** The comparable fingerprint of a single column: type + migration-relevant modifiers. */
+export interface ColumnShape {
+  type: string;
+  notNull?: boolean;
+  unique?: boolean;
+  primaryKey?: boolean;
+  generated?: boolean;
+  hidden?: boolean;
+  /** The literal or raw-SQL default, normalized to a string for comparison. */
+  default?: string;
+}
+
+/** The comparable fingerprint of a table: its partition + each column's shape. */
+export interface TableShape {
+  partition: string;
+  columns: Record<string, ColumnShape>;
+}
+
+/** table -> table shape. The comparable surface of a schema. */
+export type SchemaShape = Record<string, TableShape>;
+
+function columnShape(f: FieldDef): ColumnShape {
+  const c: ColumnShape = { type: f.type };
+  if (f.notNull) c.notNull = true;
+  if (f.unique) c.unique = true;
+  if (f.primaryKey) c.primaryKey = true;
+  if (f.generated) c.generated = true;
+  if (f.hidden) c.hidden = true;
+  if (f.defaultExpr !== undefined) c.default = `(${f.defaultExpr})`;
+  else if (f.default !== undefined) c.default = JSON.stringify(f.default);
+  return c;
+}
 
 export function schemaShape(schema: SchemaDef): SchemaShape {
   const out: SchemaShape = {};
   for (const [table, def] of Object.entries(schema)) {
-    const cols: Record<string, string> = {};
-    for (const [col, f] of Object.entries(def.fields)) cols[col] = (f as FieldDef).type;
-    out[table] = cols;
+    const columns: Record<string, ColumnShape> = {};
+    for (const [col, f] of Object.entries(def.fields)) columns[col] = columnShape(f as FieldDef);
+    out[table] = { partition: partitionOf(schema, table), columns };
   }
   return out;
 }
 
+/** The modifier fields compared for a `change-column` (everything but `type`). */
+const MODIFIER_KEYS: (keyof ColumnShape)[] = ["notNull", "unique", "primaryKey", "generated", "hidden", "default"];
+
+function modifierDiff(prev: ColumnShape, next: ColumnShape): string | null {
+  const parts: string[] = [];
+  for (const k of MODIFIER_KEYS) {
+    if (prev[k] !== next[k]) parts.push(`${k}: ${fmt(prev[k])} → ${fmt(next[k])}`);
+  }
+  return parts.length ? parts.join(", ") : null;
+}
+
+function fmt(v: unknown): string {
+  return v === undefined ? "—" : String(v);
+}
+
 export interface SchemaChange {
-  kind: "add-table" | "drop-table" | "add-column" | "drop-column" | "change-type";
+  kind: "add-table" | "drop-table" | "add-column" | "drop-column" | "change-type" | "change-column" | "move-partition";
   table: string;
   column?: string;
   detail?: string;
-  /** true = rebuilds the table and may lose data (drop / type change); false =
-   * additive, no data loss. All changes are auto-applied on the next DO boot. */
+  /** true = rebuilds the table and may lose data (drop / type change). false = additive
+   * OR a metadata-only change (modifier / partition move) — see `appliesOnBoot`. */
   destructive: boolean;
+  /** Whether migrate() actually enacts this change on the next DO boot. Additive changes
+   * are always applied; destructive type/drop changes apply only when the deploy sets
+   * PRAMEN_ALLOW_DESTRUCTIVE=true. `false` here means the boot migrator will NEVER enact
+   * it: a modifier change on an existing column (migrate only rebuilds on a TYPE change),
+   * or a partition move (needs a manual cross-DO data migration). Reported for honesty. */
+  appliesOnBoot: boolean;
 }
 
 export function diffSchemaShape(prev: SchemaShape, next: SchemaShape): SchemaChange[] {
   const changes: SchemaChange[] = [];
 
   for (const table of Object.keys(next)) {
-    if (!(table in prev)) {
-      changes.push({ kind: "add-table", table, destructive: false });
+    const pt = prev[table];
+    if (!pt) {
+      changes.push({ kind: "add-table", table, destructive: false, appliesOnBoot: true });
       continue;
     }
-    for (const col of Object.keys(next[table]!)) {
-      if (!(col in prev[table]!)) {
-        changes.push({ kind: "add-column", table, column: col, destructive: false });
-      } else if (prev[table]![col] !== next[table]![col]) {
-        changes.push({ kind: "change-type", table, column: col, detail: `${prev[table]![col]} → ${next[table]![col]}`, destructive: true });
+    const nt = next[table]!;
+    if (pt.partition !== nt.partition) {
+      changes.push({
+        kind: "move-partition",
+        table,
+        detail: `${pt.partition} → ${nt.partition}`,
+        destructive: false,
+        // A partition is a separate Durable Object; boot migration can't move a table's
+        // data across DOs. Needs a manual data migration.
+        appliesOnBoot: false,
+      });
+    }
+    for (const col of Object.keys(nt.columns)) {
+      const pc = pt.columns[col];
+      const ncol = nt.columns[col]!;
+      if (!pc) {
+        changes.push({ kind: "add-column", table, column: col, destructive: false, appliesOnBoot: true });
+      } else if (pc.type !== ncol.type) {
+        changes.push({
+          kind: "change-type",
+          table,
+          column: col,
+          detail: `${pc.type} → ${ncol.type}`,
+          destructive: true,
+          // Applied only under PRAMEN_ALLOW_DESTRUCTIVE (a table rebuild). Report it as
+          // boot-applicable — the destructive-gating note explains the opt-in.
+          appliesOnBoot: true,
+        });
+      } else {
+        const md = modifierDiff(pc, ncol);
+        if (md) {
+          changes.push({
+            kind: "change-column",
+            table,
+            column: col,
+            detail: md,
+            destructive: false,
+            // migrate() only rebuilds on a TYPE change — it never alters a modifier
+            // (notNull/unique/default/…) on an existing column.
+            appliesOnBoot: false,
+          });
+        }
       }
     }
-    for (const col of Object.keys(prev[table]!)) {
-      if (!(col in next[table]!)) changes.push({ kind: "drop-column", table, column: col, destructive: true });
+    for (const col of Object.keys(pt.columns)) {
+      if (!(col in nt.columns))
+        changes.push({ kind: "drop-column", table, column: col, destructive: true, appliesOnBoot: true });
     }
   }
 
   for (const table of Object.keys(prev)) {
-    if (!(table in next)) changes.push({ kind: "drop-table", table, destructive: true });
+    if (!(table in next)) changes.push({ kind: "drop-table", table, destructive: true, appliesOnBoot: true });
   }
 
   return changes;

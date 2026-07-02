@@ -115,6 +115,72 @@ describe("outbox (substrate-agnostic deferred tasks)", () => {
     expect(ran).toBe(1);
   });
 
+  // H9 — a 'processing' row stranded by a crashed drainer must fold into nextRunAt so the
+  // DO re-arms its alarm to reclaim it (the alarm is the only DO-path drain trigger; a
+  // quiet tenant would otherwise stall forever).
+  test("H9: a stranded 'processing' row drives nextRunAt to its stale-reclaim time", async () => {
+    const driver = await freshDriver();
+    await enqueueTask(driver, 0, { kind: "k" });
+    // Simulate a crashed drainer: this row is 'processing', claimed at 1000, never finished.
+    await driver.exec("UPDATE _pramen_outbox SET status = 'processing', claimedAt = ?", [1000]);
+
+    // A drain 30s later finds nothing due (the claim isn't stale yet, no pending rows),
+    // but must report nextRunAt = claimedAt + STALE_MS = 1000 + 60000 so the alarm fires
+    // when the claim becomes reclaimable.
+    const r = await drainOutbox(driver, { k: () => {} }, 1000 + 30_000);
+    expect(r.processed).toBe(0);
+    expect(r.remaining).toBe(0);
+    expect(r.nextRunAt).toBe(1000 + 60_000); // stale-reclaim wake-up, not null
+
+    // At/after that wake-up the next drain reclaims + runs it.
+    let ran = 0;
+    const done = await drainOutbox(driver, { k: () => void ran++ }, 1000 + 61_000);
+    expect(done.processed).toBe(1);
+    expect(ran).toBe(1);
+  });
+
+  test("H9: pending vs stranded-processing — nextRunAt is the EARLIER of the two", async () => {
+    const driver = await freshDriver();
+    // A pending row backed off far into the future (runAt = 500_000).
+    await enqueueTask(driver, 0, { kind: "later" });
+    await driver.exec("UPDATE _pramen_outbox SET runAt = ? WHERE kind = 'later'", [500_000]);
+    // A separate row stranded 'processing' at claimedAt = 1000 → reclaimable at 61_000.
+    await enqueueTask(driver, 0, { kind: "stuck" });
+    await driver.exec("UPDATE _pramen_outbox SET status = 'processing', claimedAt = ? WHERE kind = 'stuck'", [1000]);
+
+    const r = await drainOutbox(driver, {}, 2000);
+    // min(500_000 pending, 1000 + 60_000 stale) = 61_000
+    expect(r.nextRunAt).toBe(61_000);
+  });
+
+  // M1 — the per-row claimedAt re-stamp: a row's stale clock must restart to wall-clock
+  // when its own processing begins, so a long batch's tail isn't reclaimed + run twice.
+  test("M1: claimedAt is re-stamped to wall-clock immediately before the handler runs", async () => {
+    const driver = await freshDriver();
+    await enqueueTask(driver, 0, { kind: "k" });
+    // Strand it 'processing' with an ancient claimedAt so the drain reclaims it.
+    await driver.exec("UPDATE _pramen_outbox SET status = 'processing', claimedAt = ?", [1000]);
+
+    let seenClaimedAt: number | null = null;
+    const before = Date.now();
+    // now=61_000 makes the ancient claim (1000) reclaimable; inside the handler the row's
+    // claimedAt must already be the fresh wall-clock stamp (~Date.now()), not 1000 or the
+    // logical `now` — proving the per-row re-stamp fired before dispatch.
+    await drainOutbox(
+      driver,
+      {
+        k: async () => {
+          const rows = await driver.exec("SELECT claimedAt FROM _pramen_outbox", []);
+          seenClaimedAt = Number((rows[0] as Record<string, unknown>).claimedAt);
+        },
+      },
+      1000 + 61_000,
+    );
+    expect(seenClaimedAt).not.toBeNull();
+    expect(seenClaimedAt!).toBeGreaterThanOrEqual(before); // wall-clock, not the ancient 1000
+    expect(seenClaimedAt!).toBeGreaterThan(1_000_000_000); // clearly Date.now(), not logical `now`
+  });
+
   // #6 — visibility + pruning.
   test("listTasks surfaces dead-letters (no payload); done rows are pruned after retention", async () => {
     const driver = await freshDriver();

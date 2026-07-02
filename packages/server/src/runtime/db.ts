@@ -32,7 +32,9 @@ import {
   compileExpr,
   compileSelect,
   eq,
+  FALSE,
   inList,
+  isNull,
   or,
   TRUE,
   type AggFn,
@@ -147,15 +149,28 @@ function decodeCursor(s: string): unknown[] {
   }
 }
 
+// Strictly-after predicate for a single order column, NULL-aware. SQLite sorts
+// NULLs FIRST for ASC and LAST for DESC, so a naive `col > v` (which is NULL, never
+// TRUE, when col or v is NULL) would re-match already-seen NULL rows forever.
+//   ASC:  v null    -> any non-null row is after it        (col IS NOT NULL)
+//         v non-null-> col > v (NULL cols excluded, they sort before)
+//   DESC: v null    -> nothing is strictly after a null    (FALSE; PK tiebreak advances)
+//         v non-null-> col < v OR col IS NULL (nulls sort after all non-nulls)
+function keysetCmp(o: OrderBy, value: unknown): SqlExpr {
+  const desc = o.dir === "desc";
+  if (value === null) return desc ? FALSE : isNull(o.column, true);
+  return desc ? or(cmp("<", o.column, value), isNull(o.column)) : cmp(">", o.column, value);
+}
+
 // Strictly-after predicate for a composite key: lexicographic comparison,
-// e.g. (a,b) after (a0,b0) => a>a0 OR (a=a0 AND b>b0); DESC columns flip to <.
+// e.g. (a,b) after (a0,b0) => a>a0 OR (a=a0 AND b>b0); DESC columns flip to <. Each
+// column's comparison and the eq-tiebreaker are NULL-aware (eq() maps null→IS NULL).
 function keysetAfter(order: OrderBy[], values: unknown[]): SqlExpr {
   const ors: SqlExpr[] = [];
   for (let i = 0; i < order.length; i++) {
     const parts: SqlExpr[] = [];
     for (let j = 0; j < i; j++) parts.push(eq(order[j]!.column, values[j]));
-    const o = order[i]!;
-    parts.push(o.dir === "desc" ? cmp("<", o.column, values[i]) : cmp(">", o.column, values[i]));
+    parts.push(keysetCmp(order[i]!, values[i]));
     ors.push(parts.length === 1 ? parts[0]! : and(...parts));
   }
   return ors.length === 1 ? ors[0]! : or(...ors);
@@ -247,6 +262,10 @@ export class Db<S extends SchemaDef = SchemaDef> {
    * and the keyset cursor would otherwise expose a hidden column's values). Columns
    * granted only conditionally are NOT orderable. */
   private assertReadableCols(from: string, scope: Scope, cols: string[]): void {
+    // Hidden columns are never readable through the ORM — not orderable either,
+    // regardless of scope (else the order/keyset cursor leaks the hidden value).
+    const hidden = new Set(this.hiddenColsOf(from));
+    for (const c of cols) if (hidden.has(c)) throw new AclDenied(from, "read", c);
     if (scope.fields === null) return;
     for (const c of cols) if (!scope.fields.includes(c)) throw new AclDenied(from, "read", c);
   }
@@ -344,6 +363,15 @@ export class Db<S extends SchemaDef = SchemaDef> {
       }
     }
 
+    // Hidden columns are never readable through the ORM — reject group-by / aggregating
+    // them UNCONDITIONALLY (independent of scope.fields, which is null under full/SYSTEM
+    // read), else min/max/groupBy over a hidden column exposes its values.
+    const hiddenCols = new Set(this.hiddenColsOf(from));
+    for (const c of groupBy) if (hiddenCols.has(c)) throw new AclDenied(from, "read", c);
+    for (const agg of Object.values(spec.aggregations)) {
+      if (agg.column && hiddenCols.has(agg.column as string)) throw new AclDenied(from, "read", agg.column as string);
+    }
+
     if (scope.fields) {
       const refs = new Set<string>(groupBy);
       for (const agg of Object.values(spec.aggregations)) if (agg.column) refs.add(agg.column as string);
@@ -362,7 +390,29 @@ export class Db<S extends SchemaDef = SchemaDef> {
     // subqueries), then AND-merges the entity's own ACL row scope.
     if (userWhere) this.assertReadableWhere(from, scope, userWhere);
     const userExpr: SqlExpr = userWhere ? compileScopedWhere(userWhere as Record<string, unknown>, from, this.acl) : TRUE;
-    return scope.where ? and(userExpr, scope.where) : userExpr;
+    const where = scope.where ? and(userExpr, scope.where) : userExpr;
+    // A relation-traversal `where` (or a relation-traversing ACL scope) compiles to a
+    // `sub` node over another table. Record those tables in `touched` so the live-query
+    // layer re-checks the subscription when the traversed table changes — else a write
+    // there never intersects the sub's read-set and the client stays stale.
+    this.addTouchedTables(where);
+    return where;
+  }
+
+  /** Walk a compiled predicate and add every relation-subquery target table to
+   * `touched` (the live-query read-set). Recurses into nested subqueries. */
+  private addTouchedTables(expr: SqlExpr | null | undefined): void {
+    if (!expr) return;
+    switch (expr.t) {
+      case "sub":
+        this.touched.add(expr.from);
+        this.addTouchedTables(expr.where);
+        break;
+      case "and":
+      case "or":
+        for (const p of expr.parts) this.addTouchedTables(p);
+        break;
+    }
   }
 
   /** Reject a user `where` that filters on a column the caller cannot read (closes
@@ -398,6 +448,16 @@ export class Db<S extends SchemaDef = SchemaDef> {
     if (!fields) return [];
     return Object.entries(fields)
       .filter(([, f]) => (f as FieldDef).type === "json" || (f as FieldDef).type === "fileRef")
+      .map(([n]) => n);
+  }
+
+  /** Boolean columns — stored as INTEGER 0/1 (SQLite has no boolean), decoded back to
+   * true/false on read so handlers see the `boolean` the InferRow type promises. */
+  private boolColsOf(table: string): string[] {
+    const fields = this.schema[table]?.fields;
+    if (!fields) return [];
+    return Object.entries(fields)
+      .filter(([, f]) => (f as FieldDef).type === "boolean")
       .map(([n]) => n);
   }
 
@@ -487,7 +547,8 @@ export class Db<S extends SchemaDef = SchemaDef> {
 
   private decodeRows(table: string, rows: Row[]): Row[] {
     const cols = this.jsonColsOf(table);
-    if (cols.length === 0) return rows;
+    const boolCols = this.boolColsOf(table);
+    if (cols.length === 0 && boolCols.length === 0) return rows;
     for (const row of rows) {
       for (const c of cols) {
         const v = row[c];
@@ -498,6 +559,12 @@ export class Db<S extends SchemaDef = SchemaDef> {
             /* leave a non-JSON value as-is */
           }
         }
+      }
+      // INTEGER 0/1 -> boolean (leave NULL as null for a nullable bool column).
+      for (const c of boolCols) {
+        const v = row[c];
+        if (typeof v === "number") row[c] = v !== 0;
+        else if (typeof v === "bigint") row[c] = v !== 0n;
       }
     }
     return rows;
@@ -556,7 +623,9 @@ export class Db<S extends SchemaDef = SchemaDef> {
     const scope = this.acl.system ? ALLOW_ALL : resolveRelationScope(this.acl, parentEntity, relName, rel.target);
     if (!scope.allowed) throw new AclDenied(rel.target, "read");
 
-    const project = (row: Row): Row => projectRow(row, effectiveFields(scope, row, this.acl.identity));
+    // Strip hidden() columns from the relation load, like every other read path —
+    // projectRow alone keeps them under a full/allow()/SYSTEM scope (fields === null).
+    const project = (row: Row): Row => this.stripHidden(rel.target, projectRow(row, effectiveFields(scope, row, this.acl.identity)));
     // One IN query per relation (no N+1). Match column before projecting (which
     // may drop the join column).
     const fetchBy = async (col: string, values: unknown[]): Promise<Array<{ key: unknown; row: Row }>> => {
@@ -574,14 +643,16 @@ export class Db<S extends SchemaDef = SchemaDef> {
       for (const { key, row } of await fetchBy(this.pkOf(rel.target), keys)) byId.set(key, row);
       for (const r of rows) r[relName] = r[rel.column] != null ? (byId.get(r[rel.column]) ?? null) : null;
     } else {
-      // hasMany: target[column] -> parent.id
-      const ids = [...new Set(rows.map((r) => r.id).filter((v) => v != null))];
+      // hasMany: target[column] -> parent.<pk> (NOT hardcoded `id` — a parent keyed by
+      // slug/username would otherwise join on an undefined `r.id` and get []).
+      const pk = this.pkOf(parentEntity);
+      const ids = [...new Set(rows.map((r) => r[pk]).filter((v) => v != null))];
       const grouped = new Map<unknown, Row[]>();
       for (const { key, row } of await fetchBy(rel.column, ids)) {
         const bucket = grouped.get(key) ?? grouped.set(key, []).get(key)!;
         bucket.push(row);
       }
-      for (const r of rows) r[relName] = grouped.get(r.id) ?? [];
+      for (const r of rows) r[relName] = grouped.get(r[pk]) ?? [];
     }
   }
 

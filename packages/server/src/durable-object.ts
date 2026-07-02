@@ -35,14 +35,17 @@ import type { HandlerContext } from "./sdk/handlers";
 import type { PramenApp } from "./pramen";
 import type { ClientMsg, ServerMsg, Subscription } from "./runtime/protocol";
 
-interface SocketState {
+/** Durable per-socket state — kept SMALL and stable, since it rides the WebSocket
+ * attachment which workerd caps at ~2 KB. Only auth/routing identity lives here so it
+ * survives hibernation; the (potentially large) subscription list does NOT — see
+ * `subsBySocket`. */
+interface SocketAttachment {
   identity: Identity | null;
   /** Tenant fixed at connect time (survives hibernation via the attachment). */
   tenant: string;
   /** Partition fixed at connect time (read from x-pramen-partition at upgrade);
    * survives hibernation via the attachment, like `tenant`. */
   partition: string;
-  subs: Subscription[];
 }
 
 export interface DoEnv {
@@ -84,6 +87,14 @@ export class PramenDOBase extends DurableObject<DoEnv> {
    * task context — a DO can't introspect its own idFromName. */
   private identityPersisted = false;
   private identityLoaded = false;
+  /** Live subscriptions per socket — held IN MEMORY, not in the WS attachment. The
+   * attachment is capped at ~2 KB by workerd, and 64 subs (each with arbitrary input
+   * JSON + a read-set + digest) blow past that well before MAX_SUBSCRIPTIONS. The
+   * tradeoff: this map is lost on DO hibernation/eviction, so a woken socket has no
+   * entry and is treated as having no active subscriptions — acceptable because the
+   * client replays its subscriptions on (re)connect. Keyed by the WebSocket object;
+   * cleaned up in webSocketClose. */
+  private readonly subsBySocket = new Map<WebSocket, Subscription[]>();
 
   constructor(ctx: DurableObjectState, env: DoEnv, app: PramenApp) {
     super(ctx, env);
@@ -161,7 +172,8 @@ export class PramenDOBase extends DurableObject<DoEnv> {
     if (request.headers.get("Upgrade") === "websocket") {
       const { 0: client, 1: server } = new WebSocketPair();
       this.ctx.acceptWebSocket(server); // hibernatable
-      this.setState(server, { identity, tenant: this.tenant, partition: this.partition, subs: [] });
+      this.setAttachment(server, { identity, tenant: this.tenant, partition: this.partition });
+      this.subsBySocket.set(server, []);
       return new Response(null, { status: 101, webSocket: client });
     }
 
@@ -183,8 +195,11 @@ export class PramenDOBase extends DurableObject<DoEnv> {
         name,
         input,
       );
-      if (kind === "mutation" && touched.length > 0) await this.broadcast(touched);
+      // Arm the drain BEFORE broadcasting so enqueued tasks are always scheduled even
+      // if broadcast has trouble (broadcast is best-effort and never throws — a failed
+      // push must not 500 a COMMITTED write nor skip the alarm).
       if (enqueued > 0) await this.armDrain();
+      if (kind === "mutation" && touched.length > 0) await this.broadcast(touched);
       return Response.json({ ok: true, result });
     } catch (err) {
       const { status, body } = toResponse(err);
@@ -199,15 +214,17 @@ export class PramenDOBase extends DurableObject<DoEnv> {
   }
 
   /** A privileged, system-scoped context for running task handlers (outside a request).
-   * Task handlers get full db access + env (e.g. ctx.env.EMAIL) + their own ctx.tasks. */
-  private taskCtx(): HandlerContext {
+   * Task handlers get full db access + env (e.g. ctx.env.EMAIL) + their own ctx.tasks.
+   * Returns the `db` alongside the ctx so the drainer can broadcast the tables the task
+   * handlers touched (live queries would otherwise go stale after deferred/trigger work). */
+  private taskCtx(): { ctx: HandlerContext; db: Db } {
     const identity: Identity = { roles: ["admin"] };
     const db = new Db(
       this.driver,
       { acl: this.acl, identity, system: true, schema: this.app.schema, partition: this.partition, suppressTriggers: true },
       this.app.schema,
     );
-    return {
+    const ctx: HandlerContext = {
       db,
       kv: this.kv,
       files: this.filesFor(this.tenant),
@@ -217,6 +234,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
       mail: createMail(this.envBag, this.kv),
       queue: createQueue(this.envBag),
     };
+    return { ctx, db };
   }
 
   /** Restore (tenant, partition) on a cold wake (e.g. an alarm with no request) so the
@@ -237,23 +255,33 @@ export class PramenDOBase extends DurableObject<DoEnv> {
   }
 
   /** Drain due tasks. Called by the alarm (DO path) and the /__admin/tasks/drain route
-   * (manual / cron). Returns the drain stats incl. `nextRunAt` for rescheduling. */
-  private async drainTasks(): Promise<Awaited<ReturnType<typeof drainOutbox>>> {
+   * (manual / cron). Returns the drain stats incl. `nextRunAt` for rescheduling, plus
+   * the union of tables the drained task handlers touched (for a post-commit broadcast). */
+  private async drainTasks(): Promise<{ result: Awaited<ReturnType<typeof drainOutbox>>; touched: string[] }> {
     await ensureOutbox(this.driver); // idempotent — the table may predate this instance (cold alarm)
-    return drainOutbox(this.driver, bindTasks(this.app.tasks, this.taskCtx()), Date.now());
+    const { ctx, db } = this.taskCtx();
+    const result = await drainOutbox(this.driver, bindTasks(this.app.tasks, ctx), Date.now());
+    return { result, touched: [...db.touched] };
   }
 
   override async alarm(): Promise<void> {
     await this.loadIdentity(); // cold wake: restore tenant/partition before building taskCtx
-    const { nextRunAt } = await this.drainTasks();
+    // A post-deploy cold alarm may run against the old schema — reconcile it first, or a
+    // task handler writing a new column dead-letters. loadIdentity() restored the partition.
+    await this.ensureMigrated();
+    const { result, touched } = await this.drainTasks();
+    // Deferred/triggered writes are invisible to live queries unless we broadcast the
+    // tables the task handlers touched (post-commit — the drain has already committed).
+    if (touched.length > 0) await this.broadcast(touched);
     // Reschedule to the NEXT task's due time (a backed-off retry, or the next batch if
     // the drain hit its limit) so a failed task can't stall waiting for a new enqueue.
-    if (nextRunAt != null) await this.ctx.storage.setAlarm(Math.max(nextRunAt, Date.now() + 250));
+    if (result.nextRunAt != null) await this.ctx.storage.setAlarm(Math.max(result.nextRunAt, Date.now() + 250));
   }
 
   private async handleDrain(): Promise<Response> {
     await this.loadIdentity();
-    const result = await this.drainTasks();
+    const { result, touched } = await this.drainTasks();
+    if (touched.length > 0) await this.broadcast(touched);
     // Keep the alarm honest even when drained manually: ensure a backed-off retry wakes.
     if (result.nextRunAt != null) await this.ctx.storage.setAlarm(Math.max(result.nextRunAt, Date.now() + 250));
     return Response.json({ ok: true, result });
@@ -282,7 +310,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
     // socket's (tenant, partition) — fixed at connect time, survives via the attachment
     // — and ensure the schema is migrated before any handler/ctx.db work. Idempotent
     // (the `migrated` flag), so a no-op after the first call.
-    const { tenant, partition } = this.getState(ws);
+    const { tenant, partition } = this.getAttachment(ws);
     this.tenant = tenant;
     this.partition = partition;
     await this.ensureMigrated();
@@ -290,11 +318,9 @@ export class PramenDOBase extends DurableObject<DoEnv> {
     switch (msg.type) {
       case "subscribe":
         return this.onSubscribe(ws, msg.id, msg.name, msg.input);
-      case "unsubscribe": {
-        const state = this.getState(ws);
-        this.setState(ws, { ...state, subs: state.subs.filter((s) => s.id !== msg.id) });
+      case "unsubscribe":
+        this.setSubs(ws, this.getSubs(ws).filter((s) => s.id !== msg.id));
         return;
-      }
       case "call":
         return this.onCall(ws, msg.id, msg.name, msg.input);
       default:
@@ -303,6 +329,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
   }
 
   override async webSocketClose(ws: WebSocket): Promise<void> {
+    this.subsBySocket.delete(ws); // release the in-memory subscription list for this socket
     ws.close();
   }
 
@@ -318,19 +345,20 @@ export class PramenDOBase extends DurableObject<DoEnv> {
   // --- live-query internals ---
 
   private async onSubscribe(ws: WebSocket, id: string, name: string, input: unknown): Promise<void> {
-    const state = this.getState(ws);
+    const att = this.getAttachment(ws);
+    const subs = this.getSubs(ws);
     try {
-      const replacing = state.subs.some((s) => s.id === id);
-      if (!replacing && state.subs.length >= MAX_SUBSCRIPTIONS) {
+      const replacing = subs.some((s) => s.id === id);
+      if (!replacing && subs.length >= MAX_SUBSCRIPTIONS) {
         return this.send(ws, toWsError(id, new BadRequest("subscription limit reached")));
       }
-      const { result, kind, touched } = await dispatch(this.app.handlers, this.app.schema, this.driver, this.kv, this.filesFor(state.tenant), this.envBag, this.ctxFor(state.identity, state.partition), name, input);
+      const { result, kind, touched } = await dispatch(this.app.handlers, this.app.schema, this.driver, this.kv, this.filesFor(att.tenant), this.envBag, this.ctxFor(att.identity, att.partition), name, input);
       if (kind !== "query") {
         return this.send(ws, toWsError(id, new BadRequest(`${name} is not a query`)));
       }
-      const subs = state.subs.filter((s) => s.id !== id);
-      subs.push({ id, name, input, tables: touched, digest: digest(result) });
-      this.setState(ws, { ...state, subs });
+      const next = subs.filter((s) => s.id !== id);
+      next.push({ id, name, input, tables: touched, digest: digest(result) });
+      this.setSubs(ws, next);
       this.send(ws, { type: "data", id, result });
     } catch (err) {
       this.send(ws, toWsError(id, err));
@@ -338,38 +366,57 @@ export class PramenDOBase extends DurableObject<DoEnv> {
   }
 
   private async onCall(ws: WebSocket, id: string, name: string, input: unknown): Promise<void> {
-    const state = this.getState(ws);
+    const att = this.getAttachment(ws);
+    let outcome: Awaited<ReturnType<typeof dispatch>>;
     try {
-      const { result, kind, touched, enqueued } = await dispatch(this.app.handlers, this.app.schema, this.driver, this.kv, this.filesFor(state.tenant), this.envBag, this.ctxFor(state.identity, state.partition), name, input);
-      this.send(ws, { type: "result", id, result });
-      if (kind === "mutation" && touched.length > 0) await this.broadcast(touched);
-      if (enqueued > 0) await this.armDrain();
+      outcome = await dispatch(this.app.handlers, this.app.schema, this.driver, this.kv, this.filesFor(att.tenant), this.envBag, this.ctxFor(att.identity, att.partition), name, input);
     } catch (err) {
-      this.send(ws, toWsError(id, err));
+      return this.send(ws, toWsError(id, err));
     }
+    // The mutation is committed — send its result FIRST, then run post-commit
+    // side-effects that must never turn a committed write into a spurious error frame:
+    // arm the drain (independent of broadcast), then broadcast (best-effort, never throws).
+    const { result, kind, touched, enqueued } = outcome;
+    this.send(ws, { type: "result", id, result });
+    if (enqueued > 0) await this.armDrain();
+    if (kind === "mutation" && touched.length > 0) await this.broadcast(touched);
   }
 
   // Re-run every subscription whose read-set intersects the written tables, each
-  // under its own socket's identity, and push only when its result changed.
+  // under its own socket's identity, and push only when its result changed. Best-effort:
+  // a failure for one subscription or socket is logged and skipped — it must NEVER throw,
+  // because it runs after a mutation has committed (a throw here would 500 that write).
   private async broadcast(touched: string[]): Promise<void> {
     const written = new Set(touched);
     for (const ws of this.ctx.getWebSockets()) {
-      const state = this.getState(ws);
-      let dirty = false;
-      for (const sub of state.subs) {
-        if (!sub.tables.some((t) => written.has(t))) continue;
-        try {
-          const { result } = await dispatch(this.app.handlers, this.app.schema, this.driver, this.kv, this.filesFor(state.tenant), this.envBag, this.ctxFor(state.identity, state.partition), sub.name, sub.input);
-          const next = digest(result);
-          if (next === sub.digest) continue; // result unchanged for this subscription
-          sub.digest = next;
-          dirty = true;
-          this.send(ws, { type: "data", id: sub.id, result });
-        } catch (err) {
-          this.send(ws, toWsError(sub.id, err));
+      try {
+        const att = this.getAttachment(ws);
+        const subs = this.getSubs(ws);
+        let dirty = false;
+        for (const sub of subs) {
+          if (!sub.tables.some((t) => written.has(t))) continue;
+          try {
+            const { result } = await dispatch(this.app.handlers, this.app.schema, this.driver, this.kv, this.filesFor(att.tenant), this.envBag, this.ctxFor(att.identity, att.partition), sub.name, sub.input);
+            const next = digest(result);
+            if (next === sub.digest) continue; // result unchanged for this subscription
+            sub.digest = next;
+            dirty = true;
+            this.send(ws, { type: "data", id: sub.id, result });
+          } catch (err) {
+            // One subscription failing (re-dispatch error, or a send to a dead socket)
+            // must not abort the other subs — surface it to that sub, swallow otherwise.
+            try {
+              this.send(ws, toWsError(sub.id, err));
+            } catch {
+              /* socket already gone */
+            }
+          }
         }
+        if (dirty) this.setSubs(ws, subs);
+      } catch (err) {
+        // A bad socket must not stop the loop over the others.
+        console.error("pramen: broadcast to a socket failed", err);
       }
-      if (dirty) this.setState(ws, state);
     }
   }
 
@@ -468,7 +515,9 @@ export class PramenDOBase extends DurableObject<DoEnv> {
           result = await db.count({ from: table, where: b.where });
           break;
         case "get":
-          result = (await db.find({ from: table, where: { id: b.id }, limit: 1 }))[0] ?? null;
+          // Resolve the PK from the schema — a custom-PK table (e.g. auth_users keyed on
+          // `username`) has no `id` column, so a hardcoded `{ id }` would 500.
+          result = (await db.find({ from: table, where: { [db.pkOf(table)]: b.id }, limit: 1 }))[0] ?? null;
           break;
         case "create":
           result = await this.driver.transaction(() => db.insert(table, b.values));
@@ -485,6 +534,9 @@ export class PramenDOBase extends DurableObject<DoEnv> {
         default:
           return Response.json({ ok: false, error: `unknown op: ${op}`, code: "bad_request" }, { status: 400 });
       }
+      // Admin-data writes fire triggers too — arm the drain if any task was enqueued
+      // (independent of broadcast), then broadcast the touched tables to live queries.
+      if (mutated && db.taskEnqueues > 0) await this.armDrain();
       if (mutated && db.touched.size > 0) await this.broadcast([...db.touched]);
       return Response.json({ ok: true, result });
     } catch (err) {
@@ -526,19 +578,31 @@ export class PramenDOBase extends DurableObject<DoEnv> {
     }
   }
 
-  private getState(ws: WebSocket): SocketState {
+  /** The durable per-socket auth/routing state (identity + tenant + partition), read
+   * from the WS attachment. Survives hibernation; kept tiny to stay under workerd's cap. */
+  private getAttachment(ws: WebSocket): SocketAttachment {
     return (
-      (ws.deserializeAttachment() as SocketState | null) ?? {
+      (ws.deserializeAttachment() as SocketAttachment | null) ?? {
         identity: null,
         tenant: this.tenant,
         partition: this.partition,
-        subs: [],
       }
     );
   }
 
-  private setState(ws: WebSocket, state: SocketState): void {
-    ws.serializeAttachment(state);
+  private setAttachment(ws: WebSocket, att: SocketAttachment): void {
+    ws.serializeAttachment(att);
+  }
+
+  /** This socket's live subscriptions from the in-memory map (see `subsBySocket`). A
+   * hibernated/woken socket has no entry → no active subscriptions until the client
+   * replays them on reconnect. */
+  private getSubs(ws: WebSocket): Subscription[] {
+    return this.subsBySocket.get(ws) ?? [];
+  }
+
+  private setSubs(ws: WebSocket, subs: Subscription[]): void {
+    this.subsBySocket.set(ws, subs);
   }
 
   private send(ws: WebSocket, msg: ServerMsg): void {

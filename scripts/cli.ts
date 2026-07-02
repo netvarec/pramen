@@ -112,11 +112,27 @@ async function schemaCmd(sub: string | undefined): Promise<void> {
     for (const c of changes) {
       const where = c.column ? `${c.table}.${c.column}` : c.table;
       const note = c.detail ? ` (${c.detail})` : "";
-      console.log(`${c.destructive ? "  ⚠" : "  +"} ${c.kind} ${where}${note}${c.destructive ? "  [destructive]" : ""}`);
+      const glyph = c.destructive ? "⚠" : !c.appliesOnBoot ? "•" : "+";
+      const tags =
+        (c.destructive ? "  [destructive]" : "") + (!c.appliesOnBoot ? "  [NOT applied on boot]" : "");
+      console.log(`  ${glyph} ${c.kind} ${where}${note}${tags}`);
     }
-    console.log("\nAll changes are auto-applied on the next DO boot.");
+    console.log(
+      "\nOn the next DO boot: additive changes (new table/column) auto-apply; destructive changes\n" +
+        "(drops, type changes, table rebuilds) are SKIPPED unless the deploy sets PRAMEN_ALLOW_DESTRUCTIVE=true\n" +
+        "(the schema hash is then left unwritten so a later opt-in deploy retries).",
+    );
     if (changes.some((c) => c.destructive))
-      console.log("⚠ destructive changes rebuild the table and CAN lose data. A drop+add is applied as such unless\n  the column declares `renamedFrom` (which migrates the data).");
+      console.log(
+        "⚠ destructive changes rebuild the table and CAN lose data. A drop+add is applied as such unless\n" +
+          "  the column declares `renamedFrom` (which migrates the data).",
+      );
+    if (changes.some((c) => !c.appliesOnBoot))
+      console.log(
+        "• [NOT applied on boot] changes the boot migrator never enacts: a modifier change on an existing\n" +
+          "  column (migrate only rebuilds on a TYPE change), or a partition move (a separate Durable Object —\n" +
+          "  needs a manual cross-DO data migration). Apply these yourself.",
+      );
     return;
   }
   if (sub === "status") {
@@ -154,7 +170,7 @@ async function schemaCmd(sub: string | undefined): Promise<void> {
       const want = schemaShape(subset);
       for (const table of Object.keys(want)) {
         const liveCols = new Set(live.tables[table] ?? []);
-        const missing = Object.keys(want[table]!).filter((col) => !liveCols.has(col));
+        const missing = Object.keys(want[table]!.columns).filter((col) => !liveCols.has(col));
         if (!live.tables[table]) console.log(`  + table ${table} (not yet created live)`);
         else if (missing.length) console.log(`  + ${table}: ${missing.join(", ")} (not yet added live)`);
       }

@@ -8,6 +8,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/). This pro
 **pre-1.0 and under active development**: 0.0.x releases may include breaking changes —
 there are no backward-compatibility guarantees yet.
 
+## [Unreleased]
+
+### Fixed
+
+- **`@pramen/client` `call()` no longer silently resolves `undefined`.** A 2xx response
+  that isn't the `{ ok: true, result }` envelope (e.g. a trailing-slash base url routed to
+  the Worker help page) now throws a `PramenError` with the status instead of resolving
+  `undefined`. The base url is also normalized (trailing slash stripped) so `${url}/rpc`
+  can't become `//rpc`.
+- **`@pramen/client` D1 read-your-writes bookmark keeps the maximum**, not
+  last-response-wins — a slower earlier response can no longer clobber a newer bookmark and
+  regress read-your-writes under concurrency.
+- **`@pramen/client` surfaces live-connection failures.** A missing WebSocket
+  implementation, or a socket that keeps closing past `maxReconnectAttempts` (default 8),
+  now fires a new optional `onConnectionError` subscribe callback instead of hanging
+  forever behind a permanent loading state. Reconnect backoff gained jitter and only resets
+  after the connection has stayed open a few seconds (no accept-then-close hot-loop).
+
+### Changed
+
+- **`pramen schema diff` now reports modifier and partition changes**, not just column
+  types — `notNull`/`unique`/`primaryKey`/`generated`/`default`/`hidden` changes and
+  entity partition moves are surfaced, each labeled `[NOT applied on boot]` because the
+  boot migrator only rebuilds on a type change (partition moves need a manual cross-DO data
+  migration).
+- **Migration docs corrected:** destructive migrations are gated behind
+  `PRAMEN_ALLOW_DESTRUCTIVE` (off by default), not auto-applied. Fixed the misleading
+  "auto-applied" wording in the CLI, `schema diff`, and the README/docs.
+
 ## [0.0.14] — 2026-06-25
 
 ### Added

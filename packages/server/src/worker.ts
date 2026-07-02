@@ -20,7 +20,7 @@ import { listDOs, partitionDoName } from "./runtime/registry";
 import { createFiles, handleFileRequest, R2Adapter } from "./runtime/storage";
 import type { Identity } from "./sdk/acl";
 import type { HandlerContext } from "./sdk/handlers";
-import { DEFAULT_PARTITION } from "./sdk/schema";
+import { DEFAULT_PARTITION, partitionsOf } from "./sdk/schema";
 import type { PramenApp } from "./pramen";
 
 export interface Env {
@@ -52,6 +52,11 @@ export interface Env {
    * per-tenant Durable Object. The header still overrides per-request. /live always
    * needs the DO regardless of this setting. */
   PRAMEN_STORE?: string;
+  /** "true" to allow the shared D1 store to serve a non-`main` tenant. OFF by default:
+   * the D1 proof uses ONE database with no tenant column, so multiple tenants would
+   * commingle. Only set this if the app genuinely single-tenants that D1 (or has added
+   * its own tenant isolation). */
+  PRAMEN_D1_ALLOW_MULTITENANT?: string;
   /** Cloudflare Queues producer binding for ctx.queue (declared in oblaka.ts). Optional —
    * ctx.queue discovers any producer binding by name; this just types the common one. */
   JOBS?: QueueProducerBinding;
@@ -396,19 +401,30 @@ export function makeWorker(app: PramenApp) {
     const useD1 = useD1Store({ storeHeader, isLive, defaultStore: env.PRAMEN_STORE });
     if (useD1) {
       if (!env.DB) return badRequest("D1 store is not configured");
+      // COMMINGLING GUARD: this D1 path is ONE shared database with no tenant column, so
+      // every tenant's rows live together. Selecting it for a non-`main` tenant (a
+      // multi-tenant scenario) would leak/mix tenants — and `PRAMEN_STORE=d1` makes it a
+      // silent global default. Fail closed unless the operator explicitly opts in.
+      if (tenant !== "main" && env.PRAMEN_D1_ALLOW_MULTITENANT !== "true") {
+        return withCors(
+          forbidden(`D1 store for tenant '${tenant}' (shared D1 has no tenant isolation — set PRAMEN_D1_ALLOW_MULTITENANT=true to allow)`),
+          cors,
+        );
+      }
       // (isLive is excluded by useD1Store — live always routes to the DO below.)
       const name = url.pathname.replace(/^\/rpc\//, "");
       let input: unknown;
       if (request.method === "POST") input = await request.json().catch(() => undefined);
 
-      // Pick where the D1 session may start its first read. A client-supplied bookmark
-      // wins (read-your-writes); otherwise default by handler kind: a mutation pins the
-      // primary so its reads see current data, a query may begin at the nearest replica.
+      // Pick where the D1 session may start its first read. A mutation ALWAYS pins the
+      // primary (`first-primary` is a superset of read-your-writes) so a read-modify-write
+      // can't run off a lagging replica — an inbound bookmark must not widen that window.
+      // A query honors a client-supplied bookmark (read-your-writes), else the nearest replica.
       const inboundBookmark = req.headers.get(D1_BOOKMARK_HEADER);
       const kind = app.handlers[name]?.kind;
       let start: D1SessionStart;
-      if (inboundBookmark) start = inboundBookmark;
-      else if (kind === "mutation") start = "first-primary";
+      if (kind === "mutation") start = "first-primary";
+      else if (inboundBookmark) start = inboundBookmark;
       else start = "first-unconstrained";
 
       const driver = new D1Driver(env.DB, { start });
@@ -436,13 +452,22 @@ export function makeWorker(app: PramenApp) {
       const name = url.pathname.replace(/^\/rpc\//, "");
       partition = app.handlers[name]?.partition ?? DEFAULT_PARTITION;
     } else {
+      // /live's partition is client-supplied (?partition= / x-pramen-partition), so
+      // validate it against the schema's known partitions BEFORE routing — otherwise an
+      // anonymous caller could spin up unbounded junk DOs + permanent registry KV keys.
       partition = req.headers.get("x-pramen-partition") || DEFAULT_PARTITION;
+      if (!partitionsOf(app.schema).includes(partition)) {
+        return withCors(badRequest(`unknown partition '${partition}'`), cors);
+      }
     }
 
-    // Forward a trusted identity to the DO (the DO never re-derives it).
+    // Forward a trusted identity to the DO (the DO never re-derives it). Also set the
+    // tenant header so the DO learns its own name — without it, `main` (the default when
+    // the client omits x-pramen-tenant) never registers and re-runs its guard forever.
     const headers = new Headers(req.headers);
     if (identity) headers.set("x-pramen-identity", JSON.stringify(identity as Identity));
     else headers.delete("x-pramen-identity");
+    headers.set("x-pramen-tenant", tenant);
     headers.set("x-pramen-partition", partition);
 
     // Routed to the DO but no DO is bound — return a clear, actionable error instead of

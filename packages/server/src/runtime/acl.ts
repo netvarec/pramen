@@ -225,6 +225,12 @@ function resolveMarkers(rule: Record<string, unknown>, identity: Identity | null
     } else {
       const rv = resolveValue(v, identity, input);
       if (rv === UNRESOLVED) return null;
+      // A bare-value marker must only ever produce an EQUALITY comparison. If it
+      // resolves to a caller-controlled non-primitive (object/array), compileWhere
+      // would read it as an operator predicate (`{"gte":""}` → full-table
+      // enumeration), defeating the intended equality. Treat that as unresolvable so
+      // the branch matches nothing (the safe-deny path). Primitives resolve as today.
+      if (isMarker && rv !== null && typeof rv === "object") return null;
       out[key] = rv;
     }
   }
@@ -242,6 +248,24 @@ function pkOf(schema: SchemaDef | undefined, entity: string): string {
   const fields = schema?.[entity]?.fields;
   if (fields) for (const [n, f] of Object.entries(fields)) if ((f as FieldDef).primaryKey) return n;
   return "id";
+}
+
+/** Reject a relation `where` that filters the target on a column it can't read —
+ * anywhere in the clause, including inside nested AND/OR groups (else a hidden/
+ * unreadable column is LIKE-oracle'able through the subquery). Nested relation keys
+ * are skipped: they're re-scoped against THEIR own target's read scope downstream.
+ * Mirrors Db.assertReadableWhere's recursion for the top-level user `where`. */
+function assertReadableRelationWhere(where: Record<string, unknown>, target: string, fields: string[], ctx: AclContext): void {
+  const targetRels = (ctx.schema?.[target]?.relations ?? {}) as Record<string, unknown>;
+  for (const [k, v] of Object.entries(where)) {
+    if (k === "AND" || k === "OR") {
+      for (const g of v as Record<string, unknown>[]) assertReadableRelationWhere(g, target, fields, ctx);
+    } else if (targetRels[k]) {
+      continue;
+    } else if (!fields.includes(k)) {
+      throw new AclDenied(target, "read", k);
+    }
+  }
 }
 
 /** Compile a relation predicate `{ rel: { … } }` to a subquery, AND-merging the
@@ -268,11 +292,7 @@ function relationPredicate(rel: RelationDef, nested: unknown, parentEntity: stri
       inner = FALSE; // can't filter through a relation you can't read
     } else {
       if (tScope.fields !== null) {
-        const targetRels = (ctx.schema?.[rel.target]?.relations ?? {}) as Record<string, unknown>;
-        for (const k of Object.keys(nested as Record<string, unknown>)) {
-          if (k === "AND" || k === "OR" || targetRels[k]) continue;
-          if (!tScope.fields.includes(k)) throw new AclDenied(rel.target, "read", k);
-        }
+        assertReadableRelationWhere(nested as Record<string, unknown>, rel.target, tScope.fields, ctx);
       }
       if (tScope.where) inner = and(inner, tScope.where);
     }

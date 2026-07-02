@@ -129,9 +129,10 @@ export const handlers = {
   `ctx.tasks.enqueue` — a transactional outbox, not an inline call. See
   [Deferred Tasks](/docs/tasks).
 
-The context is `{ db, kv, files, env, identity, tasks }` — `ctx.kv` (global config
-cache), `ctx.files` (R2, see [File Storage](/docs/file-storage)), `ctx.env` (bindings
-+ secrets), `ctx.identity` (the verified caller), and `ctx.tasks` (deferred work).
+The context is `{ db, kv, files, env, identity, tasks, mail, queue }` — `ctx.kv`
+(global config cache), `ctx.files` (R2, see [File Storage](/docs/file-storage)),
+`ctx.env` (bindings + secrets), `ctx.identity` (the verified caller), `ctx.tasks`
+(deferred work), `ctx.mail` (transactional email), and `ctx.queue` (Cloudflare Queues).
 
 ## Input validation
 

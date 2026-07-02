@@ -141,6 +141,17 @@ export async function drainOutbox(driver: Driver, tasks: TaskMap, now: number, l
     const kind = String(row.kind);
     const attempts = Number(row.attempts) + 1;
     const handler = tasks[kind];
+    // Re-stamp claimedAt to WALL-CLOCK time immediately before running this row, so its
+    // stale clock starts when its own processing starts — not when the whole batch was
+    // claimed. Otherwise a batch (up to `limit` rows) processed SEQUENTIALLY whose total
+    // time exceeds STALE_MS would leave the not-yet-run tail reclaimable by a concurrent
+    // drainer under the batch-shared claimedAt, running it twice. We use Date.now() (not
+    // the caller's fixed `now`) because that is the only clock that advances across the
+    // loop; the atomic claim above still gives disjoint batches for concurrent drainers.
+    await driver.exec(
+      `UPDATE ${d.id(OUTBOX_TABLE)} SET claimedAt = ${ph(1)} WHERE id = ${ph(2)}`,
+      enc(driver, [Date.now(), id]),
+    );
     try {
       if (!handler) throw new Error(`no task handler registered for kind ${JSON.stringify(kind)}`);
       await handler(JSON.parse(String(row.payload)), { id, attempts });
@@ -160,22 +171,34 @@ export async function drainOutbox(driver: Driver, tasks: TaskMap, now: number, l
     }
   }
 
-  // remaining = pending AND due now; nextRunAt = the earliest pending runAt (any), so
-  // the DO can schedule its alarm exactly when the next task — including a backed-off
-  // retry — becomes due.
+  // remaining = pending AND due now. nextRunAt = the earliest moment the DO must wake to
+  // make progress, so it can re-arm its alarm exactly there. That is the min of:
+  //   (a) MIN(runAt) over pending rows (a due-now or backed-off retry), and
+  //   (b) MIN(claimedAt) + STALE_MS over 'processing' rows — a claim stranded by a
+  //       crashed drainer becomes reclaimable at claimedAt + STALE_MS. Without folding
+  //       this in, a mid-drain crash would leave a row 'processing' with no pending row
+  //       to re-arm the alarm, and on a quiet tenant the task would stall forever (the
+  //       alarm is the only DO-path drain trigger). Any processing rows here belong to a
+  //       *different* (concurrent or crashed) drainer — our own batch is never left
+  //       processing after this loop.
   const stats = await driver.exec(
     `SELECT ` +
       `(SELECT COUNT(*) FROM ${d.id(OUTBOX_TABLE)} WHERE status = ${ph(1)} AND runAt <= ${ph(2)}) AS due, ` +
-      `(SELECT MIN(runAt) FROM ${d.id(OUTBOX_TABLE)} WHERE status = ${ph(3)}) AS nextRunAt`,
-    enc(driver, ["pending", now, "pending"]),
+      `(SELECT MIN(runAt) FROM ${d.id(OUTBOX_TABLE)} WHERE status = ${ph(3)}) AS nextPending, ` +
+      `(SELECT MIN(claimedAt) FROM ${d.id(OUTBOX_TABLE)} WHERE status = ${ph(4)}) AS nextStale`,
+    enc(driver, ["pending", now, "pending", "processing"]),
   );
-  const nextRaw = stats[0]?.nextRunAt;
+  const pendingRaw = stats[0]?.nextPending;
+  const staleRaw = stats[0]?.nextStale;
+  const candidates: number[] = [];
+  if (pendingRaw != null) candidates.push(Number(pendingRaw));
+  if (staleRaw != null) candidates.push(Number(staleRaw) + STALE_MS);
   return {
     processed: claimed.length,
     succeeded,
     failed,
     remaining: Number(stats[0]?.due ?? 0),
-    nextRunAt: nextRaw == null ? null : Number(nextRaw),
+    nextRunAt: candidates.length ? Math.min(...candidates) : null,
   };
 }
 
