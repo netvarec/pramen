@@ -42,6 +42,49 @@ describe("HmacStrategy (HS256)", () => {
   });
 });
 
+// Opt-in claim validation (requireExp / audience / issuer) threaded through verifyJwt.
+// HS256 exercised directly — no server. Sign with full control over claims (the shared
+// `sign()` always injects an exp, which the requireExp case must NOT have).
+describe("HmacStrategy — opt-in claim validation", () => {
+  const now = () => Math.floor(Date.now() / 1000);
+
+  async function signHs(payload: Record<string, unknown>): Promise<string> {
+    const header = strB64(JSON.stringify({ alg: "HS256", typ: "JWT" }));
+    const body = strB64(JSON.stringify(payload));
+    const data = `${header}.${body}`;
+    const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(DEV_SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(data));
+    return `${data}.${b64url(new Uint8Array(sig))}`;
+  }
+
+  test("requireExp rejects a token with no exp, accepts one with exp", async () => {
+    const strat = new HmacStrategy(DEV_SECRET, { requireExp: true });
+    expect(await strat.verify(await signHs({ sub: "a" }))).toBeNull();
+    const claims = await strat.verify(await signHs({ sub: "a", exp: now() + 3600 }));
+    expect(claims?.sub).toBe("a");
+  });
+
+  test("audience: mismatch rejected, match (string or array aud) accepted", async () => {
+    const strat = new HmacStrategy(DEV_SECRET, { audience: "api" });
+    expect(await strat.verify(await signHs({ sub: "a", exp: now() + 3600, aud: "other" }))).toBeNull();
+    expect(await strat.verify(await signHs({ sub: "a", exp: now() + 3600 }))).toBeNull(); // missing aud
+    expect((await strat.verify(await signHs({ sub: "a", exp: now() + 3600, aud: "api" })))?.sub).toBe("a");
+    expect((await strat.verify(await signHs({ sub: "a", exp: now() + 3600, aud: ["x", "api"] })))?.sub).toBe("a");
+  });
+
+  test("issuer: mismatch rejected, exact match accepted", async () => {
+    const strat = new HmacStrategy(DEV_SECRET, { issuer: "iss-1" });
+    expect(await strat.verify(await signHs({ sub: "a", exp: now() + 3600, iss: "iss-2" }))).toBeNull();
+    expect((await strat.verify(await signHs({ sub: "a", exp: now() + 3600, iss: "iss-1" })))?.sub).toBe("a");
+  });
+
+  test("all config unset ⇒ a no-exp / no-aud / no-iss token still verifies", async () => {
+    const strat = new HmacStrategy(DEV_SECRET); // defaults: everything off
+    const claims = await strat.verify(await signHs({ sub: "a" }));
+    expect(claims?.sub).toBe("a");
+  });
+});
+
 describe("JwksStrategy (RS256)", () => {
   let realFetch: typeof fetch;
   afterEach(() => {

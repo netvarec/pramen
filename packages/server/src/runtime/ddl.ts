@@ -15,12 +15,25 @@ export const sqlType = (f: FieldDef): string =>
       ? "TEXT"
       : f.type.toUpperCase();
 
-/** Render a DEFAULT literal. Strings are single-quote-escaped; booleans → 0/1. */
-function defaultLiteral(v: DefaultValue): string {
+/** Render a DEFAULT literal. Strings are single-quote-escaped; booleans → 0/1.
+ * Exported for the migrator, which reconstructs a column's expected DEFAULT text to
+ * compare against the live `PRAGMA table_info.dflt_value`. */
+export function defaultLiteral(v: DefaultValue): string {
   if (v === null) return "NULL";
   if (typeof v === "boolean") return v ? "1" : "0";
   if (typeof v === "number") return String(v);
   return `'${v.replace(/'/g, "''")}'`;
+}
+
+/** The SQL text of a column's DEFAULT value (the part after `DEFAULT `), or null when
+ * the column declares no default. A raw-SQL `defaultExpr` is returned unquoted (e.g.
+ * `datetime('now')`); a literal `default` is rendered via {@link defaultLiteral}. Used
+ * by the migrator both to detect a default add/change on an existing column and to
+ * COALESCE-backfill a NOT NULL column during a rebuild. */
+export function defaultSqlValue(f: FieldDef): string | null {
+  if (f.defaultExpr !== undefined) return f.defaultExpr;
+  if (f.default !== undefined) return defaultLiteral(f.default);
+  return null;
 }
 
 /** The ` DEFAULT x` fragment for a column, or "" when it has no default. A raw-SQL
@@ -65,11 +78,15 @@ export function indexName(table: string, col: string): string {
 }
 
 /** CREATE [UNIQUE] INDEX statements for a table's unique/index columns (idempotent
- * via IF NOT EXISTS). Unique wins if a column declares both. */
-export function indexStatements(table: string, def: { fields: EntityFields }): string[] {
+ * via IF NOT EXISTS). Unique wins if a column declares both. `skipCols` omits specific
+ * columns — the migrator uses it to avoid emitting a UNIQUE index that would throw
+ * (duplicate values present on a column that just gained `unique()`); that delta is
+ * reported as skipped instead. */
+export function indexStatements(table: string, def: { fields: EntityFields }, skipCols?: ReadonlySet<string>): string[] {
   const out: string[] = [];
   for (const [col, f] of Object.entries(def.fields)) {
     if (!f.unique && !f.index) continue;
+    if (skipCols?.has(col)) continue;
     const kind = f.unique ? "UNIQUE INDEX" : "INDEX";
     out.push(`CREATE ${kind} IF NOT EXISTS ${quoteIdent(indexName(table, col))} ON ${quoteIdent(table)} (${quoteIdent(col)})`);
   }

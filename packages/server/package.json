@@ -30,6 +30,9 @@
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "pramen": "./dist/cli.js"
+  },
   "files": ["dist", "src"],
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json"
@@ -38,6 +41,7 @@
     "access": "public"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20250101.0"
+    "@cloudflare/workers-types": "^4.20250101.0",
+    "@types/node": "^22.0.0"
   }
 }

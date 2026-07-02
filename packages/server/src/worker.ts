@@ -4,7 +4,7 @@
 // endpoints (/tenants, /admin/recover, /admin/schema). createPramen() pairs the
 // returned fetch with the matching DO class; a consumer just re-exports both.
 
-import { authorizeTenant, HmacStrategy, isAdmin, JwksStrategy, resolveIdentity, type VerifyStrategy } from "./auth";
+import { authorizeTenant, HmacStrategy, isAdmin, JwksStrategy, resolveIdentity, type VerifyOptions, type VerifyStrategy } from "./auth";
 import { dispatch, tasksFacade, bindTasks } from "./runtime/dispatch";
 import { ensureOutbox, drainOutbox, listTasks } from "./runtime/outbox";
 import { createMail } from "./runtime/mail";
@@ -33,6 +33,16 @@ export interface Env {
   /** Optional: a JWKS endpoint. When set, tokens are verified as RS256 against the
    * fetched public keys (HmacStrategy/AUTH_SECRET is bypassed). */
   JWKS_URL?: string;
+  /** "true" to REJECT any bearer token with no numeric `exp` claim. Off by default
+   * (a token without exp is accepted) so existing issuers keep working; turn it on to
+   * refuse non-expiring tokens. Applies to both the HS256 and JWKS strategies. */
+  AUTH_REQUIRE_EXP?: string;
+  /** Optional required audience. When set, a token's `aud` (string or array) must
+   * contain this value or the token is rejected. Unset ⇒ `aud` is not checked. */
+  AUTH_AUDIENCE?: string;
+  /** Optional required issuer. When set, a token's `iss` must equal this exactly.
+   * Unset ⇒ `iss` is not checked. */
+  AUTH_ISSUER?: string;
   /** D1 binding. Enables the "Worker + D1 (no DO)" path — the same schema/ACL/read
    * engine over D1 instead of a Durable Object. Selected per-request via
    * `x-pramen-store: d1`. RPC only (live queries need the DO). */
@@ -161,12 +171,20 @@ export function makeWorker(app: PramenApp) {
   // JwksStrategy caches fetched public keys, so keep one instance per isolate (keyed
   // by URL) rather than rebuilding it per request. HmacStrategy is stateless.
   let jwks: JwksStrategy | undefined;
+  // Opt-in claim validation from env — default OFF (unset) so existing tokens keep
+  // verifying. Threaded into whichever strategy the deployment uses.
+  const verifyOptsFor = (env: Env): VerifyOptions => ({
+    requireExp: env.AUTH_REQUIRE_EXP === "true",
+    audience: env.AUTH_AUDIENCE || undefined,
+    issuer: env.AUTH_ISSUER || undefined,
+  });
   const strategyFor = (env: Env): VerifyStrategy => {
+    const opts = verifyOptsFor(env);
     if (env.JWKS_URL) {
-      if (!jwks || jwks.url !== env.JWKS_URL) jwks = new JwksStrategy(env.JWKS_URL);
+      if (!jwks || jwks.url !== env.JWKS_URL) jwks = new JwksStrategy(env.JWKS_URL, undefined, opts);
       return jwks;
     }
-    return new HmacStrategy(env.AUTH_SECRET);
+    return new HmacStrategy(env.AUTH_SECRET, opts);
   };
 
   // ACL is compiled once per isolate; the Worker's D1 path reuses it (the DO compiles

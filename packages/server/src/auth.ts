@@ -40,9 +40,36 @@ export interface VerifyStrategy {
 /** Verify a signature over `${header}.${payload}` for the parsed header. */
 type SignatureVerifier = (signingInput: string, signature: Uint8Array, header: JwtHeader) => Promise<boolean>;
 
+/** Optional, opt-in claim validation layered on top of signature + exp/nbf. All
+ * default OFF (unset) so existing tokens keep verifying; a deployment turns these on
+ * to tighten what it accepts. Shared by every strategy (they all run verifyJwt). */
+export interface VerifyOptions {
+  /** Reject a token that has no numeric `exp` (RFC 7519 leaves exp optional; a strict
+   * deployment can require it so no non-expiring token is ever accepted). */
+  requireExp?: boolean;
+  /** Required audience. `payload.aud` (string or string[]) must contain at least one of
+   * these; a missing `aud` is rejected. Unset ⇒ `aud` not checked. */
+  audience?: string | string[];
+  /** Required issuer. `payload.iss` must equal this exactly. Unset ⇒ `iss` not checked. */
+  issuer?: string;
+}
+
+/** Does the token's `aud` claim satisfy the required audience? Token aud may be a
+ * string or an array; a match is any overlap with the expected audience(s). */
+function audienceMatches(aud: unknown, expected: string | string[]): boolean {
+  const claim = Array.isArray(aud) ? aud.filter((a): a is string => typeof a === "string") : typeof aud === "string" ? [aud] : [];
+  const want = Array.isArray(expected) ? expected : [expected];
+  return want.some((w) => claim.includes(w));
+}
+
 // Shared JWT pipeline: parse, verify the signature via the supplied function, then
-// validate exp/nbf. Any malformed part or a verification throw -> null (reject).
-async function verifyJwt(token: string, verifySignature: SignatureVerifier): Promise<Record<string, unknown> | null> {
+// validate exp/nbf and the opt-in exp-required/aud/iss claims. Any malformed part or a
+// verification throw -> null (reject).
+async function verifyJwt(
+  token: string,
+  verifySignature: SignatureVerifier,
+  opts: VerifyOptions = {},
+): Promise<Record<string, unknown> | null> {
   const parts = token.split(".");
   if (parts.length !== 3) return null;
   const [h, p, sig] = parts;
@@ -70,27 +97,38 @@ async function verifyJwt(token: string, verifySignature: SignatureVerifier): Pro
   }
 
   const now = Math.floor(Date.now() / 1000);
-  if (typeof payload.exp === "number" && now >= payload.exp) return null;
+  const hasExp = typeof payload.exp === "number";
+  if (opts.requireExp && !hasExp) return null;
+  if (hasExp && now >= (payload.exp as number)) return null;
   if (typeof payload.nbf === "number" && now < payload.nbf) return null;
+  if (opts.audience !== undefined && !audienceMatches(payload.aud, opts.audience)) return null;
+  if (opts.issuer !== undefined && payload.iss !== opts.issuer) return null;
   return payload;
 }
 
 /** HS256 via a shared secret. The dev/default strategy. */
 export class HmacStrategy implements VerifyStrategy {
-  constructor(private readonly secret: string) {}
+  constructor(
+    private readonly secret: string,
+    private readonly opts: VerifyOptions = {},
+  ) {}
 
   verify(token: string): Promise<Record<string, unknown> | null> {
-    return verifyJwt(token, async (input, signature, header) => {
-      if (header.alg !== "HS256" || !this.secret) return false;
-      const key = await crypto.subtle.importKey(
-        "raw",
-        new TextEncoder().encode(this.secret),
-        { name: "HMAC", hash: "SHA-256" },
-        false,
-        ["verify"],
-      );
-      return crypto.subtle.verify("HMAC", key, signature, new TextEncoder().encode(input));
-    });
+    return verifyJwt(
+      token,
+      async (input, signature, header) => {
+        if (header.alg !== "HS256" || !this.secret) return false;
+        const key = await crypto.subtle.importKey(
+          "raw",
+          new TextEncoder().encode(this.secret),
+          { name: "HMAC", hash: "SHA-256" },
+          false,
+          ["verify"],
+        );
+        return crypto.subtle.verify("HMAC", key, signature, new TextEncoder().encode(input));
+      },
+      this.opts,
+    );
   }
 }
 
@@ -111,15 +149,20 @@ export class JwksStrategy implements VerifyStrategy {
   constructor(
     readonly url: string,
     private readonly ttlMs = 600_000,
+    private readonly opts: VerifyOptions = {},
   ) {}
 
   verify(token: string): Promise<Record<string, unknown> | null> {
-    return verifyJwt(token, async (input, signature, header) => {
-      if (header.alg !== "RS256") return false;
-      const key = await this.keyFor(header.kid);
-      if (!key) return false;
-      return crypto.subtle.verify("RSASSA-PKCS1-v1_5", key, signature, new TextEncoder().encode(input));
-    });
+    return verifyJwt(
+      token,
+      async (input, signature, header) => {
+        if (header.alg !== "RS256") return false;
+        const key = await this.keyFor(header.kid);
+        if (!key) return false;
+        return crypto.subtle.verify("RSASSA-PKCS1-v1_5", key, signature, new TextEncoder().encode(input));
+      },
+      this.opts,
+    );
   }
 
   private lookup(kid?: string): CryptoKey | null {

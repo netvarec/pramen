@@ -63,7 +63,7 @@ describe("diffSchemaShape", () => {
     expect(changes.every((c) => c.destructive)).toBe(true);
   });
 
-  test("a modifier change on an existing column is reported but NOT applied on boot", () => {
+  test("a constraint-tightening modifier change is destructive and applies on boot", () => {
     const prev: SchemaShape = { notes: shape({ id: { type: "integer" }, code: { type: "text" } }) };
     const next: SchemaShape = {
       notes: shape({ id: { type: "integer" }, code: { type: "text", notNull: true, unique: true } }),
@@ -74,11 +74,30 @@ describe("diffSchemaShape", () => {
       kind: "change-column",
       table: "notes",
       column: "code",
-      destructive: false,
-      appliesOnBoot: false,
+      // adds NOT NULL + UNIQUE — gated / may skip on conflicting data
+      destructive: true,
+      // migrate() now reconciles modifier changes on boot
+      appliesOnBoot: true,
     });
     expect(changes[0]!.detail).toContain("notNull");
     expect(changes[0]!.detail).toContain("unique");
+  });
+
+  test("a DEFAULT change on an existing column is non-destructive and applies on boot", () => {
+    const prev: SchemaShape = { notes: shape({ id: { type: "integer" }, status: { type: "text" } }) };
+    const next: SchemaShape = {
+      notes: shape({ id: { type: "integer" }, status: { type: "text", default: '"pending"' } }),
+    };
+    const changes = diffSchemaShape(prev, next);
+    expect(changes).toHaveLength(1);
+    expect(changes[0]).toMatchObject({
+      kind: "change-column",
+      table: "notes",
+      column: "status",
+      destructive: false, // a DEFAULT add backfills — no data loss
+      appliesOnBoot: true,
+    });
+    expect(changes[0]!.detail).toContain("default");
   });
 
   test("a partition move is reported and flagged as NOT applied on boot", () => {

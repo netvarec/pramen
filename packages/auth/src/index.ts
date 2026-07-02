@@ -51,17 +51,22 @@ const b64urlStr = (s: string) => b64url(enc(s));
 
 // --- password hashing (PBKDF2-SHA256) ---
 
-const PBKDF2_ITERATIONS = 100_000;
+// OWASP 2026 guidance for PBKDF2-HMAC-SHA256 is ~600k iterations. The iteration
+// count (and hash alg) are ENCODED in the stored string — `pbkdf2$sha256$<iters>$
+// <saltB64>$<hashB64>` — and verifyPassword parses them from the stored hash, so a
+// future bump here keeps verifying older hashes; only NEW hashes use the new count.
+const PBKDF2_ITERATIONS = 600_000;
+const PBKDF2_HASH = "SHA-256";
 
 export async function hashPassword(password: string): Promise<string> {
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const key = await crypto.subtle.importKey("raw", enc(password), "PBKDF2", false, ["deriveBits"]);
   const bits = await crypto.subtle.deriveBits(
-    { name: "PBKDF2", salt, iterations: PBKDF2_ITERATIONS, hash: "SHA-256" },
+    { name: "PBKDF2", salt, iterations: PBKDF2_ITERATIONS, hash: PBKDF2_HASH },
     key,
     256,
   );
-  return `pbkdf2$${PBKDF2_ITERATIONS}$${b64(salt)}$${b64(new Uint8Array(bits))}`;
+  return `pbkdf2$sha256$${PBKDF2_ITERATIONS}$${b64(salt)}$${b64(new Uint8Array(bits))}`;
 }
 
 /** Constant-time string compare (avoids leaking the hash via timing). */
@@ -72,16 +77,41 @@ function constantTimeEqual(a: string, b: string): boolean {
   return diff === 0;
 }
 
+/** Parse the self-describing hash string. Supports the current
+ * `pbkdf2$sha256$<iters>$<salt>$<hash>` form and the legacy `pbkdf2$<iters>$<salt>$<hash>`
+ * (no alg segment). Iterations come FROM the stored string, so raising PBKDF2_ITERATIONS
+ * never breaks verification of an already-stored hash. */
+function parseStoredHash(stored: string): { iterations: number; hash: string; saltB64: string; hashB64: string } | null {
+  const parts = stored.split("$");
+  if (parts[0] !== "pbkdf2") return null;
+  // 5 parts: pbkdf2 $ sha256 $ iters $ salt $ hash   (current)
+  // 4 parts: pbkdf2 $ iters $ salt $ hash            (legacy — implicit sha256)
+  const [algSeg, iterStr, saltB64, hashB64] = parts.length === 5 ? parts.slice(1) : ["sha256", ...parts.slice(1)];
+  const iterations = Number(iterStr);
+  if (!saltB64 || !hashB64 || !Number.isFinite(iterations) || iterations <= 0) return null;
+  const hash = algSeg === "sha512" ? "SHA-512" : "SHA-256";
+  return { iterations, hash, saltB64, hashB64 };
+}
+
 export async function verifyPassword(password: string, stored: string): Promise<boolean> {
-  const [scheme, iterStr, saltB64, hashB64] = stored.split("$");
-  if (scheme !== "pbkdf2" || !saltB64 || !hashB64) return false;
+  const parsed = parseStoredHash(stored);
+  if (!parsed) return false;
   const key = await crypto.subtle.importKey("raw", enc(password), "PBKDF2", false, ["deriveBits"]);
   const bits = await crypto.subtle.deriveBits(
-    { name: "PBKDF2", salt: unb64(saltB64), iterations: Number(iterStr), hash: "SHA-256" },
+    { name: "PBKDF2", salt: unb64(parsed.saltB64), iterations: parsed.iterations, hash: parsed.hash },
     key,
     256,
   );
-  return constantTimeEqual(b64(new Uint8Array(bits)), hashB64);
+  return constantTimeEqual(b64(new Uint8Array(bits)), parsed.hashB64);
+}
+
+// A fixed placeholder hash (current params), computed once and reused, so a login for a
+// NON-EXISTENT username can still run a full PBKDF2 verify. That equalizes the timing of
+// the "no such user" and "wrong password" paths — neither short-circuits — closing the
+// user-existence timing oracle. Lazily initialized (top-level await isn't available here).
+let dummyHashPromise: Promise<string> | undefined;
+function dummyPasswordHash(): Promise<string> {
+  return (dummyHashPromise ??= hashPassword("pramen-login-timing-equalizer-placeholder"));
 }
 
 // --- HS256 token signing (matches the verifier in @pramen/server auth.ts) ---
@@ -128,15 +158,29 @@ function parseCreds(raw: unknown): { username: string; password: string } {
 /** signup / login / me. Roles are assigned server-side (default `["user"]`) — the
  * client never picks its own roles. Spread into your handler map. */
 export const authHandlers = {
+  // NOTE on username enumeration: signup returns a distinct "username is taken" error,
+  // which is an enumeration oracle. This is INHERENT to systems where the username is a
+  // user-chosen, publicly-visible identifier — the caller learns "taken" the moment the
+  // name shows up anywhere, so hiding it at signup buys little. What we CAN close is the
+  // timing side channel: both the taken and the available paths run the same expensive
+  // PBKDF2 hash before responding, so response time doesn't leak which path was taken.
+  // The enumeration-SAFE flow is the passwordless / magic-link path (createMagicLinkAuth),
+  // which keys on the email and always returns the same `{ ok: true }`.
   signup: mutation(
     async (ctx, input: { username: string; password: string }) => {
       const existing = await ctx.db.exec("SELECT 1 FROM auth_users WHERE username = ? LIMIT 1", input.username);
-      if (existing.length > 0) throw new BadRequest("username is taken");
+      if (existing.length > 0) {
+        // Equalize timing with the available path (which hashes below) so the taken vs.
+        // available decision isn't a fast timing oracle on top of the response-body one.
+        await hashPassword(input.password);
+        throw new BadRequest("username is taken");
+      }
       const roles = DEFAULT_ROLES;
+      const passwordHash = await hashPassword(input.password);
       await ctx.db.exec(
         "INSERT INTO auth_users (username, passwordHash, roles, createdAt) VALUES (?, ?, ?, ?)",
         input.username,
-        await hashPassword(input.password),
+        passwordHash,
         JSON.stringify(roles),
         Date.now(),
       );
@@ -153,7 +197,14 @@ export const authHandlers = {
         input.username,
       );
       const u = rows[0];
-      if (!u || !(await verifyPassword(input.password, String(u.passwordHash)))) {
+      if (!u) {
+        // No such user: still run a full PBKDF2 verify against a fixed dummy hash so the
+        // not-found path costs the same as a wrong-password path — no timing oracle that
+        // distinguishes "unknown username" from "bad password".
+        await verifyPassword(input.password, await dummyPasswordHash());
+        throw new Unauthorized("invalid username or password");
+      }
+      if (!(await verifyPassword(input.password, String(u.passwordHash)))) {
         throw new Unauthorized("invalid username or password");
       }
       // Only after the password verifies (so this can't enumerate accounts): a

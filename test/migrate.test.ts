@@ -5,7 +5,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { Entity, defineSchema, renamedFrom, hidden, unique, defaultTo } from "../packages/server/src/sdk/schema";
+import { Entity, defineSchema, renamedFrom, hidden, unique, notNull, defaultTo } from "../packages/server/src/sdk/schema";
 import { migrate } from "../packages/server/src/runtime/migrate";
 import { bunSqliteDriver } from "./sqlite-driver";
 
@@ -305,5 +305,196 @@ describe("migrate — partition-scoped", () => {
     db.run("UPDATE auth_users SET email = 'x@y.com' WHERE username = 'alice'");
     // ...but rejects a duplicate non-null email.
     expect(() => db.run("UPDATE auth_users SET email = 'x@y.com' WHERE username = 'bob'")).toThrow();
+  });
+});
+
+// --- modifier reconciliation on an EXISTING column. migrate() now detects and applies
+// (or safely skips) a NOT NULL / DEFAULT / PRIMARY KEY / UNIQUE change on a column that
+// already exists — and, crucially, only records the schema hash when the store fully
+// matches the schema, so a skipped change keeps showing as drift instead of silently
+// diverging.
+
+describe("migrate — modifier reconciliation", () => {
+  test("adding notNull() over NULL rows (no default) is skipped by default; hash unwritten", async () => {
+    const db = new Database(":memory:");
+    const d = bunSqliteDriver(db);
+    const base = defineSchema({ notes: Entity((t) => ({ id: t.id(), code: t.text() })) });
+    await migrate(d, base);
+    db.run("INSERT INTO notes (code) VALUES (NULL)");
+    db.run("INSERT INTO notes (code) VALUES ('a')");
+
+    const v = defineSchema({ notes: Entity((t) => ({ id: t.id(), code: notNull(t.text()) })) });
+    const r = await migrate(d, v); // gate OFF
+    expect(r.rebuilt).toEqual([]);
+    expect(r.skipped.some((s) => s.includes("NOT NULL"))).toBe(true);
+    // data untouched, NOT NULL not enforced (NULL still present)
+    expect(db.query("SELECT count(*) AS n FROM notes").get()).toEqual({ n: 2 });
+
+    // hash NOT written -> the drift persists across a re-run (still skipped, changed).
+    const again = await migrate(d, v);
+    expect(again.changed).toBe(true);
+    expect(again.rebuilt).toEqual([]);
+    expect(again.skipped.some((s) => s.includes("NOT NULL"))).toBe(true);
+  });
+
+  test("after the NULLs are backfilled, adding notNull() applies and records the hash", async () => {
+    const db = new Database(":memory:");
+    const d = bunSqliteDriver(db);
+    const base = defineSchema({ notes: Entity((t) => ({ id: t.id(), code: t.text() })) });
+    await migrate(d, base);
+    db.run("INSERT INTO notes (code) VALUES (NULL)");
+    const v = defineSchema({ notes: Entity((t) => ({ id: t.id(), code: notNull(t.text()) })) });
+    expect((await migrate(d, v)).skipped.length).toBeGreaterThan(0); // skipped while NULL present
+
+    db.run("UPDATE notes SET code = 'x' WHERE code IS NULL"); // operator fixes the data
+    const fixed = await migrate(d, v); // still gate OFF — now safe (no NULLs)
+    expect(fixed.rebuilt).toContain("notes");
+    expect(fixed.skipped).toEqual([]);
+    // NOT NULL is now enforced
+    expect(() => db.run("INSERT INTO notes (code) VALUES (NULL)")).toThrow();
+    // hash recorded -> re-run is a no-op
+    expect((await migrate(d, v)).changed).toBe(false);
+  });
+
+  test("adding notNull() with a DEFAULT backfills the NULL rows (applied without the gate)", async () => {
+    const db = new Database(":memory:");
+    const d = bunSqliteDriver(db);
+    const base = defineSchema({ notes: Entity((t) => ({ id: t.id(), status: t.text() })) });
+    await migrate(d, base);
+    db.run("INSERT INTO notes (status) VALUES (NULL)");
+    db.run("INSERT INTO notes (status) VALUES ('open')");
+
+    const v = defineSchema({ notes: Entity((t) => ({ id: t.id(), status: notNull(defaultTo(t.text(), "pending")) })) });
+    const r = await migrate(d, v); // gate OFF — a default makes it safe
+    expect(r.rebuilt).toContain("notes");
+    expect(r.skipped).toEqual([]);
+    // the NULL row was backfilled from the default; the other row kept its value
+    expect(db.query("SELECT status FROM notes ORDER BY id").all()).toEqual([{ status: "pending" }, { status: "open" }]);
+    expect(() => db.run("INSERT INTO notes (status) VALUES (NULL)")).toThrow();
+  });
+
+  test("adding a DEFAULT to an existing column rebuilds, backfills future inserts, records hash", async () => {
+    const db = new Database(":memory:");
+    const d = bunSqliteDriver(db);
+    const base = defineSchema({ notes: Entity((t) => ({ id: t.id(), status: t.text() })) });
+    await migrate(d, base);
+    db.run("INSERT INTO notes (id, status) VALUES (1, 'x')");
+    db.run("INSERT INTO notes (id, status) VALUES (2, NULL)");
+
+    const v = defineSchema({ notes: Entity((t) => ({ id: t.id(), status: defaultTo(t.text(), "pending") })) });
+    const r = await migrate(d, v); // no gate — a DEFAULT add loses no data
+    expect(r.rebuilt).toContain("notes");
+    expect(r.skipped).toEqual([]);
+    // existing rows preserved verbatim (a DEFAULT only fills omitted future inserts)
+    expect(db.query("SELECT id, status FROM notes ORDER BY id").all()).toEqual([
+      { id: 1, status: "x" },
+      { id: 2, status: null },
+    ]);
+    // an insert omitting status now gets the default
+    db.run("INSERT INTO notes (id) VALUES (3)");
+    expect(db.query("SELECT status FROM notes WHERE id = 3").get()).toEqual({ status: "pending" });
+    // hash recorded -> no-op re-run
+    expect((await migrate(d, v)).changed).toBe(false);
+  });
+
+  test("changing an existing column's DEFAULT rebuilds and applies the new default", async () => {
+    const db = new Database(":memory:");
+    const d = bunSqliteDriver(db);
+    const base = defineSchema({ notes: Entity((t) => ({ id: t.id(), status: defaultTo(t.text(), "a") })) });
+    await migrate(d, base);
+    db.run("INSERT INTO notes (id, status) VALUES (1, 'keep')");
+
+    const v = defineSchema({ notes: Entity((t) => ({ id: t.id(), status: defaultTo(t.text(), "b") })) });
+    const r = await migrate(d, v);
+    expect(r.rebuilt).toContain("notes");
+    expect(r.skipped).toEqual([]);
+    expect(db.query("SELECT status FROM notes WHERE id = 1").get()).toEqual({ status: "keep" }); // existing kept
+    db.run("INSERT INTO notes (id) VALUES (2)");
+    expect(db.query("SELECT status FROM notes WHERE id = 2").get()).toEqual({ status: "b" }); // new default
+    expect((await migrate(d, v)).changed).toBe(false);
+  });
+
+  test("adding unique() to an existing column creates the index (no rebuild) when there are no dups", async () => {
+    const db = new Database(":memory:");
+    const d = bunSqliteDriver(db);
+    const base = defineSchema({ notes: Entity((t) => ({ id: t.id(), code: t.text() })) });
+    await migrate(d, base);
+    db.run("INSERT INTO notes (code) VALUES ('a')");
+    db.run("INSERT INTO notes (code) VALUES ('b')");
+
+    const v = defineSchema({ notes: Entity((t) => ({ id: t.id(), code: unique(t.text()) })) });
+    const r = await migrate(d, v);
+    expect(r.rebuilt).toEqual([]); // unique is an index op, not a rebuild
+    expect(r.skipped).toEqual([]);
+    // uniqueness now enforced
+    db.run("INSERT INTO notes (code) VALUES ('c')");
+    expect(() => db.run("INSERT INTO notes (code) VALUES ('a')")).toThrow();
+    expect((await migrate(d, v)).changed).toBe(false); // hash recorded
+  });
+
+  test("adding unique() to a column with duplicate values is skipped; hash unwritten", async () => {
+    const db = new Database(":memory:");
+    const d = bunSqliteDriver(db);
+    const base = defineSchema({ notes: Entity((t) => ({ id: t.id(), code: t.text() })) });
+    await migrate(d, base);
+    db.run("INSERT INTO notes (code) VALUES ('dup')");
+    db.run("INSERT INTO notes (code) VALUES ('dup')");
+
+    const v = defineSchema({ notes: Entity((t) => ({ id: t.id(), code: unique(t.text()) })) });
+    const r = await migrate(d, v);
+    expect(r.skipped.some((s) => s.includes("UNIQUE"))).toBe(true);
+    expect(r.rebuilt).toEqual([]);
+    // no unique index was created -> a third duplicate still inserts
+    db.run("INSERT INTO notes (code) VALUES ('dup')");
+    expect(db.query("SELECT count(*) AS n FROM notes").get()).toEqual({ n: 3 });
+    // hash unwritten -> a re-run still detects the drift
+    expect((await migrate(d, v)).changed).toBe(true);
+  });
+
+  test("dropping unique() removes the managed index", async () => {
+    const db = new Database(":memory:");
+    const d = bunSqliteDriver(db);
+    const base = defineSchema({ notes: Entity((t) => ({ id: t.id(), code: unique(t.text()) })) });
+    await migrate(d, base);
+    db.run("INSERT INTO notes (code) VALUES ('a')");
+    expect(() => db.run("INSERT INTO notes (code) VALUES ('a')")).toThrow(); // unique enforced
+
+    const v = defineSchema({ notes: Entity((t) => ({ id: t.id(), code: t.text() })) });
+    const r = await migrate(d, v);
+    expect(r.skipped).toEqual([]);
+    // the unique index is gone -> a duplicate now inserts
+    db.run("INSERT INTO notes (code) VALUES ('a')");
+    expect(db.query("SELECT count(*) AS n FROM notes").get()).toEqual({ n: 2 });
+    expect((await migrate(d, v)).changed).toBe(false); // hash recorded
+  });
+
+  test("a hidden()/generated()-only change records the hash (no physical column change)", async () => {
+    const db = new Database(":memory:");
+    const d = bunSqliteDriver(db);
+    const base = defineSchema({ notes: Entity((t) => ({ id: t.id(), secret: t.text() })) });
+    await migrate(d, base);
+    const v = defineSchema({ notes: Entity((t) => ({ id: t.id(), secret: hidden(t.text()) })) });
+    const r = await migrate(d, v); // hash differs (hidden is in the fingerprint) but no store delta
+    expect(r.rebuilt).toEqual([]);
+    expect(r.skipped).toEqual([]);
+    expect((await migrate(d, v)).changed).toBe(false); // hash was recorded — store already matched
+  });
+});
+
+describe("migrate — partition move", () => {
+  test("an entity moved to another partition is a skipped manual migration; data preserved, hash unwritten", async () => {
+    const db = new Database(":memory:");
+    const d = bunSqliteDriver(db);
+    const v1 = defineSchema({ logs: Entity((t) => ({ id: t.id(), msg: t.text() }), undefined, { partition: "p" }) });
+    await migrate(d, v1, { partition: "p" }); // creates `logs` in partition p
+    db.run("INSERT INTO logs (msg) VALUES ('x')");
+
+    const v2 = defineSchema({ logs: Entity((t) => ({ id: t.id(), msg: t.text() }), undefined, { partition: "q" }) });
+    const r = await migrate(d, v2, { partition: "p" });
+    expect(r.skipped.some((s) => s.includes("move partition"))).toBe(true);
+    // the data is left intact in this DO (never dropped) for a manual cross-DO migration
+    expect(db.query("SELECT count(*) AS n FROM logs").get()).toEqual({ n: 1 });
+    // hash unwritten -> the drift keeps showing
+    expect((await migrate(d, v2, { partition: "p" })).changed).toBe(true);
   });
 });

@@ -1,6 +1,8 @@
 // Smoke test for the CLI — runs commands via the shell and checks output.
 
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const ROOT = join(import.meta.dir, "..");
@@ -37,5 +39,21 @@ describe("pramen cli", () => {
   test("unknown command exits non-zero", () => {
     const { code } = run("frobnicate");
     expect(code).not.toBe(0);
+  });
+
+  test("init scaffolds a working (non-deny-all) ACL", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pramen-init-"));
+    const { out, code } = run("init", dir);
+    expect(code).toBe(0);
+    expect(out).toContain("app.ts");
+    const appTs = readFileSync(join(dir, "app.ts"), "utf8");
+    // CLI2 regression guard: the old scaffold shipped `const acl: never[] = []`,
+    // which denies every request. The scaffold must grant something on first run.
+    expect(appTs).not.toContain("acl: never[] = []");
+    expect(appTs).toContain('role("anonymous"');
+    expect(appTs).toContain("allow()");
+    // The scaffolded app must load and produce valid DDL (proves the ACL DSL is wired).
+    const sql = run("schema", "sql", "--app", join(dir, "app.ts"));
+    expect(sql.out).toContain(`CREATE TABLE IF NOT EXISTS "notes"`);
   });
 });

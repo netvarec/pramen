@@ -23,6 +23,11 @@ export default define(({ env }) => {
       ? {
           AUTH_SECRET: "dev-secret-change-me",
           FILES_SECRET: "dev-files-secret-change-me",
+          // Opt-in JWT claim validation (default OFF — unset). Uncomment to tighten what
+          // the verifier accepts: reject tokens with no `exp`, and/or pin `aud`/`iss`.
+          // AUTH_REQUIRE_EXP: "true",
+          // AUTH_AUDIENCE: "pramen",
+          // AUTH_ISSUER: "https://issuer.example.com",
           CORS_ORIGINS: "*",
           // Local dev applies destructive migrations freely; production must opt in.
           PRAMEN_ALLOW_DESTRUCTIVE: "true",

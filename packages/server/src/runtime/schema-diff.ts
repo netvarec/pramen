@@ -8,10 +8,14 @@
 //
 // The shape records column type + the migration-relevant modifiers (notNull, unique,
 // primaryKey, generated, default, hidden) and the entity's partition, so the diff REPORTS
-// modifier and partition changes too. IMPORTANT: migrate() only rebuilds on a TYPE change —
-// it does NOT alter a modifier on an existing column, and it cannot move a table between
-// partitions (a partition is a separate Durable Object). Such changes are reported with
-// `appliesOnBoot: false` so the tool is honest that boot migration won't enact them.
+// modifier and partition changes too. migrate() now RECONCILES modifier changes on an
+// existing column (a NOT NULL / DEFAULT / PRIMARY KEY change via a rebuild, a UNIQUE
+// change via a create/drop index), so a `change-column` is `appliesOnBoot: true`. It is
+// flagged `destructive` when it tightens a constraint (adds NOT NULL / UNIQUE / PRIMARY
+// KEY) — those apply only under PRAMEN_ALLOW_DESTRUCTIVE, or are skipped when the live
+// data conflicts (NULL rows / duplicates), leaving the hash unwritten. A partition MOVE
+// still CANNOT be enacted on boot (a partition is a separate Durable Object — it needs a
+// manual cross-DO data migration), so it stays `appliesOnBoot: false`.
 
 import type { FieldDef, SchemaDef } from "../sdk/schema";
 import { partitionOf } from "../sdk/schema";
@@ -62,6 +66,13 @@ export function schemaShape(schema: SchemaDef): SchemaShape {
 /** The modifier fields compared for a `change-column` (everything but `type`). */
 const MODIFIER_KEYS: (keyof ColumnShape)[] = ["notNull", "unique", "primaryKey", "generated", "hidden", "default"];
 
+/** Does `next` tighten a constraint `prev` lacked (add NOT NULL / UNIQUE / PRIMARY KEY)?
+ * Such a change may require the destructive gate or be skipped when the live data
+ * conflicts (NULL rows / duplicates) — so the diff flags it `destructive`. */
+function tightensConstraint(prev: ColumnShape, next: ColumnShape): boolean {
+  return (!!next.notNull && !prev.notNull) || (!!next.unique && !prev.unique) || (!!next.primaryKey && !prev.primaryKey);
+}
+
 function modifierDiff(prev: ColumnShape, next: ColumnShape): string | null {
   const parts: string[] = [];
   for (const k of MODIFIER_KEYS) {
@@ -82,11 +93,12 @@ export interface SchemaChange {
   /** true = rebuilds the table and may lose data (drop / type change). false = additive
    * OR a metadata-only change (modifier / partition move) — see `appliesOnBoot`. */
   destructive: boolean;
-  /** Whether migrate() actually enacts this change on the next DO boot. Additive changes
-   * are always applied; destructive type/drop changes apply only when the deploy sets
-   * PRAMEN_ALLOW_DESTRUCTIVE=true. `false` here means the boot migrator will NEVER enact
-   * it: a modifier change on an existing column (migrate only rebuilds on a TYPE change),
-   * or a partition move (needs a manual cross-DO data migration). Reported for honesty. */
+  /** Whether migrate() enacts this change on the next DO boot. Additive changes are
+   * always applied; destructive changes (type/drop, or a constraint-tightening modifier
+   * change) apply only when the deploy sets PRAMEN_ALLOW_DESTRUCTIVE=true (and are
+   * skipped when the live data conflicts, leaving the hash unwritten). `false` here means
+   * the boot migrator will NEVER enact it — today only a partition MOVE (needs a manual
+   * cross-DO data migration). Reported for honesty. */
   appliesOnBoot: boolean;
 }
 
@@ -135,10 +147,12 @@ export function diffSchemaShape(prev: SchemaShape, next: SchemaShape): SchemaCha
             table,
             column: col,
             detail: md,
-            destructive: false,
-            // migrate() only rebuilds on a TYPE change — it never alters a modifier
-            // (notNull/unique/default/…) on an existing column.
-            appliesOnBoot: false,
+            // Tightening a constraint (add NOT NULL / UNIQUE / PRIMARY KEY) rebuilds/
+            // indexes and applies only under PRAMEN_ALLOW_DESTRUCTIVE (or is skipped when
+            // live data conflicts). Loosening or a DEFAULT change is additive.
+            destructive: tightensConstraint(pc, ncol),
+            // migrate() now reconciles modifier changes on an existing column on boot.
+            appliesOnBoot: true,
           });
         }
       }
