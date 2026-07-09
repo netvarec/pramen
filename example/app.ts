@@ -39,6 +39,8 @@ import {
   createUserHandlers,
   authPolicies,
 } from "@pramen/auth";
+// @pramen/cms — the block/page builder, wired as an ordinary app fragment.
+import { cmsSchema, cmsHandlers, cmsPolicies, cmsTasks } from "@pramen/cms";
 
 // Reusable write rule: force ownerId to the authenticated caller (a client cannot
 // forge it), even if the request body tries to set a different owner.
@@ -49,6 +51,8 @@ const schema = defineSchema({
   ...authSchema,
   // @pramen/auth's passwordless magic-link table (requestMagicLink/loginWithMagicLink).
   ...magicLinkSchema,
+  // @pramen/cms's block/page-builder tables (cms_pages, cms_blocks, cms_block_types, …).
+  ...cmsSchema,
   // A custom, authSchema-shaped users table with an EXTRA `tenants` column — the
   // multi-tenant accounts pattern. createUserHandlers({ table: "org_accounts" }) +
   // authPolicies({ table: "org_accounts", ... }) manage it without a rename.
@@ -160,6 +164,9 @@ const handlers = {
   // @pramen/auth: user management — listUsers / setUserRoles / setUserActive (admin),
   // changeEmail / changePassword (self). Gated by authPolicies() in the ACL below.
   ...userHandlers,
+  // @pramen/cms: block/page builder — createBlockType / createContentType / createPage /
+  // addBlock / publishPage / schedulePage (editor-gated) + getPage (public content API).
+  ...cmsHandlers,
   // The same handlers over the custom org_accounts table, under prefixed names, plus
   // an app-owned setOrgAccountTenants writing the extra `tenants` column (the Tah
   // setUserTenants analog) — permitted by authPolicies adminWriteFields below.
@@ -501,6 +508,9 @@ const acl = [
       adminReadFields: ["username", "roles", "email", "active", "tenants", "createdAt"],
       adminWriteFields: ["roles", "email", "active", "tenants"],
     }).admin,
+    // @pramen/cms: full CRUD across the cms_ tables (admin holds the default `admin`
+    // editor role, so the CMS editor handlers accept it too).
+    ...cmsPolicies().editor,
   ]),
   // anonymous: applied to callers with NO verified token. A guest may create a
   // signup (public write) and read one back only by presenting its `code`
@@ -508,6 +518,9 @@ const acl = [
   role("anonymous", [
     policy("anon:signups:create", "signups", "create", allow()),
     policy("anon:signups:read", "signups", "read", { where: { code: $input("code") } }),
+    // @pramen/cms: guests read PUBLISHED pages + their snapshots only (getPage serves the
+    // snapshot; unpublished block rows are never exposed).
+    ...cmsPolicies().public,
   ]),
   role("author", [
     policy("author:read", "notes", "read", {
@@ -628,6 +641,8 @@ const tasks = {
     const { op, id, row } = payload as { op: string; id: number; row: { title: string } };
     await ctx.kv.put(`note-changed:${id}`, `${op}:${row.title}`, { expirationTtl: 900 });
   },
+  // @pramen/cms: scheduled publish/unpublish (backing schedulePage), run off the write path.
+  ...cmsTasks,
 };
 
 // Cloudflare Queues consumers, keyed by QUEUE name (the oblaka `Queue` name —

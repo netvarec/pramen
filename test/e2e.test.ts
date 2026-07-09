@@ -7,6 +7,7 @@ import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { runAcl } from "./suites/acl";
 import { runCellAcl } from "./suites/cell-acl";
+import { runCms } from "./suites/cms";
 import { runD1 } from "./suites/d1";
 import { runFiles } from "./suites/files";
 import { runExtras } from "./suites/extras";
@@ -98,4 +99,5 @@ describe("pramen e2e", () => {
   test("hardening: input validation + safe errors", () => runHardening(BASE), 30_000);
   test("uuid field type (generated PK + non-PK, write validation)", () => runUuid(BASE), 30_000);
   test("DO partitions (isolation + per-partition admin/reactivity)", () => runPartitions(BASE, WS), 30_000);
+  test("@pramen/cms (block/page builder: regions, publish, content API)", () => runCms(BASE), 30_000);
 });
