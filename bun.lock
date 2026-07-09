@@ -9,6 +9,7 @@
         "@pramen/admin": "workspace:*",
         "@pramen/auth": "workspace:*",
         "@pramen/client": "workspace:*",
+        "@pramen/cms": "workspace:*",
         "@pramen/react": "workspace:*",
         "@pramen/server": "workspace:*",
         "@types/react": "^19.0.0",
@@ -36,6 +37,19 @@
     "packages/client": {
       "name": "@pramen/client",
       "version": "0.0.14",
+    },
+    "packages/cms": {
+      "name": "@pramen/cms",
+      "version": "0.0.14",
+      "dependencies": {
+        "@pramen/server": "workspace:*",
+      },
+      "peerDependencies": {
+        "react": ">=18",
+      },
+      "optionalPeers": [
+        "react",
+      ],
     },
     "packages/react": {
       "name": "@pramen/react",
@@ -199,6 +213,8 @@
     "@pramen/auth": ["@pramen/auth@workspace:packages/auth"],
 
     "@pramen/client": ["@pramen/client@workspace:packages/client"],
+
+    "@pramen/cms": ["@pramen/cms@workspace:packages/cms"],
 
     "@pramen/react": ["@pramen/react@workspace:packages/react"],
 
