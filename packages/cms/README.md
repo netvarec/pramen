@@ -8,8 +8,19 @@ Paragraphs / Storyblok.
 
 > **Status: spike → production (in progress).** Proven end-to-end against a real Durable
 > Object by `test/suites/cms.ts`. Being taken to production feature-by-feature; **media
-> library is done** (below), then i18n, editorial workflow, SEO, typed blocks, a visual editor.
+> library** and **i18n** are done (below), then editorial workflow, SEO, typed blocks, a visual editor.
 > See *Limitations* for what's not there yet.
+
+## i18n / multi-locale
+
+- A page has a `locale` and a `translationGroupId` (auto-minted; shared across a page's
+  translations). Slugs are unique **per locale** (`/en/about` + `/cs/about` coexist).
+- `createTranslation({ pageId, locale, title?, slug? })` makes a new page in another locale
+  sharing the group; `listTranslations({ pageId })` lists all locales of a page;
+  `listLocales()` returns the distinct locales.
+- `getPage({ slug, locale? })` is locale-aware (`locale` defaults to the configured default).
+  The content API's `page.translations` carries the published sibling locales (computed live,
+  so a later-published translation shows up) for **hreflang** alternates.
 
 ## Media library
 
@@ -97,8 +108,10 @@ function Page({ slug }: { slug: string }) {
 - **Media orphan sweeping is manual** — `deleteMedia` removes a blob explicitly, but media no
   longer referenced by any block isn't auto-collected (refs live inside opaque block JSON).
   Deleting media still used on a published page breaks that page's image until re-publish.
-- **Single-column unique slug** — per-locale slug uniqueness / full i18n is stubbed
-  (`locale` column exists; routing by it is not built).
+- **Per-locale slug uniqueness is enforced in handler code**, not the schema — pramen's
+  `unique()` is single-column only, so `(slug, locale)` can't be a schema constraint. A
+  concurrent double-insert of the same `(slug, locale)` could in theory slip past the
+  SELECT-then-insert guard (the DO's single-writer makes this effectively safe per tenant).
 - **No draft autosave / optimistic-locking / presence** — the DO's single-writer + live
   queries make these straightforward to add, but they aren't here yet.
 - **Field validation is structural**, not exhaustive (no cross-field rules, no referential

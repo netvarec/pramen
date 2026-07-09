@@ -33,6 +33,7 @@ import {
   generated,
   notNull,
   unique,
+  indexed,
   defaultTo,
   expr,
   policy,
@@ -132,9 +133,15 @@ export const cmsSchema = {
       id: primaryKey(generated(t.uuid())),
       typeId: notNull(t.uuid()),
       title: notNull(t.text()),
-      slug: unique(notNull(t.text())),
+      // NOT globally unique — a slug is unique PER LOCALE (`/en/about` + `/cs/about`).
+      // pramen's unique() is single-column only, so (slug, locale) uniqueness is enforced
+      // in createPage/createTranslation; this index just speeds the lookup.
+      slug: indexed(notNull(t.text())),
       status: defaultTo(t.text(), "draft"), // draft | published | archived
       locale: defaultTo(t.text(), "en"),
+      // Links a page to its translations: all locales of one logical page share this id.
+      // Auto-minted for a standalone page; a translation is created with the source's id.
+      translationGroupId: generated(t.uuid()),
       fields: t.json(),
       publishedAt: t.text(),
       scheduledAt: t.text(),
@@ -257,6 +264,11 @@ export interface RenderedBlock {
   is_shared: boolean;
 }
 
+export interface PageTranslation {
+  locale: string;
+  slug: string;
+}
+
 export interface AssembledPage {
   page: {
     id: string;
@@ -264,6 +276,9 @@ export interface AssembledPage {
     slug: string;
     status: string;
     locale: string;
+    translationGroupId: string | null;
+    /** Published sibling locales of this page (for hreflang alternates). */
+    translations: PageTranslation[];
     fields: Record<string, unknown> | null;
     metaTitle: string | null;
     metaDescription: string | null;
@@ -432,17 +447,30 @@ async function assembleLive(db: CmsDb, page: Record<string, unknown>): Promise<A
       is_shared: Boolean(m.p.isShared),
     });
   }
-  return { page: pageMeta(page), regions };
+  return { page: pageMeta(page, await siblingTranslations(db, page)), regions };
+}
+
+/** Published sibling translations of a page (other locales in the same translation group),
+ * for hreflang. Excludes the page itself. */
+async function siblingTranslations(db: CmsDb, page: Record<string, unknown>): Promise<PageTranslation[]> {
+  const group = page.translationGroupId;
+  if (!group) return [];
+  const rows = await db.find({ from: "cms_pages", where: { translationGroupId: group, status: "published" } });
+  return rows
+    .filter((r) => String(r.id) !== String(page.id))
+    .map((r) => ({ locale: String(r.locale ?? "en"), slug: String(r.slug) }));
 }
 
 /** Project a page row to the public AssembledPage.page shape. */
-function pageMeta(page: Record<string, unknown>): AssembledPage["page"] {
+function pageMeta(page: Record<string, unknown>, translations: PageTranslation[] = []): AssembledPage["page"] {
   return {
     id: String(page.id),
     title: String(page.title),
     slug: String(page.slug),
     status: String(page.status),
     locale: String(page.locale ?? "en"),
+    translationGroupId: (page.translationGroupId as string | null) ?? null,
+    translations,
     fields: (page.fields as Record<string, unknown> | null) ?? null,
     metaTitle: (page.metaTitle as string | null) ?? null,
     metaDescription: (page.metaDescription as string | null) ?? null,
@@ -482,6 +510,8 @@ export interface CmsHandlerOpts {
   editorRoles?: readonly string[];
   /** Max accepted media upload size in bytes (enforced at the Worker). Default 25 MB. */
   mediaMaxSize?: number;
+  /** Default locale used when `getPage`/`createPage` omit one. Default `"en"`. */
+  defaultLocale?: string;
 }
 
 /** Build the CMS handler map. Spread into your app's handlers. Editor mutations are
@@ -490,6 +520,17 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
   const editorRoles = opts.editorRoles ?? ["editor", "admin"];
   const editor = { auth: editorRoles };
   const mediaMaxSize = opts.mediaMaxSize ?? 25_000_000;
+  const defaultLocale = opts.defaultLocale ?? "en";
+
+  // (slug, locale) uniqueness is enforced here because pramen's unique() is single-column.
+  const assertSlugFree = async (db: CmsDb, slug: string, locale: string, exceptId?: string): Promise<void> => {
+    const rows = await db.exec(
+      "SELECT id FROM cms_pages WHERE slug = ? AND locale = ? LIMIT 1",
+      slug,
+      locale,
+    );
+    if (rows[0] && String(rows[0].id) !== exceptId) throw new BadRequest(`slug '${slug}' already exists for locale '${locale}'`);
+  };
 
   const TASK_PUBLISH = "cms:publish";
   const TASK_UNPUBLISH = "cms:unpublish";
@@ -622,17 +663,20 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     listPages: query((ctx) => cdb(ctx).find({ from: "cms_pages", orderBy: { column: "createdAt", dir: "desc" }, limit: 100 })),
 
     /** Create a page and auto-scaffold its content type's default blocks. */
-    createPage: mutation(async (ctx, input: { typeId: string; title: string; slug: string; fields?: Record<string, unknown> }) => {
+    createPage: mutation(async (ctx, input: { typeId: string; title: string; slug: string; locale?: string; fields?: Record<string, unknown> }) => {
       const db = cdb(ctx);
       const ctRows = await db.find({ from: "cms_content_types", where: { id: input.typeId }, limit: 1 });
       const ct = ctRows[0];
       if (!ct) throw new BadRequest("unknown content type");
       validateFields(ct.fieldsSchema as FieldDefinition[] | undefined, input.fields ?? {}, "page.fields");
+      const locale = input.locale ?? defaultLocale;
+      await assertSlugFree(db, input.slug, locale);
 
       const page = await db.insert("cms_pages", {
         typeId: input.typeId,
         title: input.title,
         slug: input.slug,
+        locale,
         fields: input.fields ?? {},
         status: "draft",
       });
@@ -658,14 +702,68 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       return page;
     }, {
       ...editor,
-      input: (raw): { typeId: string; title: string; slug: string; fields?: Record<string, unknown> } => {
+      input: (raw): { typeId: string; title: string; slug: string; locale?: string; fields?: Record<string, unknown> } => {
         const o = asObj(raw);
         if (typeof o.typeId !== "string" || typeof o.title !== "string" || typeof o.slug !== "string") {
           throw new BadRequest("typeId, title and slug are required");
         }
+        if (o.locale !== undefined && typeof o.locale !== "string") throw new BadRequest("locale must be a string");
         return o as never;
       },
     }),
+
+    /** Create a translation of an existing page: a new page in `locale` sharing the
+     * source's translationGroupId (and content type). Content starts empty — the editor
+     * fills in the translated blocks. Slug defaults to the source's (allowed in a new locale). */
+    createTranslation: mutation(async (ctx, input: { pageId: string; locale: string; title?: string; slug?: string }) => {
+      const db = cdb(ctx);
+      const rows = await db.find({ from: "cms_pages", where: { id: input.pageId }, limit: 1 });
+      const src = rows[0];
+      if (!src) throw notFound("page");
+      if (String(src.locale) === input.locale) throw new BadRequest("page is already in that locale");
+      const existing = await db.find({ from: "cms_pages", where: { translationGroupId: src.translationGroupId, locale: input.locale }, limit: 1 });
+      if (existing[0]) throw new BadRequest(`a '${input.locale}' translation already exists`);
+      const slug = input.slug ?? String(src.slug);
+      await assertSlugFree(db, slug, input.locale);
+      return db.insert("cms_pages", {
+        typeId: src.typeId,
+        title: input.title ?? String(src.title),
+        slug,
+        locale: input.locale,
+        translationGroupId: src.translationGroupId,
+        fields: {},
+        status: "draft",
+      });
+    }, {
+      ...editor,
+      input: (raw): { pageId: string; locale: string; title?: string; slug?: string } => {
+        const o = asObj(raw);
+        if (typeof o.pageId !== "string" || typeof o.locale !== "string") throw new BadRequest("pageId and locale are required");
+        return o as never;
+      },
+    }),
+
+    /** List all locales of a page (the translation group), including the page itself. */
+    listTranslations: query(async (ctx, input: { pageId: string }) => {
+      const db = cdb(ctx);
+      const rows = await db.find({ from: "cms_pages", where: { id: input.pageId }, limit: 1 });
+      if (!rows[0]) throw notFound("page");
+      const group = await db.find({ from: "cms_pages", where: { translationGroupId: rows[0].translationGroupId } });
+      return group.map((r) => ({ id: String(r.id), locale: String(r.locale ?? "en"), slug: String(r.slug), title: String(r.title), status: String(r.status) }));
+    }, {
+      ...editor,
+      input: (raw): { pageId: string } => {
+        const o = asObj(raw);
+        if (typeof o.pageId !== "string") throw new BadRequest("pageId is required");
+        return o as never;
+      },
+    }),
+
+    /** Distinct locales present across all pages. */
+    listLocales: query(async (ctx) => {
+      const rows = await cdb(ctx).exec("SELECT DISTINCT locale FROM cms_pages ORDER BY locale");
+      return rows.map((r) => String(r.locale ?? "en"));
+    }, editor),
 
     // ---- blocks & placement ----
     /** Create a block instance and place it into a page region in one call (the common
@@ -903,15 +1001,17 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     }),
 
     // ---- public content API ----
-    /** Fetch an assembled page by slug. Anonymous callers get the published snapshot
-     * (the ACL scopes `cms_pages` reads to `status = published`). Editors may pass
-     * `preview: true` to assemble the current DRAFT live from the tables. */
-    getPage: query(async (ctx, input: { slug: string; preview?: boolean }) => {
+    /** Fetch an assembled page by slug (+ locale). Anonymous callers get the published
+     * snapshot (the ACL scopes `cms_pages` reads to `status = published`). Editors may pass
+     * `preview: true` to assemble the current DRAFT live from the tables. `locale` defaults
+     * to the configured default locale; a slug is unique per locale. */
+    getPage: query(async (ctx, input: { slug: string; locale?: string; preview?: boolean }) => {
       const db = cdb(ctx);
       // Preview is an editor capability — gate it before the lookup so a non-editor gets a
       // clear 403 (rather than a 404 that merely reflects the published-only read scope).
       if (input.preview && !isEditor(ctx, editorRoles)) throw new Forbidden("preview requires an editor role");
-      const rows = await db.find({ from: "cms_pages", where: { slug: input.slug }, limit: 1 });
+      const locale = input.locale ?? defaultLocale;
+      const rows = await db.find({ from: "cms_pages", where: { slug: input.slug, locale }, limit: 1 });
       const page = rows[0];
       if (!page) throw notFound("page"); // also the anonymous-vs-draft case: ACL yields no row
 
@@ -924,13 +1024,21 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       // practice publish always sets currentRevisionId, so that fallback is defensive.
       if (page.currentRevisionId) {
         const revs = await db.find({ from: "cms_page_revisions", where: { id: page.currentRevisionId }, limit: 1 });
-        if (revs[0]?.snapshot) return revs[0].snapshot as unknown as AssembledPage;
+        if (revs[0]?.snapshot) {
+          const snap = revs[0].snapshot as unknown as AssembledPage;
+          // hreflang alternates are computed LIVE (not from the snapshot): a sibling
+          // published AFTER this page won't be in the baked snapshot. Anonymous can read
+          // published pages, so this query is in-policy on the public path.
+          snap.page.translations = await siblingTranslations(db, page);
+          return snap;
+        }
       }
-      return { page: pageMeta(page), regions: {} };
+      return { page: pageMeta(page, await siblingTranslations(db, page)), regions: {} };
     }, {
-      input: (raw): { slug: string; preview?: boolean } => {
+      input: (raw): { slug: string; locale?: string; preview?: boolean } => {
         const o = asObj(raw);
         if (typeof o.slug !== "string") throw new BadRequest("slug is required");
+        if (o.locale !== undefined && typeof o.locale !== "string") throw new BadRequest("locale must be a string");
         return o as never;
       },
     }),

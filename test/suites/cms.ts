@@ -161,6 +161,29 @@ export async function runCms(base: string): Promise<void> {
   const gone = await fetch(`${base}/media/${mediaKey}`);
   assert(gone.status === 404, "cms: the blob is gone after deleteMedia");
 
+  // --- i18n: translations, per-locale slug uniqueness, locale-aware content API ---
+  const enPage = await call("createPage", { typeId: ct.body.result.id, title: "Contact", slug: "contact" }, admin);
+  const enId = enPage.body.result.id as string;
+  assert(enPage.body.result.locale === "en", "cms: createPage defaults to the 'en' locale");
+  const cs = await call("createTranslation", { pageId: enId, locale: "cs", title: "Kontakt" }, admin);
+  assert(cs.body.ok && cs.body.result.locale === "cs" && cs.body.result.slug === "contact", "cms: createTranslation shares the slug in a new locale");
+  assert(cs.body.result.translationGroupId === enPage.body.result.translationGroupId, "cms: a translation shares the source's translationGroupId");
+  const dupe = await call("createPage", { typeId: ct.body.result.id, title: "Dup", slug: "contact", locale: "en" }, admin);
+  assert(dupe.status === 400 && dupe.body.ok === false, "cms: a duplicate (slug, locale) is rejected (400)");
+  const trans = await call("listTranslations", { pageId: enId }, admin);
+  assert(Array.isArray(trans.body.result) && trans.body.result.length === 2, "cms: listTranslations returns all locales of the group");
+  await call("addBlock", { pageId: enId, blockTypeSlug: "rich_text", region: "content", fields: { body: "<p>EN</p>" } }, admin);
+  await call("addBlock", { pageId: cs.body.result.id, blockTypeSlug: "rich_text", region: "content", fields: { body: "<p>CS</p>" } }, admin);
+  await call("publishPage", { pageId: enId }, admin);
+  await call("publishPage", { pageId: cs.body.result.id }, admin);
+  const getEn = await call("getPage", { slug: "contact", locale: "en" });
+  assert((getEn.body.result.regions.content as Array<{ fields: { body: string } }>)[0].fields.body === "<p>EN</p>", "cms: getPage(locale=en) returns the English page");
+  const getCs = await call("getPage", { slug: "contact", locale: "cs" });
+  assert((getCs.body.result.regions.content as Array<{ fields: { body: string } }>)[0].fields.body === "<p>CS</p>", "cms: getPage(locale=cs) returns the Czech page");
+  assert((getEn.body.result.page.translations as Array<{ locale: string; slug: string }>).some((t) => t.locale === "cs" && t.slug === "contact"), "cms: the content API lists sibling translations (hreflang), computed live");
+  const locales = await call("listLocales", {}, admin);
+  assert((locales.body.result as string[]).includes("en") && (locales.body.result as string[]).includes("cs"), "cms: listLocales returns the distinct locales");
+
   // --- reorderRegion must cover the region exactly (partial list rejected) ---
   const contentPlacements = pub2.body.result.regions.content as Array<{ id: string }>;
   const partial = await call("reorderRegion", { pageId, region: "content", order: [contentPlacements[0].id] }, admin);
