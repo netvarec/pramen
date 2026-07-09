@@ -17,7 +17,7 @@ import { D1Driver, type D1SessionStart, type Driver } from "./runtime/driver";
 import { toResponse } from "./runtime/errors";
 import { Kv } from "./runtime/kv";
 import { listDOs, partitionDoName } from "./runtime/registry";
-import { createFiles, handleFileRequest, R2Adapter } from "./runtime/storage";
+import { createFiles, handleFileRequest, handleMediaRequest, R2Adapter } from "./runtime/storage";
 import type { Identity } from "./sdk/acl";
 import type { HandlerContext } from "./sdk/handlers";
 import { DEFAULT_PARTITION, partitionsOf } from "./sdk/schema";
@@ -243,6 +243,14 @@ export function makeWorker(app: PramenApp) {
     // authorized purely by the HMAC token in the url — no JWT/tenant routing.
     if (url.pathname.startsWith("/files/")) {
       const res = await handleFileRequest(request, { adapter: new R2Adapter(env.FILES), secret: filesSecret(env) });
+      if (res) return res;
+    }
+
+    // Public media serving: `GET /media/<tenant>/media/<key>` streams a CMS media blob
+    // from R2 (cache-friendly, no auth — published-site assets are public). Put Cloudflare
+    // Image Resizing (/cdn-cgi/image) in front for transforms. Restricted to media keys.
+    if (url.pathname.startsWith("/media/") && env.FILES) {
+      const res = await handleMediaRequest(request, { adapter: new R2Adapter(env.FILES) });
       if (res) return res;
     }
 

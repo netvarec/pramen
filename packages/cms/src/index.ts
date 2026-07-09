@@ -41,7 +41,7 @@ import {
   Forbidden,
   PramenError,
 } from "@pramen/server";
-import type { HandlerContext, Policy } from "@pramen/server";
+import type { HandlerContext, Policy, FileRef } from "@pramen/server";
 
 // --- field schema DSL (the block-editor field language) ---------------------
 
@@ -271,6 +271,84 @@ export interface AssembledPage {
   regions: Record<string, RenderedBlock[]>;
 }
 
+// --- media -------------------------------------------------------------------
+
+/** A `"media"` block field, resolved from a stored media id to a servable shape at
+ * assemble time. `url` is the raw (full-size) serving path; pass `key` to `imageUrl()`
+ * for on-the-fly transforms. `null` when the referenced media was deleted. */
+export interface ResolvedMedia {
+  id: string;
+  key: string;
+  url: string;
+  alt: string | null;
+  contentType: string | null;
+  filename: string | null;
+}
+
+/** The public serving path for a media blob (relative; the client resolves it against
+ * its base). Served by the Worker's public `GET /media/<key>` route. */
+export function mediaPath(key: string): string {
+  return `/media/${key}`;
+}
+
+/** Build a URL for a media blob, optionally with Cloudflare Image Resizing transforms
+ * (`/cdn-cgi/image/<opts>/…`). With no transform opts it's just `mediaPath` (optionally
+ * prefixed by `origin`). Transforms need the deploy's origin to resolve the source path. */
+export function imageUrl(
+  key: string,
+  opts: { origin?: string; width?: number; height?: number; quality?: number; format?: "auto" | "webp" | "avif" } = {},
+): string {
+  const path = mediaPath(key);
+  const origin = opts.origin ?? "";
+  const hasTransform = opts.width || opts.height || opts.quality || opts.format;
+  if (!hasTransform) return `${origin}${path}`;
+  const params: string[] = [];
+  if (opts.width) params.push(`width=${opts.width}`);
+  if (opts.height) params.push(`height=${opts.height}`);
+  if (opts.quality) params.push(`quality=${opts.quality}`);
+  params.push(`format=${opts.format ?? "auto"}`);
+  return `${origin}/cdn-cgi/image/${params.join(",")}${path}`;
+}
+
+/** Collect the media ids referenced by a fields payload, walking group/repeater nesting. */
+function collectMediaIds(fields: Record<string, unknown>, schema: FieldDefinition[] | undefined, acc: Set<string>): void {
+  if (!Array.isArray(schema)) return;
+  for (const def of schema) {
+    const v = fields[def.name];
+    if (v == null) continue;
+    if (def.type === "media") {
+      if (typeof v === "string") acc.add(v);
+    } else if (def.type === "group") {
+      collectMediaIds(asObj(v), def.fields, acc);
+    } else if (def.type === "repeater" && Array.isArray(v)) {
+      for (const item of v) collectMediaIds(asObj(item), def.fields, acc);
+    }
+  }
+}
+
+/** Return a copy of `fields` with every `"media"` field resolved from its id to a
+ * `ResolvedMedia` (or null), recursing into group/repeater nesting. */
+function resolveMediaFields(
+  fields: Record<string, unknown>,
+  schema: FieldDefinition[] | undefined,
+  mediaById: Map<string, ResolvedMedia>,
+): Record<string, unknown> {
+  if (!Array.isArray(schema)) return fields;
+  const out: Record<string, unknown> = { ...fields };
+  for (const def of schema) {
+    const v = out[def.name];
+    if (v == null) continue;
+    if (def.type === "media") {
+      if (typeof v === "string") out[def.name] = mediaById.get(v) ?? null;
+    } else if (def.type === "group") {
+      out[def.name] = resolveMediaFields(asObj(v), def.fields, mediaById);
+    } else if (def.type === "repeater" && Array.isArray(v)) {
+      out[def.name] = v.map((item) => resolveMediaFields(asObj(item), def.fields, mediaById));
+    }
+  }
+  return out;
+}
+
 // --- structural view of the ACL'd Db (this package can't import the app's schema
 // type, so it addresses tables by name — same ctx.db at runtime; ACL still applies). --
 
@@ -316,19 +394,42 @@ async function assembleLive(db: CmsDb, page: Record<string, unknown>): Promise<A
   });
   const typeIds = [...new Set(placements.map((p) => asObj(p.block).typeId).filter((v): v is string => typeof v === "string"))];
   const types = typeIds.length ? await db.find({ from: "cms_block_types", where: { id: { in: typeIds } } }) : [];
-  const slugByTypeId = new Map(types.map((t) => [t.id as string, t.slug as string]));
+  const typeById = new Map(types.map((t) => [t.id as string, { slug: t.slug as string, fieldsSchema: t.fieldsSchema as FieldDefinition[] | undefined }]));
+
+  // Merge each placement's fields (base + shared overrides), then resolve `"media"`
+  // fields (id → ResolvedMedia) in one batched lookup across the whole page.
+  const merged = placements.map((p) => {
+    const block = asObj(p.block);
+    const fields = { ...asObj(block.fields), ...(p.isShared ? asObj(p.overrides) : {}) };
+    return { p, block, fields, schema: typeById.get(String(block.typeId))?.fieldsSchema };
+  });
+  const mediaIds = new Set<string>();
+  for (const m of merged) collectMediaIds(m.fields, m.schema, mediaIds);
+  const mediaById = new Map<string, ResolvedMedia>();
+  if (mediaIds.size) {
+    const rows = await db.find({ from: "cms_media", where: { id: { in: [...mediaIds] } } });
+    for (const r of rows) {
+      const file = asObj(r.file);
+      mediaById.set(String(r.id), {
+        id: String(r.id),
+        key: String(file.key ?? ""),
+        url: mediaPath(String(file.key ?? "")),
+        alt: (r.alt as string | null) ?? null,
+        contentType: (file.contentType as string | null) ?? null,
+        filename: (file.filename as string | null) ?? null,
+      });
+    }
+  }
 
   const regions: Record<string, RenderedBlock[]> = {};
-  for (const p of placements) {
-    const block = asObj(p.block);
-    const region = String(p.region);
-    const merged = { ...asObj(block.fields), ...(p.isShared ? asObj(p.overrides) : {}) };
+  for (const m of merged) {
+    const region = String(m.p.region);
     (regions[region] ??= []).push({
-      id: String(p.id),
-      block_type: slugByTypeId.get(String(block.typeId)) ?? "unknown",
-      title: (block.title as string | null) ?? null,
-      fields: merged,
-      is_shared: Boolean(p.isShared),
+      id: String(m.p.id),
+      block_type: typeById.get(String(m.block.typeId))?.slug ?? "unknown",
+      title: (m.block.title as string | null) ?? null,
+      fields: resolveMediaFields(m.fields, m.schema, mediaById),
+      is_shared: Boolean(m.p.isShared),
     });
   }
   return { page: pageMeta(page), regions };
@@ -379,6 +480,8 @@ export interface CmsHandlerOpts {
   /** Roles permitted to call the editor mutations (also enforced by the ACL). Default
    * `["editor", "admin"]`. */
   editorRoles?: readonly string[];
+  /** Max accepted media upload size in bytes (enforced at the Worker). Default 25 MB. */
+  mediaMaxSize?: number;
 }
 
 /** Build the CMS handler map. Spread into your app's handlers. Editor mutations are
@@ -386,6 +489,7 @@ export interface CmsHandlerOpts {
 export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
   const editorRoles = opts.editorRoles ?? ["editor", "admin"];
   const editor = { auth: editorRoles };
+  const mediaMaxSize = opts.mediaMaxSize ?? 25_000_000;
 
   const TASK_PUBLISH = "cms:publish";
   const TASK_UNPUBLISH = "cms:unpublish";
@@ -426,6 +530,90 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
         const o = asObj(raw);
         if (typeof o.name !== "string" || typeof o.slug !== "string") throw new BadRequest("name and slug are required");
         if (!Array.isArray(o.regions) || o.regions.length === 0) throw new BadRequest("at least one region is required");
+        return o as never;
+      },
+    }),
+
+    // ---- media library ----
+    /** Mint a signed upload URL for a media blob (keyed under the tenant's `media/`
+     * prefix so the public /media route can serve it). The client PUTs the bytes to
+     * `url`, then calls `createMedia` with the returned `ref`. */
+    signMediaUpload: mutation((ctx, input: { contentType: string; filename?: string }) => {
+      return ctx.files.signUpload({ contentType: input.contentType, filename: input.filename, prefix: "media", maxSize: mediaMaxSize });
+    }, {
+      ...editor,
+      input: (raw): { contentType: string; filename?: string } => {
+        const o = asObj(raw);
+        if (typeof o.contentType !== "string") throw new BadRequest("contentType is required");
+        return { contentType: o.contentType, filename: typeof o.filename === "string" ? o.filename : undefined };
+      },
+    }),
+
+    /** Confirm an uploaded blob is really in storage (capturing its true size) and
+     * persist a `cms_media` row. Mirrors the notes attach flow. */
+    createMedia: mutation(async (ctx, input: { ref: FileRef; alt?: string }) => {
+      const head = await ctx.files.head(input.ref.key);
+      if (!head) throw new BadRequest("uploaded file not found in storage");
+      const file: FileRef = {
+        key: input.ref.key,
+        size: head.size,
+        contentType: head.contentType ?? input.ref.contentType,
+        filename: input.ref.filename,
+        uploadedAt: Date.now(),
+      };
+      return cdb(ctx).insert("cms_media", { file, alt: input.alt ?? null });
+    }, {
+      ...editor,
+      input: (raw): { ref: FileRef; alt?: string } => {
+        const o = asObj(raw);
+        const ref = asObj(o.ref);
+        if (typeof ref.key !== "string") throw new BadRequest("ref.key is required");
+        return {
+          ref: {
+            key: ref.key,
+            size: typeof ref.size === "number" ? ref.size : 0,
+            contentType: typeof ref.contentType === "string" ? ref.contentType : "application/octet-stream",
+            filename: typeof ref.filename === "string" ? ref.filename : undefined,
+          },
+          alt: typeof o.alt === "string" ? o.alt : undefined,
+        };
+      },
+    }),
+
+    listMedia: query((ctx, input: { limit?: number; offset?: number }) => {
+      const limit = Math.min(Math.max(Math.trunc(Number(input?.limit ?? 50)) || 50, 1), 200);
+      const offset = Math.max(Math.trunc(Number(input?.offset ?? 0)) || 0, 0);
+      return cdb(ctx).find({ from: "cms_media", orderBy: { column: "createdAt", dir: "desc" }, limit, offset });
+    }, editor),
+
+    getMedia: query(async (ctx, input: { id: string }) => {
+      const rows = await cdb(ctx).find({ from: "cms_media", where: { id: input.id }, limit: 1 });
+      return rows[0] ?? null;
+    }, {
+      ...editor,
+      input: (raw): { id: string } => {
+        const o = asObj(raw);
+        if (typeof o.id !== "string") throw new BadRequest("id is required");
+        return o as never;
+      },
+    }),
+
+    /** Delete a media row AND its R2 blob. (Automatic orphan sweeping — media no longer
+     * referenced by any block — is future work; refs live inside opaque block JSON.) */
+    deleteMedia: mutation(async (ctx, input: { id: string }) => {
+      const db = cdb(ctx);
+      const rows = await db.find({ from: "cms_media", where: { id: input.id }, limit: 1 });
+      const media = rows[0];
+      if (!media) throw notFound("media");
+      const key = String(asObj(media.file).key ?? "");
+      await db.delete("cms_media", input.id);
+      if (key) await ctx.files.delete(key).catch(() => {});
+      return { ok: true };
+    }, {
+      ...editor,
+      input: (raw): { id: string } => {
+        const o = asObj(raw);
+        if (typeof o.id !== "string") throw new BadRequest("id is required");
         return o as never;
       },
     }),

@@ -121,6 +121,46 @@ export async function runCms(base: string): Promise<void> {
   assert(content2.some((b) => b.fields.body === "<p>Shared CTA</p>"), "cms: the base reusable placement shows the block's own fields");
   assert(content2.some((b) => b.is_shared && b.fields.body === "<p>Overridden CTA</p>"), "cms: a shared placement's overrides merge over the block's fields");
 
+  // --- media library: upload → attach to a block → resolved URL in the content API ---
+  const imgType = await call("createBlockType", {
+    name: "Image",
+    slug: "image",
+    fieldsSchema: [{ name: "image", type: "media", required: true }, { name: "caption", type: "text" }],
+  }, admin);
+  assert(imgType.body.ok, "cms: createBlockType(image) with a media field");
+
+  const signed = await call("signMediaUpload", { contentType: "image/png", filename: "logo.png" }, admin);
+  assert(signed.body.ok && typeof signed.body.result.url === "string", "cms: signMediaUpload returns a signed url + ref");
+
+  const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3, 4]); // PNG magic + a few bytes
+  const put = await fetch(`${base}${signed.body.result.url}`, { method: "PUT", headers: { "content-type": "image/png" }, body: bytes });
+  assert(put.status === 200, "cms: uploading media bytes to the signed url succeeds");
+
+  const media = await call("createMedia", { ref: signed.body.result.ref, alt: "Our logo" }, admin);
+  assert(media.body.ok && typeof media.body.result.id === "string", "cms: createMedia persists a cms_media row");
+  const mediaId = media.body.result.id as string;
+  const mediaKey = signed.body.result.ref.key as string;
+
+  const imgPage = await call("createPage", { typeId: ct.body.result.id, title: "Logo Page", slug: "logo-page" }, admin);
+  await call("addBlock", { pageId: imgPage.body.result.id, blockTypeSlug: "image", region: "content", fields: { image: mediaId, caption: "Hi" } }, admin);
+  await call("publishPage", { pageId: imgPage.body.result.id }, admin);
+
+  const logo = await call("getPage", { slug: "logo-page" });
+  const imgBlock = (logo.body.result.regions.content as Array<{ block_type: string; fields: { image?: { url?: string; alt?: string } } }>).find((b) => b.block_type === "image");
+  assert(!!imgBlock && imgBlock.fields.image?.url === `/media/${mediaKey}`, "cms: a media field resolves to a servable /media URL in the snapshot");
+  assert(imgBlock?.fields.image?.alt === "Our logo", "cms: resolved media carries its alt text");
+
+  const served = await fetch(`${base}/media/${mediaKey}`);
+  assert(served.status === 200 && served.headers.get("content-type") === "image/png", "cms: the public /media route serves the blob (no auth)");
+
+  const badMedia = await fetch(`${base}/media/main/nope/xyz`);
+  assert(badMedia.status === 404, "cms: the /media route refuses non-media keys");
+
+  const del = await call("deleteMedia", { id: mediaId }, admin);
+  assert(del.body.ok, "cms: deleteMedia removes the media");
+  const gone = await fetch(`${base}/media/${mediaKey}`);
+  assert(gone.status === 404, "cms: the blob is gone after deleteMedia");
+
   // --- reorderRegion must cover the region exactly (partial list rejected) ---
   const contentPlacements = pub2.body.result.regions.content as Array<{ id: string }>;
   const partial = await call("reorderRegion", { pageId, region: "content", order: [contentPlacements[0].id] }, admin);

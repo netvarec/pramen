@@ -6,8 +6,27 @@ pramen primitives**. It is an ordinary app fragment (schema + handlers + ACL + t
 a new runtime. Inspired by [WollyCMS](https://github.com/wollycms/wollycms) / Drupal
 Paragraphs / Storyblok.
 
-> **Status: spike.** Proven end-to-end against a real Durable Object by `test/suites/cms.ts`.
-> Not yet hardened for production — see *Limitations* below.
+> **Status: spike → production (in progress).** Proven end-to-end against a real Durable
+> Object by `test/suites/cms.ts`. Being taken to production feature-by-feature; **media
+> library is done** (below), then i18n, editorial workflow, SEO, typed blocks, a visual editor.
+> See *Limitations* for what's not there yet.
+
+## Media library
+
+- **Upload:** `signMediaUpload({ contentType, filename? })` mints a signed PUT url (keyed under
+  the tenant's `media/` prefix); the client PUTs the bytes, then `createMedia({ ref, alt? })`
+  confirms the blob is in R2 and persists a `cms_media` row. `listMedia`/`getMedia`/`deleteMedia`
+  (deleteMedia also removes the R2 blob) round it out. Editor-gated.
+- **Reference from a block:** a `"media"` field stores a `cms_media` id. At assemble/publish time
+  the id is resolved (recursively, through group/repeater nesting) to a `ResolvedMedia`
+  `{ id, key, url, alt, contentType, filename }` in the snapshot — so the content API returns a
+  servable URL, never a bare id.
+- **Serving + transforms:** published media is served by the Worker's **public** `GET
+  /media/<tenant>/media/<key>` route (immutable-cached, `nosniff`; restricted to `media/`-prefixed
+  keys so it can't leak signed-private objects). Put **Cloudflare Image Resizing** in front for
+  on-the-fly resize/format — build URLs with `imageUrl(key, { width, format, origin })`
+  (`/cdn-cgi/image/…`). Image Resizing is a **zone setting** (enable it on the Cloudflare zone),
+  not a binding.
 
 ## Model
 
@@ -68,13 +87,16 @@ function Page({ slug }: { slug: string }) {
 }
 ```
 
-## Limitations (spike)
+## Limitations
 
 - **Block `fields` are opaque JSON**, so pramen's row/cell-level ACL and relational queries
   don't reach inside a block — access is gated at the page/block level. Fine for content;
   note it.
-- **No typed inference for block field data** (types are runtime `FieldDefinition[]`). A
-  code-first, typed block DSL is a possible future direction.
+- **No typed inference for block field data** yet (types are runtime `FieldDefinition[]`). A
+  hybrid typed-block layer (inference + codegen) is a planned phase.
+- **Media orphan sweeping is manual** — `deleteMedia` removes a blob explicitly, but media no
+  longer referenced by any block isn't auto-collected (refs live inside opaque block JSON).
+  Deleting media still used on a published page breaks that page's image until re-publish.
 - **Single-column unique slug** — per-locale slug uniqueness / full i18n is stubbed
   (`locale` column exists; routing by it is not built).
 - **No draft autosave / optimistic-locking / presence** — the DO's single-writer + live
