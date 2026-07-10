@@ -347,9 +347,17 @@ export const cmsSchema = {
 
 // --- field validation --------------------------------------------------------
 
+export interface ValidateOpts {
+  /** Enforce `required` fields (reject when missing). Default true. Editor-facing draft
+   * writes (addBlock/updateBlock/createPage) pass `false` — a DRAFT block may be incomplete;
+   * required is only mandatory when publishing. Type checks always run. */
+  requireRequired?: boolean;
+}
+
 /** Validate a block/page's `fields` payload against a field schema, throwing a 400 on
  * the first violation. Recursive (repeater/group). Lenient on unknown field types. */
-export function validateFields(schema: FieldDefinition[] | undefined | null, values: unknown, path = ""): void {
+export function validateFields(schema: FieldDefinition[] | undefined | null, values: unknown, path = "", opts: ValidateOpts = {}): void {
+  const requireRequired = opts.requireRequired !== false;
   const defs = Array.isArray(schema) ? schema : [];
   const obj = (values ?? {}) as Record<string, unknown>;
   if (typeof obj !== "object" || Array.isArray(obj)) throw new BadRequest(`${path || "fields"} must be an object`);
@@ -358,7 +366,7 @@ export function validateFields(schema: FieldDefinition[] | undefined | null, val
     const v = obj[def.name];
     const missing = v === undefined || v === null || v === "";
     if (missing) {
-      if (def.required) throw new BadRequest(`field '${at}' is required`);
+      if (def.required && requireRequired) throw new BadRequest(`field '${at}' is required`);
       continue;
     }
     switch (def.type) {
@@ -384,13 +392,13 @@ export function validateFields(schema: FieldDefinition[] | undefined | null, val
         if (typeof v !== "string" && typeof v !== "number") throw new BadRequest(`field '${at}' must be a media id`);
         break;
       case "group":
-        validateFields(def.fields, v, at);
+        validateFields(def.fields, v, at, opts);
         break;
       case "repeater": {
         if (!Array.isArray(v)) throw new BadRequest(`field '${at}' must be a list`);
         if (def.min != null && v.length < def.min) throw new BadRequest(`field '${at}' needs at least ${def.min} item(s)`);
         if (def.max != null && v.length > def.max) throw new BadRequest(`field '${at}' allows at most ${def.max} item(s)`);
-        v.forEach((item, i) => validateFields(def.fields, item, `${at}[${i}]`));
+        v.forEach((item, i) => validateFields(def.fields, item, `${at}[${i}]`, opts));
         break;
       }
       default:
@@ -402,7 +410,10 @@ export function validateFields(schema: FieldDefinition[] | undefined | null, val
 // --- assembled-page shape (the content-API result + revision snapshot) --------
 
 export interface RenderedBlock {
+  /** The placement id (cms_page_blocks) — stable per position; used for reorder/remove. */
   id: string;
+  /** The underlying block instance id (cms_blocks) — used to edit the block's content. */
+  block_id: string;
   block_type: string;
   title: string | null;
   fields: Record<string, unknown>;
@@ -599,6 +610,7 @@ async function assembleLive(db: CmsDb, page: Record<string, unknown>): Promise<A
     const region = String(m.p.region);
     (regions[region] ??= []).push({
       id: String(m.p.id),
+      block_id: String(m.block.id),
       block_type: typeById.get(String(m.block.typeId))?.slug ?? "unknown",
       title: (m.block.title as string | null) ?? null,
       fields: resolveMediaFields(m.fields, m.schema, mediaById),
@@ -866,6 +878,20 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       },
     }),
 
+    listContentTypes: query((ctx) => cdb(ctx).find({ from: "cms_content_types", orderBy: { column: "name" } }), editor),
+
+    getContentType: query(async (ctx, input: { id: string }) => {
+      const rows = await cdb(ctx).find({ from: "cms_content_types", where: { id: input.id }, limit: 1 });
+      return rows[0] ?? null;
+    }, {
+      ...editor,
+      input: (raw): { id: string } => {
+        const o = asObj(raw);
+        if (typeof o.id !== "string") throw new BadRequest("id is required");
+        return o as never;
+      },
+    }),
+
     // ---- pages ----
     listPages: query((ctx) => cdb(ctx).find({ from: "cms_pages", orderBy: { column: "createdAt", dir: "desc" }, limit: 100 })),
 
@@ -902,7 +928,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       const ctRows = await db.find({ from: "cms_content_types", where: { id: input.typeId }, limit: 1 });
       const ct = ctRows[0];
       if (!ct) throw new BadRequest("unknown content type");
-      validateFields(ct.fieldsSchema as FieldDefinition[] | undefined, input.fields ?? {}, "page.fields");
+      validateFields(ct.fieldsSchema as FieldDefinition[] | undefined, input.fields ?? {}, "page.fields", { requireRequired: false });
       const locale = input.locale ?? defaultLocale;
       await assertSlugFree(db, input.slug, locale);
 
@@ -925,7 +951,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
           const bts = await db.find({ from: "cms_block_types", where: { slug: d.blockTypeSlug }, limit: 1 });
           if (!bts[0]) throw new BadRequest(`unknown block type '${d.blockTypeSlug}'`);
           await assertRegionAllows(db, page, d.region, d.blockTypeSlug);
-          validateFields(bts[0].fieldsSchema as FieldDefinition[] | undefined, d.fields ?? {});
+          validateFields(bts[0].fieldsSchema as FieldDefinition[] | undefined, d.fields ?? {}, "", { requireRequired: false });
           const block = await db.insert("cms_blocks", { typeId: bts[0].id, fields: d.fields ?? {} });
           const position = await nextPosition(db, String(page.id), d.region);
           await db.insert("cms_page_blocks", { pageId: page.id, blockId: block.id, region: d.region, position });
@@ -1010,7 +1036,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       if (!page) throw notFound("page");
       const bt = await loadBlockTypeBySlug(db, input.blockTypeSlug);
       await assertRegionAllows(db, page, input.region, input.blockTypeSlug);
-      validateFields(bt.fieldsSchema as FieldDefinition[] | undefined, input.fields ?? {});
+      validateFields(bt.fieldsSchema as FieldDefinition[] | undefined, input.fields ?? {}, "", { requireRequired: false });
 
       const block = await db.insert("cms_blocks", {
         typeId: bt.id,
@@ -1056,7 +1082,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       const slug = String(bts[0]?.slug ?? "");
       await assertRegionAllows(db, page, input.region, slug);
       if (input.overrides !== undefined) {
-        validateFields(bts[0]?.fieldsSchema as FieldDefinition[] | undefined, { ...asObj(block.fields), ...input.overrides });
+        validateFields(bts[0]?.fieldsSchema as FieldDefinition[] | undefined, { ...asObj(block.fields), ...input.overrides }, "", { requireRequired: false });
       }
       const position = input.position ?? (await nextPosition(db, input.pageId, input.region));
       return db.insert("cms_page_blocks", {
@@ -1078,6 +1104,19 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       },
     }),
 
+    /** Fetch a block's RAW content (media fields as ids, not resolved) — for editing. */
+    getBlock: query(async (ctx, input: { blockId: string }) => {
+      const rows = await cdb(ctx).find({ from: "cms_blocks", where: { id: input.blockId }, limit: 1 });
+      return rows[0] ?? null;
+    }, {
+      ...editor,
+      input: (raw): { blockId: string } => {
+        const o = asObj(raw);
+        if (typeof o.blockId !== "string") throw new BadRequest("blockId is required");
+        return o as never;
+      },
+    }),
+
     /** Update a block's content (re-validated against its type's field schema). */
     updateBlock: mutation(async (ctx, input: { blockId: string; fields?: Record<string, unknown>; title?: string }) => {
       const db = cdb(ctx);
@@ -1086,7 +1125,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       if (!block) throw notFound("block");
       if (input.fields !== undefined) {
         const bt = await db.find({ from: "cms_block_types", where: { id: block.typeId }, limit: 1 });
-        validateFields(bt[0]?.fieldsSchema as FieldDefinition[] | undefined, input.fields);
+        validateFields(bt[0]?.fieldsSchema as FieldDefinition[] | undefined, input.fields, "", { requireRequired: false });
       }
       const patch: Record<string, unknown> = { updatedAt: nowStamp() };
       if (input.fields !== undefined) patch.fields = input.fields;

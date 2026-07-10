@@ -7,9 +7,13 @@ a new runtime. Inspired by [WollyCMS](https://github.com/wollycms/wollycms) / Dr
 Paragraphs / Storyblok.
 
 > **Status: spike → production (in progress).** Proven end-to-end against a real Durable
-> Object by `test/suites/cms.ts`. Being taken to production feature-by-feature; **media
-> library** and **i18n** are done (below), then editorial workflow, SEO, typed blocks, a visual editor.
-> See *Limitations* for what's not there yet.
+> Object by `test/suites/cms.ts`. Done: **media library**, **i18n**, **editorial workflow +
+> audit**, **SEO + sitemap**, **typed blocks**, and a **visual editor** (`@pramen/cms-editor`,
+> a standalone React SPA). Remaining: integration + QA against a real project. See *Limitations*.
+>
+> **Draft vs. publish validation:** editor-facing writes (addBlock/updateBlock/createPage)
+> validate field *types* but treat `required` as advisory — a DRAFT block may be incomplete
+> and filled in later. (Enforcing required *at publish* is a small follow-up.)
 
 ## Typed blocks (hybrid)
 

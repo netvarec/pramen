@@ -67,9 +67,13 @@ export async function runCms(base: string): Promise<void> {
   const draftPublic = await call("getPage", { slug });
   assert(draftPublic.status === 404 && draftPublic.body.ok === false, "cms: anonymous cannot read a draft page (404)");
 
-  // --- field validation: a required field is enforced ---
-  const bad = await call("addBlock", { pageId, blockTypeSlug: "hero", region: "hero", fields: { subtitle: "no heading" } }, admin);
-  assert(bad.status === 400 && bad.body.ok === false, "cms: a missing required field is rejected (400)");
+  // --- field validation: types are always enforced (required is deferred to publish so a
+  // DRAFT block can be added then filled in) ---
+  const bad = await call("addBlock", { pageId, blockTypeSlug: "hero", region: "hero", fields: { heading: 123 } }, admin);
+  assert(bad.status === 400 && bad.body.ok === false, "cms: a wrong-typed field is rejected (400)");
+  const draftBlock = await call("addBlock", { pageId, blockTypeSlug: "hero", region: "hero", fields: { subtitle: "no heading yet" } }, admin);
+  assert(draftBlock.body.ok, "cms: a draft block missing a required field is allowed (filled in later)");
+  await call("removeBlock", { pageBlockId: draftBlock.body.result.placement.id }, admin);
 
   // --- region allow-list: the hero region only permits `hero`, so a rich_text is rejected ---
   const wrongRegion = await call("addBlock", { pageId, blockTypeSlug: "rich_text", region: "hero", fields: { body: "x" } }, admin);
@@ -252,18 +256,19 @@ export async function runCms(base: string): Promise<void> {
   const afterRm = await call("getPage", { slug, preview: true }, admin);
   assert((afterRm.body.result.regions.content as unknown[]).length === contentPlacements.length - 1, "cms: the removed placement is gone from the page");
 
-  // --- createPage skips (not scaffolds) an invalid default block ---
+  // --- createPage skips (not scaffolds) a default block that violates a REGION allow-list
+  // (missing required fields are OK on a draft; an unknown type / disallowed region is not) ---
   const showcaseCt = await call("createContentType", {
     name: "Showcase",
     slug: "showcase",
-    regions: [{ name: "content" }],
-    // hero requires `heading`; this default omits it, so it must be skipped, not scaffolded.
-    defaultBlocks: [{ region: "content", blockTypeSlug: "hero", fields: {} }],
+    regions: [{ name: "hero", allowedTypes: ["hero"] }],
+    // rich_text isn't allowed in the hero region → must be skipped, not scaffolded.
+    defaultBlocks: [{ region: "hero", blockTypeSlug: "rich_text", fields: { body: "x" } }],
   }, admin);
   const showcasePage = await call("createPage", { typeId: showcaseCt.body.result.id, title: "Showcase", slug: "showcase-1" }, admin);
   assert(showcasePage.body.ok, "cms: createPage succeeds despite an invalid default block");
   const showcasePreview = await call("getPage", { slug: "showcase-1", preview: true }, admin);
-  assert(((showcasePreview.body.result.regions.content as unknown[] | undefined) ?? []).length === 0, "cms: an invalid default block is skipped, not scaffolded");
+  assert(((showcasePreview.body.result.regions.hero as unknown[] | undefined) ?? []).length === 0, "cms: a disallowed default block is skipped, not scaffolded");
 
   // --- scheduling: input validation ---
   const badOrder = await call("schedulePage", { pageId, publishAt: Date.now() + 1000, unpublishAt: Date.now() + 500 }, admin);

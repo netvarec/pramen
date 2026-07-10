@@ -1,0 +1,28 @@
+{
+  "name": "@pramen/cms-editor",
+  "version": "0.0.14",
+  "description": "Visual block/page editor for @pramen/cms — a standalone React SPA that talks to the CMS handlers over HTTP.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/netvarec/pramen.git",
+    "directory": "packages/cms-editor"
+  },
+  "homepage": "https://github.com/netvarec/pramen#readme",
+  "bugs": "https://github.com/netvarec/pramen/issues",
+  "type": "module",
+  "private": true,
+  "files": ["dist", "src"],
+  "scripts": {
+    "build": "bun run scripts/build.ts",
+    "dev": "bun run scripts/build.ts --watch"
+  },
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0"
+  }
+}
