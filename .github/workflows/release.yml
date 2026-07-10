@@ -29,8 +29,11 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+      # Pin npm rather than track @latest: a broken npm@latest global install
+      # (missing bundled `sigstore`, needed for --provenance) failed the v0.0.15
+      # publish. 11.5.1 is the floor that supports OIDC trusted publishing.
       - name: Use an npm that supports trusted publishing (>= 11.5.1)
-        run: npm install -g npm@latest
+        run: npm install -g npm@11.5.1
       - name: Install (workspaces)
         run: bun install --frozen-lockfile
       - name: Typecheck
