@@ -88,6 +88,127 @@ export interface DefaultBlockDefinition {
   fields?: Record<string, unknown>;
 }
 
+// --- hybrid typed blocks: compile-time inference over a const FieldDefinition[] --------
+//
+// The data-driven half stores block field schemas as JSON rows (webmasters add types with
+// no deploy). For DEVELOPER-authored blocks, `defineBlockType(slug, fields as const)` gives
+// compile-time field typing with NO build step — a rendered block's `fields` is inferred from
+// the schema, exactly like `typeof app.handlers` types the RPC client. (A `pramen cms codegen`
+// command that emits these types from DB-stored schemas is future work.)
+
+/** A rich-text value — a serialized editor document (or a plain string). */
+export type RichText = string | { type: string; content?: unknown[] };
+
+/** Map one FieldDefinition (as a const literal) to the TS type of its RENDERED value.
+ * Media resolves to `ResolvedMedia` (the assemble-time shape a component receives). */
+export type FieldTsType<D extends FieldDefinition> = D["type"] extends "text" | "textarea" | "url" | "select"
+  ? string
+  : D["type"] extends "richtext"
+    ? RichText
+    : D["type"] extends "number"
+      ? number
+      : D["type"] extends "boolean"
+        ? boolean
+        : D["type"] extends "media"
+          ? ResolvedMedia | null
+          : D["type"] extends "group"
+            ? InferBlockFields<NonNullable<D["fields"]>>
+            : D["type"] extends "repeater"
+              ? InferBlockFields<NonNullable<D["fields"]>>[]
+              : unknown;
+
+/** Infer the `fields` object type from a const `FieldDefinition[]`. Required fields are
+ * present; optional ones are `| undefined`. */
+export type InferBlockFields<T extends readonly FieldDefinition[]> = {
+  [D in T[number] as D["name"]]: D extends { required: true } ? FieldTsType<D> : FieldTsType<D> | undefined;
+};
+
+/** A developer-authored block type: a slug + a const field schema, carrying enough type
+ * info to (a) create the DB block type and (b) type a rendering component's `fields`. */
+export interface BlockTypeDef<S extends string = string, F extends readonly FieldDefinition[] = readonly FieldDefinition[]> {
+  readonly slug: S;
+  readonly name: string;
+  readonly fieldsSchema: F;
+  readonly description?: string;
+  readonly icon?: string;
+  readonly category?: string;
+}
+
+/** Declare a typed block type. Pass `fields as const` to preserve the literals so
+ * `BlockFieldsOf<typeof def>` infers the field shape:
+ *
+ *   const hero = defineBlockType("hero", [
+ *     { name: "heading", type: "text", required: true },
+ *     { name: "image", type: "media" },
+ *   ] as const);
+ *   type HeroFields = BlockFieldsOf<typeof hero>; // { heading: string; image: ResolvedMedia|null|undefined }
+ *
+ * Spread `hero` (minus fieldsSchema key naming) into `createBlockType`, and use
+ * `BlockFieldsOf<typeof hero>` to type the block's React component. */
+export function defineBlockType<S extends string, F extends readonly FieldDefinition[]>(
+  slug: S,
+  fields: F,
+  opts: { name?: string; description?: string; icon?: string; category?: string } = {},
+): BlockTypeDef<S, F> {
+  return { slug, name: opts.name ?? slug, fieldsSchema: fields, description: opts.description, icon: opts.icon, category: opts.category };
+}
+
+/** The inferred `fields` type of a `defineBlockType` result. */
+export type BlockFieldsOf<D extends BlockTypeDef> = InferBlockFields<D["fieldsSchema"]>;
+
+// --- codegen: emit .ts field interfaces from DB-stored block schemas ------------------
+//
+// The data-driven half (webmaster-created block types) has no static type. This is the
+// runtime mirror of `InferBlockFields`: read `cms_block_types.fieldsSchema` rows and emit a
+// `.ts` module of per-slug field interfaces + a `BlockFieldsBySlug` registry. A future
+// `pramen cms codegen` CLI command fetches the rows over HTTP and writes the output.
+
+const pascal = (s: string): string => s.replace(/(^|[_-])(\w)/g, (_m, _sep, c: string) => c.toUpperCase());
+
+function tsTypeOf(f: FieldDefinition): string {
+  switch (f.type) {
+    case "text":
+    case "textarea":
+    case "url":
+    case "select":
+      return "string";
+    case "richtext":
+      return "RichText";
+    case "number":
+      return "number";
+    case "boolean":
+      return "boolean";
+    case "media":
+      return "ResolvedMedia | null";
+    case "group":
+      return `{ ${(f.fields ?? []).map(tsFieldLine).join(" ")} }`;
+    case "repeater":
+      return `Array<{ ${(f.fields ?? []).map(tsFieldLine).join(" ")} }>`;
+    default:
+      return "unknown";
+  }
+}
+const tsFieldLine = (f: FieldDefinition): string => `${JSON.stringify(f.name)}${f.required ? "" : "?"}: ${tsTypeOf(f)};`;
+
+/** Emit a `.ts` module of per-slug field interfaces + a `BlockFieldsBySlug` registry from
+ * DB-stored block types (`{ slug, fieldsSchema }` rows). The runtime counterpart to the
+ * compile-time `InferBlockFields`, for webmaster-authored (data-driven) block types. */
+export function generateBlockTypes(blockTypes: Array<{ slug: string; fieldsSchema?: FieldDefinition[] | null }>): string {
+  const interfaces = blockTypes
+    .map((bt) => {
+      const fields = Array.isArray(bt.fieldsSchema) ? bt.fieldsSchema : [];
+      const body = fields.map((f) => `  ${tsFieldLine(f)}`).join("\n");
+      return `export interface ${pascal(bt.slug)}Fields {\n${body}\n}`;
+    })
+    .join("\n\n");
+  const registry = blockTypes.map((bt) => `  ${JSON.stringify(bt.slug)}: ${pascal(bt.slug)}Fields;`).join("\n");
+  return (
+    `// AUTO-GENERATED by @pramen/cms — do not edit.\n` +
+    `import type { ResolvedMedia, RichText } from "@pramen/cms";\n\n` +
+    `${interfaces}\n\nexport interface BlockFieldsBySlug {\n${registry}\n}\n`
+  );
+}
+
 // --- schema fragment: spread into your defineSchema so the tables migrate --------
 
 /** The block/page builder tables. All in the default partition (relations can't cross

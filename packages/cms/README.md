@@ -11,6 +11,21 @@ Paragraphs / Storyblok.
 > library** and **i18n** are done (below), then editorial workflow, SEO, typed blocks, a visual editor.
 > See *Limitations* for what's not there yet.
 
+## Typed blocks (hybrid)
+
+Block types are data-driven (JSON schemas, no deploy to add one), but developers can get
+compile-time field typing two ways:
+
+- **Hand-authored, no build step:** `defineBlockType("hero", [...] as const)` +
+  `BlockFieldsOf<typeof hero>` infers the `fields` shape (media → `ResolvedMedia`, repeater →
+  array, group → nested), exactly like `typeof app.handlers` types the RPC client. Type a
+  component with `TypedBlockComponent<typeof hero>` (from `@pramen/cms/react`). Proven by
+  `example/cms-inference-check.ts`.
+- **Codegen from DB-stored types:** `generateBlockTypes(blockTypes)` emits a `.ts` module of
+  per-slug field interfaces + a `BlockFieldsBySlug` registry from `cms_block_types` rows —
+  for webmaster-created types. (A `pramen cms codegen` CLI that fetches the rows over HTTP and
+  writes the file is the remaining thin wrapper.)
+
 ## SEO & sitemap
 
 - Per-page SEO on `cms_pages`: `metaTitle`, `metaDescription`, `canonicalUrl`, `robots`,

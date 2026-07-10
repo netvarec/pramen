@@ -14,7 +14,19 @@
 
 import { createElement, Fragment } from "react";
 import type { ComponentType, ReactElement } from "react";
-import type { RenderedBlock } from "./index";
+import type { RenderedBlock, BlockTypeDef, BlockFieldsOf } from "./index";
+
+/** Props a component for a specific typed block type receives — `fields` is inferred from
+ * the block type's schema via `BlockFieldsOf` (see `defineBlockType`). */
+export interface TypedBlockProps<D extends BlockTypeDef> {
+  fields: BlockFieldsOf<D>;
+  block: RenderedBlock;
+  region?: string;
+  position: number;
+}
+
+/** A React component for a typed block type: `const Hero: TypedBlockComponent<typeof heroDef>`. */
+export type TypedBlockComponent<D extends BlockTypeDef> = ComponentType<TypedBlockProps<D>>;
 
 /** Props a block component receives. `fields` is the block's (override-merged) content. */
 export interface BlockComponentProps {
