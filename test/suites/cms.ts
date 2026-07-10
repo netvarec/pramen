@@ -161,6 +161,35 @@ export async function runCms(base: string): Promise<void> {
   const gone = await fetch(`${base}/media/${mediaKey}`);
   assert(gone.status === 404, "cms: the blob is gone after deleteMedia");
 
+  // --- editorial workflow: submit → review → approve/reject, with audit + RBAC ---
+  const editorTok = await token("cms-editor", ["editor"]);
+  const wfPage = await call("createPage", { typeId: ct.body.result.id, title: "Policy", slug: "policy" }, admin);
+  const wfId = wfPage.body.result.id as string;
+  await call("addBlock", { pageId: wfId, blockTypeSlug: "rich_text", region: "content", fields: { body: "<p>Draft</p>" } }, admin);
+  // an editor can submit for review
+  const submit = await call("submitForReview", { pageId: wfId, note: "please review" }, editorTok);
+  assert(submit.body.ok && submit.body.result.page.status === "review", "cms: submitForReview moves a draft to review");
+  // an editor (non-reviewer) cannot approve
+  const editorApprove = await call("approve", { pageId: wfId }, editorTok);
+  assert(editorApprove.status === 403, "cms: an editor cannot approve (reviewer-gated, 403)");
+  // reject sends it back
+  const reject = await call("reject", { pageId: wfId, note: "needs work" }, admin);
+  assert(reject.body.ok && reject.body.result.page.status === "rejected", "cms: reject moves review → rejected");
+  // approve only works from review — a rejected page must be resubmitted
+  const approveRejected = await call("approve", { pageId: wfId }, admin);
+  assert(approveRejected.status === 400, "cms: approve only works from the review state (400)");
+  // resubmit → approve (publishes)
+  await call("submitForReview", { pageId: wfId }, editorTok);
+  const approve = await call("approve", { pageId: wfId, note: "lgtm" }, admin);
+  assert(approve.body.ok && approve.body.result.page.status === "published", "cms: approve publishes a page in review");
+  const wfPublic = await call("getPage", { slug: "policy" });
+  assert(wfPublic.body.ok && (wfPublic.body.result.regions.content as unknown[]).length === 1, "cms: an approved page is publicly readable");
+  // the audit trail records every transition with actors
+  const audit = await call("listPageAudit", { pageId: wfId }, admin);
+  const actions = (audit.body.result as Array<{ action: string; actor: string | null }>).map((a) => a.action);
+  assert(actions.includes("submit") && actions.includes("reject") && actions.includes("approve"), "cms: the audit trail records submit/reject/approve");
+  assert((audit.body.result as Array<{ action: string; actor: string | null }>).some((a) => a.action === "submit" && a.actor === "cms-editor"), "cms: audit captures the actor (identity.userId)");
+
   // --- i18n: translations, per-locale slug uniqueness, locale-aware content API ---
   const enPage = await call("createPage", { typeId: ct.body.result.id, title: "Contact", slug: "contact" }, admin);
   const enId = enPage.body.result.id as string;

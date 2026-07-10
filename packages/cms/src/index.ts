@@ -185,10 +185,27 @@ export const cmsSchema = {
       status: t.text(),
       snapshot: t.json(), // the fully-assembled page + regions at publish time
       note: t.text(),
+      actor: t.text(), // the identity.userId that published (null = system/unknown)
       createdAt: defaultTo(t.text(), expr.now()),
     }),
     (r) => ({ page: r.belongsTo("cms_pages", "pageId") }),
   ),
+
+  // Append-only audit trail of workflow transitions (who moved a page between states,
+  // when, with an optional note). In the DEFAULT partition — the transition handlers write
+  // it synchronously (transactional with the state change, and they hold the actor from
+  // ctx.identity); a handler can't write across a partition boundary, so an isolated
+  // audit partition isn't reachable from here.
+  cms_audit: Entity((t) => ({
+    id: primaryKey(generated(t.uuid())),
+    pageId: indexed(t.uuid()),
+    action: notNull(t.text()), // submit | approve | reject | publish | unpublish
+    fromStatus: t.text(),
+    toStatus: t.text(),
+    actor: t.text(),
+    note: t.text(),
+    createdAt: defaultTo(t.text(), expr.now()),
+  })),
 
   // Media: a fileRef column holds only R2 metadata; bytes live in R2, uploaded via
   // ctx.files + the Worker /files/* route. Block `fields` reference a media id.
@@ -450,6 +467,16 @@ async function assembleLive(db: CmsDb, page: Record<string, unknown>): Promise<A
   return { page: pageMeta(page, await siblingTranslations(db, page)), regions };
 }
 
+/** Publish a page: assemble a snapshot, write a revision (recording the actor), and point
+ * the page at it. Shared by publishPage, approve, and the scheduled cms:publish task. */
+async function doPublish(db: CmsDb, page: Record<string, unknown>, actor: string | null, note?: string): Promise<Record<string, unknown> | undefined> {
+  const now = nowStamp();
+  const snapshot = await assembleLive(db, { ...page, status: "published" });
+  snapshot.page.status = "published";
+  const rev = await db.insert("cms_page_revisions", { pageId: page.id, title: page.title, status: "published", snapshot, note: note ?? null, actor });
+  return db.update("cms_pages", String(page.id), { status: "published", publishedAt: now, scheduledAt: null, currentRevisionId: rev.id, updatedAt: now });
+}
+
 /** Published sibling translations of a page (other locales in the same translation group),
  * for hreflang. Excludes the page itself. */
 async function siblingTranslations(db: CmsDb, page: Record<string, unknown>): Promise<PageTranslation[]> {
@@ -512,6 +539,9 @@ export interface CmsHandlerOpts {
   mediaMaxSize?: number;
   /** Default locale used when `getPage`/`createPage` omit one. Default `"en"`. */
   defaultLocale?: string;
+  /** Roles permitted to approve/reject a page in review and publish (the editorial gate).
+   * Default `["reviewer", "admin"]`. */
+  reviewerRoles?: readonly string[];
 }
 
 /** Build the CMS handler map. Spread into your app's handlers. Editor mutations are
@@ -521,6 +551,14 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
   const editor = { auth: editorRoles };
   const mediaMaxSize = opts.mediaMaxSize ?? 25_000_000;
   const defaultLocale = opts.defaultLocale ?? "en";
+  const reviewerRoles = opts.reviewerRoles ?? ["reviewer", "admin"];
+  const reviewer = { auth: reviewerRoles };
+
+  // The caller's identity id (the audit actor), or null for a system/unauthenticated write.
+  const actorOf = (ctx: HandlerContext): string | null => (typeof ctx.identity?.userId === "string" ? ctx.identity.userId : null);
+  // Append an audit row for a workflow transition (synchronous, in the mutation's txn).
+  const writeAudit = (db: CmsDb, e: { pageId: string; action: string; from?: string; to?: string; actor: string | null; note?: string }) =>
+    db.insert("cms_audit", { pageId: e.pageId, action: e.action, fromStatus: e.from ?? null, toStatus: e.to ?? null, actor: e.actor, note: e.note ?? null });
 
   // (slug, locale) uniqueness is enforced here because pramen's unique() is single-column.
   const assertSlugFree = async (db: CmsDb, slug: string, locale: string, exceptId?: string): Promise<void> => {
@@ -920,25 +958,94 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       },
     }),
 
+    // ---- editorial workflow ----
+    /** Move a draft (or rejected) page into review. Editor-gated. */
+    submitForReview: mutation(async (ctx, input: { pageId: string; note?: string }) => {
+      const db = cdb(ctx);
+      const rows = await db.find({ from: "cms_pages", where: { id: input.pageId }, limit: 1 });
+      const page = rows[0];
+      if (!page) throw notFound("page");
+      const from = String(page.status);
+      if (from !== "draft" && from !== "rejected") throw new BadRequest(`cannot submit a '${from}' page for review`);
+      const updated = await db.update("cms_pages", input.pageId, { status: "review", updatedAt: nowStamp() });
+      await writeAudit(db, { pageId: input.pageId, action: "submit", from, to: "review", actor: actorOf(ctx), note: input.note });
+      return { ok: true, page: updated };
+    }, {
+      ...editor,
+      input: (raw): { pageId: string; note?: string } => {
+        const o = asObj(raw);
+        if (typeof o.pageId !== "string") throw new BadRequest("pageId is required");
+        return o as never;
+      },
+    }),
+
+    /** Approve a page in review → publish it (snapshot + currentRevisionId). Reviewer-gated. */
+    approve: mutation(async (ctx, input: { pageId: string; note?: string }) => {
+      const db = cdb(ctx);
+      const rows = await db.find({ from: "cms_pages", where: { id: input.pageId }, limit: 1 });
+      const page = rows[0];
+      if (!page) throw notFound("page");
+      if (String(page.status) !== "review") throw new BadRequest("only a page in review can be approved");
+      const updated = await doPublish(db, page, actorOf(ctx), input.note);
+      await writeAudit(db, { pageId: input.pageId, action: "approve", from: "review", to: "published", actor: actorOf(ctx), note: input.note });
+      return { ok: true, page: updated };
+    }, {
+      ...reviewer,
+      input: (raw): { pageId: string; note?: string } => {
+        const o = asObj(raw);
+        if (typeof o.pageId !== "string") throw new BadRequest("pageId is required");
+        return o as never;
+      },
+    }),
+
+    /** Reject a page in review → back to draft. Reviewer-gated. */
+    reject: mutation(async (ctx, input: { pageId: string; note?: string }) => {
+      const db = cdb(ctx);
+      const rows = await db.find({ from: "cms_pages", where: { id: input.pageId }, limit: 1 });
+      const page = rows[0];
+      if (!page) throw notFound("page");
+      if (String(page.status) !== "review") throw new BadRequest("only a page in review can be rejected");
+      const updated = await db.update("cms_pages", input.pageId, { status: "rejected", updatedAt: nowStamp() });
+      await writeAudit(db, { pageId: input.pageId, action: "reject", from: "review", to: "rejected", actor: actorOf(ctx), note: input.note });
+      return { ok: true, page: updated };
+    }, {
+      ...reviewer,
+      input: (raw): { pageId: string; note?: string } => {
+        const o = asObj(raw);
+        if (typeof o.pageId !== "string") throw new BadRequest("pageId is required");
+        return o as never;
+      },
+    }),
+
+    /** The workflow audit trail for a page (most recent first). Handler-gated to editors;
+     * reads the append-only log via `exec` (a plain admin-scoped read of a gated log). */
+    listPageAudit: query(async (ctx, input: { pageId: string; limit?: number }) => {
+      const limit = Math.min(Math.max(Math.trunc(Number(input?.limit ?? 50)) || 50, 1), 200);
+      return cdb(ctx).exec(
+        `SELECT "id", "pageId", "action", "fromStatus", "toStatus", "actor", "note", "createdAt" FROM "cms_audit" WHERE "pageId" = ? ORDER BY "createdAt" DESC LIMIT ${limit}`,
+        input.pageId,
+      );
+    }, {
+      ...editor,
+      input: (raw): { pageId: string; limit?: number } => {
+        const o = asObj(raw);
+        if (typeof o.pageId !== "string") throw new BadRequest("pageId is required");
+        return o as never;
+      },
+    }),
+
     // ---- publishing ----
-    /** Publish a page: snapshot the fully-assembled page into a revision and flip status
-     * to `published`. The public content API serves the snapshot. */
+    /** Publish a page directly: snapshot the assembled page into a revision and flip
+     * status to `published` (records an audit entry). The public content API serves the
+     * snapshot. `approve` is the review-gated path to the same outcome. */
     publishPage: mutation(async (ctx, input: { pageId: string; note?: string }) => {
       const db = cdb(ctx);
       const rows = await db.find({ from: "cms_pages", where: { id: input.pageId }, limit: 1 });
       const page = rows[0];
       if (!page) throw notFound("page");
-      const now = nowStamp();
-      const snapshot = await assembleLive(db, { ...page, status: "published" });
-      snapshot.page.status = "published";
-      const rev = await db.insert("cms_page_revisions", { pageId: input.pageId, title: page.title, status: "published", snapshot, note: input.note ?? null });
-      const updated = await db.update("cms_pages", input.pageId, {
-        status: "published",
-        publishedAt: now,
-        scheduledAt: null,
-        currentRevisionId: rev.id,
-        updatedAt: now,
-      });
+      const from = String(page.status);
+      const updated = await doPublish(db, page, actorOf(ctx), input.note);
+      await writeAudit(db, { pageId: input.pageId, action: "publish", from, to: "published", actor: actorOf(ctx), note: input.note });
       return { ok: true, page: updated };
     }, {
       ...editor,
@@ -953,8 +1060,12 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       // Clear any pending schedule tokens too: a queued cms:publish/cms:unpublish task
       // validates its token against these at fire time, so nulling them cancels the
       // schedule (the editor is taking manual control).
-      const updated = await cdb(ctx).update("cms_pages", input.pageId, { status: "draft", scheduledAt: null, unpublishAt: null, updatedAt: nowStamp() });
+      const db = cdb(ctx);
+      const rows = await db.find({ from: "cms_pages", where: { id: input.pageId }, limit: 1 });
+      const from = rows[0] ? String(rows[0].status) : undefined;
+      const updated = await db.update("cms_pages", input.pageId, { status: "draft", scheduledAt: null, unpublishAt: null, updatedAt: nowStamp() });
       if (!updated) throw notFound("page");
+      await writeAudit(db, { pageId: input.pageId, action: "unpublish", from, to: "draft", actor: actorOf(ctx) });
       return { ok: true, page: updated };
     }, {
       ...editor,
@@ -1066,7 +1177,7 @@ export interface CmsPolicyOpts {
  * `editor` grants full CRUD across every cms_ table. */
 export function cmsPolicies(opts: CmsPolicyOpts = {}): { public: Policy[]; editor: Policy[] } {
   const p = opts.prefix ?? "cms";
-  const tables = ["cms_content_types", "cms_block_types", "cms_blocks", "cms_pages", "cms_page_blocks", "cms_page_revisions", "cms_media"] as const;
+  const tables = ["cms_content_types", "cms_block_types", "cms_blocks", "cms_pages", "cms_page_blocks", "cms_page_revisions", "cms_media", "cms_audit"] as const;
   const editorPolicies: Policy[] = [];
   for (const table of tables) {
     for (const action of ["read", "create", "update", "delete"] as const) {
@@ -1115,12 +1226,9 @@ export const cmsTasks = {
     // reschedule (new token), a manual publish/unpublish (token cleared), or a duplicate
     // delivery after this task already ran (token cleared below) all make this a no-op.
     if (String(page.scheduledAt ?? "") !== String(token ?? "")) return;
-    const now = nowStamp();
-    const snapshot = await assembleLive(db, { ...page, status: "published" });
-    snapshot.page.status = "published";
-    const rev = await db.insert("cms_page_revisions", { pageId, title: page.title, status: "published", snapshot, note: "scheduled publish" });
-    // Clear scheduledAt so a duplicate delivery of THIS task no-ops on the token check.
-    await db.update("cms_pages", pageId, { status: "published", publishedAt: now, scheduledAt: null, currentRevisionId: rev.id, updatedAt: now });
+    const from = String(page.status);
+    await doPublish(db, page, null, "scheduled publish"); // actor null = system
+    await db.insert("cms_audit", { pageId, action: "publish", fromStatus: from, toStatus: "published", actor: null, note: "scheduled" });
   },
   "cms:unpublish": async (ctx: HandlerContext, payload: unknown) => {
     const { pageId, token } = asObj(payload) as { pageId?: string; token?: string };
@@ -1130,6 +1238,8 @@ export const cmsTasks = {
     const page = rows[0];
     if (!page) return;
     if (String(page.unpublishAt ?? "") !== String(token ?? "")) return; // superseded/cancelled
+    const from = String(page.status);
     await db.update("cms_pages", pageId, { status: "archived", unpublishAt: null, updatedAt: nowStamp() });
+    await db.insert("cms_audit", { pageId, action: "unpublish", fromStatus: from, toStatus: "archived", actor: null, note: "scheduled" });
   },
 };

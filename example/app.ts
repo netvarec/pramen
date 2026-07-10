@@ -522,6 +522,12 @@ const acl = [
     // snapshot; unpublished block rows are never exposed).
     ...cmsPolicies().public,
   ]),
+  // @pramen/cms editorial roles: an `editor` can author + submit for review; a `reviewer`
+  // can approve/reject/publish. Both need the same CMS data ACL (full CRUD on cms_ tables);
+  // the workflow gate is the per-handler `auth` (submit → editor, approve/reject → reviewer).
+  // Distinct policy-name prefixes so the grants don't collide with admin's.
+  role("editor", [...cmsPolicies({ prefix: "cms-ed" }).editor]),
+  role("reviewer", [...cmsPolicies({ prefix: "cms-rev" }).editor]),
   role("author", [
     policy("author:read", "notes", "read", {
       where: { ownerId: $identity("userId") },

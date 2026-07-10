@@ -11,6 +11,18 @@ Paragraphs / Storyblok.
 > library** and **i18n** are done (below), then editorial workflow, SEO, typed blocks, a visual editor.
 > See *Limitations* for what's not there yet.
 
+## Editorial workflow & audit
+
+- **States:** `draft → review → published`, plus `rejected` and `archived`. Handlers:
+  `submitForReview` (editor), `approve`/`reject` (reviewer-gated), `publishPage` (direct
+  publish), `unpublishPage`, `schedulePage`. Each transition is guarded (e.g. you can only
+  approve a page that is in review).
+- **RBAC:** `submitForReview` is gated to `editorRoles`; `approve`/`reject`/publish to
+  `reviewerRoles` (default `["reviewer","admin"]`). Configure via `createCmsHandlers({ editorRoles, reviewerRoles })`.
+- **Audit trail:** every transition writes a `cms_audit` row (`action`, from/to status,
+  `actor` = `identity.userId`, note) synchronously in the same transaction. `listPageAudit({ pageId })`
+  returns it. Revisions also record the publishing `actor`.
+
 ## i18n / multi-locale
 
 - A page has a `locale` and a `translationGroupId` (auto-minted; shared across a page's
