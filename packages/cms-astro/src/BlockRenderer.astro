@@ -1,0 +1,32 @@
+---
+// Render a list of @pramen/cms blocks with your own .astro components. Map each block's
+// `block_type` slug to a component; each component receives `fields` (the resolved block
+// content), `block` (the RenderedBlock), and `region`.
+//
+//   import BlockRenderer from "@pramen/cms-astro/BlockRenderer.astro";
+//   import RichText from "../components/blocks/RichText.astro";
+//   const components = { rich_text: RichText, image: Image };
+//   <BlockRenderer blocks={page.blocks} {components} />
+
+import type { RenderedBlock } from "./index";
+import type { AstroComponentFactory } from "astro/runtime/server/index.js";
+
+interface Props {
+  blocks: RenderedBlock[];
+  components: Record<string, AstroComponentFactory>;
+  region?: string;
+}
+
+const { blocks, components, region } = Astro.props;
+---
+
+{
+  blocks.map((block) => {
+    const Component = components[block.block_type];
+    return Component ? (
+      <Component fields={block.fields} block={block} region={region} />
+    ) : (
+      <div data-unknown-block={block.block_type}>Unknown block type: {block.block_type}</div>
+    );
+  })
+}

@@ -1,0 +1,26 @@
+{
+  "name": "@pramen/cms-astro",
+  "version": "0.0.14",
+  "description": "Astro integration for @pramen/cms — a build-time content-collection loader + a BlockRenderer for rendering CMS blocks in .astro pages.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/netvarec/pramen.git",
+    "directory": "packages/cms-astro"
+  },
+  "homepage": "https://github.com/netvarec/pramen#readme",
+  "bugs": "https://github.com/netvarec/pramen/issues",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./BlockRenderer.astro": "./src/BlockRenderer.astro"
+  },
+  "files": ["src"],
+  "peerDependencies": {
+    "astro": ">=4"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
