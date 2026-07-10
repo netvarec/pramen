@@ -79,6 +79,12 @@ export async function runCms(base: string): Promise<void> {
   const wrongRegion = await call("addBlock", { pageId, blockTypeSlug: "rich_text", region: "hero", fields: { body: "x" } }, admin);
   assert(wrongRegion.status === 400 && wrongRegion.body.ok === false, "cms: a block type not allowed in a region is rejected (400)");
 
+  // --- an EMPTY allowedTypes region means "any type" (matches the editor), not "none" ---
+  const anyCt = await call("createContentType", { name: "AnyRegion", slug: "any-region", regions: [{ name: "main", allowedTypes: [] }] }, admin);
+  const anyPage = await call("createPage", { typeId: anyCt.body.result.id, title: "Any", slug: "any-page" }, admin);
+  const anyAdd = await call("addBlock", { pageId: anyPage.body.result.id, blockTypeSlug: "hero", region: "main", fields: { heading: "x" } }, admin);
+  assert(anyAdd.body.ok, "cms: a region with empty allowedTypes accepts any block type");
+
   // --- place typed blocks in regions ---
   const heroBlock = await call("addBlock", { pageId, blockTypeSlug: "hero", region: "hero", fields: { heading: "About Us", subtitle: "Who we are" } }, admin);
   assert(heroBlock.body.ok, "cms: addBlock(hero) ok");
@@ -221,6 +227,21 @@ export async function runCms(base: string): Promise<void> {
   const actions = (audit.body.result as Array<{ action: string; actor: string | null }>).map((a) => a.action);
   assert(actions.includes("submit") && actions.includes("reject") && actions.includes("approve"), "cms: the audit trail records submit/reject/approve");
   assert((audit.body.result as Array<{ action: string; actor: string | null }>).some((a) => a.action === "submit" && a.actor === "cms-editor"), "cms: audit captures the actor (identity.userId)");
+
+  // reviewer RBAC: a pure reviewer (not editor/admin) can VIEW a draft (preview + content
+  // type) to review it, then approve — but cannot edit.
+  const reviewerTok = await token("cms-reviewer", ["reviewer"]);
+  const revPage = await call("createPage", { typeId: ct.body.result.id, title: "Review Me", slug: "review-me" }, admin);
+  const revPageId = revPage.body.result.id as string;
+  await call("addBlock", { pageId: revPageId, blockTypeSlug: "rich_text", region: "content", fields: { body: "<p>r</p>" } }, admin);
+  await call("submitForReview", { pageId: revPageId }, admin);
+  const revPreview = await call("getPage", { slug: "review-me", preview: true }, reviewerTok);
+  assert(revPreview.body.ok && (revPreview.body.result.regions.content as unknown[]).length === 1, "cms: a reviewer can preview a draft page before approving");
+  assert((await call("getContentType", { id: ct.body.result.id }, reviewerTok)).body.ok, "cms: a reviewer can load the content type");
+  const revEdit = await call("addBlock", { pageId: revPageId, blockTypeSlug: "rich_text", region: "content", fields: { body: "<p>no</p>" } }, reviewerTok);
+  assert(revEdit.status === 403, "cms: a reviewer cannot edit (writes stay editor-gated, 403)");
+  const revApprove = await call("approve", { pageId: revPageId }, reviewerTok);
+  assert(revApprove.body.ok && revApprove.body.result.page.status === "published", "cms: a reviewer can approve");
 
   // --- i18n: translations, per-locale slug uniqueness, locale-aware content API ---
   const enPage = await call("createPage", { typeId: ct.body.result.id, title: "Contact", slug: "contact" }, admin);

@@ -389,7 +389,9 @@ export function validateFields(schema: FieldDefinition[] | undefined | null, val
         if (typeof v !== "boolean") throw new BadRequest(`field '${at}' must be a boolean`);
         break;
       case "media":
-        if (typeof v !== "string" && typeof v !== "number") throw new BadRequest(`field '${at}' must be a media id`);
+        // Media ids are uuids (strings) — reject numbers so the value always resolves
+        // (collectMediaIds/resolveMediaFields only handle string ids).
+        if (typeof v !== "string") throw new BadRequest(`field '${at}' must be a media id (string)`);
         break;
       case "group":
         validateFields(def.fields, v, at, opts);
@@ -617,7 +619,8 @@ async function assembleLive(db: CmsDb, page: Record<string, unknown>): Promise<A
       is_shared: Boolean(m.p.isShared),
     });
   }
-  return { page: pageMeta(page, await siblingTranslations(db, page), await resolveMediaId(db, page.ogImage)), regions };
+  const [translations, ogImage] = await Promise.all([siblingTranslations(db, page), resolveMediaId(db, page.ogImage)]);
+  return { page: pageMeta(page, translations, ogImage), regions };
 }
 
 /** Resolve a single media id to a ResolvedMedia (for og:image etc.), or null. */
@@ -637,13 +640,18 @@ async function resolveMediaId(db: CmsDb, id: unknown): Promise<ResolvedMedia | n
 }
 
 /** Publish a page: assemble a snapshot, write a revision (recording the actor), and point
- * the page at it. Shared by publishPage, approve, and the scheduled cms:publish task. */
-async function doPublish(db: CmsDb, page: Record<string, unknown>, actor: string | null, note?: string): Promise<Record<string, unknown> | undefined> {
+ * the page at it. Shared by publishPage, approve, and the scheduled cms:publish task.
+ * `clearSchedule` (a MANUAL publish) also clears the pending auto-unpublish token so a
+ * stale scheduled unpublish can't later archive the page behind the editor's back; the
+ * SCHEDULED cms:publish task passes false so a publish+unpublish pair both still fire. */
+async function doPublish(db: CmsDb, page: Record<string, unknown>, actor: string | null, note?: string, clearSchedule = false): Promise<Record<string, unknown> | undefined> {
   const now = nowStamp();
   const snapshot = await assembleLive(db, { ...page, status: "published" });
   snapshot.page.status = "published";
   const rev = await db.insert("cms_page_revisions", { pageId: page.id, title: page.title, status: "published", snapshot, note: note ?? null, actor });
-  return db.update("cms_pages", String(page.id), { status: "published", publishedAt: now, scheduledAt: null, currentRevisionId: rev.id, updatedAt: now });
+  const patch: Record<string, unknown> = { status: "published", publishedAt: now, scheduledAt: null, currentRevisionId: rev.id, updatedAt: now };
+  if (clearSchedule) patch.unpublishAt = null;
+  return db.update("cms_pages", String(page.id), patch);
 }
 
 /** Published sibling translations of a page (other locales in the same translation group),
@@ -705,7 +713,9 @@ async function assertRegionAllows(db: CmsDb, page: Record<string, unknown>, regi
   const regions = (ctRows[0]?.regions as RegionDefinition[] | undefined) ?? [];
   const def = regions.find((r) => r.name === region);
   if (!def) throw new BadRequest(`region '${region}' is not defined on this page's content type`);
-  if (def.allowedTypes && !def.allowedTypes.includes(blockTypeSlug)) {
+  // A non-empty allowedTypes restricts; null/undefined OR an empty array means "any type"
+  // (matching the editor, which treats `[]` as unrestricted — otherwise the region is unusable).
+  if (def.allowedTypes && def.allowedTypes.length && !def.allowedTypes.includes(blockTypeSlug)) {
     throw new BadRequest(`block type '${blockTypeSlug}' is not allowed in region '${region}'`);
   }
 }
@@ -734,6 +744,10 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
   const defaultLocale = opts.defaultLocale ?? "en";
   const reviewerRoles = opts.reviewerRoles ?? ["reviewer", "admin"];
   const reviewer = { auth: reviewerRoles };
+  // Anyone who edits OR reviews may VIEW content (a reviewer must preview a page + load its
+  // content type/blocks before approving). Read/preview handlers use this; writes stay editor.
+  const viewerRoles = [...new Set([...editorRoles, ...reviewerRoles])];
+  const viewer = { auth: viewerRoles };
 
   // The caller's identity id (the audit actor), or null for a system/unauthenticated write.
   const actorOf = (ctx: HandlerContext): string | null => (typeof ctx.identity?.userId === "string" ? ctx.identity.userId : null);
@@ -844,13 +858,13 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       const limit = Math.min(Math.max(Math.trunc(Number(input?.limit ?? 50)) || 50, 1), 200);
       const offset = Math.max(Math.trunc(Number(input?.offset ?? 0)) || 0, 0);
       return cdb(ctx).find({ from: "cms_media", orderBy: { column: "createdAt", dir: "desc" }, limit, offset });
-    }, editor),
+    }, viewer),
 
     getMedia: query(async (ctx, input: { id: string }) => {
       const rows = await cdb(ctx).find({ from: "cms_media", where: { id: input.id }, limit: 1 });
       return rows[0] ?? null;
     }, {
-      ...editor,
+      ...viewer,
       input: (raw): { id: string } => {
         const o = asObj(raw);
         if (typeof o.id !== "string") throw new BadRequest("id is required");
@@ -878,13 +892,13 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       },
     }),
 
-    listContentTypes: query((ctx) => cdb(ctx).find({ from: "cms_content_types", orderBy: { column: "name" } }), editor),
+    listContentTypes: query((ctx) => cdb(ctx).find({ from: "cms_content_types", orderBy: { column: "name" } }), viewer),
 
     getContentType: query(async (ctx, input: { id: string }) => {
       const rows = await cdb(ctx).find({ from: "cms_content_types", where: { id: input.id }, limit: 1 });
       return rows[0] ?? null;
     }, {
-      ...editor,
+      ...viewer,
       input: (raw): { id: string } => {
         const o = asObj(raw);
         if (typeof o.id !== "string") throw new BadRequest("id is required");
@@ -981,7 +995,15 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       const src = rows[0];
       if (!src) throw notFound("page");
       if (String(src.locale) === input.locale) throw new BadRequest("page is already in that locale");
-      const existing = await db.find({ from: "cms_pages", where: { translationGroupId: src.translationGroupId, locale: input.locale }, limit: 1 });
+      // A legacy page (migrated in before this column existed) has a NULL group — a NULL
+      // match would collapse ALL legacy pages together. Backfill the source with its own
+      // group first, so this translation joins only it.
+      let group = src.translationGroupId;
+      if (typeof group !== "string" || !group) {
+        group = crypto.randomUUID();
+        await db.update("cms_pages", String(src.id), { translationGroupId: group });
+      }
+      const existing = await db.find({ from: "cms_pages", where: { translationGroupId: group, locale: input.locale }, limit: 1 });
       if (existing[0]) throw new BadRequest(`a '${input.locale}' translation already exists`);
       const slug = input.slug ?? String(src.slug);
       await assertSlugFree(db, slug, input.locale);
@@ -990,7 +1012,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
         title: input.title ?? String(src.title),
         slug,
         locale: input.locale,
-        translationGroupId: src.translationGroupId,
+        translationGroupId: group,
         fields: {},
         status: "draft",
       });
@@ -1007,11 +1029,15 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     listTranslations: query(async (ctx, input: { pageId: string }) => {
       const db = cdb(ctx);
       const rows = await db.find({ from: "cms_pages", where: { id: input.pageId }, limit: 1 });
-      if (!rows[0]) throw notFound("page");
-      const group = await db.find({ from: "cms_pages", where: { translationGroupId: rows[0].translationGroupId } });
-      return group.map((r) => ({ id: String(r.id), locale: String(r.locale ?? "en"), slug: String(r.slug), title: String(r.title), status: String(r.status) }));
+      const self = rows[0];
+      if (!self) throw notFound("page");
+      const proj = (r: Record<string, unknown>) => ({ id: String(r.id), locale: String(r.locale ?? "en"), slug: String(r.slug), title: String(r.title), status: String(r.status) });
+      // A NULL group (legacy page) matches all legacy pages — guard it and return just self.
+      if (typeof self.translationGroupId !== "string" || !self.translationGroupId) return [proj(self)];
+      const group = await db.find({ from: "cms_pages", where: { translationGroupId: self.translationGroupId } });
+      return group.map(proj);
     }, {
-      ...editor,
+      ...viewer,
       input: (raw): { pageId: string } => {
         const o = asObj(raw);
         if (typeof o.pageId !== "string") throw new BadRequest("pageId is required");
@@ -1023,7 +1049,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     listLocales: query(async (ctx) => {
       const rows = await cdb(ctx).exec("SELECT DISTINCT locale FROM cms_pages ORDER BY locale");
       return rows.map((r) => String(r.locale ?? "en"));
-    }, editor),
+    }, viewer),
 
     // ---- blocks & placement ----
     /** Create a block instance and place it into a page region in one call (the common
@@ -1109,7 +1135,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       const rows = await cdb(ctx).find({ from: "cms_blocks", where: { id: input.blockId }, limit: 1 });
       return rows[0] ?? null;
     }, {
-      ...editor,
+      ...viewer,
       input: (raw): { blockId: string } => {
         const o = asObj(raw);
         if (typeof o.blockId !== "string") throw new BadRequest("blockId is required");
@@ -1221,7 +1247,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       const page = rows[0];
       if (!page) throw notFound("page");
       if (String(page.status) !== "review") throw new BadRequest("only a page in review can be approved");
-      const updated = await doPublish(db, page, actorOf(ctx), input.note);
+      const updated = await doPublish(db, page, actorOf(ctx), input.note, true); // manual → clear pending auto-unpublish
       await writeAudit(db, { pageId: input.pageId, action: "approve", from: "review", to: "published", actor: actorOf(ctx), note: input.note });
       return { ok: true, page: updated };
     }, {
@@ -1261,7 +1287,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
         input.pageId,
       );
     }, {
-      ...editor,
+      ...viewer,
       input: (raw): { pageId: string; limit?: number } => {
         const o = asObj(raw);
         if (typeof o.pageId !== "string") throw new BadRequest("pageId is required");
@@ -1279,7 +1305,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       const page = rows[0];
       if (!page) throw notFound("page");
       const from = String(page.status);
-      const updated = await doPublish(db, page, actorOf(ctx), input.note);
+      const updated = await doPublish(db, page, actorOf(ctx), input.note, true); // manual → clear pending auto-unpublish
       await writeAudit(db, { pageId: input.pageId, action: "publish", from, to: "published", actor: actorOf(ctx), note: input.note });
       return { ok: true, page: updated };
     }, {
@@ -1359,7 +1385,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       const db = cdb(ctx);
       // Preview is an editor capability — gate it before the lookup so a non-editor gets a
       // clear 403 (rather than a 404 that merely reflects the published-only read scope).
-      if (input.preview && !isEditor(ctx, editorRoles)) throw new Forbidden("preview requires an editor role");
+      if (input.preview && !isEditor(ctx, viewerRoles)) throw new Forbidden("preview requires an editor or reviewer role");
       const locale = input.locale ?? defaultLocale;
       const rows = await db.find({ from: "cms_pages", where: { slug: input.slug, locale }, limit: 1 });
       const page = rows[0];
@@ -1380,6 +1406,11 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
           // published AFTER this page won't be in the baked snapshot. Anonymous can read
           // published pages, so this query is in-policy on the public path.
           snap.page.translations = await siblingTranslations(db, page);
+          // Back-compat: a snapshot baked before `seo`/`translationGroupId` existed lacks
+          // those keys, but AssembledPage now types them as present — backfill from the live
+          // page row so a frontend head template never hits `page.seo` === undefined.
+          if (!snap.page.seo) snap.page.seo = pageMeta(page).seo;
+          if (snap.page.translationGroupId === undefined) snap.page.translationGroupId = (page.translationGroupId as string | null) ?? null;
           return snap;
         }
       }
