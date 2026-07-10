@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Api, ApiError, loadConfig, saveConfig, type Config } from "./api";
 import { FieldForm } from "./fields";
-import type { AssembledPage, AuditEntry, BlockType, ContentType, FieldDefinition, Page, RegionDefinition, RenderedBlock } from "./types";
+import type { AssembledPage, AuditEntry, BlockType, ContentType, FieldDefinition, Media, Page, RegionDefinition, RenderedBlock } from "./types";
 
 export function App() {
   const [cfg, setCfg] = useState<Config>(loadConfig());
@@ -47,6 +47,7 @@ function Editor({ api, cfg, onReconfigure }: { api: Api; cfg: Config; onReconfig
   const [pages, setPages] = useState<Page[]>([]);
   const [blockTypes, setBlockTypes] = useState<BlockType[]>([]);
   const [current, setCurrent] = useState<Page | null>(null);
+  const [view, setView] = useState<"pages" | "media">("pages");
   const [err, setErr] = useState("");
 
   const refreshPages = useCallback(() => {
@@ -63,15 +64,19 @@ function Editor({ api, cfg, onReconfigure }: { api: Api; cfg: Config; onReconfig
         <span className="brand">
           pramen <span className="dim">· cms</span>
         </span>
-        <span className="crumb">
-          {current ? (
-            <>
-              <a onClick={() => setCurrent(null)}>Pages</a> / <b>{current.title}</b>
-            </>
-          ) : (
-            <b>Pages</b>
-          )}
-        </span>
+        <nav className="tabs" style={{ margin: 0 }}>
+          <button className={view === "pages" ? "on" : "ghost"} onClick={() => { setView("pages"); setCurrent(null); }}>
+            Pages
+          </button>
+          <button className={view === "media" ? "on" : "ghost"} onClick={() => setView("media")}>
+            Media
+          </button>
+        </nav>
+        {view === "pages" && current ? (
+          <span className="crumb">
+            <a onClick={() => setCurrent(null)}>Pages</a> / <b>{current.title}</b>
+          </span>
+        ) : null}
         <span className="grow" />
         <span className="muted">{cfg.tenant}</span>
         <button className="ghost sm" onClick={onReconfigure}>
@@ -79,7 +84,9 @@ function Editor({ api, cfg, onReconfigure }: { api: Api; cfg: Config; onReconfig
         </button>
       </div>
       {err ? <div className="banner err">{err}</div> : null}
-      {current ? (
+      {view === "media" ? (
+        <MediaLibrary api={api} onError={setErr} />
+      ) : current ? (
         <PageEditor api={api} page={current} blockTypes={blockTypes} onBack={() => { setCurrent(null); refreshPages(); }} onChange={(p) => setCurrent(p)} />
       ) : (
         <PageList api={api} pages={pages} blockTypes={blockTypes} onOpen={setCurrent} onCreated={refreshPages} onError={setErr} />
@@ -490,7 +497,177 @@ function AuditLog({ api, pageId, onError }: { api: Api; pageId: string; onError:
   );
 }
 
+// --- media library (a top-level view: browse, upload, edit alt, delete) ---
+const PAGE_SIZE = 60;
+
+function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) => void }) {
+  const [media, setMedia] = useState<Media[]>([]);
+  const [offset, setOffset] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [selected, setSelected] = useState<Media | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(
+    (off: number) => {
+      api
+        .listMedia(PAGE_SIZE, off)
+        .then((rows) => {
+          setMedia((prev) => (off === 0 ? rows : [...prev, ...rows]));
+          setHasMore(rows.length === PAGE_SIZE);
+          setOffset(off + rows.length);
+        })
+        .catch((e) => onError(errMsg(e)));
+    },
+    [api, onError],
+  );
+  useEffect(() => { load(0); }, [load]);
+
+  const upload = async (files: FileList | null) => {
+    if (!files?.length) return;
+    setBusy(true);
+    onError("");
+    try {
+      for (const f of Array.from(files)) await api.uploadMedia(f);
+      load(0); // refresh from the top
+    } catch (e) {
+      onError(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="media-lib">
+      <div className="media-toolbar">
+        <h2 style={{ margin: 0, flex: 1 }}>Media</h2>
+        <label className={`btn primary${busy ? " disabled" : ""}`}>
+          {busy ? "Uploading…" : "+ Upload"}
+          <input type="file" multiple hidden disabled={busy} onChange={(e) => { upload(e.target.files); e.target.value = ""; }} />
+        </label>
+      </div>
+      {media.length === 0 ? (
+        <p className="muted">No media yet. Upload images to use them in blocks and SEO.</p>
+      ) : (
+        <div className="media-grid">
+          {media.map((m) => (
+            <div key={m.id} className={`media-cell${selected?.id === m.id ? " sel" : ""}`} onClick={() => setSelected(m)}>
+              {isImage(m) ? <img src={api.resolve(`/media/${m.file.key}`)} alt={m.alt ?? ""} /> : <div className="ext">{ext(m)}</div>}
+              <div className="fn">{m.file.filename ?? m.id}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      {hasMore ? (
+        <div style={{ textAlign: "center", marginTop: 14 }}>
+          <button className="sm" onClick={() => load(offset)}>
+            Load more
+          </button>
+        </div>
+      ) : null}
+      {selected ? (
+        <MediaDetail
+          api={api}
+          media={selected}
+          onClose={() => setSelected(null)}
+          onSaved={(m) => { setSelected(m); setMedia((prev) => prev.map((x) => (x.id === m.id ? m : x))); }}
+          onDeleted={(id) => { setSelected(null); setMedia((prev) => prev.filter((x) => x.id !== id)); }}
+          onError={onError}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function MediaDetail({ api, media, onClose, onSaved, onDeleted, onError }: { api: Api; media: Media; onClose: () => void; onSaved: (m: Media) => void; onDeleted: (id: string) => void; onError: (s: string) => void }) {
+  const [alt, setAlt] = useState(media.alt ?? "");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => setAlt(media.alt ?? ""), [media]);
+  const url = api.resolve(`/media/${media.file.key}`);
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      onSaved(await api.updateMedia(media.id, alt || null));
+    } catch (e) {
+      onError(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const del = async () => {
+    if (!confirm("Delete this file permanently? If a block or page still references it, that image will break — this cannot be undone.")) return;
+    setBusy(true);
+    try {
+      await api.deleteMedia(media.id);
+      onDeleted(media.id);
+    } catch (e) {
+      onError(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="scrim" onClick={onClose}>
+      <div className="modal media-detail" onClick={(e) => e.stopPropagation()}>
+        <h2>{media.file.filename ?? "Media"}</h2>
+        {isImage(media) ? <img src={url} alt={media.alt ?? ""} /> : <div className="ext lg">{ext(media)}</div>}
+        <label className="field">
+          <span className="lbl">Alt text (for accessibility &amp; SEO)</span>
+          <input value={alt} onChange={(e) => setAlt(e.target.value)} placeholder="Describe the image…" />
+        </label>
+        <div className="kv">
+          <span>Type</span>
+          <span>{media.file.contentType ?? "—"}</span>
+          <span>Size</span>
+          <span>{fmtBytes(media.file.size)}</span>
+          <span>Uploaded</span>
+          <span>{media.file.uploadedAt ? new Date(media.file.uploadedAt).toLocaleString() : (media.createdAt ?? "—")}</span>
+          <span>URL</span>
+          <span>
+            <a href={url} target="_blank" rel="noreferrer">
+              /media/{media.file.key}
+            </a>
+          </span>
+        </div>
+        <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+          <button className="primary" onClick={save} disabled={busy || alt === (media.alt ?? "")}>
+            Save
+          </button>
+          <button className="sm" onClick={() => navigator.clipboard?.writeText(url)}>
+            Copy URL
+          </button>
+          <span className="grow" />
+          <button className="ghost danger" onClick={del} disabled={busy}>
+            Delete
+          </button>
+          <button className="ghost" onClick={onClose}>
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // --- helpers ---
+function isImage(m: Media): boolean {
+  return (m.file.contentType ?? "").startsWith("image/");
+}
+function ext(m: Media): string {
+  const fromType = (m.file.contentType ?? "").split("/")[1];
+  const fromName = m.file.filename?.split(".").pop();
+  return (fromName ?? fromType ?? "file").slice(0, 5).toUpperCase();
+}
+function fmtBytes(n?: number): string {
+  if (!n || n <= 0) return "—";
+  const u = ["B", "KB", "MB", "GB"];
+  let i = 0;
+  let v = n;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return `${v < 10 && i > 0 ? v.toFixed(1) : Math.round(v)} ${u[i]}`;
+}
+
 function errMsg(e: unknown): string {
   if (e instanceof ApiError) return e.message;
   return e instanceof Error ? e.message : String(e);

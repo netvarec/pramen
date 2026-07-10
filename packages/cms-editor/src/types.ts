@@ -102,7 +102,7 @@ export interface AssembledPage {
 
 export interface Media {
   id: string;
-  file: { key: string; contentType?: string; filename?: string };
+  file: { key: string; contentType?: string; filename?: string; size?: number; uploadedAt?: number };
   alt?: string | null;
   createdAt?: string;
 }

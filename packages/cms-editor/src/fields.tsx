@@ -176,9 +176,7 @@ export function MediaPicker({ api, onClose, onPick }: { api: Api; onClose: () =>
     setBusy(true);
     setErr("");
     try {
-      const signed = await api.call<{ url: string; ref: { key: string; contentType: string; filename?: string } }>("signMediaUpload", { contentType: file.type || "application/octet-stream", filename: file.name });
-      await api.put(signed.url, await file.arrayBuffer(), file.type || "application/octet-stream");
-      const row = await api.call<Media>("createMedia", { ref: signed.ref, alt: file.name });
+      const row = await api.uploadMedia(file);
       onPick(row.id);
     } catch (e) {
       setErr(String((e as Error).message ?? e));

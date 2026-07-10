@@ -88,6 +88,19 @@ export class Api {
   getContentType = (id: string) => this.call<ContentType | null>("getContentType", { id });
   listPages = () => this.call<Page[]>("listPages");
   getPagePreview = (slug: string, locale?: string) => this.call<AssembledPage>("getPage", { slug, locale, preview: true });
-  listMedia = () => this.call<Media[]>("listMedia");
   listPageAudit = (pageId: string) => this.call<AuditEntry[]>("listPageAudit", { pageId });
+
+  // --- media ---
+  listMedia = (limit = 50, offset = 0) => this.call<Media[]>("listMedia", { limit, offset });
+  getMedia = (id: string) => this.call<Media | null>("getMedia", { id });
+  updateMedia = (id: string, alt: string | null) => this.call<Media>("updateMedia", { id, alt });
+  deleteMedia = (id: string) => this.call<{ ok: true }>("deleteMedia", { id });
+
+  /** Full upload flow: sign → PUT the bytes → persist a `cms_media` row. Returns the row. */
+  async uploadMedia(file: File): Promise<Media> {
+    const contentType = file.type || "application/octet-stream";
+    const signed = await this.call<{ url: string; ref: { key: string; contentType: string; filename?: string } }>("signMediaUpload", { contentType, filename: file.name });
+    await this.put(signed.url, await file.arrayBuffer(), contentType);
+    return this.call<Media>("createMedia", { ref: signed.ref, alt: file.name });
+  }
 }
