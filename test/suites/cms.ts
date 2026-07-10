@@ -161,6 +161,29 @@ export async function runCms(base: string): Promise<void> {
   const gone = await fetch(`${base}/media/${mediaKey}`);
   assert(gone.status === 404, "cms: the blob is gone after deleteMedia");
 
+  // --- SEO: meta fields, og:image resolution, sitemap.xml, robots.txt ---
+  const seoUp = await call("signMediaUpload", { contentType: "image/png" }, admin);
+  await fetch(`${base}${seoUp.body.result.url}`, { method: "PUT", headers: { "content-type": "image/png" }, body: new Uint8Array([137, 80, 78, 71, 1, 2, 3]) });
+  const seoMedia = await call("createMedia", { ref: seoUp.body.result.ref }, admin);
+  const seoPage = await call("createPage", { typeId: ct.body.result.id, title: "SEO Page", slug: "seo-page" }, admin);
+  const seoId = seoPage.body.result.id as string;
+  await call("addBlock", { pageId: seoId, blockTypeSlug: "rich_text", region: "content", fields: { body: "<p>x</p>" } }, admin);
+  const seoSet = await call("updatePageSeo", { pageId: seoId, metaTitle: "My Meta Title", canonicalUrl: "https://example.com/seo", robots: "noindex", ogImage: seoMedia.body.result.id, structuredData: { "@type": "WebPage" } }, admin);
+  assert(seoSet.body.ok, "cms: updatePageSeo sets SEO fields");
+  await call("publishPage", { pageId: seoId }, admin);
+  const seoGet = await call("getPage", { slug: "seo-page" });
+  const seo = seoGet.body.result.page.seo as { metaTitle: string; robots: string; ogImage: { url: string } | null; structuredData: { "@type"?: string } | null };
+  assert(seo.metaTitle === "My Meta Title", "cms: getPage exposes seo.metaTitle");
+  assert(seo.robots === "noindex", "cms: getPage exposes seo.robots");
+  assert(seo.ogImage?.url === `/media/${seoUp.body.result.ref.key}`, "cms: og:image resolves to a servable URL");
+  assert(seo.structuredData?.["@type"] === "WebPage", "cms: getPage exposes structuredData (JSON-LD)");
+
+  const sitemap = await fetch(`${base}/sitemap.xml`);
+  const sitemapBody = await sitemap.text();
+  assert(sitemap.status === 200 && sitemapBody.includes("<urlset") && sitemapBody.includes("/seo-page"), "cms: /sitemap.xml lists published pages");
+  const robots = await fetch(`${base}/robots.txt`);
+  assert(robots.status === 200 && (await robots.text()).includes("Sitemap:"), "cms: /robots.txt points at the sitemap");
+
   // --- editorial workflow: submit → review → approve/reject, with audit + RBAC ---
   const editorTok = await token("cms-editor", ["editor"]);
   const wfPage = await call("createPage", { typeId: ct.body.result.id, title: "Policy", slug: "policy" }, admin);
@@ -172,6 +195,11 @@ export async function runCms(base: string): Promise<void> {
   // an editor (non-reviewer) cannot approve
   const editorApprove = await call("approve", { pageId: wfId }, editorTok);
   assert(editorApprove.status === 403, "cms: an editor cannot approve (reviewer-gated, 403)");
+  // ...nor bypass review by publishing/scheduling directly (both reviewer-gated)
+  const editorPublish = await call("publishPage", { pageId: wfId }, editorTok);
+  assert(editorPublish.status === 403, "cms: an editor cannot publish directly (no review bypass, 403)");
+  const editorSchedule = await call("schedulePage", { pageId: wfId, publishAt: Date.now() + 1000 }, editorTok);
+  assert(editorSchedule.status === 403, "cms: an editor cannot schedule a publish (reviewer-gated, 403)");
   // reject sends it back
   const reject = await call("reject", { pageId: wfId, note: "needs work" }, admin);
   assert(reject.body.ok && reject.body.result.page.status === "rejected", "cms: reject moves review → rejected");

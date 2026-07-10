@@ -150,8 +150,15 @@ export const cmsSchema = {
       // (not "latest by timestamp") so selection is deterministic even when two publishes
       // land in the same second (expr.now() is second-precision).
       currentRevisionId: t.uuid(),
+      // SEO
       metaTitle: t.text(),
       metaDescription: t.text(),
+      canonicalUrl: t.text(),
+      robots: t.text(), // e.g. "noindex, nofollow"
+      ogTitle: t.text(),
+      ogDescription: t.text(),
+      ogImage: t.uuid(), // a cms_media id, resolved to a URL at assemble time
+      structuredData: t.json(), // JSON-LD, emitted as-is into <head>
       createdAt: defaultTo(t.text(), expr.now()),
       updatedAt: defaultTo(t.text(), expr.now()),
     }),
@@ -286,6 +293,17 @@ export interface PageTranslation {
   slug: string;
 }
 
+export interface PageSeo {
+  metaTitle: string | null;
+  metaDescription: string | null;
+  canonicalUrl: string | null;
+  robots: string | null;
+  ogTitle: string | null;
+  ogDescription: string | null;
+  ogImage: ResolvedMedia | null;
+  structuredData: unknown | null;
+}
+
 export interface AssembledPage {
   page: {
     id: string;
@@ -297,8 +315,10 @@ export interface AssembledPage {
     /** Published sibling locales of this page (for hreflang alternates). */
     translations: PageTranslation[];
     fields: Record<string, unknown> | null;
+    /** Back-compat: mirrors seo.metaTitle/metaDescription. */
     metaTitle: string | null;
     metaDescription: string | null;
+    seo: PageSeo;
   };
   regions: Record<string, RenderedBlock[]>;
 }
@@ -464,7 +484,23 @@ async function assembleLive(db: CmsDb, page: Record<string, unknown>): Promise<A
       is_shared: Boolean(m.p.isShared),
     });
   }
-  return { page: pageMeta(page, await siblingTranslations(db, page)), regions };
+  return { page: pageMeta(page, await siblingTranslations(db, page), await resolveMediaId(db, page.ogImage)), regions };
+}
+
+/** Resolve a single media id to a ResolvedMedia (for og:image etc.), or null. */
+async function resolveMediaId(db: CmsDb, id: unknown): Promise<ResolvedMedia | null> {
+  if (typeof id !== "string" || !id) return null;
+  const rows = await db.find({ from: "cms_media", where: { id }, limit: 1 });
+  if (!rows[0]) return null;
+  const file = asObj(rows[0].file);
+  return {
+    id: String(rows[0].id),
+    key: String(file.key ?? ""),
+    url: mediaPath(String(file.key ?? "")),
+    alt: (rows[0].alt as string | null) ?? null,
+    contentType: (file.contentType as string | null) ?? null,
+    filename: (file.filename as string | null) ?? null,
+  };
 }
 
 /** Publish a page: assemble a snapshot, write a revision (recording the actor), and point
@@ -489,7 +525,9 @@ async function siblingTranslations(db: CmsDb, page: Record<string, unknown>): Pr
 }
 
 /** Project a page row to the public AssembledPage.page shape. */
-function pageMeta(page: Record<string, unknown>, translations: PageTranslation[] = []): AssembledPage["page"] {
+function pageMeta(page: Record<string, unknown>, translations: PageTranslation[] = [], ogImage: ResolvedMedia | null = null): AssembledPage["page"] {
+  const metaTitle = (page.metaTitle as string | null) ?? null;
+  const metaDescription = (page.metaDescription as string | null) ?? null;
   return {
     id: String(page.id),
     title: String(page.title),
@@ -499,8 +537,18 @@ function pageMeta(page: Record<string, unknown>, translations: PageTranslation[]
     translationGroupId: (page.translationGroupId as string | null) ?? null,
     translations,
     fields: (page.fields as Record<string, unknown> | null) ?? null,
-    metaTitle: (page.metaTitle as string | null) ?? null,
-    metaDescription: (page.metaDescription as string | null) ?? null,
+    metaTitle,
+    metaDescription,
+    seo: {
+      metaTitle,
+      metaDescription,
+      canonicalUrl: (page.canonicalUrl as string | null) ?? null,
+      robots: (page.robots as string | null) ?? null,
+      ogTitle: (page.ogTitle as string | null) ?? null,
+      ogDescription: (page.ogDescription as string | null) ?? null,
+      ogImage,
+      structuredData: (page.structuredData as unknown) ?? null,
+    },
   };
 }
 
@@ -699,6 +747,33 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
 
     // ---- pages ----
     listPages: query((ctx) => cdb(ctx).find({ from: "cms_pages", orderBy: { column: "createdAt", dir: "desc" }, limit: 100 })),
+
+    /** Public: list published pages (slug, locale, updatedAt) for sitemap generation. The
+     * anonymous ACL scopes cms_pages reads to status=published, so this is safe to expose. */
+    listPublishedPages: query(async (ctx) => {
+      const rows = await cdb(ctx).find({ from: "cms_pages", where: { status: "published" }, orderBy: { column: "updatedAt", dir: "desc" }, limit: 5000 });
+      return rows.map((r) => ({ slug: String(r.slug), locale: String(r.locale ?? "en"), updatedAt: String(r.updatedAt ?? r.createdAt ?? "") }));
+    }),
+
+    /** Update a page's SEO fields (meta/canonical/robots/OpenGraph/JSON-LD). Editor-gated. */
+    updatePageSeo: mutation(async (ctx, input: { pageId: string; metaTitle?: string | null; metaDescription?: string | null; canonicalUrl?: string | null; robots?: string | null; ogTitle?: string | null; ogDescription?: string | null; ogImage?: string | null; structuredData?: unknown }) => {
+      const db = cdb(ctx);
+      const patch: Record<string, unknown> = { updatedAt: nowStamp() };
+      for (const k of ["metaTitle", "metaDescription", "canonicalUrl", "robots", "ogTitle", "ogDescription", "ogImage"] as const) {
+        if (k in input) patch[k] = (input as Record<string, unknown>)[k];
+      }
+      if ("structuredData" in input) patch.structuredData = input.structuredData ?? null;
+      const updated = await db.update("cms_pages", input.pageId, patch);
+      if (!updated) throw notFound("page");
+      return { ok: true, page: updated };
+    }, {
+      ...editor,
+      input: (raw): { pageId: string } => {
+        const o = asObj(raw);
+        if (typeof o.pageId !== "string") throw new BadRequest("pageId is required");
+        return o as never;
+      },
+    }),
 
     /** Create a page and auto-scaffold its content type's default blocks. */
     createPage: mutation(async (ctx, input: { typeId: string; title: string; slug: string; locale?: string; fields?: Record<string, unknown> }) => {
@@ -1048,7 +1123,10 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       await writeAudit(db, { pageId: input.pageId, action: "publish", from, to: "published", actor: actorOf(ctx), note: input.note });
       return { ok: true, page: updated };
     }, {
-      ...editor,
+      // Reviewer-gated: publishing makes content live, so it requires the same authority as
+      // `approve` — an editor can't bypass review by calling publishPage directly. (Editors
+      // author + submitForReview; reviewers approve/publish.)
+      ...reviewer,
       input: (raw): { pageId: string; note?: string } => {
         const o = asObj(raw);
         if (typeof o.pageId !== "string") throw new BadRequest("pageId is required");
@@ -1099,7 +1177,8 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       }
       return { ok: true, publishInMs: Math.max(0, input.publishAt - now) };
     }, {
-      ...editor,
+      // Reviewer-gated like publishPage — a scheduled publish is still a publish.
+      ...reviewer,
       input: (raw): { pageId: string; publishAt: number; unpublishAt?: number } => {
         const o = asObj(raw);
         if (typeof o.pageId !== "string" || !Number.isFinite(o.publishAt)) throw new BadRequest("pageId and a finite publishAt (epoch ms) are required");
@@ -1144,7 +1223,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
           return snap;
         }
       }
-      return { page: pageMeta(page, await siblingTranslations(db, page)), regions: {} };
+      return { page: pageMeta(page, await siblingTranslations(db, page), await resolveMediaId(db, page.ogImage)), regions: {} };
     }, {
       input: (raw): { slug: string; locale?: string; preview?: boolean } => {
         const o = asObj(raw);
@@ -1243,3 +1322,77 @@ export const cmsTasks = {
     await db.insert("cms_audit", { pageId, action: "unpublish", fromStatus: from, toStatus: "archived", actor: null, note: "scheduled" });
   },
 };
+
+// --- SEO: sitemap.xml / robots.txt --------------------------------------------
+
+export interface SitemapEntry {
+  slug: string;
+  locale: string;
+  updatedAt?: string;
+}
+
+const xmlEscape = (s: string): string =>
+  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+
+export interface SitemapOpts {
+  origin: string;
+  /** Map an entry → its absolute URL. Default `${origin}/${locale}/${slug}`. */
+  pageUrl?: (e: SitemapEntry, origin: string) => string;
+}
+
+/** Build a sitemap.xml body from published-page entries. */
+export function sitemapXml(entries: SitemapEntry[], opts: SitemapOpts): string {
+  const toUrl = opts.pageUrl ?? ((e, origin) => `${origin}/${e.locale}/${e.slug}`);
+  const urls = entries
+    .map((e) => {
+      const loc = xmlEscape(toUrl(e, opts.origin));
+      const lastmod = e.updatedAt ? `<lastmod>${xmlEscape(e.updatedAt.slice(0, 10))}</lastmod>` : "";
+      return `  <url><loc>${loc}</loc>${lastmod}</url>`;
+    })
+    .join("\n");
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls}\n</urlset>\n`;
+}
+
+/** Build a robots.txt body pointing at the sitemap. */
+export function robotsTxt(opts: { origin: string; disallow?: string[] }): string {
+  const dis = (opts.disallow ?? []).map((p) => `Disallow: ${p}`).join("\n");
+  return `User-agent: *\n${dis ? dis + "\n" : "Allow: /\n"}Sitemap: ${opts.origin}/sitemap.xml\n`;
+}
+
+// Minimal shape of a pramen public route (see @pramen/server/worker app.routes).
+interface RouteCtx {
+  callPrivileged: (opts: { name: string; input?: unknown; tenant?: string; roles?: string[] }) => Promise<Response>;
+}
+interface CmsRoute {
+  method: string;
+  path: string;
+  handler: (request: Request, env: Readonly<Record<string, unknown>>, ctx: RouteCtx) => Promise<Response>;
+}
+
+/** Turnkey public routes for `GET /sitemap.xml` and `GET /robots.txt`. Spread into
+ * `app.routes`. The sitemap pulls published pages via `callPrivileged(listPublishedPages)`.
+ * `origin` defaults to the request's origin; `pageUrl` customizes the URL shape. */
+export function cmsRoutes(opts: { origin?: string; tenant?: string; pageUrl?: SitemapOpts["pageUrl"]; disallow?: string[] } = {}): CmsRoute[] {
+  const tenant = opts.tenant ?? "main";
+  return [
+    {
+      method: "GET",
+      path: "/sitemap.xml",
+      handler: async (request, _env, ctx) => {
+        const origin = opts.origin ?? new URL(request.url).origin;
+        const res = await ctx.callPrivileged({ name: "listPublishedPages", tenant, roles: ["admin"] });
+        const body = (await res.json().catch(() => ({}))) as { result?: SitemapEntry[] };
+        const xml = sitemapXml(body.result ?? [], { origin, pageUrl: opts.pageUrl });
+        return new Response(xml, { headers: { "content-type": "application/xml; charset=utf-8" } });
+      },
+    },
+    {
+      method: "GET",
+      path: "/robots.txt",
+      handler: async (request) => {
+        const origin = opts.origin ?? new URL(request.url).origin;
+        return new Response(robotsTxt({ origin, disallow: opts.disallow }), { headers: { "content-type": "text/plain; charset=utf-8" } });
+      },
+    },
+  ];
+}

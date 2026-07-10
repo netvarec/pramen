@@ -40,7 +40,7 @@ import {
   authPolicies,
 } from "@pramen/auth";
 // @pramen/cms — the block/page builder, wired as an ordinary app fragment.
-import { cmsSchema, cmsHandlers, cmsPolicies, cmsTasks } from "@pramen/cms";
+import { cmsSchema, cmsHandlers, cmsPolicies, cmsTasks, cmsRoutes } from "@pramen/cms";
 
 // Reusable write rule: force ownerId to the authenticated caller (a client cannot
 // forge it), even if the request body tries to set a different owner.
@@ -630,6 +630,8 @@ const routes = [
       return ctx.callPrivileged({ name: "createSignup", input: { email: body.email ?? "", code: body.code ?? "" } });
     },
   },
+  // @pramen/cms: public GET /sitemap.xml + /robots.txt (origin derived from the request).
+  ...cmsRoutes(),
 ];
 
 // Deferred side-effect handlers, drained from the outbox after a mutation enqueues.

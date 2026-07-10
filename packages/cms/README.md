@@ -11,14 +11,26 @@ Paragraphs / Storyblok.
 > library** and **i18n** are done (below), then editorial workflow, SEO, typed blocks, a visual editor.
 > See *Limitations* for what's not there yet.
 
+## SEO & sitemap
+
+- Per-page SEO on `cms_pages`: `metaTitle`, `metaDescription`, `canonicalUrl`, `robots`,
+  `ogTitle`, `ogDescription`, `ogImage` (a media id, resolved to a URL), `structuredData`
+  (JSON-LD). Set via `updatePageSeo({ pageId, … })`; exposed as `page.seo` on the content API.
+- `listPublishedPages` (public) returns published `{ slug, locale, updatedAt }` for sitemaps.
+- `cmsRoutes({ origin?, pageUrl? })` returns turnkey **`GET /sitemap.xml`** + **`/robots.txt`**
+  routes — spread into `app.routes`. Helpers `sitemapXml(entries, opts)` / `robotsTxt(opts)`
+  are exported if you want to build them yourself. hreflang alternates ride the content API's
+  `page.translations`.
+
 ## Editorial workflow & audit
 
 - **States:** `draft → review → published`, plus `rejected` and `archived`. Handlers:
   `submitForReview` (editor), `approve`/`reject` (reviewer-gated), `publishPage` (direct
   publish), `unpublishPage`, `schedulePage`. Each transition is guarded (e.g. you can only
   approve a page that is in review).
-- **RBAC:** `submitForReview` is gated to `editorRoles`; `approve`/`reject`/publish to
-  `reviewerRoles` (default `["reviewer","admin"]`). Configure via `createCmsHandlers({ editorRoles, reviewerRoles })`.
+- **RBAC:** `submitForReview` is gated to `editorRoles`; `approve`/`reject`/`publishPage`/
+  `schedulePage` to `reviewerRoles` (default `["reviewer","admin"]`) — so an editor **can't
+  bypass review** by publishing directly. Configure via `createCmsHandlers({ editorRoles, reviewerRoles })`.
 - **Audit trail:** every transition writes a `cms_audit` row (`action`, from/to status,
   `actor` = `identity.userId`, note) synchronously in the same transaction. `listPageAudit({ pageId })`
   returns it. Revisions also record the publishing `actor`.
