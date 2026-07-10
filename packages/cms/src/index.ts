@@ -872,6 +872,20 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       },
     }),
 
+    /** Edit a media asset's metadata (currently just `alt` text). Editor-gated. */
+    updateMedia: mutation(async (ctx, input: { id: string; alt: string | null }) => {
+      const updated = await cdb(ctx).update("cms_media", input.id, { alt: input.alt ?? null });
+      if (!updated) throw notFound("media");
+      return updated;
+    }, {
+      ...editor,
+      input: (raw): { id: string; alt: string | null } => {
+        const o = asObj(raw);
+        if (typeof o.id !== "string") throw new BadRequest("id is required");
+        return { id: o.id, alt: typeof o.alt === "string" ? o.alt : null };
+      },
+    }),
+
     /** Delete a media row AND its R2 blob. (Automatic orphan sweeping — media no longer
      * referenced by any block — is future work; refs live inside opaque block JSON.) */
     deleteMedia: mutation(async (ctx, input: { id: string }) => {

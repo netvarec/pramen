@@ -166,6 +166,11 @@ export async function runCms(base: string): Promise<void> {
   const badMedia = await fetch(`${base}/media/main/nope/xyz`);
   assert(badMedia.status === 404, "cms: the /media route refuses non-media keys");
 
+  const altUp = await call("updateMedia", { id: mediaId, alt: "Updated alt" }, admin);
+  assert(altUp.body.ok && altUp.body.result.alt === "Updated alt", "cms: updateMedia edits alt text");
+  const altRead = await call("getMedia", { id: mediaId }, admin);
+  assert(altRead.body.result.alt === "Updated alt", "cms: the new alt text persists");
+
   const del = await call("deleteMedia", { id: mediaId }, admin);
   assert(del.body.ok, "cms: deleteMedia removes the media");
   const gone = await fetch(`${base}/media/${mediaKey}`);
