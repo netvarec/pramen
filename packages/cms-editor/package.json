@@ -11,11 +11,11 @@
   "homepage": "https://github.com/netvarec/pramen#readme",
   "bugs": "https://github.com/netvarec/pramen/issues",
   "type": "module",
-  "private": true,
   "files": ["dist", "src"],
   "scripts": {
     "build": "bun run scripts/build.ts",
-    "dev": "bun run scripts/build.ts --watch"
+    "dev": "bun run scripts/build.ts --watch",
+    "prepublishOnly": "bun run build"
   },
   "dependencies": {
     "react": "^19.0.0",
