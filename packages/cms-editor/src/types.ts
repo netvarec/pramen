@@ -9,6 +9,8 @@ export type FieldType =
   | "url"
   | "number"
   | "boolean"
+  | "date"
+  | "datetime"
   | "media"
   | "select"
   | "repeater"

@@ -58,6 +58,8 @@ export interface FieldDefinition {
     | "url"
     | "number"
     | "boolean"
+    | "date"
+    | "datetime"
     | "media"
     | "select"
     | "repeater"
@@ -101,7 +103,7 @@ export type RichText = string | { type: string; content?: unknown[] };
 
 /** Map one FieldDefinition (as a const literal) to the TS type of its RENDERED value.
  * Media resolves to `ResolvedMedia` (the assemble-time shape a component receives). */
-export type FieldTsType<D extends FieldDefinition> = D["type"] extends "text" | "textarea" | "url" | "select"
+export type FieldTsType<D extends FieldDefinition> = D["type"] extends "text" | "textarea" | "url" | "select" | "date" | "datetime"
   ? string
   : D["type"] extends "richtext"
     ? RichText
@@ -171,6 +173,8 @@ function tsTypeOf(f: FieldDefinition): string {
     case "textarea":
     case "url":
     case "select":
+    case "date":
+    case "datetime":
       return "string";
     case "richtext":
       return "RichText";
@@ -356,6 +360,15 @@ export interface ValidateOpts {
 
 /** Validate a block/page's `fields` payload against a field schema, throwing a 400 on
  * the first violation. Recursive (repeater/group). Lenient on unknown field types. */
+/** A calendar date, `YYYY-MM-DD` (what an <input type="date"> emits) — must also parse. */
+function isDateString(v: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(v) && Number.isFinite(Date.parse(v));
+}
+/** A date-time: `YYYY-MM-DDTHH:MM[:SS[.sss]][Z|±HH:MM]` (ISO 8601 / datetime-local). */
+function isDateTimeString(v: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:\d{2})?$/.test(v) && Number.isFinite(Date.parse(v));
+}
+
 export function validateFields(schema: FieldDefinition[] | undefined | null, values: unknown, path = "", opts: ValidateOpts = {}): void {
   const requireRequired = opts.requireRequired !== false;
   const defs = Array.isArray(schema) ? schema : [];
@@ -387,6 +400,12 @@ export function validateFields(schema: FieldDefinition[] | undefined | null, val
         break;
       case "boolean":
         if (typeof v !== "boolean") throw new BadRequest(`field '${at}' must be a boolean`);
+        break;
+      case "date":
+        if (typeof v !== "string" || !isDateString(v)) throw new BadRequest(`field '${at}' must be a date (YYYY-MM-DD)`);
+        break;
+      case "datetime":
+        if (typeof v !== "string" || !isDateTimeString(v)) throw new BadRequest(`field '${at}' must be a date-time (ISO 8601)`);
         break;
       case "media":
         // Media ids are uuids (strings) — reject numbers so the value always resolves

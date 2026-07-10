@@ -46,6 +46,14 @@ function FieldInput({ def, value, onChange, api }: { def: FieldDefinition; value
           <input type="number" value={value == null ? "" : String(value)} onChange={(e) => onChange(e.target.value === "" ? null : Number(e.target.value))} />
         </label>
       );
+    case "date":
+    case "datetime":
+      return (
+        <label className="field">
+          {label}
+          <input type={def.type === "date" ? "date" : "datetime-local"} value={(value as string) ?? ""} onChange={(e) => onChange(e.target.value || null)} />
+        </label>
+      );
     case "boolean":
       return (
         <label className="field checkbox">

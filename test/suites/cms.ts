@@ -160,6 +160,25 @@ export async function runCms(base: string): Promise<void> {
   assert(!!imgBlock && imgBlock.fields.image?.url === `/media/${mediaKey}`, "cms: a media field resolves to a servable /media URL in the snapshot");
   assert(imgBlock?.fields.image?.alt === "Our logo", "cms: resolved media carries its alt text");
 
+  // --- date / datetime field types ---
+  const evType = await call("createBlockType", {
+    name: "Event",
+    slug: "event",
+    fieldsSchema: [{ name: "day", type: "date", required: true }, { name: "startsAt", type: "datetime" }],
+  }, admin);
+  assert(evType.body.ok, "cms: createBlockType(event) with date + datetime fields");
+  const evPage = await call("createPage", { typeId: ct.body.result.id, title: "Gala", slug: "gala" }, admin);
+  const evOk = await call("addBlock", { pageId: evPage.body.result.id, blockTypeSlug: "event", region: "content", fields: { day: "2026-09-01", startsAt: "2026-09-01T19:30" } }, admin);
+  assert(evOk.body.ok, "cms: a valid date + datetime block is accepted");
+  const evBadDate = await call("addBlock", { pageId: evPage.body.result.id, blockTypeSlug: "event", region: "content", fields: { day: "01/09/2026" } }, admin);
+  assert(evBadDate.status === 400, "cms: a malformed date (not YYYY-MM-DD) is rejected");
+  const evBadDt = await call("addBlock", { pageId: evPage.body.result.id, blockTypeSlug: "event", region: "content", fields: { day: "2026-09-01", startsAt: "not-a-time" } }, admin);
+  assert(evBadDt.status === 400, "cms: a malformed datetime is rejected");
+  await call("publishPage", { pageId: evPage.body.result.id }, admin);
+  const gala = await call("getPage", { slug: "gala" });
+  const evBlock = (gala.body.result.regions.content as Array<{ block_type: string; fields: { day?: string; startsAt?: string } }>).find((b) => b.block_type === "event");
+  assert(evBlock?.fields.day === "2026-09-01" && evBlock?.fields.startsAt === "2026-09-01T19:30", "cms: date/datetime values round-trip through the content API");
+
   const served = await fetch(`${base}/media/${mediaKey}`);
   assert(served.status === 200 && served.headers.get("content-type") === "image/png", "cms: the public /media route serves the blob (no auth)");
 
