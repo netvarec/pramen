@@ -15,40 +15,12 @@
 // restore the original manifest so the working tree is untouched.
 
 import { $ } from "bun";
+import { PUBLISH_PKGS as PKGS, assertNoPackageDrift } from "./packages";
 
-// Dependency order: a package is listed after anything it depends on
-// (react -> client; auth -> server; cms -> server). cms-astro/cms-editor are
-// self-contained (HTTP/React only), so their position is unconstrained.
-const PKGS = [
-  "packages/client",
-  "packages/server",
-  "packages/react",
-  "packages/auth",
-  "packages/cms",
-  "packages/cms-astro",
-  "packages/cms-editor",
-  "packages/admin",
-];
+// Fail if any publishable package is missing from the list before we publish anything.
+await assertNoPackageDrift();
 
 const DEP_FIELDS = ["dependencies", "peerDependencies", "optionalDependencies", "devDependencies"] as const;
-
-// Drift guard: every non-private @pramen/* workspace must be in PKGS, or it would be
-// silently skipped at release (how cms/cms-astro/cms-editor went unpublished for a while).
-{
-  const listed = new Set(PKGS);
-  const { Glob } = await import("bun");
-  const missing: string[] = [];
-  for await (const manifest of new Glob("packages/*/package.json").scan(".")) {
-    const dir = manifest.replace(/\/package\.json$/, "");
-    const pkg = JSON.parse(await Bun.file(manifest).text());
-    if (pkg.private) continue; // apps/tools opt out by being private
-    if (!listed.has(dir)) missing.push(`${pkg.name} (${dir})`);
-  }
-  if (missing.length) {
-    console.error(`publish.ts: publishable package(s) missing from PKGS:\n  ${missing.join("\n  ")}`);
-    process.exit(1);
-  }
-}
 
 // Map every in-repo package name -> its current version, to resolve `workspace:` ranges.
 const versions = new Map<string, string>();

@@ -12,8 +12,7 @@
 // independent per-package versions + changelogs, graduate to changesets.
 
 import { $ } from "bun";
-
-const PKGS = ["packages/server", "packages/client", "packages/react", "packages/auth", "packages/admin"];
+import { PUBLISH_PKGS as PKGS, assertNoPackageDrift } from "./packages";
 
 const args = process.argv.slice(2);
 const dryRun = args.includes("--dry-run");
@@ -23,6 +22,10 @@ if (!spec) {
   console.error("usage: bun run bump <patch|minor|major|X.Y.Z> [--dry-run]");
   process.exit(1);
 }
+
+// Refuse to bump if a publishable package is missing from the shared list — a
+// half-bumped set (some packages left at the old version) publishes inconsistently.
+await assertNoPackageDrift();
 
 const cur = JSON.parse(await Bun.file(`${PKGS[0]}/package.json`).text()).version as string;
 const m = cur.match(/^(\d+)\.(\d+)\.(\d+)/);
