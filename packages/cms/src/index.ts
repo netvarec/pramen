@@ -827,6 +827,50 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       },
     }),
 
+    /** Update a block type (found by `id` or `slug`). `slug` is the stable key and is
+     * NOT mutable; only the metadata + `fieldsSchema` are patched. Editor-gated. This is
+     * what lets a schema evolve (e.g. a field text → date) without recreating the type. */
+    updateBlockType: mutation(async (ctx, input: { id?: string; slug?: string; name?: string; fieldsSchema?: FieldDefinition[]; icon?: string | null; category?: string | null; description?: string | null }) => {
+      const db = cdb(ctx);
+      const rows = await db.find({ from: "cms_block_types", where: input.id ? { id: input.id } : { slug: input.slug }, limit: 1 });
+      const row = rows[0];
+      if (!row) throw notFound("block type");
+      const patch: Record<string, unknown> = {};
+      for (const k of ["name", "fieldsSchema", "icon", "category", "description"] as const) {
+        if (k in input) patch[k] = (input as Record<string, unknown>)[k];
+      }
+      return db.update("cms_block_types", String(row.id), patch);
+    }, {
+      ...editor,
+      input: (raw): { id?: string; slug?: string; name?: string; fieldsSchema?: FieldDefinition[]; icon?: string | null; category?: string | null; description?: string | null } => {
+        const o = asObj(raw);
+        if (typeof o.id !== "string" && typeof o.slug !== "string") throw new BadRequest("id or slug is required");
+        return o as never;
+      },
+    }),
+
+    /** Update a content type (found by `id` or `slug`). `slug` is the stable key and is
+     * NOT mutable; `name`/`regions`/`fieldsSchema`/`defaultBlocks` are patched. Editor-gated. */
+    updateContentType: mutation(async (ctx, input: { id?: string; slug?: string; name?: string; regions?: RegionDefinition[]; fieldsSchema?: FieldDefinition[]; defaultBlocks?: DefaultBlockDefinition[] }) => {
+      const db = cdb(ctx);
+      if ("regions" in input && (!Array.isArray(input.regions) || input.regions.length === 0)) throw new BadRequest("at least one region is required");
+      const rows = await db.find({ from: "cms_content_types", where: input.id ? { id: input.id } : { slug: input.slug }, limit: 1 });
+      const row = rows[0];
+      if (!row) throw notFound("content type");
+      const patch: Record<string, unknown> = {};
+      for (const k of ["name", "regions", "fieldsSchema", "defaultBlocks"] as const) {
+        if (k in input) patch[k] = (input as Record<string, unknown>)[k];
+      }
+      return db.update("cms_content_types", String(row.id), patch);
+    }, {
+      ...editor,
+      input: (raw): { id?: string; slug?: string; name?: string; regions?: RegionDefinition[]; fieldsSchema?: FieldDefinition[]; defaultBlocks?: DefaultBlockDefinition[] } => {
+        const o = asObj(raw);
+        if (typeof o.id !== "string" && typeof o.slug !== "string") throw new BadRequest("id or slug is required");
+        return o as never;
+      },
+    }),
+
     // ---- media library ----
     /** Mint a signed upload URL for a media blob (keyed under the tenant's `media/`
      * prefix so the public /media route can serve it). The client PUTs the bytes to

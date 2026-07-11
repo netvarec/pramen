@@ -58,6 +58,30 @@ export async function runCms(base: string): Promise<void> {
   }, admin);
   assert(ct.body.ok, "cms: createContentType ok");
 
+  // --- update a type in place (found by slug; the schema can evolve, e.g. text → date) ---
+  const anonUpd = await call("updateBlockType", { slug: "hero", name: "Nope" });
+  assert(anonUpd.status === 403, "cms: anonymous cannot update a block type (403)");
+
+  const updBt = await call("updateBlockType", {
+    slug: "hero",
+    fieldsSchema: [
+      { name: "heading", type: "text", required: true },
+      { name: "publishedOn", type: "date" },
+    ],
+  }, admin);
+  const updBtFields = updBt.body.result?.fieldsSchema as Array<{ name: string; type: string }> | undefined;
+  assert(updBt.body.ok && updBtFields?.some((f) => f.name === "publishedOn" && f.type === "date"), "cms: updateBlockType patches fieldsSchema in place (by slug)");
+  const btList = await call("listBlockTypes", {}, admin);
+  const heroNow = (btList.body.result as Array<{ slug: string; fieldsSchema: Array<{ name: string }> }>).find((b) => b.slug === "hero");
+  assert(heroNow?.fieldsSchema?.some((f) => f.name === "publishedOn"), "cms: the block-type update persists");
+
+  const updCt = await call("updateContentType", { slug: "article", fieldsSchema: [{ name: "date", type: "date" }] }, admin);
+  const updCtFields = updCt.body.result?.fieldsSchema as Array<{ name: string; type: string }> | undefined;
+  assert(updCt.body.ok && updCtFields?.some((f) => f.name === "date" && f.type === "date"), "cms: updateContentType patches a page-level field (text → date)");
+
+  const updMissing = await call("updateContentType", { slug: "does-not-exist", name: "X" }, admin);
+  assert(updMissing.status === 404, "cms: updating an unknown content type is a 404");
+
   // --- create a page (draft) ---
   const page = await call("createPage", { typeId: ct.body.result.id, title: "About Us", slug }, admin);
   assert(page.body.ok && page.body.result.status === "draft", "cms: createPage starts as a draft");
