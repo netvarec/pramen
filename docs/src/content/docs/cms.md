@@ -77,6 +77,11 @@ panels for SEO / workflow / i18n / audit. It mutates through the semantic handle
 validation and gates apply). Build with `bun --cwd packages/cms-editor run build`, deploy the
 static `dist/`, and point it at your Worker (set `CORS_ORIGINS`) with an editor/reviewer JWT.
 
+Views are real, deep-linkable URLs — file-based routing via [`@buzola/router`](https://www.npmjs.com/package/@buzola/router)
+(`/`, `/media`, `/users`, `/settings`, `/pages/:pageId?tab=seo`), so Back/Forward and refresh
+behave. The host must serve `index.html` for unmatched extensionless paths (a standard SPA
+catch-all rewrite); the JS is referenced by an absolute path so it loads at any route depth.
+
 ### Users & settings
 
 Two extra tabs surface the `@pramen/auth` management handlers, so they appear only when

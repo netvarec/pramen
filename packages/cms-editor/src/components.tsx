@@ -1,114 +1,18 @@
-// The CMS visual editor. Left: page list. Center: region canvas (blocks per region, add
-// from a palette filtered by allowedTypes, reorder, remove, select). Right: the selected
-// block's schema-driven field form, or page settings (Settings / SEO / Workflow / i18n /
-// Audit). All mutations go through the semantic CMS handlers (validation/publish enforced).
+// Presentational + interactive pieces of the editor, shared across route files. The
+// route modules under `routes/` are thin adapters: they pull `api`/`me`/`setError` from
+// the app context and wire URL params + navigation into these components.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Api, ApiError, loadConfig, saveConfig, type Config } from "./api";
+import { Api, ApiError } from "./api";
 import { FieldForm } from "./fields";
+import type { Config } from "./api";
+import type { Me } from "./app-context";
 import type { AssembledPage, AuditEntry, BlockType, ContentType, FieldDefinition, Media, Page, RegionDefinition, RenderedBlock } from "./types";
 
-export function App() {
-  const [cfg, setCfg] = useState<Config>(loadConfig());
-  const api = useMemo(() => new Api(cfg), [cfg]);
-  const configured = cfg.baseUrl && cfg.token;
-  if (!configured) return <Setup cfg={cfg} onSave={(c) => { saveConfig(c); setCfg(c); }} />;
-  return <Editor api={api} cfg={cfg} onReconfigure={() => setCfg({ ...cfg, token: "" })} />;
-}
+export type InspectorTab = "settings" | "seo" | "workflow" | "i18n" | "audit";
+export const INSPECTOR_TABS: InspectorTab[] = ["settings", "seo", "workflow", "i18n", "audit"];
 
-function Setup({ cfg, onSave }: { cfg: Config; onSave: (c: Config) => void }) {
-  const [c, setC] = useState(cfg);
-  return (
-    <div className="setup">
-      <h1>
-        pramen <span className="dim">· cms editor</span>
-      </h1>
-      <p className="muted">Point at your Worker and paste an editor/reviewer JWT. CORS must allow this origin (`CORS_ORIGINS`).</p>
-      <label className="field">
-        <span className="lbl">Worker base URL</span>
-        <input value={c.baseUrl} onChange={(e) => setC({ ...c, baseUrl: e.target.value })} placeholder="https://your-worker.workers.dev" />
-      </label>
-      <label className="field">
-        <span className="lbl">Tenant</span>
-        <input value={c.tenant} onChange={(e) => setC({ ...c, tenant: e.target.value })} placeholder="main" />
-      </label>
-      <label className="field">
-        <span className="lbl">Bearer token (editor or reviewer)</span>
-        <input value={c.token} onChange={(e) => setC({ ...c, token: e.target.value })} placeholder="eyJ…" />
-      </label>
-      <button className="primary" onClick={() => onSave(c)} disabled={!c.baseUrl || !c.token}>
-        Connect
-      </button>
-    </div>
-  );
-}
-
-type View = "pages" | "media" | "users" | "settings";
-interface Me { userId?: string; roles?: string[]; [k: string]: unknown }
-
-function Editor({ api, cfg, onReconfigure }: { api: Api; cfg: Config; onReconfigure: () => void }) {
-  const [pages, setPages] = useState<Page[]>([]);
-  const [blockTypes, setBlockTypes] = useState<BlockType[]>([]);
-  const [current, setCurrent] = useState<Page | null>(null);
-  const [view, setView] = useState<View>("pages");
-  const [err, setErr] = useState("");
-  const [me, setMe] = useState<Me | null>(null);
-
-  const refreshPages = useCallback(() => {
-    api.listPages().then(setPages).catch((e) => setErr(errMsg(e)));
-  }, [api]);
-  useEffect(() => {
-    refreshPages();
-    api.listBlockTypes().then(setBlockTypes).catch((e) => setErr(errMsg(e)));
-    // `me` gates the Users tab — a failing call is fine (leaves it undefined).
-    api.call<Me>("me").then(setMe).catch(() => setMe({}));
-  }, [api, refreshPages]);
-
-  const isAdmin = (me?.roles ?? []).includes("admin");
-  const go = (v: View) => { setView(v); setCurrent(null); };
-
-  return (
-    <>
-      <div className="bar">
-        <span className="brand">
-          pramen <span className="dim">· cms</span>
-        </span>
-        {view === "pages" && current ? (
-          <span className="crumb">
-            <a onClick={() => setCurrent(null)}>Pages</a> / <b>{current.title}</b>
-          </span>
-        ) : null}
-        <span className="grow" />
-        <nav className="tabs nav" style={{ margin: 0 }}>
-          <button className={view === "pages" ? "on" : ""} onClick={() => go("pages")}>Pages</button>
-          <button className={view === "media" ? "on" : ""} onClick={() => go("media")}>Media</button>
-          {isAdmin ? (
-            <button className={view === "users" ? "on" : ""} onClick={() => go("users")}>Users</button>
-          ) : null}
-          <button className={view === "settings" ? "on" : ""} onClick={() => go("settings")}>Settings</button>
-        </nav>
-        <span className="muted" style={{ marginLeft: 12 }}>{cfg.tenant}</span>
-        <button className="ghost sm" onClick={onReconfigure}>
-          sign out
-        </button>
-      </div>
-      {err ? <div className="banner err">{err}</div> : null}
-      {view === "media" ? (
-        <MediaLibrary api={api} onError={setErr} />
-      ) : view === "users" ? (
-        <UsersView api={api} me={me} onError={setErr} />
-      ) : view === "settings" ? (
-        <SettingsView api={api} cfg={cfg} me={me} onSignOut={onReconfigure} onError={setErr} />
-      ) : current ? (
-        <PageEditor api={api} page={current} blockTypes={blockTypes} onBack={() => { setCurrent(null); refreshPages(); }} onChange={(p) => setCurrent(p)} />
-      ) : (
-        <PageList api={api} pages={pages} blockTypes={blockTypes} onOpen={setCurrent} onCreated={refreshPages} onError={setErr} />
-      )}
-    </>
-  );
-}
-
-function PageList({ api, pages, blockTypes, onOpen, onCreated, onError }: { api: Api; pages: Page[]; blockTypes: BlockType[]; onOpen: (p: Page) => void; onCreated: () => void; onError: (s: string) => void }) {
+export function PageList({ api, pages, blockTypes, onOpen, onCreated, onError }: { api: Api; pages: Page[]; blockTypes: BlockType[]; onOpen: (p: Page) => void; onCreated: () => void; onError: (s: string) => void }) {
   const [creating, setCreating] = useState(false);
   return (
     <>
@@ -197,11 +101,10 @@ function CreatePage({ api, onClose, onCreated, onError }: { api: Api; onClose: (
   );
 }
 
-function PageEditor({ api, page, blockTypes, onBack, onChange }: { api: Api; page: Page; blockTypes: BlockType[]; onBack: () => void; onChange: (p: Page) => void }) {
+export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange }: { api: Api; page: Page; blockTypes: BlockType[]; tab: InspectorTab; onTab: (t: InspectorTab) => void; onBack: () => void; onChange: (p: Page) => void }) {
   const [ct, setCt] = useState<ContentType | null>(null);
   const [assembled, setAssembled] = useState<AssembledPage | null>(null);
   const [selected, setSelected] = useState<RenderedBlock | null>(null);
-  const [tab, setTab] = useState<"settings" | "seo" | "workflow" | "i18n" | "audit">("settings");
   const [err, setErr] = useState("");
   const [msg, setMsg] = useState("");
 
@@ -320,13 +223,13 @@ function PageEditor({ api, page, blockTypes, onBack, onChange }: { api: Api; pag
         ) : (
           <>
             <div className="tabs">
-              {(["settings", "seo", "workflow", "i18n", "audit"] as const).map((t) => (
-                <button key={t} className={tab === t ? "on" : ""} onClick={() => setTab(t)}>
+              {INSPECTOR_TABS.map((t) => (
+                <button key={t} className={tab === t ? "on" : ""} onClick={() => onTab(t)}>
                   {t}
                 </button>
               ))}
             </div>
-            {tab === "settings" ? <Settings api={api} page={page} onSaved={onChange} onError={setErr} /> : null}
+            {tab === "settings" ? <Settings page={page} /> : null}
             {tab === "seo" ? <SeoPanel api={api} page={page} onError={setErr} /> : null}
             {tab === "workflow" ? <Workflow api={api} page={page} onChanged={(p) => { onChange(p); }} onError={setErr} /> : null}
             {tab === "i18n" ? <I18n api={api} page={page} onError={setErr} /> : null}
@@ -374,12 +277,9 @@ function BlockInspector({ api, block, blockType, onClose, onSaved, onError }: { 
   );
 }
 
-function Settings({ api, page, onSaved, onError }: { api: Api; page: Page; onSaved: (p: Page) => void; onError: (s: string) => void }) {
+function Settings({ page }: { page: Page }) {
   // The core CMS API doesn't expose a general page-rename handler; keep this read-only +
   // link the essentials. (A future `updatePage` handler would back editable title/slug.)
-  void api;
-  void onSaved;
-  void onError;
   return (
     <div className="kv">
       <span>Title</span>
@@ -524,7 +424,7 @@ function AuditLog({ api, pageId, onError }: { api: Api; pageId: string; onError:
 // --- media library (a top-level view: browse, upload, edit alt, delete) ---
 const PAGE_SIZE = 60;
 
-function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) => void }) {
+export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) => void }) {
   const [media, setMedia] = useState<Media[]>([]);
   const [offset, setOffset] = useState(0);
   const [hasMore, setHasMore] = useState(false);
@@ -686,43 +586,6 @@ function MediaDetail({ api, media, onClose, onSaved, onDeleted, onError }: { api
   );
 }
 
-// --- helpers ---
-function isImage(m: Media): boolean {
-  return (m.file.contentType ?? "").startsWith("image/");
-}
-function ext(m: Media): string {
-  const fromType = (m.file.contentType ?? "").split("/")[1];
-  const fromName = m.file.filename?.split(".").pop();
-  return (fromName ?? fromType ?? "file").slice(0, 5).toUpperCase();
-}
-function fmtBytes(n?: number): string {
-  if (!n || n <= 0) return "—";
-  const u = ["B", "KB", "MB", "GB"];
-  let i = 0;
-  let v = n;
-  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
-  return `${v < 10 && i > 0 ? v.toFixed(1) : Math.round(v)} ${u[i]}`;
-}
-
-function errMsg(e: unknown): string {
-  if (e instanceof ApiError) return e.message;
-  return e instanceof Error ? e.message : String(e);
-}
-function slugify(s: string): string {
-  return s.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-}
-function summarize(fields: Record<string, unknown>): string {
-  const first = Object.values(fields).find((v) => typeof v === "string" && v);
-  return typeof first === "string" ? (first.length > 48 ? first.slice(0, 48) + "…" : first) : "";
-}
-function reorderMove(blocks: RenderedBlock[], region: string, i: number, d: number, reorder: (region: string, order: string[]) => void) {
-  const j = i + d;
-  if (j < 0 || j >= blocks.length) return;
-  const ids = blocks.map((b) => b.id);
-  [ids[i], ids[j]] = [ids[j], ids[i]];
-  reorder(region, ids);
-}
-
 // --- users management (admin) ------------------------------------------------
 
 interface UserRow {
@@ -740,7 +603,7 @@ function rolesOf(u: UserRow): string[] {
   return [];
 }
 
-function UsersView({ api, me, onError }: { api: Api; me: Me | null; onError: (s: string) => void }) {
+export function UsersView({ api, me, onError }: { api: Api; me: Me | null; onError: (s: string) => void }) {
   const [users, setUsers] = useState<UserRow[]>([]);
   const [inviting, setInviting] = useState(false);
   const [busy, setBusy] = useState<string>("");
@@ -887,7 +750,7 @@ function InviteUser({ api, onClose, onInvited, onError }: { api: Api; onClose: (
 
 // --- settings ----------------------------------------------------------------
 
-function SettingsView({ api, cfg, me, onSignOut, onError }: { api: Api; cfg: Config; me: Me | null; onSignOut: () => void; onError: (s: string) => void }) {
+export function SettingsView({ api, cfg, me, onSignOut, onError }: { api: Api; cfg: Config; me: Me | null; onSignOut: () => void; onError: (s: string) => void }) {
   return (
     <>
       <div className="hero">
@@ -966,4 +829,41 @@ function AboutCard({ cfg, me }: { cfg: Config; me: Me | null }) {
       </div>
     </div>
   );
+}
+
+// --- helpers ---
+function isImage(m: Media): boolean {
+  return (m.file.contentType ?? "").startsWith("image/");
+}
+function ext(m: Media): string {
+  const fromType = (m.file.contentType ?? "").split("/")[1];
+  const fromName = m.file.filename?.split(".").pop();
+  return (fromName ?? fromType ?? "file").slice(0, 5).toUpperCase();
+}
+function fmtBytes(n?: number): string {
+  if (!n || n <= 0) return "—";
+  const u = ["B", "KB", "MB", "GB"];
+  let i = 0;
+  let v = n;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return `${v < 10 && i > 0 ? v.toFixed(1) : Math.round(v)} ${u[i]}`;
+}
+
+export function errMsg(e: unknown): string {
+  if (e instanceof ApiError) return e.message;
+  return e instanceof Error ? e.message : String(e);
+}
+function slugify(s: string): string {
+  return s.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+function summarize(fields: Record<string, unknown>): string {
+  const first = Object.values(fields).find((v) => typeof v === "string" && v);
+  return typeof first === "string" ? (first.length > 48 ? first.slice(0, 48) + "…" : first) : "";
+}
+function reorderMove(blocks: RenderedBlock[], region: string, i: number, d: number, reorder: (region: string, order: string[]) => void) {
+  const j = i + d;
+  if (j < 0 || j >= blocks.length) return;
+  const ids = blocks.map((b) => b.id);
+  [ids[i], ids[j]] = [ids[j], ids[i]];
+  reorder(region, ids);
 }

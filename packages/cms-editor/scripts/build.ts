@@ -2,7 +2,9 @@
 // A standalone React app (talks to the CMS over HTTP + CORS). --watch rebuilds on
 // change and serves a preview on http://localhost:5175.
 
+import { buzolaPlugin } from "@buzola/bun-plugin";
 import { rm, mkdir, writeFile } from "node:fs/promises";
+import { extname } from "node:path";
 
 const root = new URL("..", import.meta.url).pathname;
 const dist = `${root}dist`;
@@ -18,7 +20,7 @@ const html = (jsName: string) => `<!doctype html>
   </head>
   <body>
     <div id="app"></div>
-    <script type="module" src="./${jsName}"></script>
+    <script type="module" src="/${jsName}"></script>
   </body>
 </html>
 `;
@@ -31,6 +33,9 @@ async function build(): Promise<void> {
     minify: !watch,
     sourcemap: watch ? "linked" : "none",
     naming: "[dir]/[name].[hash].[ext]",
+    // Scans src/routes, (re)generates src/buzola.gen.ts, and resolves the
+    // `virtual:buzola/routes` import in main.tsx.
+    plugins: [buzolaPlugin({ root })],
   });
   if (!out.success) {
     for (const log of out.logs) console.error(log);
@@ -50,7 +55,9 @@ await build();
 if (watch) {
   const { watch: fsWatch } = await import("node:fs");
   let pending = false;
-  fsWatch(`${root}src`, { recursive: true }, () => {
+  fsWatch(`${root}src`, { recursive: true }, (_event, filename) => {
+    // The build regenerates buzola.gen.ts; ignore that write so it can't self-trigger.
+    if (filename && filename.includes("buzola.gen")) return;
     if (pending) return;
     pending = true;
     setTimeout(() => {
@@ -63,6 +70,9 @@ if (watch) {
     fetch(req) {
       const url = new URL(req.url);
       const path = url.pathname === "/" ? "/index.html" : url.pathname;
+      // Extensionless paths are client routes — fall back to index.html so a deep
+      // link or refresh boots the SPA and lets the router resolve the path.
+      if (!extname(path)) return new Response(Bun.file(`${dist}/index.html`));
       return new Response(Bun.file(`${dist}${path}`));
     },
   });

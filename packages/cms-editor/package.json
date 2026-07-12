@@ -15,13 +15,17 @@
   "scripts": {
     "build": "bun run scripts/build.ts",
     "dev": "bun run scripts/build.ts --watch",
+    "codegen": "bun run scripts/codegen.ts",
     "prepublishOnly": "bun run build"
   },
   "dependencies": {
+    "@buzola/router": "^0.0.12",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
+    "@buzola/bun-plugin": "^0.0.12",
+    "@buzola/codegen": "^0.0.12",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0"
   }

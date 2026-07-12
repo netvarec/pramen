@@ -22,25 +22,25 @@
     },
     "packages/admin": {
       "name": "@pramen/admin",
-      "version": "0.0.18",
+      "version": "0.0.21",
       "dependencies": {
         "preact": "^10.25.0",
       },
     },
     "packages/auth": {
       "name": "@pramen/auth",
-      "version": "0.0.18",
+      "version": "0.0.21",
       "dependencies": {
         "@pramen/server": "workspace:*",
       },
     },
     "packages/client": {
       "name": "@pramen/client",
-      "version": "0.0.18",
+      "version": "0.0.21",
     },
     "packages/cms": {
       "name": "@pramen/cms",
-      "version": "0.0.18",
+      "version": "0.0.21",
       "dependencies": {
         "@pramen/server": "workspace:*",
         "xss": "^1.0.15",
@@ -54,26 +54,29 @@
     },
     "packages/cms-astro": {
       "name": "@pramen/cms-astro",
-      "version": "0.0.18",
+      "version": "0.0.21",
       "peerDependencies": {
         "astro": ">=4",
       },
     },
     "packages/cms-editor": {
       "name": "@pramen/cms-editor",
-      "version": "0.0.18",
+      "version": "0.0.21",
       "dependencies": {
+        "@buzola/router": "^0.0.12",
         "react": "^19.0.0",
         "react-dom": "^19.0.0",
       },
       "devDependencies": {
+        "@buzola/bun-plugin": "^0.0.12",
+        "@buzola/codegen": "^0.0.12",
         "@types/react": "^19.0.0",
         "@types/react-dom": "^19.0.0",
       },
     },
     "packages/react": {
       "name": "@pramen/react",
-      "version": "0.0.18",
+      "version": "0.0.21",
       "dependencies": {
         "@pramen/client": "workspace:*",
       },
@@ -83,7 +86,7 @@
     },
     "packages/server": {
       "name": "@pramen/server",
-      "version": "0.0.18",
+      "version": "0.0.21",
       "bin": {
         "pramen": "./dist/cli.js",
       },
@@ -149,6 +152,12 @@
     "@bruits/satteri-win32-arm64-msvc": ["@bruits/satteri-win32-arm64-msvc@0.9.5", "", { "os": "win32", "cpu": "arm64" }, "sha512-SrfE7NEsgZjBvU3c+RR6oQRu0ToXY5uVJEbieXEF0YTctIV2zAVlbaMjWLts074QCgh3a+XHWkR/lWh2VH2LUg=="],
 
     "@bruits/satteri-win32-x64-msvc": ["@bruits/satteri-win32-x64-msvc@0.9.5", "", { "os": "win32", "cpu": "x64" }, "sha512-5Kw9ZAtTGS8WHizyn+CJhjjfIQrw+7jcZodpmpXJjefnO15M8UexIi6JR2E5thyvsmHyhL6ZDDMUNR4bKJPd4g=="],
+
+    "@buzola/bun-plugin": ["@buzola/bun-plugin@0.0.12", "", { "dependencies": { "@buzola/codegen": "^0.0.12", "@buzola/router": "^0.0.12" } }, "sha512-0fa+rqNE3ySdxPVxUM5nfjj0/NysA29peKIo6OwqCyuihPSW837PwT4Jwxudhnajswp6oeTQHn4NDWEeR1cO0Q=="],
+
+    "@buzola/codegen": ["@buzola/codegen@0.0.12", "", { "dependencies": { "@buzola/router": "^0.0.12" }, "bin": { "buzola": "dist/cli.js" } }, "sha512-Ulcm0mVngRNSG9k4uh+siYSgXXd0uND4W0+PSzbyPp538dzxqzRHWi3BNutmsC02A1VMokzr23t1V7tleDTkEQ=="],
+
+    "@buzola/router": ["@buzola/router@0.0.12", "", { "peerDependencies": { "react": "^18.0.0 || ^19.0.0" } }, "sha512-aV6U5ma2VkGLZHBqm8tBBUQ39c0tLxy6ojksgbRSpZM19+DfVGrydzhelW4SOflBuvVEe7BdW1FoE//LzNAH+g=="],
 
     "@capsizecss/unpack": ["@capsizecss/unpack@4.0.1", "", { "dependencies": { "fontkitten": "^1.0.3" } }, "sha512-CuNiSqg7+e1cO/GjffyMOm5Tt2jUF9CWHHnvQ/UkqvtkGfHdgwEC0wpmq7fkN3gxwpRnrAN0WzO3vREKmNolMQ=="],
 
