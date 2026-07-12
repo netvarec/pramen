@@ -61,7 +61,7 @@ export type { Env, DoEnv };
  * drains the D1 outbox (the DO path self-drains via an alarm) — wire it only if you
  * use the D1 store with deferred tasks. */
 export function createPramen(app: PramenApp): {
-  fetch: (request: Request, env: Env) => Promise<Response>;
+  fetch: (request: Request, env: Env, ctx: ExecutionContext) => Promise<Response>;
   scheduled: (event: unknown, env: Env) => Promise<void>;
   queue: (batch: QueueBatch, env: Env) => Promise<void>;
   PramenDO: ReturnType<typeof pramenDO>;

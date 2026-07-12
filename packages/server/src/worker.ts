@@ -236,7 +236,7 @@ export function makeWorker(app: PramenApp) {
   };
 
   return {
-    async fetch(request: Request, env: Env): Promise<Response> {
+    async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
     // File upload/download stream through the Worker (bytes never touch the DO),
@@ -458,7 +458,13 @@ export function makeWorker(app: PramenApp) {
       const envBag = env as unknown as Record<string, unknown>;
       try {
         await ensureD1Migrated(driver, env.PRAMEN_ALLOW_DESTRUCTIVE === "true");
-        const { result } = await dispatch(app.handlers, app.schema, driver, new Kv(env.KV), files, envBag, { acl: d1Acl, identity }, name, input);
+        const { result, enqueued } = await dispatch(app.handlers, app.schema, driver, new Kv(env.KV), files, envBag, { acl: d1Acl, identity }, name, input);
+        // Kick an immediate drain in the request tail when this handler enqueued tasks
+        // (e.g. sendMagicLinkEmail). Without this, tasks wait for the next Cron trigger
+        // — up to a full minute. `waitUntil` lets the response return now while the
+        // drain runs; the Cron trigger remains the safety net for delayed / retried
+        // tasks that no request happens to coincide with.
+        if (enqueued > 0) ctx.waitUntil(drainD1(env));
         const res = json({ ok: true, result });
         // Thread the session's latest bookmark back so the client can read its own writes.
         const bookmark = driver.getBookmark();
