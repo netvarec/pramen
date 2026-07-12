@@ -76,3 +76,18 @@ groups), and inspector
 panels for SEO / workflow / i18n / audit. It mutates through the semantic handlers (so all
 validation and gates apply). Build with `bun --cwd packages/cms-editor run build`, deploy the
 static `dist/`, and point it at your Worker (set `CORS_ORIGINS`) with an editor/reviewer JWT.
+
+### Users & settings
+
+Two extra tabs surface the `@pramen/auth` management handlers, so they appear only when
+those handlers are wired into your app (`createUserHandlers`/`authPolicies` + `inviteUser`):
+
+- **Users** (admin-only — gated on `me.roles` including `admin`) — invite a teammate by
+  email (`inviteUser` sends a one-time magic link and creates the account, defaulting to the
+  `editor` role), edit roles inline (`setUserRoles`), activate/deactivate (`setUserActive`),
+  and delete (`deleteUser`). You can't deactivate or delete your own account.
+- **Settings** — account self-service for any signed-in user: change your contact email
+  (`changeEmail`) or password (`changePassword`), plus an about card and sign-out.
+
+Both go through the same ACL-gated handlers, so a non-admin who forges the tab still hits a
+403 on the server.
