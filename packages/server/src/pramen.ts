@@ -15,7 +15,7 @@
 import { makeWorker, type Env } from "./worker";
 import { pramenDO, type DoEnv } from "./durable-object";
 import { validateTriggerTasks, type SchemaDef } from "./sdk/schema";
-import type { AppTaskMap, HandlerMap } from "./sdk/handlers";
+import type { AppTaskMap, HandlerMap, BootstrapFn } from "./sdk/handlers";
 import type { AppQueueMap, QueueBatch } from "./runtime/queue-consumer";
 import type { Role } from "./sdk/acl";
 
@@ -53,6 +53,10 @@ export interface PramenApp {
    * `ctx.queue.send(...)`. Dispatched by `createPramen(app).queue` (a consumer is
    * Worker-level: no `ctx.db`, reach a tenant via `ctx.callPrivileged`). */
   queues?: AppQueueMap;
+  /** Idempotent reconcilers run once after schema migration on each boot — converge
+   * code-defined reference data into the store (see `BootstrapFn`). Each runs with a
+   * privileged system Db; failures are logged, never fatal. */
+  bootstrap?: readonly BootstrapFn[];
 }
 
 export type { Env, DoEnv };

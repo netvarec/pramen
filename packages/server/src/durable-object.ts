@@ -133,8 +133,34 @@ export class PramenDOBase extends DurableObject<DoEnv> {
         migrate(this.driver, this.app.schema, { allowDestructive, partition }).then(() => {}),
       );
       await ensureOutbox(this.driver); // the deferred-tasks table (internal, all partitions)
+      await this.runBootstrap(); // converge code-defined reference data (default partition only)
       this.migrated = true;
     });
+  }
+
+  // Run app.bootstrap() once per DO lifetime, right after migration and inside the same
+  // blockConcurrencyWhile block, so the first request sees a converged store and two
+  // concurrent first fetches can't double-run it. Default partition ONLY: reference data
+  // (content types, roles, …) lives in the default partition, and a non-default DO doesn't
+  // own those tables (a write would trip assertInPartition). A failing reconciler is logged
+  // and swallowed — unlike migrate(), it must never brick a tenant's boot; it retries next
+  // boot. Uses a SYSTEM-scoped Db (ACL bypassed) with triggers suppressed (a boot-time seed
+  // shouldn't fan out reactive side-effects).
+  private async runBootstrap(): Promise<void> {
+    const fns = this.app.bootstrap;
+    if (!fns?.length || this.partition !== DEFAULT_PARTITION) return;
+    const db = new Db(
+      this.driver,
+      { acl: this.acl, identity: { roles: ["admin"] }, system: true, partition: this.partition, schema: this.app.schema, suppressTriggers: true },
+      this.app.schema,
+    );
+    for (const fn of fns) {
+      try {
+        await this.driver.transaction(() => Promise.resolve(fn({ db, driver: this.driver, schema: this.app.schema, partition: this.partition })));
+      } catch (e) {
+        console.error(`[pramen] bootstrap failed (partition=${this.partition}):`, e);
+      }
+    }
   }
 
   override async fetch(request: Request): Promise<Response> {
