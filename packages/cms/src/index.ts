@@ -605,6 +605,9 @@ export interface AssembledPage {
     slug: string;
     status: string;
     locale: string;
+    /** The page's content-type slug (e.g. "article", "page") — lets a frontend route/render
+     * by type. `null` if the type row is missing. */
+    contentType: string | null;
     translationGroupId: string | null;
     /** Published sibling locales of this page (for hreflang alternates). */
     translations: PageTranslation[];
@@ -731,6 +734,13 @@ const isEditor = (ctx: HandlerContext, roles: readonly string[]): boolean => {
 
 /** Assemble a page LIVE from its placements/blocks/types, grouped by region and ordered
  * by position, merging each shared placement's `overrides` over its block's fields. */
+/** Resolve a page's content-type slug from its `typeId` (null when the type row is gone). */
+async function contentTypeSlug(db: CmsDb, typeId: unknown): Promise<string | null> {
+  if (typeof typeId !== "string" || !typeId) return null;
+  const rows = await db.find({ from: "cms_content_types", where: { id: typeId }, limit: 1 });
+  return rows[0] ? String(rows[0].slug) : null;
+}
+
 async function assembleLive(db: CmsDb, page: Record<string, unknown>): Promise<AssembledPage> {
   const placements = await db.find({
     from: "cms_page_blocks",
@@ -779,8 +789,8 @@ async function assembleLive(db: CmsDb, page: Record<string, unknown>): Promise<A
       is_shared: Boolean(m.p.isShared),
     });
   }
-  const [translations, ogImage] = await Promise.all([siblingTranslations(db, page), resolveMediaId(db, page.ogImage)]);
-  return { page: pageMeta(page, translations, ogImage), regions };
+  const [translations, ogImage, contentType] = await Promise.all([siblingTranslations(db, page), resolveMediaId(db, page.ogImage), contentTypeSlug(db, page.typeId)]);
+  return { page: pageMeta(page, translations, ogImage, contentType), regions };
 }
 
 /** Resolve a single media id to a ResolvedMedia (for og:image etc.), or null. */
@@ -826,7 +836,7 @@ async function siblingTranslations(db: CmsDb, page: Record<string, unknown>): Pr
 }
 
 /** Project a page row to the public AssembledPage.page shape. */
-function pageMeta(page: Record<string, unknown>, translations: PageTranslation[] = [], ogImage: ResolvedMedia | null = null): AssembledPage["page"] {
+function pageMeta(page: Record<string, unknown>, translations: PageTranslation[] = [], ogImage: ResolvedMedia | null = null, contentType: string | null = null): AssembledPage["page"] {
   const metaTitle = (page.metaTitle as string | null) ?? null;
   const metaDescription = (page.metaDescription as string | null) ?? null;
   return {
@@ -835,6 +845,7 @@ function pageMeta(page: Record<string, unknown>, translations: PageTranslation[]
     slug: String(page.slug),
     status: String(page.status),
     locale: String(page.locale ?? "en"),
+    contentType,
     translationGroupId: (page.translationGroupId as string | null) ?? null,
     translations,
     fields: (page.fields as Record<string, unknown> | null) ?? null,
@@ -1130,8 +1141,14 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     /** Public: list published pages (slug, locale, updatedAt) for sitemap generation. The
      * anonymous ACL scopes cms_pages reads to status=published, so this is safe to expose. */
     listPublishedPages: query(async (ctx) => {
-      const rows = await cdb(ctx).find({ from: "cms_pages", where: { status: "published" }, orderBy: { column: "updatedAt", dir: "desc" }, limit: 5000 });
-      return rows.map((r) => ({ slug: String(r.slug), locale: String(r.locale ?? "en"), updatedAt: String(r.updatedAt ?? r.createdAt ?? "") }));
+      const db = cdb(ctx);
+      const rows = await db.find({ from: "cms_pages", where: { status: "published" }, orderBy: { column: "updatedAt", dir: "desc" }, limit: 5000 });
+      // Join typeId → content-type slug so a frontend can route/filter by type (e.g. articles
+      // vs pages) without a second round-trip.
+      const typeIds = [...new Set(rows.map((r) => r.typeId).filter((v): v is string => typeof v === "string"))];
+      const types = typeIds.length ? await db.find({ from: "cms_content_types", where: { id: { in: typeIds } } }) : [];
+      const slugById = new Map(types.map((t) => [String(t.id), String(t.slug)]));
+      return rows.map((r) => ({ slug: String(r.slug), locale: String(r.locale ?? "en"), contentType: slugById.get(String(r.typeId)) ?? null, updatedAt: String(r.updatedAt ?? r.createdAt ?? "") }));
     }),
 
     /** Update a page's SEO fields (meta/canonical/robots/OpenGraph/JSON-LD). Editor-gated. */
@@ -1681,6 +1698,10 @@ export function cmsPolicies(opts: CmsPolicyOpts = {}): { public: Policy[]; edito
   }
   return {
     public: [
+      // Content-type metadata (slug/name) is public: the content API returns each published
+      // page's content-type slug (via listPublishedPages' live typeId→slug join) so a frontend
+      // can route/render by type. Slugs/names are structural, not sensitive.
+      policy(`${p}:public:content-types:read`, "cms_content_types", "read", allow()),
       // Only published pages are readable; the snapshot carries the content.
       policy(`${p}:public:pages:read`, "cms_pages", "read", { where: { status: "published" } }),
       // getPage reads the latest revision snapshot. Scope the grant by the revision's
