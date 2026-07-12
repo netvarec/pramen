@@ -3,4 +3,6 @@
 # `minimumReleaseAge` supply-chain delay so a freshly-published fix (e.g. 0.19.2,
 # which carries the proxy-to-DO stream-body + RETURNING fixes pramen needs) installs
 # immediately. All other dependencies still honor the global policy.
-minimumReleaseAgeExcludes = ["lopata"]
+# @podoba/* is our own design system (graphic-standard) — exempt for the same
+# reason so freshly-published versions install without the 36h cool-off.
+minimumReleaseAgeExcludes = ["lopata", "@podoba/react", "@podoba/tokens", "@podoba/tailwind"]

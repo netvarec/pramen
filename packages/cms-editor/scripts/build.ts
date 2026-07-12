@@ -3,7 +3,7 @@
 // change and serves a preview on http://localhost:5175.
 
 import { buzolaPlugin } from "@buzola/bun-plugin";
-import { rm, mkdir, writeFile } from "node:fs/promises";
+import { rm, mkdir, writeFile, copyFile } from "node:fs/promises";
 import { extname } from "node:path";
 
 const root = new URL("..", import.meta.url).pathname;
@@ -17,6 +17,8 @@ const html = (jsName: string) => `<!doctype html>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>pramen · cms editor</title>
+    <link rel="stylesheet" href="/tokens.css" />
+    <link rel="stylesheet" href="/app.css" />
   </head>
   <body>
     <div id="app"></div>
@@ -25,7 +27,18 @@ const html = (jsName: string) => `<!doctype html>
 </html>
 `;
 
+// Design system = podoba. Compile Tailwind (podoba preset) → dist/app.css and
+// copy the podoba token CSS vars → dist/tokens.css; index.html <link>s both.
+async function styles(): Promise<void> {
+  await copyFile(`${root}node_modules/@podoba/tokens/src/variables.css`, `${dist}/tokens.css`);
+  const args = ["tailwindcss", "-c", `${root}tailwind.config.ts`, "-i", `${root}src/app.css`, "-o", `${dist}/app.css`];
+  if (!watch) args.push("--minify");
+  const proc = Bun.spawn(["bunx", ...args], { cwd: root, stdout: "inherit", stderr: "inherit" });
+  if ((await proc.exited) !== 0) throw new Error("tailwind build failed");
+}
+
 async function build(): Promise<void> {
+  await styles();
   const out = await Bun.build({
     entrypoints: [entry],
     outdir: dist,

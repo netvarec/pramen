@@ -3,6 +3,7 @@
 // stays local (it's a transient in-canvas overlay).
 
 import { createPage, useNavigate } from "@buzola/router";
+import { Button } from "@podoba/react";
 import { useEffect, useState } from "react";
 import { useApp } from "../app-context";
 import { INSPECTOR_TABS, PageEditor, errMsg, type InspectorTab } from "../components";
@@ -39,12 +40,13 @@ export default createPage()
 
     if (missing) {
       return (
-        <div className="list-wrap">
-          <p className="muted">Page not found. <button className="ghost sm" onClick={() => navigate("home")}>← all pages</button></p>
+        <div className="mx-auto flex max-w-[1200px] items-center gap-2 px-7 pt-8">
+          <p className="text-fg-subtle">Page not found.</p>
+          <Button variant="ghost" size="sm" onPress={() => navigate("home")}>← all pages</Button>
         </div>
       );
     }
-    if (!page) return <div className="list-wrap"><p className="muted">Loading…</p></div>;
+    if (!page) return <div className="mx-auto max-w-[1200px] px-7 pt-8"><p className="text-fg-subtle">Loading…</p></div>;
 
     return (
       <PageEditor

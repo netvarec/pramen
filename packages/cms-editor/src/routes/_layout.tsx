@@ -3,6 +3,7 @@
 // so a deep link or refresh lands with the right tab lit.
 
 import { Outlet, useNavigate, useRoute } from "@buzola/router";
+import { Button } from "@podoba/react";
 import { useApp } from "../app-context";
 
 export default function RootLayout() {
@@ -17,27 +18,30 @@ export default function RootLayout() {
     : pathname.startsWith("/settings") ? "settings"
     : "";
 
+  const tabCls = (key: string) =>
+    active === key ? "bg-surface-muted text-fg" : "text-fg-muted";
+
   return (
     <>
-      <div className="bar">
-        <span className="brand">
-          pramen <span className="dim">· cms</span>
+      <div className="sticky top-0 z-10 flex items-center gap-4 bg-surface px-7 py-4">
+        <span className="text-[15px] font-bold tracking-[0.01em] text-fg">
+          pramen <span className="font-normal text-fg-subtle">· cms</span>
         </span>
-        <span className="grow" />
-        <nav className="tabs nav" style={{ margin: 0 }}>
-          <button className={active === "pages" ? "on" : ""} onClick={() => navigate("home")}>Pages</button>
-          <button className={active === "media" ? "on" : ""} onClick={() => navigate("media")}>Media</button>
+        <span className="flex-1" />
+        <nav className="flex items-center gap-0.5">
+          <Button variant="ghost" size="sm" className={tabCls("pages")} onPress={() => navigate("home")}>Pages</Button>
+          <Button variant="ghost" size="sm" className={tabCls("media")} onPress={() => navigate("media")}>Media</Button>
           {isAdmin ? (
-            <button className={active === "users" ? "on" : ""} onClick={() => navigate("users")}>Users</button>
+            <Button variant="ghost" size="sm" className={tabCls("users")} onPress={() => navigate("users")}>Users</Button>
           ) : null}
-          <button className={active === "settings" ? "on" : ""} onClick={() => navigate("settings")}>Settings</button>
+          <Button variant="ghost" size="sm" className={tabCls("settings")} onPress={() => navigate("settings")}>Settings</Button>
         </nav>
-        <span className="muted" style={{ marginLeft: 12 }}>{cfg.tenant}</span>
-        <button className="ghost sm" onClick={reconfigure}>
-          sign out
-        </button>
+        <span className="ml-3 text-fg-subtle">{cfg.tenant}</span>
+        <Button variant="ghost" size="sm" onPress={reconfigure}>sign out</Button>
       </div>
-      {error ? <div className="banner err">{error}</div> : null}
+      {error ? (
+        <div className="mx-7 mt-2 rounded-lg border border-danger bg-surface-card px-4 py-2.5 text-sm text-danger">{error}</div>
+      ) : null}
       <Outlet />
     </>
   );

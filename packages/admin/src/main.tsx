@@ -1,11 +1,12 @@
-// SPA entry: inject the inline stylesheet and mount the admin dashboard.
+// SPA entry: mount the admin dashboard. Styling is podoba — @podoba/tokens/variables.css
+// + the compiled Tailwind (podoba preset) are <link>ed by index.html (see scripts/build.ts).
 
-import { render } from "preact";
+import { StrictMode } from "react";
+import { createRoot } from "react-dom/client";
 import { App } from "./app";
-import { css } from "./styles";
 
-const style = document.createElement("style");
-style.textContent = css;
-document.head.appendChild(style);
-
-render(<App />, document.getElementById("app")!);
+createRoot(document.getElementById("app")!).render(
+  <StrictMode>
+    <App />
+  </StrictMode>,
+);
