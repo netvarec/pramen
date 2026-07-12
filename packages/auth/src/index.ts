@@ -315,6 +315,52 @@ export function createMagicLinkAuth(opts: MagicLinkOptions): { handlers: Handler
   const defaultRoles = opts.defaultRoles ?? DEFAULT_ROLES;
 
   const handlers: HandlerMap = {
+    /** Admin-only: create a passwordless user with the given roles (defaults if omitted)
+     * and email them a fresh magic link. Idempotent — inviting an existing user just
+     * resends the link and leaves their roles alone (admin uses setUserRoles for changes).
+     * Piggybacks on the sendMagicLinkEmail task, so the send happens outside the
+     * mutation's storage transaction. */
+    inviteUser: mutation(
+      async (ctx, input: { email: string; roles?: string[] }) => {
+        const { email } = parseEmail(input);
+        const roles =
+          Array.isArray(input?.roles) && input.roles.every((r) => typeof r === "string" && r.length > 0)
+            ? input.roles
+            : defaultRoles;
+        const now = Date.now();
+        // Existence check on username (== email, per magic-link convention); a re-invite
+        // MUST NOT overwrite roles — that's setUserRoles's job.
+        const existing = await ctx.db.exec("SELECT username FROM auth_users WHERE username = ? LIMIT 1", email);
+        if (existing.length === 0) {
+          // Same shape as loginWithMagicLink's find-or-create path: username-only, no
+          // `email` column set (it stays a pure contact attribute, set via changeEmail).
+          await ctx.db.exec(
+            "INSERT INTO auth_users (username, passwordHash, roles, active, createdAt) VALUES (?, ?, ?, ?, ?)",
+            email,
+            "",
+            JSON.stringify(roles),
+            1,
+            now,
+          );
+        }
+        // Reuse magic-link machinery so login flow is identical whether the user was
+        // self-signed-up or admin-invited.
+        const token = mintToken();
+        const tokenHash = await sha256Hex(token);
+        await ctx.db.exec("DELETE FROM auth_magic_links WHERE email = ?", email);
+        await ctx.db.exec(
+          "INSERT INTO auth_magic_links (tokenHash, email, expiresAt, createdAt) VALUES (?, ?, ?, ?)",
+          tokenHash,
+          email,
+          now + linkTtlMs,
+          now,
+        );
+        await ctx.tasks.enqueue({ kind: "sendMagicLinkEmail", payload: { email, token } });
+        return { ok: true, created: existing.length === 0 };
+      },
+      { auth: ["admin"] },
+    ),
+
     requestMagicLink: mutation(
       async (ctx, input: { email: string }) => {
         const token = mintToken();
