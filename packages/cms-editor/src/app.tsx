@@ -43,12 +43,16 @@ function Setup({ cfg, onSave }: { cfg: Config; onSave: (c: Config) => void }) {
   );
 }
 
+type View = "pages" | "media" | "users" | "settings";
+interface Me { userId?: string; roles?: string[]; [k: string]: unknown }
+
 function Editor({ api, cfg, onReconfigure }: { api: Api; cfg: Config; onReconfigure: () => void }) {
   const [pages, setPages] = useState<Page[]>([]);
   const [blockTypes, setBlockTypes] = useState<BlockType[]>([]);
   const [current, setCurrent] = useState<Page | null>(null);
-  const [view, setView] = useState<"pages" | "media">("pages");
+  const [view, setView] = useState<View>("pages");
   const [err, setErr] = useState("");
+  const [me, setMe] = useState<Me | null>(null);
 
   const refreshPages = useCallback(() => {
     api.listPages().then(setPages).catch((e) => setErr(errMsg(e)));
@@ -56,7 +60,12 @@ function Editor({ api, cfg, onReconfigure }: { api: Api; cfg: Config; onReconfig
   useEffect(() => {
     refreshPages();
     api.listBlockTypes().then(setBlockTypes).catch((e) => setErr(errMsg(e)));
+    // `me` gates the Users tab — a failing call is fine (leaves it undefined).
+    api.call<Me>("me").then(setMe).catch(() => setMe({}));
   }, [api, refreshPages]);
+
+  const isAdmin = (me?.roles ?? []).includes("admin");
+  const go = (v: View) => { setView(v); setCurrent(null); };
 
   return (
     <>
@@ -71,12 +80,12 @@ function Editor({ api, cfg, onReconfigure }: { api: Api; cfg: Config; onReconfig
         ) : null}
         <span className="grow" />
         <nav className="tabs nav" style={{ margin: 0 }}>
-          <button className={view === "pages" ? "on" : ""} onClick={() => { setView("pages"); setCurrent(null); }}>
-            Pages
-          </button>
-          <button className={view === "media" ? "on" : ""} onClick={() => setView("media")}>
-            Media
-          </button>
+          <button className={view === "pages" ? "on" : ""} onClick={() => go("pages")}>Pages</button>
+          <button className={view === "media" ? "on" : ""} onClick={() => go("media")}>Media</button>
+          {isAdmin ? (
+            <button className={view === "users" ? "on" : ""} onClick={() => go("users")}>Users</button>
+          ) : null}
+          <button className={view === "settings" ? "on" : ""} onClick={() => go("settings")}>Settings</button>
         </nav>
         <span className="muted" style={{ marginLeft: 12 }}>{cfg.tenant}</span>
         <button className="ghost sm" onClick={onReconfigure}>
@@ -86,6 +95,10 @@ function Editor({ api, cfg, onReconfigure }: { api: Api; cfg: Config; onReconfig
       {err ? <div className="banner err">{err}</div> : null}
       {view === "media" ? (
         <MediaLibrary api={api} onError={setErr} />
+      ) : view === "users" ? (
+        <UsersView api={api} me={me} onError={setErr} />
+      ) : view === "settings" ? (
+        <SettingsView api={api} cfg={cfg} me={me} onSignOut={onReconfigure} onError={setErr} />
       ) : current ? (
         <PageEditor api={api} page={current} blockTypes={blockTypes} onBack={() => { setCurrent(null); refreshPages(); }} onChange={(p) => setCurrent(p)} />
       ) : (
@@ -708,4 +721,249 @@ function reorderMove(blocks: RenderedBlock[], region: string, i: number, d: numb
   const ids = blocks.map((b) => b.id);
   [ids[i], ids[j]] = [ids[j], ids[i]];
   reorder(region, ids);
+}
+
+// --- users management (admin) ------------------------------------------------
+
+interface UserRow {
+  username: string;
+  email?: string | null;
+  roles?: string[] | string;
+  active?: boolean | number | null;
+  createdAt?: number | null;
+}
+
+function rolesOf(u: UserRow): string[] {
+  const r = u.roles;
+  if (Array.isArray(r)) return r.filter((x): x is string => typeof x === "string");
+  if (typeof r === "string") { try { const j = JSON.parse(r); return Array.isArray(j) ? j : []; } catch { return []; } }
+  return [];
+}
+
+function UsersView({ api, me, onError }: { api: Api; me: Me | null; onError: (s: string) => void }) {
+  const [users, setUsers] = useState<UserRow[]>([]);
+  const [inviting, setInviting] = useState(false);
+  const [busy, setBusy] = useState<string>("");
+
+  const refresh = useCallback(() => {
+    api.call<UserRow[]>("listUsers", { limit: 200 }).then(setUsers).catch((e) => onError(errMsg(e)));
+  }, [api, onError]);
+  useEffect(() => { refresh(); }, [refresh]);
+
+  const setRoles = async (u: UserRow, roles: string[]) => {
+    setBusy(u.username);
+    try { await api.call("setUserRoles", { username: u.username, roles }); refresh(); }
+    catch (e) { onError(errMsg(e)); }
+    finally { setBusy(""); }
+  };
+  const setActive = async (u: UserRow, active: boolean) => {
+    setBusy(u.username);
+    try { await api.call("setUserActive", { username: u.username, active }); refresh(); }
+    catch (e) { onError(errMsg(e)); }
+    finally { setBusy(""); }
+  };
+  const del = async (u: UserRow) => {
+    if (!confirm(`Delete user ${u.username}? This cannot be undone.`)) return;
+    setBusy(u.username);
+    try { await api.call("deleteUser", { username: u.username }); refresh(); }
+    catch (e) { onError(errMsg(e)); }
+    finally { setBusy(""); }
+  };
+
+  return (
+    <>
+      <div className="hero">
+        <h1 className="hero-h">
+          <span className="lead">Users</span>
+          <span className="em">{users.length === 0 ? "None yet" : users.length === 1 ? "1 account" : `${users.length} accounts`}</span>
+        </h1>
+        <div className="cta">
+          <span className="cta-text">Let&apos;s <span className="em">invite</span> someone</span>
+          <button className="primary" onClick={() => setInviting(true)}>+ Invite</button>
+        </div>
+      </div>
+      <div className="list-wrap">
+        <div className="list">
+          {users.map((u) => {
+            const roles = rolesOf(u);
+            const isMe = me?.userId === u.username;
+            const active = u.active === undefined || u.active === null ? true : Boolean(Number(u.active));
+            return (
+              <div className="row" key={u.username} style={{ cursor: "default", alignItems: "flex-start", flexWrap: "wrap" }}>
+                <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 200, gap: 2 }}>
+                  <span style={{ fontWeight: 600 }}>{u.username}{isMe ? <span className="muted" style={{ marginLeft: 6, fontWeight: 400 }}>(you)</span> : null}</span>
+                  {u.email && u.email !== u.username ? <span className="muted" style={{ fontSize: 12 }}>{u.email}</span> : null}
+                  {u.createdAt ? <span className="muted" style={{ fontSize: 11 }}>joined {new Date(Number(u.createdAt)).toLocaleDateString()}</span> : null}
+                </div>
+                <RolesInput value={roles} disabled={busy === u.username} onSave={(next) => setRoles(u, next)} />
+                <span className={`pill ${active ? "published" : "archived"}`}>{active ? "active" : "inactive"}</span>
+                <button className="sm ghost" disabled={busy === u.username || isMe} onClick={() => setActive(u, !active)}>
+                  {active ? "Deactivate" : "Activate"}
+                </button>
+                <button className="sm ghost danger" disabled={busy === u.username || isMe} onClick={() => del(u)}>
+                  Delete
+                </button>
+              </div>
+            );
+          })}
+          {users.length === 0 ? <p className="muted">No users yet. Invite someone to get started.</p> : null}
+        </div>
+      </div>
+      {inviting ? <InviteUser api={api} onClose={() => setInviting(false)} onInvited={() => { setInviting(false); refresh(); }} onError={onError} /> : null}
+    </>
+  );
+}
+
+function RolesInput({ value, disabled, onSave }: { value: string[]; disabled: boolean; onSave: (roles: string[]) => void }) {
+  const [text, setText] = useState(value.join(", "));
+  const [editing, setEditing] = useState(false);
+  useEffect(() => { setText(value.join(", ")); }, [value]);
+  const commit = () => {
+    setEditing(false);
+    const next = text.split(",").map((s) => s.trim()).filter(Boolean);
+    if (next.length === 0) { setText(value.join(", ")); return; }
+    if (next.length === value.length && next.every((r, i) => r === value[i])) return;
+    onSave(next);
+  };
+  if (editing) {
+    return (
+      <input
+        autoFocus
+        style={{ width: 220 }}
+        value={text}
+        disabled={disabled}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => { if (e.key === "Enter") commit(); if (e.key === "Escape") { setText(value.join(", ")); setEditing(false); } }}
+      />
+    );
+  }
+  return (
+    <span style={{ display: "flex", gap: 4, flexWrap: "wrap", cursor: "pointer" }} onClick={() => setEditing(true)} title="Click to edit">
+      {value.length === 0 ? <span className="pill">no roles</span> : value.map((r) => <span key={r} className={`pill ${r === "admin" ? "published" : ""}`}>{r}</span>)}
+    </span>
+  );
+}
+
+function InviteUser({ api, onClose, onInvited, onError }: { api: Api; onClose: () => void; onInvited: () => void; onError: (s: string) => void }) {
+  const [email, setEmail] = useState("");
+  const [roles, setRoles] = useState("editor");
+  const [busy, setBusy] = useState(false);
+  const invite = async () => {
+    setBusy(true);
+    try {
+      const rs = roles.split(",").map((s) => s.trim()).filter(Boolean);
+      await api.call("inviteUser", { email, roles: rs });
+      onInvited();
+    } catch (e) {
+      onError(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="scrim" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <h2>
+          Invite an <span className="dim">editor</span> or teammate
+        </h2>
+        <p className="muted" style={{ marginTop: -8 }}>They&apos;ll get a one-time magic link that logs them in and creates their account.</p>
+        <label className="field">
+          <span className="lbl">Email</span>
+          <input value={email} type="email" autoFocus onChange={(e) => setEmail(e.target.value)} placeholder="them@example.com" />
+        </label>
+        <label className="field">
+          <span className="lbl">Roles <span className="muted" style={{ fontWeight: 400 }}>(comma-separated — e.g. editor, reviewer, admin)</span></span>
+          <input value={roles} onChange={(e) => setRoles(e.target.value)} placeholder="editor" />
+        </label>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
+          <button className="ghost" onClick={onClose}>Cancel</button>
+          <button className="primary" onClick={invite} disabled={busy || !email}>{busy ? "Sending…" : "Send invite"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// --- settings ----------------------------------------------------------------
+
+function SettingsView({ api, cfg, me, onSignOut, onError }: { api: Api; cfg: Config; me: Me | null; onSignOut: () => void; onError: (s: string) => void }) {
+  return (
+    <>
+      <div className="hero">
+        <h1 className="hero-h">
+          <span className="lead">Settings</span>
+          <span className="em">{me?.userId ?? "your account"}</span>
+        </h1>
+      </div>
+      <div className="list-wrap" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+        <MyAccountCard api={api} me={me} onError={onError} onSignOut={onSignOut} />
+        <AboutCard cfg={cfg} me={me} />
+      </div>
+    </>
+  );
+}
+
+function MyAccountCard({ api, me, onError, onSignOut }: { api: Api; me: Me | null; onError: (s: string) => void; onSignOut: () => void }) {
+  const [email, setEmail] = useState("");
+  const [pwCurrent, setPwCurrent] = useState("");
+  const [pwNew, setPwNew] = useState("");
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+  const flash = (m: string) => { setMsg(m); setTimeout(() => setMsg(""), 1800); };
+
+  const saveEmail = async () => {
+    setBusy(true);
+    try { await api.call("changeEmail", { email }); setEmail(""); flash("Contact email updated"); }
+    catch (e) { onError(errMsg(e)); }
+    finally { setBusy(false); }
+  };
+  const savePassword = async () => {
+    setBusy(true);
+    try { await api.call("changePassword", { currentPassword: pwCurrent, newPassword: pwNew }); setPwCurrent(""); setPwNew(""); flash("Password updated"); }
+    catch (e) { onError(errMsg(e)); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="inspect" style={{ background: "var(--surface-2)" }}>
+      <div className="sect" style={{ marginTop: 0 }}>My account</div>
+      {msg ? <div className="banner ok">{msg}</div> : null}
+      <div className="kv" style={{ marginBottom: 16 }}>
+        <span>Username</span><span>{me?.userId ?? "—"}</span>
+        <span>Roles</span><span>{(me?.roles ?? []).join(", ") || "—"}</span>
+      </div>
+      <label className="field">
+        <span className="lbl">Change contact email</span>
+        <input value={email} type="email" onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
+      </label>
+      <button className="primary" onClick={saveEmail} disabled={busy || !email} style={{ width: "100%" }}>Save email</button>
+      <div style={{ height: 20 }} />
+      <label className="field">
+        <span className="lbl">Current password</span>
+        <input value={pwCurrent} type="password" onChange={(e) => setPwCurrent(e.target.value)} autoComplete="current-password" />
+      </label>
+      <label className="field">
+        <span className="lbl">New password <span className="muted" style={{ fontWeight: 400 }}>(at least 8 characters)</span></span>
+        <input value={pwNew} type="password" onChange={(e) => setPwNew(e.target.value)} autoComplete="new-password" />
+      </label>
+      <button className="primary" onClick={savePassword} disabled={busy || pwNew.length < 8 || pwCurrent.length === 0} style={{ width: "100%" }}>Change password</button>
+      <div style={{ height: 24 }} />
+      <button className="ghost danger" onClick={onSignOut} style={{ width: "100%" }}>Sign out</button>
+    </div>
+  );
+}
+
+function AboutCard({ cfg, me }: { cfg: Config; me: Me | null }) {
+  return (
+    <div className="inspect" style={{ background: "var(--surface-2)" }}>
+      <div className="sect" style={{ marginTop: 0 }}>About</div>
+      <div className="kv">
+        <span>Tenant</span><span>{cfg.tenant || "main"}</span>
+        <span>API</span><span style={{ wordBreak: "break-all" }}>{cfg.baseUrl}</span>
+        <span>Signed in as</span><span>{me?.userId ?? "—"}</span>
+        <span>Editor</span><span>pramen · cms-editor</span>
+      </div>
+    </div>
+  );
 }
