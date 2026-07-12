@@ -38,7 +38,8 @@
     "access": "public"
   },
   "dependencies": {
-    "@pramen/server": "workspace:*"
+    "@pramen/server": "workspace:*",
+    "xss": "^1.0.15"
   },
   "peerDependencies": {
     "react": ">=18"

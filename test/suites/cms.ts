@@ -203,6 +203,18 @@ export async function runCms(base: string): Promise<void> {
   const evBlock = (gala.body.result.regions.content as Array<{ block_type: string; fields: { day?: string; startsAt?: string } }>).find((b) => b.block_type === "event");
   assert(evBlock?.fields.day === "2026-09-01" && evBlock?.fields.startsAt === "2026-09-01T19:30", "cms: date/datetime values round-trip through the content API");
 
+  // --- server-side richtext sanitization (the XSS boundary — a caller can bypass the editor) ---
+  const xssPage = await call("createPage", { typeId: ct.body.result.id, title: "XSS", slug: "xss" }, admin);
+  const dirty = '<p onclick="alert(1)">hi <strong>there</strong></p><script>alert(2)</script><a href="javascript:alert(3)">x</a><img src=x onerror="alert(4)">';
+  const addDirty = await call("addBlock", { pageId: xssPage.body.result.id, blockTypeSlug: "rich_text", region: "content", fields: { body: dirty } }, admin);
+  assert(addDirty.body.ok, "cms: addBlock with a hostile richtext payload is accepted (then sanitized)");
+  await call("publishPage", { pageId: xssPage.body.result.id }, admin);
+  const xssGot = await call("getPage", { slug: "xss" });
+  const rtBody = (xssGot.body.result.regions.content as Array<{ block_type: string; fields: { body?: string } }>).find((b) => b.block_type === "rich_text")?.fields.body ?? "";
+  assert(!/<script/i.test(rtBody) && !/onerror\s*=/i.test(rtBody) && !/onclick\s*=/i.test(rtBody), "cms: richtext sanitized on write — <script> + inline event handlers stripped");
+  assert(!/javascript:/i.test(rtBody), "cms: richtext sanitized on write — javascript: hrefs stripped");
+  assert(/<strong>there<\/strong>/i.test(rtBody), "cms: richtext sanitization preserves allow-listed markup");
+
   const served = await fetch(`${base}/media/${mediaKey}`);
   assert(served.status === 200 && served.headers.get("content-type") === "image/png", "cms: the public /media route serves the blob (no auth)");
 

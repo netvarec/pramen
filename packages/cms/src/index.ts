@@ -43,6 +43,7 @@ import {
   PramenError,
 } from "@pramen/server";
 import type { HandlerContext, Policy, FileRef } from "@pramen/server";
+import { filterXSS } from "xss";
 
 // --- field schema DSL (the block-editor field language) ---------------------
 
@@ -426,6 +427,43 @@ export function validateFields(schema: FieldDefinition[] | undefined | null, val
         break; // unknown type — don't block
     }
   }
+}
+
+// --- rich-text sanitization (server-side — the real XSS boundary) -------------
+//
+// richtext fields are HTML the site renders with set:html, so they MUST be sanitized
+// before persistence. Client-side scrubbing is not a boundary — a caller can POST any
+// value straight to these handlers. We sanitize on write against a strict tag/attribute
+// allow-list with js-xss (`xss`), which is SYNCHRONOUS and pure-JS — this matters because
+// sanitize runs inside the DO's storage.transaction(), where async stream I/O (e.g.
+// HTMLRewriter) deadlocks. js-xss drops disallowed tags/attributes and blanks
+// javascript:/data: URLs in href/src by default.
+
+const RT_WHITELIST: Record<string, string[]> = {
+  p: [], br: [], hr: [], blockquote: [], pre: [], code: [],
+  strong: [], b: [], em: [], i: [], u: [], s: [], strike: [], del: [], ins: [], mark: [], sub: [], sup: [],
+  h2: [], h3: [], h4: [], ul: [], ol: [], li: [], a: ["href", "title"],
+};
+const RT_XSS_OPTS = { whiteList: RT_WHITELIST, stripIgnoreTag: true, stripIgnoreTagBody: ["script", "style"] as string[] };
+
+/** Sanitize one richtext HTML string to the allow-list. Synchronous by design. */
+function sanitizeRichText(html: string): string {
+  return html ? filterXSS(html, RT_XSS_OPTS) : html;
+}
+
+/** Deep-sanitize the richtext fields in a values object against a field schema (recursing
+ * into group/repeater). Returns a sanitized copy; non-richtext fields pass through. */
+export function sanitizeFields(schema: FieldDefinition[] | undefined | null, values: Record<string, unknown>): Record<string, unknown> {
+  const defs = Array.isArray(schema) ? schema : [];
+  const out: Record<string, unknown> = { ...values };
+  for (const def of defs) {
+    const v = out[def.name];
+    if (v == null) continue;
+    if (def.type === "richtext" && typeof v === "string") out[def.name] = sanitizeRichText(v);
+    else if (def.type === "group" && typeof v === "object" && !Array.isArray(v)) out[def.name] = sanitizeFields(def.fields, v as Record<string, unknown>);
+    else if (def.type === "repeater" && Array.isArray(v)) out[def.name] = v.map((it) => (it && typeof it === "object" ? sanitizeFields(def.fields, it as Record<string, unknown>) : it));
+  }
+  return out;
 }
 
 // --- assembled-page shape (the content-API result + revision snapshot) --------
@@ -1020,6 +1058,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       const ct = ctRows[0];
       if (!ct) throw new BadRequest("unknown content type");
       validateFields(ct.fieldsSchema as FieldDefinition[] | undefined, input.fields ?? {}, "page.fields", { requireRequired: false });
+      const cleanPageFields = await sanitizeFields(ct.fieldsSchema as FieldDefinition[] | undefined, input.fields ?? {});
       const locale = input.locale ?? defaultLocale;
       await assertSlugFree(db, input.slug, locale);
 
@@ -1028,7 +1067,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
         title: input.title,
         slug: input.slug,
         locale,
-        fields: input.fields ?? {},
+        fields: cleanPageFields,
         status: "draft",
       });
 
@@ -1043,7 +1082,8 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
           if (!bts[0]) throw new BadRequest(`unknown block type '${d.blockTypeSlug}'`);
           await assertRegionAllows(db, page, d.region, d.blockTypeSlug);
           validateFields(bts[0].fieldsSchema as FieldDefinition[] | undefined, d.fields ?? {}, "", { requireRequired: false });
-          const block = await db.insert("cms_blocks", { typeId: bts[0].id, fields: d.fields ?? {} });
+          const cleanDefault = await sanitizeFields(bts[0].fieldsSchema as FieldDefinition[] | undefined, d.fields ?? {});
+          const block = await db.insert("cms_blocks", { typeId: bts[0].id, fields: cleanDefault });
           const position = await nextPosition(db, String(page.id), d.region);
           await db.insert("cms_page_blocks", { pageId: page.id, blockId: block.id, region: d.region, position });
         } catch (e) {
@@ -1140,11 +1180,12 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       const bt = await loadBlockTypeBySlug(db, input.blockTypeSlug);
       await assertRegionAllows(db, page, input.region, input.blockTypeSlug);
       validateFields(bt.fieldsSchema as FieldDefinition[] | undefined, input.fields ?? {}, "", { requireRequired: false });
+      const cleanFields = await sanitizeFields(bt.fieldsSchema as FieldDefinition[] | undefined, input.fields ?? {});
 
       const block = await db.insert("cms_blocks", {
         typeId: bt.id,
         title: input.title ?? null,
-        fields: input.fields ?? {},
+        fields: cleanFields,
         isReusable: input.isReusable ?? false,
       });
       const position = input.position ?? (await nextPosition(db, input.pageId, input.region));
@@ -1184,8 +1225,10 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       const bts = await db.find({ from: "cms_block_types", where: { id: block.typeId }, limit: 1 });
       const slug = String(bts[0]?.slug ?? "");
       await assertRegionAllows(db, page, input.region, slug);
+      let cleanOverrides: Record<string, unknown> | null = input.overrides ?? null;
       if (input.overrides !== undefined) {
         validateFields(bts[0]?.fieldsSchema as FieldDefinition[] | undefined, { ...asObj(block.fields), ...input.overrides }, "", { requireRequired: false });
+        cleanOverrides = await sanitizeFields(bts[0]?.fieldsSchema as FieldDefinition[] | undefined, input.overrides);
       }
       const position = input.position ?? (await nextPosition(db, input.pageId, input.region));
       return db.insert("cms_page_blocks", {
@@ -1194,7 +1237,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
         region: input.region,
         position,
         isShared: true,
-        overrides: input.overrides ?? null,
+        overrides: cleanOverrides,
       });
     }, {
       ...editor,
@@ -1226,12 +1269,14 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       const rows = await db.find({ from: "cms_blocks", where: { id: input.blockId }, limit: 1 });
       const block = rows[0];
       if (!block) throw notFound("block");
+      let cleanFields = input.fields;
       if (input.fields !== undefined) {
         const bt = await db.find({ from: "cms_block_types", where: { id: block.typeId }, limit: 1 });
         validateFields(bt[0]?.fieldsSchema as FieldDefinition[] | undefined, input.fields, "", { requireRequired: false });
+        cleanFields = await sanitizeFields(bt[0]?.fieldsSchema as FieldDefinition[] | undefined, input.fields);
       }
       const patch: Record<string, unknown> = { updatedAt: nowStamp() };
-      if (input.fields !== undefined) patch.fields = input.fields;
+      if (cleanFields !== undefined) patch.fields = cleanFields;
       if (input.title !== undefined) patch.title = input.title;
       return db.update("cms_blocks", input.blockId, patch);
     }, {
