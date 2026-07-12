@@ -1,6 +1,6 @@
 {
   "name": "@pramen/server",
-  "version": "0.0.20",
+  "version": "0.0.21",
   "description": "pramen server runtime — schema, ACL, ORM, live queries, files, and the createPramen(app) factory for Cloudflare Workers + Durable Objects.",
   "license": "MIT",
   "repository": {
