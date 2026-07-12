@@ -1,7 +1,7 @@
 // Schema-driven field forms: one input per FieldDefinition type, recursively composed for
 // group/repeater. Media fields open a picker (upload + choose from the library).
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Api } from "./api";
 import type { FieldDefinition, Media } from "./types";
 
@@ -32,12 +32,20 @@ function FieldInput({ def, value, onChange, api }: { def: FieldDefinition; value
         </label>
       );
     case "textarea":
-    case "richtext":
       return (
         <label className="field">
           {label}
           <textarea value={typeof value === "string" ? value : value == null ? "" : JSON.stringify(value)} onChange={(e) => onChange(e.target.value)} />
         </label>
+      );
+    case "richtext":
+      // A rich-text value is an HTML string (round-trips with the site's set:html
+      // renderers). A legacy object value isn't editable here — fall back to raw text.
+      return (
+        <div className="field">
+          {label}
+          <RichText value={typeof value === "string" ? value : ""} onChange={onChange as (v: string) => void} />
+        </div>
       );
     case "number":
       return (
@@ -96,6 +104,98 @@ function FieldInput({ def, value, onChange, api }: { def: FieldDefinition; value
     default:
       return null;
   }
+}
+
+// --- rich text (WYSIWYG) --------------------------------------------------------------
+// A dependency-free contentEditable editor. Emits an HTML string, so it round-trips with
+// existing rich_text content and every set:html renderer — no value migration, no bundled
+// ProseMirror. TipTap is the upgrade path if tables/embeds are ever needed.
+
+const RT_TOOLS: Array<{ label: string; title: string; run: (exec: (c: string, a?: string) => void) => void }> = [
+  { label: "B", title: "Bold", run: (x) => x("bold") },
+  { label: "I", title: "Italic", run: (x) => x("italic") },
+  { label: "H2", title: "Heading", run: (x) => x("formatBlock", "H2") },
+  { label: "H3", title: "Subheading", run: (x) => x("formatBlock", "H3") },
+  { label: "¶", title: "Paragraph", run: (x) => x("formatBlock", "P") },
+  { label: "• List", title: "Bulleted list", run: (x) => x("insertUnorderedList") },
+  { label: "1. List", title: "Numbered list", run: (x) => x("insertOrderedList") },
+  { label: "Link", title: "Add link", run: (x) => {
+    const raw = window.prompt("Link URL (https://, mailto:, /path)", "https://");
+    if (!raw) return;
+    const url = safeLinkUrl(raw);
+    if (!url) { window.alert("Only http(s), mailto, tel, or relative (/, #) links are allowed."); return; }
+    x("createLink", url);
+  } },
+  { label: "Unlink", title: "Remove link", run: (x) => x("unlink") },
+  { label: "Clear", title: "Clear formatting", run: (x) => x("removeFormat") },
+];
+
+/** Allow-list for a link href: http(s), mailto, tel, or a relative/anchor path.
+ * The prefix allow-list inherently rejects `javascript:`/`data:`/`vbscript:` (they
+ * don't match), so a bare script URL never reaches execCommand. */
+function safeLinkUrl(raw: string): string | null {
+  const url = raw.trim();
+  return /^(https?:\/\/|mailto:|tel:|\/|#)/i.test(url) ? url : null;
+}
+
+/** NOTE: this is cosmetic paste-cleaning, NOT a security boundary. It cannot be relied
+ * on for XSS defense — an editor-role caller can POST any `richtext` value straight to
+ * the RPC handler, never touching this editor. Stored-XSS is prevented on the SERVER by
+ * sanitizeRichText() in @pramen/cms on write (which also covers raw writes / imports).
+ * Here we just tidy obviously-unwanted markup so the editor doesn't render junk. */
+function scrubHtml(html: string): string {
+  return html
+    .replace(/<\s*(script|style)[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi, "")
+    .replace(/\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "")
+    .replace(/(href|src)\s*=\s*("javascript:[^"]*"|'javascript:[^']*')/gi, '$1="#"');
+}
+
+export function RichText({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const last = useRef<string>("");
+
+  // Sync only EXTERNAL changes (e.g. switching blocks) into the DOM — never on our own
+  // keystrokes, or the caret jumps to the start on every character.
+  useEffect(() => {
+    const el = ref.current;
+    if (el && value !== last.current) {
+      // Scrub on load too — content may have entered the store via raw writes or imports,
+      // not just this editor. contentEditable requires innerHTML; scrubHtml strips
+      // scripts / inline handlers / javascript: URLs first.
+      el.innerHTML = scrubHtml(value || "");
+      last.current = value || "";
+    }
+  }, [value]);
+
+  const emit = () => {
+    const html = scrubHtml(ref.current?.innerHTML ?? "");
+    last.current = html;
+    onChange(html);
+  };
+  const exec = (command: string, arg?: string) => {
+    ref.current?.focus();
+    document.execCommand(command, false, arg);
+    emit();
+  };
+  // Paste as plain text — avoids importing Word/Docs style-junk into the HTML.
+  const onPaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    document.execCommand("insertText", false, e.clipboardData.getData("text/plain"));
+  };
+
+  return (
+    <div className="rt">
+      <div className="rt-toolbar">
+        {RT_TOOLS.map((t) => (
+          // preventDefault on mousedown keeps the editor's selection while the button is clicked.
+          <button key={t.label} type="button" className="sm ghost" title={t.title} onMouseDown={(e) => e.preventDefault()} onClick={() => t.run(exec)}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+      <div ref={ref} className="rt-editor" contentEditable suppressContentEditableWarning data-placeholder="Write…" onInput={emit} onBlur={emit} onPaste={onPaste} />
+    </div>
+  );
 }
 
 function Repeater({ def, value, onChange, api, label }: { def: FieldDefinition; value: Record<string, unknown>[]; onChange: (v: unknown[]) => void; api: Api; label: React.ReactNode }) {
@@ -195,7 +295,9 @@ export function MediaPicker({ api, onClose, onPick }: { api: Api; onClose: () =>
   return (
     <div className="scrim" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2>Media library</h2>
+        <h2>
+          Choose <span className="dim">a file</span> from the library
+        </h2>
         {err ? <div className="banner err">{err}</div> : null}
         <label className="field">
           <span className="lbl">Upload a new file</span>

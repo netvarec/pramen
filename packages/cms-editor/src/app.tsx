@@ -64,21 +64,21 @@ function Editor({ api, cfg, onReconfigure }: { api: Api; cfg: Config; onReconfig
         <span className="brand">
           pramen <span className="dim">· cms</span>
         </span>
-        <nav className="tabs" style={{ margin: 0 }}>
-          <button className={view === "pages" ? "on" : "ghost"} onClick={() => { setView("pages"); setCurrent(null); }}>
-            Pages
-          </button>
-          <button className={view === "media" ? "on" : "ghost"} onClick={() => setView("media")}>
-            Media
-          </button>
-        </nav>
         {view === "pages" && current ? (
           <span className="crumb">
             <a onClick={() => setCurrent(null)}>Pages</a> / <b>{current.title}</b>
           </span>
         ) : null}
         <span className="grow" />
-        <span className="muted">{cfg.tenant}</span>
+        <nav className="tabs nav" style={{ margin: 0 }}>
+          <button className={view === "pages" ? "on" : ""} onClick={() => { setView("pages"); setCurrent(null); }}>
+            Pages
+          </button>
+          <button className={view === "media" ? "on" : ""} onClick={() => setView("media")}>
+            Media
+          </button>
+        </nav>
+        <span className="muted" style={{ marginLeft: 12 }}>{cfg.tenant}</span>
         <button className="ghost sm" onClick={onReconfigure}>
           sign out
         </button>
@@ -98,26 +98,36 @@ function Editor({ api, cfg, onReconfigure }: { api: Api; cfg: Config; onReconfig
 function PageList({ api, pages, blockTypes, onOpen, onCreated, onError }: { api: Api; pages: Page[]; blockTypes: BlockType[]; onOpen: (p: Page) => void; onCreated: () => void; onError: (s: string) => void }) {
   const [creating, setCreating] = useState(false);
   return (
-    <div style={{ padding: 20, maxWidth: 780, margin: "0 auto" }}>
-      <div style={{ display: "flex", alignItems: "center", marginBottom: 12 }}>
-        <h2 style={{ margin: 0, flex: 1 }}>Pages</h2>
-        <button className="primary" onClick={() => setCreating(true)}>
-          + New page
-        </button>
+    <>
+      <div className="hero">
+        <h1 className="hero-h">
+          <span className="lead">Pages</span>
+          <span className="em">{pages.length === 0 ? "None yet" : pages.length === 1 ? "1 page total" : `${pages.length} pages total`}</span>
+        </h1>
+        <div className="cta">
+          <span className="cta-text">
+            Let&apos;s <span className="em">create</span> something
+          </span>
+          <button className="primary" onClick={() => setCreating(true)}>
+            + New page
+          </button>
+        </div>
       </div>
-      <div className="list">
-        {pages.map((p) => (
-          <div className="row" key={p.id} onClick={() => onOpen(p)}>
-            <span className="grow">{p.title}</span>
-            <span className="muted">/{p.slug}</span>
-            <span className="muted">{p.locale}</span>
-            <span className={`pill ${p.status}`}>{p.status}</span>
-          </div>
-        ))}
-        {pages.length === 0 ? <p className="muted">No pages yet. {blockTypes.length === 0 ? "Define block types + a content type first (via the API/admin)." : "Create one."}</p> : null}
+      <div className="list-wrap">
+        <div className="list">
+          {pages.map((p) => (
+            <div className="row" key={p.id} onClick={() => onOpen(p)}>
+              <span className="grow">{p.title}</span>
+              <span className="muted">/{p.slug}</span>
+              <span className="muted">{p.locale}</span>
+              <span className={`pill ${p.status}`}>{p.status}</span>
+            </div>
+          ))}
+          {pages.length === 0 ? <p className="muted">No pages yet. {blockTypes.length === 0 ? "Define block types + a content type first (via the API/admin)." : "Create one."}</p> : null}
+        </div>
       </div>
       {creating ? <CreatePage api={api} onClose={() => setCreating(false)} onCreated={() => { setCreating(false); onCreated(); }} onError={onError} /> : null}
-    </div>
+    </>
   );
 }
 
@@ -140,7 +150,9 @@ function CreatePage({ api, onClose, onCreated, onError }: { api: Api; onClose: (
   return (
     <div className="scrim" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2>New page</h2>
+        <h2>
+          Create a <span className="dim">new page</span> and define the essentials<span className="dim">.</span>
+        </h2>
         <label className="field">
           <span className="lbl">Content type</span>
           <select value={typeId} onChange={(e) => setTypeId(e.target.value)}>
@@ -334,10 +346,9 @@ function BlockInspector({ api, block, blockType, onClose, onSaved, onError }: { 
   };
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center" }}>
-        <b className="btype" style={{ flex: 1, color: "var(--spring)", fontFamily: "var(--mono)" }}>
-          {block.block_type}
-        </b>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span className="btype">{block.block_type}</span>
+        <span style={{ flex: 1 }} />
         <button className="ghost sm" onClick={onClose}>
           done
         </button>
@@ -537,14 +548,23 @@ function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) => void
   };
 
   return (
-    <div className="media-lib">
-      <div className="media-toolbar">
-        <h2 style={{ margin: 0, flex: 1 }}>Media</h2>
-        <label className={`btn primary${busy ? " disabled" : ""}`}>
-          {busy ? "Uploading…" : "+ Upload"}
-          <input type="file" multiple hidden disabled={busy} onChange={(e) => { upload(e.target.files); e.target.value = ""; }} />
-        </label>
+    <>
+      <div className="hero">
+        <h1 className="hero-h">
+          <span className="lead">Media</span>
+          <span className="em">{media.length === 0 ? "None yet" : media.length === 1 ? "1 file" : `${media.length}${hasMore ? "+" : ""} files`}</span>
+        </h1>
+        <div className="cta">
+          <span className="cta-text">
+            Let&apos;s <span className="em">upload</span> something
+          </span>
+          <label className={`btn primary${busy ? " disabled" : ""}`}>
+            {busy ? "Uploading…" : "+ Upload"}
+            <input type="file" multiple hidden disabled={busy} onChange={(e) => { upload(e.target.files); e.target.value = ""; }} />
+          </label>
+        </div>
       </div>
+      <div className="media-lib">
       {media.length === 0 ? (
         <p className="muted">No media yet. Upload images to use them in blocks and SEO.</p>
       ) : (
@@ -574,7 +594,8 @@ function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) => void
           onError={onError}
         />
       ) : null}
-    </div>
+      </div>
+    </>
   );
 }
 
@@ -610,7 +631,9 @@ function MediaDetail({ api, media, onClose, onSaved, onDeleted, onError }: { api
   return (
     <div className="scrim" onClick={onClose}>
       <div className="modal media-detail" onClick={(e) => e.stopPropagation()}>
-        <h2>{media.file.filename ?? "Media"}</h2>
+        <h2>
+          <span className="dim">Media</span> {media.file.filename ?? ""}
+        </h2>
         {isImage(media) ? <img src={url} alt={media.alt ?? ""} /> : <div className="ext lg">{ext(media)}</div>}
         <label className="field">
           <span className="lbl">Alt text (for accessibility &amp; SEO)</span>
