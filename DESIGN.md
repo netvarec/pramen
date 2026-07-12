@@ -415,6 +415,14 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
       columns remain). Unit-tested against real SQLite (`test/migrate.test.ts`); create+PRAGMA path
       exercised on the real DO by the e2e boot. Next: destructive/explicit migrations, column rename
       detection, a `_pramen_meta` schema-version log.
+- [x] Bootstrap (code-defined reference data): `app.bootstrap: BootstrapFn[]` runs once after
+      `migrate()` on each boot (DO first-fetch and D1 isolate init) with a privileged system `Db`,
+      so a schema can converge reference rows — content types, block types, roles, feature flags —
+      that the repo owns but the framework stores as data. Idempotent by contract (upsert, not
+      blind-insert); a throwing reconciler is logged, never fatal (unlike `migrate`); the DO path
+      runs default-partition only (where such data lives). `@pramen/cms` layers `defineContentType`/
+      `defineBlockType` + `cmsBootstrap` (upsert-by-slug) on top. Covered by `test/bootstrap.test.ts`
+      (reconcile semantics) + the e2e cms suite (a fresh tenant is pre-seeded on boot).
 - [x] Query expressiveness: operators (`eq`/`ne`/`gt`/`gte`/`lt`/`lte`/`in`/`notIn`/`like`/`isNull`),
       nestable `AND`/`OR` groups, multi-column `orderBy`, and `limit`/`offset` pagination. The `SqlExpr`
       AST + `compileWhere` (`runtime/read-engine.ts`) handle it; `WhereInput<F>` types operators per

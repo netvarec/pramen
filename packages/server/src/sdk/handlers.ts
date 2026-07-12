@@ -3,6 +3,7 @@
 // rolls back on throw (see runtime/dispatch.ts).
 
 import type { Db } from "../runtime/db";
+import type { Driver } from "../runtime/driver";
 import type { Kv } from "../runtime/kv";
 import type { Mail } from "../runtime/mail";
 import type { Queue } from "../runtime/queue";
@@ -44,6 +45,28 @@ export interface HandlerContext<S extends SchemaDef = SchemaDef> {
    * Declare queues in oblaka.ts; consume them via `app.queues`. */
   readonly queue: Queue;
 }
+
+/** Context handed to each `app.bootstrap` function. A privileged, SYSTEM-scoped `Db` (ACL
+ * bypassed) plus the raw driver, available once schema migration has run on boot. Use it to
+ * reconcile CODE-DEFINED reference data — content types, block types, roles, feature flags —
+ * into the store, so a fresh / reprovisioned database converges to what the repo declares
+ * instead of depending on rows someone created by hand. */
+export interface BootstrapContext<S extends SchemaDef = SchemaDef> {
+  /** System-scoped Db (ACL bypassed), scoped to `partition`. */
+  readonly db: Db<S>;
+  /** Raw driver — for `driver.transaction(...)` or bespoke SQL. */
+  readonly driver: Driver;
+  readonly schema: S;
+  /** The partition being booted. On the DO path bootstrap runs ONLY for the default
+   * partition (reference data lives there); on the D1 path it is always the default. */
+  readonly partition: string;
+}
+
+/** An idempotent reconcile run once after `migrate()` on each boot (a DO's first fetch, or a
+ * Worker/D1 isolate init). It MUST be safe to run repeatedly — upsert by a stable key, never
+ * blind-insert. A thrown error is logged and swallowed so a broken reconcile can't brick a
+ * tenant's boot; it simply retries on the next boot. Set as `app.bootstrap`. */
+export type BootstrapFn = (ctx: BootstrapContext) => void | Promise<void>;
 
 /** The deferred-side-effects facade handed to handlers as `ctx.tasks`. */
 export interface Tasks {

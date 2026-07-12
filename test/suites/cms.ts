@@ -24,6 +24,21 @@ export async function runCms(base: string): Promise<void> {
   const admin = await token("cms-admin", ["admin"]);
   const slug = "about-us";
 
+  // --- app.bootstrap: a fresh tenant is already seeded with code-defined types on boot ---
+  // example/app.ts registers cmsBootstrap({ contentTypes: [seeded_doc], blockTypes: [seeded_note] }).
+  // Before this suite creates anything, those must already exist — proving the server ran
+  // app.bootstrap after migrating this tenant's store (no createContentType call was made).
+  const seededCts = await call("listContentTypes", {}, admin);
+  assert(
+    seededCts.body.ok && (seededCts.body.result as Array<{ slug: string }>).some((c) => c.slug === "seeded_doc"),
+    "cms: app.bootstrap seeded the 'seeded_doc' content type on boot (no manual create)",
+  );
+  const seededBts = await call("listBlockTypes", {}, admin);
+  assert(
+    seededBts.body.ok && (seededBts.body.result as Array<{ slug: string }>).some((b) => b.slug === "seeded_note"),
+    "cms: app.bootstrap seeded the 'seeded_note' block type on boot",
+  );
+
   // --- editor auth: an anonymous caller cannot create block types ---
   const anonCreate = await call("createBlockType", { name: "X", slug: "x" });
   assert(anonCreate.status === 403 && anonCreate.body.ok === false, "cms: anonymous cannot create a block type (403)");

@@ -208,6 +208,13 @@ log) for independent single-writer serialization and storage.
   on an actual value CHANGE; `hidden()` columns are stripped from the payload; raw
   `ctx.db.exec` and task-handler writes (suppressTriggers) don't fire triggers (no
   cascade); `createPramen` rejects a trigger whose `task` has no `app.tasks` handler.
+- Bootstrap (code-defined reference data): `app.bootstrap: BootstrapFn[]` runs once after
+  schema migration on each boot (DO first-fetch / D1 isolate init) with a privileged system
+  `Db` — converge code-declared reference data (content types, block types, roles, flags)
+  into the store so a fresh/reprovisioned DB matches the repo, no manual seeding. Idempotent
+  (upsert, don't blind-insert); a throw is logged, never fatal; DO path runs default-partition
+  only. `@pramen/cms` ships `defineContentType`/`defineBlockType` + `cmsBootstrap({ blockTypes,
+  contentTypes })` (upsert-by-slug) — see `example/app.ts`.
 - Native queues: `ctx.queue.send(binding, body, { delaySeconds?, contentType? })` /
   `sendBatch(binding, msgs, opts?)` (`runtime/queue.ts`) — a facade + adapter seam (like
   `ctx.mail`) over **Cloudflare Queues**, distinct from `ctx.tasks` (NOT transactional with

@@ -42,7 +42,7 @@ import {
   Forbidden,
   PramenError,
 } from "@pramen/server";
-import type { HandlerContext, Policy, FileRef } from "@pramen/server";
+import type { HandlerContext, Policy, FileRef, BootstrapFn } from "@pramen/server";
 import { filterXSS } from "xss";
 
 // --- field schema DSL (the block-editor field language) ---------------------
@@ -158,6 +158,109 @@ export function defineBlockType<S extends string, F extends readonly FieldDefini
 
 /** The inferred `fields` type of a `defineBlockType` result. */
 export type BlockFieldsOf<D extends BlockTypeDef> = InferBlockFields<D["fieldsSchema"]>;
+
+// --- code-defined content types + bootstrap reconcile ---------------------------------
+//
+// Block/content types are runtime rows (a webmaster can add one with no deploy), but a repo
+// that hard-depends on a fixed shape (e.g. an Astro site whose build fails unless an
+// `article` type with certain fields exists) wants them CODE-DEFINED and auto-applied. These
+// helpers let you declare types in code and converge them into the store on boot via pramen's
+// `app.bootstrap` — so a fresh / reprovisioned database has them without a manual
+// createContentType/createBlockType call.
+
+/** A developer-authored content type: a page template. Page-level `fields`, named `regions`
+ * (each with an optional block-type allow-list), and optional `defaultBlocks` scaffolded when
+ * a page of this type is created. Mirror of `BlockTypeDef`; feed to `cmsBootstrap`. */
+export interface ContentTypeDef {
+  readonly slug: string;
+  readonly name: string;
+  readonly description?: string;
+  readonly fields?: readonly FieldDefinition[];
+  readonly regions: readonly RegionDefinition[];
+  readonly defaultBlocks?: readonly DefaultBlockDefinition[];
+}
+
+/** Declare a content type in code. Spread the result into `cmsBootstrap({ contentTypes })`:
+ *
+ *   const article = defineContentType("article", {
+ *     name: "Article",
+ *     fields: [{ name: "perex", type: "textarea" }, { name: "date", type: "date" }],
+ *     regions: [{ name: "content", allowedTypes: ["rich_text", "image"] }],
+ *   }); */
+export function defineContentType(
+  slug: string,
+  opts: {
+    name?: string;
+    description?: string;
+    fields?: readonly FieldDefinition[];
+    regions: readonly RegionDefinition[];
+    defaultBlocks?: readonly DefaultBlockDefinition[];
+  },
+): ContentTypeDef {
+  return { slug, name: opts.name ?? slug, description: opts.description, fields: opts.fields, regions: opts.regions, defaultBlocks: opts.defaultBlocks };
+}
+
+/** The narrow slice of the system Db a reconcile needs. `cmsBootstrap` runs with a SYSTEM
+ * Db (ACL bypassed), so these calls are unrestricted; kept loose to avoid threading the
+ * host app's schema generic through a library helper. */
+interface ReconcileDb {
+  find(q: { from: string; where?: Record<string, unknown>; limit?: number }): Promise<Record<string, unknown>[]>;
+  insert(table: string, values: Record<string, unknown>): Promise<unknown>;
+  update(table: string, id: string, patch: Record<string, unknown>): Promise<unknown>;
+}
+
+const sameJson = (a: unknown, b: unknown): boolean => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+
+/** Insert `values` if no row has this `slug`, else patch only the columns that drifted
+ * (never `id`/`slug`/`createdAt`). Idempotent — an identical definition is a no-op. */
+async function upsertBySlug(db: ReconcileDb, table: string, slug: string, values: Record<string, unknown>): Promise<void> {
+  const existing = (await db.find({ from: table, where: { slug }, limit: 1 }))[0];
+  if (!existing) {
+    await db.insert(table, values);
+    return;
+  }
+  const patch: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(values)) {
+    if (k === "slug") continue;
+    if (!sameJson(existing[k], v)) patch[k] = v;
+  }
+  if (Object.keys(patch).length) await db.update(table, String(existing.id), patch);
+}
+
+/** Build a pramen `bootstrap` reconciler that upserts code-defined block + content types by
+ * `slug` on each boot. Idempotent: inserts a missing type, updates a drifted one, leaves an
+ * identical one untouched. Register it on your app:
+ *
+ *   export const app = { schema, handlers, acl, tasks,
+ *     bootstrap: [ cmsBootstrap({ blockTypes: [...], contentTypes: [...] }) ] };
+ *
+ * Runs with a privileged system Db, so a fresh/reprovisioned database converges to the
+ * code-declared types with no manual createContentType/createBlockType call. */
+export function cmsBootstrap(defs: { blockTypes?: readonly BlockTypeDef[]; contentTypes?: readonly ContentTypeDef[] }): BootstrapFn {
+  return async ({ db }) => {
+    const sys = db as unknown as ReconcileDb;
+    for (const bt of defs.blockTypes ?? []) {
+      await upsertBySlug(sys, "cms_block_types", bt.slug, {
+        name: bt.name,
+        slug: bt.slug,
+        description: bt.description ?? null,
+        fieldsSchema: bt.fieldsSchema ?? [],
+        icon: bt.icon ?? null,
+        category: bt.category ?? null,
+      });
+    }
+    for (const ct of defs.contentTypes ?? []) {
+      await upsertBySlug(sys, "cms_content_types", ct.slug, {
+        name: ct.name,
+        slug: ct.slug,
+        description: ct.description ?? null,
+        fieldsSchema: ct.fields ?? [],
+        regions: ct.regions ?? [],
+        defaultBlocks: ct.defaultBlocks ?? [],
+      });
+    }
+  };
+}
 
 // --- codegen: emit .ts field interfaces from DB-stored block schemas ------------------
 //

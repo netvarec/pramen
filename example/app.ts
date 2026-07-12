@@ -40,7 +40,7 @@ import {
   authPolicies,
 } from "@pramen/auth";
 // @pramen/cms — the block/page builder, wired as an ordinary app fragment.
-import { cmsSchema, cmsHandlers, cmsPolicies, cmsTasks, cmsRoutes } from "@pramen/cms";
+import { cmsSchema, cmsHandlers, cmsPolicies, cmsTasks, cmsRoutes, defineBlockType, defineContentType, cmsBootstrap } from "@pramen/cms";
 
 // Reusable write rule: force ownerId to the authenticated caller (a client cannot
 // forge it), even if the request body tries to set a different owner.
@@ -669,4 +669,24 @@ const queues = {
   },
 };
 
-export const app = { schema, handlers, acl, routes, tasks, queues };
+// @pramen/cms code-defined types: declare block + content types in code and have every
+// tenant's store converge to them on boot (no manual createContentType). Distinct slugs so
+// they don't collide with the ones the cms e2e suite creates over RPC. The suite asserts a
+// fresh tenant is already seeded with `seeded_doc` before it creates anything — proving the
+// server invokes app.bootstrap after migration on boot.
+const seededNote = defineBlockType("seeded_note", [{ name: "body", type: "richtext" }] as const, { name: "Seeded Note" });
+const seededDoc = defineContentType("seeded_doc", {
+  name: "Seeded Doc",
+  fields: [{ name: "summary", type: "textarea" }],
+  regions: [{ name: "content", allowedTypes: ["seeded_note"] }],
+});
+
+export const app = {
+  schema,
+  handlers,
+  acl,
+  routes,
+  tasks,
+  queues,
+  bootstrap: [cmsBootstrap({ blockTypes: [seededNote], contentTypes: [seededDoc] })],
+};

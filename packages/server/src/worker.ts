@@ -191,11 +191,30 @@ export function makeWorker(app: PramenApp) {
   // its own). Schema migration over D1 runs once per isolate (and short-circuits on a
   // stored schema hash thereafter); a failed run is not cached.
   const d1Acl = compileAcl(app.acl ?? []);
+
+  // Converge code-defined reference data on the D1 path — the mirror of the DO's
+  // runBootstrap(), run once per isolate after migration. D1 is a single shared store (no
+  // partition split), so every reconciler runs under the default partition. SYSTEM-scoped
+  // Db (ACL bypassed), triggers suppressed; a failing reconciler is logged, never fatal.
+  const runBootstrapD1 = async (driver: Driver): Promise<void> => {
+    const fns = app.bootstrap;
+    if (!fns?.length) return;
+    const db = new Db(driver, { acl: d1Acl, identity: { roles: ["admin"] }, system: true, schema: app.schema, suppressTriggers: true }, app.schema);
+    for (const fn of fns) {
+      try {
+        await driver.transaction(() => Promise.resolve(fn({ db, driver, schema: app.schema, partition: DEFAULT_PARTITION })));
+      } catch (e) {
+        console.error("[pramen] bootstrap failed (d1):", e);
+      }
+    }
+  };
+
   let d1Ready: Promise<void> | undefined;
   const ensureD1Migrated = (driver: Driver, allowDestructive: boolean): Promise<void> => {
     if (!d1Ready) {
       d1Ready = migrate(driver, app.schema, { allowDestructive })
         .then(() => ensureOutbox(driver)) // the deferred-tasks table also lives in D1
+        .then(() => runBootstrapD1(driver)) // converge code-defined reference data
         .then(() => undefined)
         .catch((e) => {
           d1Ready = undefined;
