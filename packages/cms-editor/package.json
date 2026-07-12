@@ -1,6 +1,6 @@
 {
   "name": "@pramen/cms-editor",
-  "version": "0.0.18",
+  "version": "0.0.19",
   "description": "Visual block/page editor for @pramen/cms — a standalone React SPA that talks to the CMS handlers over HTTP.",
   "license": "MIT",
   "repository": {
