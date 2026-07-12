@@ -149,6 +149,12 @@ export async function runCms(base: string): Promise<void> {
   assert(pub.body.result.regions.hero[0].fields.heading === "About Us", "cms: hero block fields are present");
   assert(pub.body.result.regions.content.length === 2, "cms: published content region carries both rich_text blocks");
   assert(pub.body.result.page.status === "published", "cms: snapshot reports published status");
+  assert(pub.body.result.page.contentType === "article", "cms: content API exposes the page's content-type slug");
+  const pubList = await call("listPublishedPages", {});
+  assert(
+    pubList.body.ok && (pubList.body.result as Array<{ slug: string; contentType: string | null }>).some((p) => p.slug === slug && p.contentType === "article"),
+    "cms: listPublishedPages carries the content-type slug for type-filtered collections",
+  );
 
   // --- reordering a region ---
   const placements = pub.body.result.regions.content.map((b: { id: string }) => b.id);

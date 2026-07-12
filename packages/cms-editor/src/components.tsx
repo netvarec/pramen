@@ -379,6 +379,26 @@ function Workflow({ api, page, onChanged, onError }: { api: Api; page: Page; onC
       onError(errMsg(e));
     }
   };
+  // Show only the transitions valid FROM the current status, so a draft never surfaces a
+  // primary "Approve" that the server rejects (approve requires status === "review"). The
+  // server still enforces role gates; this just stops the UI from offering dead-end actions.
+  // `publish` = publishPage (any → published, reviewer/admin) — the one-click path for a solo
+  // operator; `approve` is the reviewer step of the two-actor review pipeline.
+  const status = String(page.status);
+  const buttons: Array<{ label: string; action: string; variant?: "secondary" | "ghost" }> =
+    status === "review"
+      ? [
+          { label: "Approve (publish)", action: "approve" },
+          { label: "Reject", action: "reject", variant: "secondary" },
+          { label: "Publish directly", action: "publishPage", variant: "secondary" },
+        ]
+      : status === "published"
+        ? [{ label: "Unpublish", action: "unpublishPage", variant: "secondary" }]
+        : // draft | rejected | archived
+          [
+            { label: "Publish", action: "publishPage" },
+            { label: "Submit for review", action: "submitForReview", variant: "secondary" },
+          ];
   return (
     <div>
       <Section>Workflow</Section>
@@ -387,13 +407,11 @@ function Workflow({ api, page, onChanged, onError }: { api: Api; page: Page; onC
         <Pill status={page.status}>{page.status}</Pill>
       </div>
       <div className="flex flex-col gap-2">
-        <Button variant="secondary" onPress={() => act("submitForReview")}>Submit for review</Button>
-        <Button onPress={() => act("approve")}>Approve (publish)</Button>
-        <Button variant="secondary" onPress={() => act("reject")}>Reject</Button>
-        <Button variant="secondary" onPress={() => act("publishPage")}>Publish directly</Button>
-        <Button variant="ghost" onPress={() => act("unpublishPage")}>Unpublish</Button>
+        {buttons.map((b) => (
+          <Button key={b.action} variant={b.variant} onPress={() => act(b.action)}>{b.label}</Button>
+        ))}
       </div>
-      <p className="mt-2.5 text-fg-subtle">Submit is editor-gated; approve/publish are reviewer-gated.</p>
+      <p className="mt-2.5 text-fg-subtle">Publish needs a reviewer/admin role; submit-for-review is editor-gated.</p>
     </div>
   );
 }

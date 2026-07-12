@@ -37,6 +37,8 @@ export interface AssembledPage {
     slug: string;
     status: string;
     locale: string;
+    /** The page's content-type slug (e.g. "article", "page"). `null` if unknown. */
+    contentType: string | null;
     translationGroupId: string | null;
     translations: { locale: string; slug: string }[];
     fields: Record<string, unknown> | null;
@@ -50,6 +52,8 @@ export interface AssembledPage {
 export interface PublishedPageRef {
   slug: string;
   locale: string;
+  /** Content-type slug — lets a loader filter to one type (see `CmsLoaderOptions.type`). */
+  contentType: string | null;
   updatedAt: string;
 }
 
@@ -102,6 +106,9 @@ export interface CmsLoaderOptions {
   client: CmsClient;
   /** Restrict to one locale (else every published page of every locale is loaded). */
   locale?: string;
+  /** Restrict to one content-type slug (e.g. "article" or "page"), so separate collections
+   * can each load their own type. Omit to load every type. */
+  type?: string;
   /**
    * Map an AssembledPage to the entry `data` stored in the collection. Default flattens the
    * page's own `fields` up to the top level and adds `title/slug/locale/seo/regions/blocks`
@@ -117,6 +124,7 @@ const defaultTransform = (p: AssembledPage): Record<string, unknown> => {
     title: p.page.title,
     slug: p.page.slug,
     locale: p.page.locale,
+    contentType: p.page.contentType,
     status: p.page.status,
     seo: p.page.seo ?? null,
     translations: p.page.translations,
@@ -136,7 +144,7 @@ export function cmsLoader(opts: CmsLoaderOptions): Loader {
     name: "@pramen/cms",
     async load({ store, logger, parseData, generateDigest }: LoaderContext): Promise<void> {
       const refs = await opts.client.listPublishedPages();
-      const wanted = opts.locale ? refs.filter((r) => r.locale === opts.locale) : refs;
+      const wanted = refs.filter((r) => (opts.locale ? r.locale === opts.locale : true) && (opts.type ? r.contentType === opts.type : true));
       store.clear();
       let loaded = 0;
       for (const ref of wanted) {
