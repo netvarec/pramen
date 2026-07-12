@@ -95,6 +95,8 @@ export async function runUserManagement(base: string): Promise<void> {
   // NOT resolve to that account — login keys on the immutable username, not the mutable
   // email — so this makes a separate passwordless account (no squatting / takeover, no 500).
   await call("requestMagicLink", { email: "alice@new.example.com" });
+  // the email (dev token stash) is sent from a task after commit — drain before reading it
+  await fetch(`${base}/admin/tasks/drain`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${admin}` }, body: JSON.stringify({ tenant: "main" }) });
   const mlTok = (await call("__magicInbox", { email: "alice@new.example.com" }, admin)).body.result.token;
   const mlLogin = await call("loginWithMagicLink", { token: mlTok });
   assert(

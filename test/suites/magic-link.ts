@@ -6,6 +6,17 @@
 
 import { assert, http, token } from "../lib";
 
+/** Run the outbox now: the email (and its dev token-stash in KV) is sent from the
+ * `sendMagicLinkEmail` task AFTER the requestMagicLink mutation commits, so the test must
+ * drain before reading the inbox. The DO also self-drains via an alarm; this is deterministic. */
+async function drain(base: string, admin: string): Promise<void> {
+  await fetch(`${base}/admin/tasks/drain`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${admin}` },
+    body: JSON.stringify({ tenant: "main" }),
+  });
+}
+
 export async function runMagicLink(base: string): Promise<void> {
   const call = http(base, "main"); // request/login are anonymous → the open default tenant
   const admin = await token("admin", ["admin"]); // the dev __magicInbox is admin-gated
@@ -18,6 +29,7 @@ export async function runMagicLink(base: string): Promise<void> {
   // request → always { ok: true } (same response whether or not the account exists)
   const req = await call("requestMagicLink", { email });
   assert(req.body.ok && req.body.result?.ok === true, "magic: requestMagicLink returns ok");
+  await drain(base, admin); // the email (token stash) is sent from a task after commit
 
   // read the "inbox" (dev-only handler in the example app) to get the emailed token
   const inbox = await call("__magicInbox", { email }, admin);
@@ -54,6 +66,7 @@ export async function runMagicLink(base: string): Promise<void> {
   // OLD token (already consumed above) plus any prior pending link no longer works.
   const req2 = await call("requestMagicLink", { email });
   assert(req2.body.ok, "magic: re-request returns ok");
+  await drain(base, admin);
   const inbox2 = await call("__magicInbox", { email }, admin);
   const linkToken2 = inbox2.body.result?.token as string;
   assert(linkToken2 !== linkToken, "magic: re-request mints a distinct token");

@@ -17,7 +17,7 @@
 // the token lifecycle. See createMagicLinkAuth below.
 
 import { Entity, mutation, query, defaultTo, unique, hidden, policy, allow, $identity, BadRequest, Unauthorized } from "@pramen/server";
-import type { HandlerContext, Policy } from "@pramen/server";
+import type { AppTaskMap, HandlerContext, HandlerMap, Policy } from "@pramen/server";
 
 // --- schema fragment: spread into your defineSchema so the table is migrated ---
 
@@ -277,8 +277,11 @@ export interface MagicLinkOptions {
    * On Cloudflare the recommended transport is Cloudflare Email Sending — a
    * `send_email` binding (no API keys), e.g.
    * `await (ctx.env.EMAIL as SendEmail).send({ to, from: { email, name }, subject, text, html })`
-   * (see example/app.ts + oblaka.ts). Throwing rolls back the mutation, so a delivery
-   * failure leaves no orphan token and surfaces to the caller to retry. */
+   * (see example/app.ts + oblaka.ts). Called from the `sendMagicLinkEmail` TASK, not
+   * inline in the mutation — a slow SMTP/API call can't hold the mutation's storage
+   * transaction open and time the store out. Retries follow the outbox retry policy;
+   * a permanent failure dead-letters the task and the token expires unused (users just
+   * request a new link). */
   sendEmail: (ctx: HandlerContext, args: { email: string; token: string }) => void | Promise<void>;
   /** How long the emailed link stays valid, in seconds. Default 900 (15 min). */
   linkTtlSeconds?: number;
@@ -288,15 +291,30 @@ export interface MagicLinkOptions {
   defaultRoles?: string[];
 }
 
-/** Build the `requestMagicLink` / `loginWithMagicLink` handler pair. Spread the
- * result into your handler map (and `magicLinkSchema` into your schema). Both are
- * anonymous — gate nothing; the token is the capability. */
-export function createMagicLinkAuth(opts: MagicLinkOptions) {
+/** Build the `requestMagicLink` / `loginWithMagicLink` handler pair, plus the
+ * `sendMagicLinkEmail` task handler that actually invokes `opts.sendEmail`.
+ *
+ * ```
+ * const magicLink = createMagicLinkAuth({ sendEmail: ... });
+ * const handlers = { ...cmsHandlers, ...authHandlers, ...magicLink.handlers };
+ * const tasks    = { ...cmsTasks,    ...magicLink.tasks };
+ * ```
+ *
+ * The `requestMagicLink` handler writes the token and ENQUEUES a task (atomic with
+ * the write via the transactional outbox); the drainer runs `sendMagicLinkEmail`
+ * AFTER commit, outside the mutation's storage transaction. This avoids the class
+ * of failure where a slow SMTP/API call holds the storage lock long enough for the
+ * store to time out and reset the underlying object.
+ *
+ * You MUST spread `magicLink.tasks` into your app's task map — without it, tokens
+ * get written but the email never sends (the drainer retries then dead-letters).
+ * Both handlers are anonymous — gate nothing; the token is the capability. */
+export function createMagicLinkAuth(opts: MagicLinkOptions): { handlers: HandlerMap; tasks: AppTaskMap } {
   const linkTtlMs = (opts.linkTtlSeconds ?? 900) * 1000;
   const sessionTtl = opts.sessionTtlSeconds ?? TOKEN_TTL_SECONDS;
   const defaultRoles = opts.defaultRoles ?? DEFAULT_ROLES;
 
-  return {
+  const handlers: HandlerMap = {
     requestMagicLink: mutation(
       async (ctx, input: { email: string }) => {
         const token = mintToken();
@@ -311,8 +329,11 @@ export function createMagicLinkAuth(opts: MagicLinkOptions) {
           now + linkTtlMs,
           now,
         );
-        // Inside the mutation transaction: a throw here rolls the token back.
-        await opts.sendEmail(ctx, { email: input.email, token });
+        // Defer the actual email send. Enqueue is a DB write into the outbox, so it
+        // commits atomically with the token insert. If commit fails, the task never
+        // runs. If the task fails, retries + eventual dead-letter; the token expires
+        // (linkTtl) and the user re-requests.
+        await ctx.tasks.enqueue({ kind: "sendMagicLinkEmail", payload: { email: input.email, token } });
         return { ok: true };
       },
       { input: parseEmail },
@@ -361,6 +382,15 @@ export function createMagicLinkAuth(opts: MagicLinkOptions) {
       { input: parseLinkToken },
     ),
   };
+
+  const tasks: AppTaskMap = {
+    sendMagicLinkEmail: async (ctx, payload) => {
+      const p = payload as { email: string; token: string };
+      await opts.sendEmail(ctx, { email: p.email, token: p.token });
+    },
+  };
+
+  return { handlers, tasks };
 }
 
 // --- user management ---------------------------------------------------------

@@ -159,8 +159,9 @@ const orgAccounts = createUserHandlers({ table: "org_accounts" });
 const handlers = {
   // @pramen/auth: signup / login / me (issue + use HS256 tokens, no third-party IdP).
   ...authHandlers,
-  // @pramen/auth: requestMagicLink / loginWithMagicLink (passwordless).
-  ...magicLink,
+  // @pramen/auth: requestMagicLink / loginWithMagicLink (passwordless). The email is
+  // sent from the `sendMagicLinkEmail` task (see `tasks` below), off the write path.
+  ...magicLink.handlers,
   // @pramen/auth: user management — listUsers / setUserRoles / setUserActive (admin),
   // changeEmail / changePassword (self). Gated by authPolicies() in the ACL below.
   ...userHandlers,
@@ -651,6 +652,9 @@ const tasks = {
   },
   // @pramen/cms: scheduled publish/unpublish (backing schedulePage), run off the write path.
   ...cmsTasks,
+  // @pramen/auth: sendMagicLinkEmail — invokes the app's sendEmail after commit, so a slow
+  // transport can't hold the requestMagicLink mutation's storage transaction open.
+  ...magicLink.tasks,
 };
 
 // Cloudflare Queues consumers, keyed by QUEUE name (the oblaka `Queue` name —
