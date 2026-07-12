@@ -12,9 +12,10 @@ export const css = `
   --amber:#b8863b; --amber-bg:#f1e6cf;
   --danger:#b04141; --danger-bg:#f5e2e2;
   --radius:14px; --radius-sm:10px; --radius-pill:999px;
-  --serif:"Iowan Old Style","Palatino",Georgia,"Times New Roman",serif;
   --mono:ui-monospace,"SF Mono","JetBrains Mono","Menlo",monospace;
   --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  /* Display face — system font for now (no serif). Swap in a brand font here later. */
+  --serif:var(--sans);
 }
 * { box-sizing:border-box; }
 html,body { margin:0; height:100%; }
