@@ -3,6 +3,7 @@
 // owns the pre-route config gate — when there's no base URL + token yet, it renders the
 // Setup screen instead of mounting the router at all.
 
+import { Button, Input } from "@podoba/react";
 import { createContext, use, useEffect, useMemo, useState } from "react";
 import { Api, loadConfig, saveConfig, type Config } from "./api";
 
@@ -63,26 +64,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 function Setup({ cfg, onSave }: { cfg: Config; onSave: (c: Config) => void }) {
   const [c, setC] = useState(cfg);
   return (
-    <div className="setup">
-      <h1>
-        pramen <span className="dim">· cms editor</span>
-      </h1>
-      <p className="muted">Point at your Worker and paste an editor/reviewer JWT. CORS must allow this origin (`CORS_ORIGINS`).</p>
-      <label className="field">
-        <span className="lbl">Worker base URL</span>
-        <input value={c.baseUrl} onChange={(e) => setC({ ...c, baseUrl: e.target.value })} placeholder="https://your-worker.workers.dev" />
-      </label>
-      <label className="field">
-        <span className="lbl">Tenant</span>
-        <input value={c.tenant} onChange={(e) => setC({ ...c, tenant: e.target.value })} placeholder="main" />
-      </label>
-      <label className="field">
-        <span className="lbl">Bearer token (editor or reviewer)</span>
-        <input value={c.token} onChange={(e) => setC({ ...c, token: e.target.value })} placeholder="eyJ…" />
-      </label>
-      <button className="primary" onClick={() => onSave(c)} disabled={!c.baseUrl || !c.token}>
-        Connect
-      </button>
+    <div className="mx-auto mt-[14vh] w-full max-w-[520px] px-6">
+      <div className="rounded-panel border border-border bg-surface-card px-10 py-8 shadow-[0_24px_60px_rgba(30,20,10,0.08)]">
+        <h1 className="mb-4 text-display text-fg">
+          pramen <span className="text-fg-subtle">· cms editor</span>
+        </h1>
+        <p className="mb-6 text-sm text-fg-muted">
+          Point at your Worker and paste an editor/reviewer JWT. CORS must allow this origin (<code>CORS_ORIGINS</code>).
+        </p>
+        <div className="flex flex-col gap-4">
+          <Input label="Worker base URL" value={c.baseUrl} onChange={(baseUrl) => setC({ ...c, baseUrl })} placeholder="https://your-worker.workers.dev" />
+          <Input label="Tenant" value={c.tenant} onChange={(tenant) => setC({ ...c, tenant })} placeholder="main" />
+          <Input label="Bearer token (editor or reviewer)" value={c.token} onChange={(token) => setC({ ...c, token })} placeholder="eyJ…" />
+          <Button className="mt-2 w-full" onPress={() => onSave(c)} isDisabled={!c.baseUrl || !c.token}>
+            Connect
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }

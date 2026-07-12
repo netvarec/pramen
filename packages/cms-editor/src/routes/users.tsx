@@ -3,6 +3,7 @@
 // the server enforces the ACL regardless).
 
 import { createPage, useNavigate } from "@buzola/router";
+import { Button } from "@podoba/react";
 import { useApp } from "../app-context";
 import { UsersView } from "../components";
 
@@ -12,11 +13,12 @@ export default createPage()
     const { api, me, isAdmin, setError } = useApp();
     const navigate = useNavigate();
 
-    if (me === null) return <div className="list-wrap"><p className="muted">Loading…</p></div>;
+    if (me === null) return <div className="mx-auto max-w-[1200px] px-7 pt-8"><p className="text-fg-subtle">Loading…</p></div>;
     if (!isAdmin) {
       return (
-        <div className="list-wrap">
-          <p className="muted">Admins only. <button className="ghost sm" onClick={() => navigate("home")}>← back to pages</button></p>
+        <div className="mx-auto flex max-w-[1200px] items-center gap-2 px-7 pt-8">
+          <p className="text-fg-subtle">Admins only.</p>
+          <Button variant="ghost" size="sm" onPress={() => navigate("home")}>← back to pages</Button>
         </div>
       );
     }
