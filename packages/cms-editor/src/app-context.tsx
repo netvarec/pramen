@@ -16,8 +16,12 @@ declare global {
 
 /** External sign-in URL, if the host configured one via /config.js. When set, an
  * unauthenticated OR expired session is redirected here instead of the built-in Setup
- * screen — for deployments whose auth (magic-link, SSO, …) lives on a separate page. */
-const SIGN_IN_URL: string | undefined = typeof window !== "undefined" ? window.PRAMEN_CMS_EDITOR?.signInUrl : undefined;
+ * screen — for deployments whose auth (magic-link, SSO, …) lives on a separate page.
+ *
+ * `?setup=1` forces the built-in Setup screen even when a sign-in URL is configured — the
+ * bootstrap escape hatch for pasting a first-admin JWT before any account exists. */
+const SIGN_IN_URL: string | undefined =
+  typeof window !== "undefined" && !new URLSearchParams(window.location.search).has("setup") ? window.PRAMEN_CMS_EDITOR?.signInUrl : undefined;
 
 /** Drop the stale session and hand off to the external sign-in page. */
 function redirectToSignIn(): void {
