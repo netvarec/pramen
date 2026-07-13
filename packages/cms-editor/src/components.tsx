@@ -165,6 +165,23 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
   const [assembled, setAssembled] = useState<AssembledPage | null>(null);
   const [err, setErr] = useState("");
 
+  // Unsaved-changes guard. Each BlockCard reports its dirty state up; while any block has
+  // unsaved edits, warn before leaving the editor (← all pages) and before a browser unload
+  // (refresh / close / navigating off-site). Reorder/add/remove keep block state — React
+  // reuses BlockCard instances by key — so those don't lose edits and need no guard; only
+  // unmounting the whole editor (leaving) or a page unload discards the local edits.
+  const dirtyRef = useRef<Set<string>>(new Set());
+  const [dirtyCount, setDirtyCount] = useState(0);
+  const reportDirty = useCallback((id: string, isDirty: boolean) => {
+    const s = dirtyRef.current;
+    if (isDirty ? s.has(id) : !s.has(id)) return;
+    if (isDirty) s.add(id);
+    else s.delete(id);
+    setDirtyCount(s.size);
+  }, []);
+  const confirmLeave = () =>
+    dirtyRef.current.size === 0 || window.confirm(`You have unsaved changes in ${dirtyRef.current.size} block${dirtyRef.current.size === 1 ? "" : "s"}. Leave without saving?`);
+
   const btBySlug = useMemo(() => new Map(blockTypes.map((b) => [b.slug, b])), [blockTypes]);
 
   const reload = useCallback(async () => {
@@ -177,6 +194,14 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
     }
   }, [api, page.typeId, page.slug, page.locale]);
   useEffect(() => { reload(); }, [reload]);
+
+  // Native prompt on refresh/close/off-site nav while there are unsaved edits.
+  useEffect(() => {
+    if (dirtyCount === 0) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ""; };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [dirtyCount]);
 
   const regions: RegionDefinition[] = ct?.regions ?? [];
 
@@ -254,7 +279,8 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
   return (
     <div className="grid min-h-[calc(100vh-68px)] grid-cols-[260px_1fr_400px] gap-5 px-7 pb-7 pt-2 max-[820px]:grid-cols-1">
       <div className="overflow-auto rounded-panel bg-surface-muted p-[18px]">
-        <Button variant="ghost" size="sm" onPress={onBack}>← all pages</Button>
+        <Button variant="ghost" size="sm" onPress={() => { if (confirmLeave()) onBack(); }}>← all pages</Button>
+        {dirtyCount > 0 ? <p className="mt-2 text-[11px] text-accent-strong">● {dirtyCount} unsaved block{dirtyCount === 1 ? "" : "s"}</p> : null}
         <Section>Regions</Section>
         {regions.map((r) => (
           <div key={r.name} className={`${ROW} mb-2`}>
@@ -289,6 +315,7 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
                   onMove={(d) => reorderMove(blocks, r.name, i, d, reorder)}
                   onRemove={() => removeBlock(b)}
                   onPatch={patchBlockFields}
+                  onDirtyChange={reportDirty}
                   onError={setErr}
                   dragging={drag?.region === r.name && drag.from === i}
                   isOver={!!drag && drag.region === r.name && drag.over === i && drag.from !== i}
@@ -325,7 +352,7 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
 // as the WYSIWYG, media as a thumbnail picker). Edits are held locally and committed only on
 // an explicit Save — the header + footer show an "unsaved" state until you do, and nothing is
 // written until you click Save. Collapse folds it to a one-line plain-text preview.
-function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, onPatch, onError, dragging, isOver, onDragStartBlock, onDragOverBlock, onDropBlock, onDragEndBlock }: {
+function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, onPatch, onDirtyChange, onError, dragging, isOver, onDragStartBlock, onDragOverBlock, onDropBlock, onDragEndBlock }: {
   api: Api;
   block: RenderedBlock;
   blockType: BlockType | undefined;
@@ -334,6 +361,7 @@ function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, o
   onMove: (dir: number) => void;
   onRemove: () => void;
   onPatch: (placementId: string, fields: Record<string, unknown>) => void;
+  onDirtyChange: (placementId: string, dirty: boolean) => void;
   onError: (s: string) => void;
   dragging: boolean;
   isOver: boolean;
@@ -386,6 +414,11 @@ function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, o
   }, [api, blockId, placementId, fields, onPatch, onError, block.pending]);
 
   const change = (next: Record<string, unknown>) => setFields(next);
+
+  // Report dirty state up (for the editor's leave/unload guard); clear it on unmount so a
+  // removed block never leaves a stale "unsaved" flag behind.
+  useEffect(() => { onDirtyChange(placementId, dirty); }, [dirty, placementId, onDirtyChange]);
+  useEffect(() => () => { onDirtyChange(placementId, false); }, [placementId, onDirtyChange]);
 
   const schema: FieldDefinition[] = blockType?.fieldsSchema ?? [];
   const name = blockType?.name ?? block.block_type;
