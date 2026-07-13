@@ -164,7 +164,6 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
   const [ct, setCt] = useState<ContentType | null>(null);
   const [assembled, setAssembled] = useState<AssembledPage | null>(null);
   const [err, setErr] = useState("");
-  const [msg, setMsg] = useState("");
 
   const btBySlug = useMemo(() => new Map(blockTypes.map((b) => [b.slug, b])), [blockTypes]);
 
@@ -180,12 +179,16 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
   useEffect(() => { reload(); }, [reload]);
 
   const regions: RegionDefinition[] = ct?.regions ?? [];
-  const flash = (m: string) => { setMsg(m); setTimeout(() => setMsg(""), 1800); };
+
+  const patchRegion = (region: string, fn: (list: RenderedBlock[]) => RenderedBlock[]) =>
+    setAssembled((prev) => (prev ? { ...prev, regions: { ...prev.regions, [region]: fn(prev.regions[region] ?? []) } } : prev));
 
   const addBlock = async (region: string, slug: string) => {
+    // Optimistic: show a placeholder immediately (no wait for the round trip), then
+    // reconcile with the persisted row addBlock echoes — or roll it back on failure.
+    const tempId = `tmp:${crypto.randomUUID()}`;
+    patchRegion(region, (list) => [...list, { id: tempId, block_id: tempId, block_type: slug, title: null, fields: {}, is_shared: false, pending: true }]);
     try {
-      // addBlock echoes the created block + placement, so append it locally instead of a
-      // full getContentType+getPage reload — one round trip instead of three.
       const { block, placement } = await api.call<{
         block: { id: string; title?: string | null; fields?: Record<string, unknown> | null };
         placement: { id: string; isShared?: boolean | number };
@@ -198,9 +201,9 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
         fields: block.fields ?? {},
         is_shared: Boolean(placement.isShared),
       };
-      setAssembled((prev) => (prev ? { ...prev, regions: { ...prev.regions, [region]: [...(prev.regions[region] ?? []), rb] } } : prev));
-      flash("block added");
+      patchRegion(region, (list) => list.map((b) => (b.id === tempId ? rb : b)));
     } catch (e) {
+      patchRegion(region, (list) => list.filter((b) => b.id !== tempId));
       setErr(errMsg(e));
     }
   };
@@ -268,7 +271,6 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
 
       <div className="overflow-auto py-1.5">
         {err ? <Banner>{err}</Banner> : null}
-        {msg ? <Banner ok>{msg}</Banner> : null}
         {regions.map((r) => {
           const blocks = assembled?.regions[r.name] ?? [];
           const allowed = r.allowedTypes && r.allowedTypes.length ? r.allowedTypes : blockTypes.map((b) => b.slug);
@@ -350,13 +352,17 @@ function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, o
   const placementId = block.id;
 
   // Load RAW fields (media as ids, richtext as HTML) so the value round-trips on save.
+  // A pending optimistic block has no persisted row yet — start empty and skip the fetch
+  // (its temp id would 404); when it reconciles to real ids the card remounts and fetches.
   useEffect(() => {
+    if (block.pending) { setFields({}); return; }
     let alive = true;
     api.call<{ fields?: Record<string, unknown> }>("getBlock", { blockId }).then((b) => { if (alive) setFields(b?.fields ?? {}); }).catch((e) => onError(errMsg(e)));
     return () => { alive = false; };
-  }, [api, blockId, onError]);
+  }, [api, blockId, onError, block.pending]);
 
   const flush = useCallback(async () => {
+    if (block.pending) return; // don't write against a placeholder's temp id
     if (timer.current) { clearTimeout(timer.current); timer.current = undefined; }
     const next = pending.current;
     if (!next) return;
@@ -371,7 +377,7 @@ function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, o
       onError(errMsg(e));
       setSaveState("idle");
     }
-  }, [api, blockId, placementId, onPatch, onError]);
+  }, [api, blockId, placementId, onPatch, onError, block.pending]);
 
   // Flush a pending edit if the card unmounts (nav away, reorder remount) before the debounce.
   useEffect(() => () => { if (pending.current) void flush(); }, [flush]);
@@ -392,7 +398,7 @@ function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, o
     // image is set to the whole card so you drag a preview of the block, not just the grip.
     <div
       ref={cardRef}
-      className={`mb-2.5 rounded-panel border bg-surface-card transition-colors ${isOver ? "border-brand-green" : "border-border"} ${dragging ? "opacity-40" : ""}`}
+      className={`mb-2.5 rounded-panel border bg-surface-card transition-colors ${isOver ? "border-brand-green" : "border-border"} ${dragging ? "opacity-40" : ""} ${block.pending ? "pointer-events-none opacity-60" : ""}`}
       onDragOver={(e) => { e.preventDefault(); onDragOverBlock(); }}
       onDrop={(e) => { e.preventDefault(); onDropBlock(); }}
     >

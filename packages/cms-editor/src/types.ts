@@ -95,6 +95,7 @@ export interface RenderedBlock {
   title: string | null;
   fields: Record<string, unknown>;
   is_shared: boolean;
+  pending?: boolean; // optimistic placeholder — not yet persisted (temp ids, no getBlock)
 }
 
 export interface AssembledPage {
