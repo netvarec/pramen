@@ -219,6 +219,22 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
     });
   }, []);
 
+  // Drag-to-reorder within a region. `from`/`over` are indices in the region's block list;
+  // hovering updates `over` live (for the drop-target highlight), and the drop commits the
+  // new order via reorderRegion. Dragging is confined to the region it started in.
+  const [drag, setDrag] = useState<{ region: string; from: number; over: number } | null>(null);
+  const beginDrag = (region: string, i: number) => setDrag({ region, from: i, over: i });
+  const hoverDrag = (region: string, i: number) => setDrag((d) => (d && d.region === region && d.over !== i ? { ...d, over: i } : d));
+  const cancelDrag = () => setDrag(null);
+  const dropDrag = (region: string) => {
+    setDrag(null);
+    if (!drag || drag.region !== region || drag.from === drag.over) return;
+    const ids = (assembled?.regions[region] ?? []).map((b) => b.id);
+    const [moved] = ids.splice(drag.from, 1);
+    ids.splice(drag.over, 0, moved);
+    reorder(region, ids);
+  };
+
   return (
     <div className="grid min-h-[calc(100vh-68px)] grid-cols-[260px_1fr_400px] gap-5 px-7 pb-7 pt-2 max-[820px]:grid-cols-1">
       <div className="overflow-auto rounded-panel bg-surface-muted p-[18px]">
@@ -259,6 +275,12 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
                   onRemove={() => removeBlock(b)}
                   onPatch={patchBlockFields}
                   onError={setErr}
+                  dragging={drag?.region === r.name && drag.from === i}
+                  isOver={!!drag && drag.region === r.name && drag.over === i && drag.from !== i}
+                  onDragStartBlock={() => beginDrag(r.name, i)}
+                  onDragOverBlock={() => hoverDrag(r.name, i)}
+                  onDropBlock={() => dropDrag(r.name)}
+                  onDragEndBlock={cancelDrag}
                 />
               ))}
               <AddBlock allowed={allowed} btBySlug={btBySlug} onAdd={(slug) => addBlock(r.name, slug)} />
@@ -288,7 +310,7 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
 // as the WYSIWYG, media as a thumbnail picker), and edits autosave — debounced while typing,
 // flushed on blur and on unmount — so there's no separate "save block" step and no full page
 // reload that would drop the caret. Collapse folds it to a one-line plain-text preview.
-function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, onPatch, onError }: {
+function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, onPatch, onError, dragging, isOver, onDragStartBlock, onDragOverBlock, onDropBlock, onDragEndBlock }: {
   api: Api;
   block: RenderedBlock;
   blockType: BlockType | undefined;
@@ -298,12 +320,19 @@ function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, o
   onRemove: () => void;
   onPatch: (placementId: string, fields: Record<string, unknown>) => void;
   onError: (s: string) => void;
+  dragging: boolean;
+  isOver: boolean;
+  onDragStartBlock: () => void;
+  onDragOverBlock: () => void;
+  onDropBlock: () => void;
+  onDragEndBlock: () => void;
 }) {
   const [fields, setFields] = useState<Record<string, unknown> | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
   const pending = useRef<Record<string, unknown> | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const cardRef = useRef<HTMLDivElement>(null);
   const blockId = block.block_id;
   const placementId = block.id;
 
@@ -345,8 +374,28 @@ function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, o
   const name = blockType?.name ?? block.block_type;
 
   return (
-    <div className="mb-2.5 rounded-panel border border-border bg-surface-card">
+    // The card is the drop target; the ⠿ handle is the only draggable element, so
+    // dragging never fights the inline contentEditable text selection. The handle's drag
+    // image is set to the whole card so you drag a preview of the block, not just the grip.
+    <div
+      ref={cardRef}
+      className={`mb-2.5 rounded-panel border bg-surface-card transition-colors ${isOver ? "border-brand-green" : "border-border"} ${dragging ? "opacity-40" : ""}`}
+      onDragOver={(e) => { e.preventDefault(); onDragOverBlock(); }}
+      onDrop={(e) => { e.preventDefault(); onDropBlock(); }}
+    >
       <div className="flex items-center gap-2.5 px-3.5 py-2.5">
+        <span
+          draggable
+          onDragStart={(e) => {
+            if (cardRef.current) e.dataTransfer.setDragImage(cardRef.current, 12, 12);
+            e.dataTransfer.effectAllowed = "move";
+            e.dataTransfer.setData("text/plain", "");
+            onDragStartBlock();
+          }}
+          onDragEnd={onDragEndBlock}
+          className="shrink-0 cursor-grab select-none px-0.5 text-fg-subtle hover:text-fg active:cursor-grabbing"
+          title="Drag to reorder"
+        >⠿</span>
         <button type="button" className="w-4 shrink-0 text-fg-subtle hover:text-fg" title={collapsed ? "Expand" : "Collapse"} onClick={() => setCollapsed((c) => !c)}>{collapsed ? "▸" : "▾"}</button>
         <span className="font-medium text-fg">{name}</span>
         {block.is_shared ? <span className="text-[11px] text-accent-strong">shared</span> : null}
