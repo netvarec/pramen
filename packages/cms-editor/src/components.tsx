@@ -3,7 +3,7 @@
 // the app context and wire URL params + navigation into these components.
 
 import { Button, Input, Textarea } from "@podoba/react";
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Api, ApiError } from "./api";
 import { FieldForm } from "./fields";
 import type { Config } from "./api";
@@ -163,7 +163,6 @@ function CreatePage({ api, onClose, onCreated, onError }: { api: Api; onClose: (
 export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange }: { api: Api; page: Page; blockTypes: BlockType[]; tab: InspectorTab; onTab: (t: InspectorTab) => void; onBack: () => void; onChange: (p: Page) => void }) {
   const [ct, setCt] = useState<ContentType | null>(null);
   const [assembled, setAssembled] = useState<AssembledPage | null>(null);
-  const [selected, setSelected] = useState<RenderedBlock | null>(null);
   const [err, setErr] = useState("");
   const [msg, setMsg] = useState("");
 
@@ -178,10 +177,7 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
       setErr(errMsg(e));
     }
   }, [api, page.typeId, page.slug, page.locale]);
-  useEffect(() => {
-    reload();
-    setSelected(null);
-  }, [reload]);
+  useEffect(() => { reload(); }, [reload]);
 
   const regions: RegionDefinition[] = ct?.regions ?? [];
   const flash = (m: string) => { setMsg(m); setTimeout(() => setMsg(""), 1800); };
@@ -198,7 +194,6 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
   const removeBlock = async (b: RenderedBlock) => {
     try {
       await api.call("removeBlock", { pageBlockId: b.id });
-      if (selected?.id === b.id) setSelected(null);
       await reload();
     } catch (e) {
       setErr(errMsg(e));
@@ -212,6 +207,17 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
       setErr(errMsg(e));
     }
   };
+
+  // Patch a block's raw fields into local state after an inline save — keeps the collapsed
+  // preview fresh without a full reload (which would remount every editor + lose caret/focus).
+  const patchBlockFields = useCallback((placementId: string, fields: Record<string, unknown>) => {
+    setAssembled((prev) => {
+      if (!prev) return prev;
+      const next: Record<string, RenderedBlock[]> = {};
+      for (const [name, list] of Object.entries(prev.regions)) next[name] = list.map((b) => (b.id === placementId ? { ...b, fields } : b));
+      return { ...prev, regions: next };
+    });
+  }, []);
 
   return (
     <div className="grid min-h-[calc(100vh-68px)] grid-cols-[260px_1fr_400px] gap-5 px-7 pb-7 pt-2 max-[820px]:grid-cols-1">
@@ -238,28 +244,24 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
           const blocks = assembled?.regions[r.name] ?? [];
           const allowed = r.allowedTypes && r.allowedTypes.length ? r.allowedTypes : blockTypes.map((b) => b.slug);
           return (
-            <div className="mb-6" key={r.name}>
-              <h3 className="m-0 mb-3 flex items-baseline gap-3 text-[22px] font-normal text-fg">
-                {r.label ?? r.name}
-                {r.allowedTypes ? <span className="text-[11px] font-normal text-fg-subtle">only: {r.allowedTypes.join(", ")}</span> : null}
-              </h3>
+            <div className="mb-8" key={r.name}>
+              <h3 className="m-0 mb-3 text-[22px] font-normal text-fg">{r.label ?? r.name}</h3>
+              {blocks.length === 0 ? <p className="mb-3 text-sm text-fg-subtle">No blocks yet — add one below.</p> : null}
               {blocks.map((b, i) => (
-                <div className={`mb-2.5 rounded-panel border bg-surface-card p-3.5 ${selected?.id === b.id ? "border-fg" : "border-border"}`} key={b.id} onClick={() => setSelected(b)}>
-                  <div className="flex items-center gap-2.5">
-                    <span className="rounded-full bg-surface-muted px-2 py-0.5 font-mono text-xs text-fg-muted">{b.block_type}</span>
-                    {b.is_shared ? <span className="text-[11px] text-accent-strong">shared</span> : null}
-                    <span className="flex-1 truncate text-fg-subtle">{summarize(b.fields)}</span>
-                    <Button variant="ghost" size="sm" onPress={() => reorderMove(blocks, r.name, i, -1, reorder)}>↑</Button>
-                    <Button variant="ghost" size="sm" onPress={() => reorderMove(blocks, r.name, i, 1, reorder)}>↓</Button>
-                    <Button variant="ghost" size="sm" className="text-danger" onPress={() => removeBlock(b)}>✕</Button>
-                  </div>
-                </div>
+                <BlockCard
+                  key={b.id}
+                  api={api}
+                  block={b}
+                  blockType={btBySlug.get(b.block_type)}
+                  isFirst={i === 0}
+                  isLast={i === blocks.length - 1}
+                  onMove={(d) => reorderMove(blocks, r.name, i, d, reorder)}
+                  onRemove={() => removeBlock(b)}
+                  onPatch={patchBlockFields}
+                  onError={setErr}
+                />
               ))}
-              <div className="mt-2.5 flex flex-wrap gap-1.5">
-                {allowed.map((slug) => (
-                  <Button key={slug} variant="secondary" size="sm" onPress={() => addBlock(r.name, slug)}>+ {btBySlug.get(slug)?.name ?? slug}</Button>
-                ))}
-              </div>
+              <AddBlock allowed={allowed} btBySlug={btBySlug} onAdd={(slug) => addBlock(r.name, slug)} />
             </div>
           );
         })}
@@ -267,55 +269,130 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
       </div>
 
       <div className="overflow-auto rounded-panel border border-border bg-surface-card p-5">
-        {selected ? (
-          <BlockInspector api={api} block={selected} blockType={btBySlug.get(selected.block_type)} onClose={() => setSelected(null)} onSaved={reload} onError={setErr} />
-        ) : (
-          <>
-            <div className="mb-3 flex gap-1">
-              {INSPECTOR_TABS.map((t) => (
-                <Button key={t} variant="ghost" size="sm" className={tab === t ? "bg-surface-muted text-fg" : "text-fg-muted"} onPress={() => onTab(t)}>{t}</Button>
-              ))}
-            </div>
-            {tab === "settings" ? <Settings page={page} /> : null}
-            {tab === "seo" ? <SeoPanel api={api} page={page} onError={setErr} /> : null}
-            {tab === "workflow" ? <Workflow api={api} page={page} onChanged={(p) => { onChange(p); }} onError={setErr} /> : null}
-            {tab === "i18n" ? <I18n api={api} page={page} onError={setErr} /> : null}
-            {tab === "audit" ? <AuditLog api={api} pageId={page.id} onError={setErr} /> : null}
-          </>
-        )}
+        <div className="mb-3 flex gap-1">
+          {INSPECTOR_TABS.map((t) => (
+            <Button key={t} variant="ghost" size="sm" className={tab === t ? "bg-surface-muted text-fg" : "text-fg-muted"} onPress={() => onTab(t)}>{t}</Button>
+          ))}
+        </div>
+        {tab === "settings" ? <Settings page={page} /> : null}
+        {tab === "seo" ? <SeoPanel api={api} page={page} onError={setErr} /> : null}
+        {tab === "workflow" ? <Workflow api={api} page={page} onChanged={(p) => { onChange(p); }} onError={setErr} /> : null}
+        {tab === "i18n" ? <I18n api={api} page={page} onError={setErr} /> : null}
+        {tab === "audit" ? <AuditLog api={api} pageId={page.id} onError={setErr} /> : null}
       </div>
     </div>
   );
 }
 
-function BlockInspector({ api, block, blockType, onClose, onSaved, onError }: { api: Api; block: RenderedBlock; blockType: BlockType | undefined; onClose: () => void; onSaved: () => void; onError: (s: string) => void }) {
-  const [fields, setFields] = useState<Record<string, unknown>>({});
-  const [busy, setBusy] = useState(false);
+// A single block, edited inline: the block IS its editor. Fields render in place (rich text
+// as the WYSIWYG, media as a thumbnail picker), and edits autosave — debounced while typing,
+// flushed on blur and on unmount — so there's no separate "save block" step and no full page
+// reload that would drop the caret. Collapse folds it to a one-line plain-text preview.
+function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, onPatch, onError }: {
+  api: Api;
+  block: RenderedBlock;
+  blockType: BlockType | undefined;
+  isFirst: boolean;
+  isLast: boolean;
+  onMove: (dir: number) => void;
+  onRemove: () => void;
+  onPatch: (placementId: string, fields: Record<string, unknown>) => void;
+  onError: (s: string) => void;
+}) {
+  const [fields, setFields] = useState<Record<string, unknown> | null>(null);
+  const [collapsed, setCollapsed] = useState(false);
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
+  const pending = useRef<Record<string, unknown> | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const blockId = block.block_id;
+  const placementId = block.id;
+
+  // Load RAW fields (media as ids, richtext as HTML) so the value round-trips on save.
   useEffect(() => {
-    // Load RAW fields (media as ids) for editing.
-    api.call<{ fields?: Record<string, unknown> }>("getBlock", { blockId: block.block_id }).then((b) => setFields(b?.fields ?? {})).catch((e) => onError(errMsg(e)));
-  }, [api, block.block_id, onError]);
-  const schema: FieldDefinition[] = blockType?.fieldsSchema ?? [];
-  const save = async () => {
-    setBusy(true);
+    let alive = true;
+    api.call<{ fields?: Record<string, unknown> }>("getBlock", { blockId }).then((b) => { if (alive) setFields(b?.fields ?? {}); }).catch((e) => onError(errMsg(e)));
+    return () => { alive = false; };
+  }, [api, blockId, onError]);
+
+  const flush = useCallback(async () => {
+    if (timer.current) { clearTimeout(timer.current); timer.current = undefined; }
+    const next = pending.current;
+    if (!next) return;
+    pending.current = null;
+    setSaveState("saving");
     try {
-      await api.call("updateBlock", { blockId: block.block_id, fields });
-      onSaved();
+      await api.call("updateBlock", { blockId, fields: next });
+      onPatch(placementId, next);
+      setSaveState("saved");
+      setTimeout(() => setSaveState((s) => (s === "saved" ? "idle" : s)), 1200);
     } catch (e) {
       onError(errMsg(e));
-    } finally {
-      setBusy(false);
+      setSaveState("idle");
     }
+  }, [api, blockId, placementId, onPatch, onError]);
+
+  // Flush a pending edit if the card unmounts (nav away, reorder remount) before the debounce.
+  useEffect(() => () => { if (pending.current) void flush(); }, [flush]);
+
+  const change = (next: Record<string, unknown>) => {
+    setFields(next);
+    pending.current = next;
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => void flush(), 700);
   };
+
+  const schema: FieldDefinition[] = blockType?.fieldsSchema ?? [];
+  const name = blockType?.name ?? block.block_type;
+
   return (
-    <div>
-      <div className="flex items-center gap-2">
-        <span className="rounded-full bg-surface-muted px-2 py-0.5 font-mono text-xs text-fg-muted">{block.block_type}</span>
+    <div className="mb-2.5 rounded-panel border border-border bg-surface-card">
+      <div className="flex items-center gap-2.5 px-3.5 py-2.5">
+        <button type="button" className="w-4 shrink-0 text-fg-subtle hover:text-fg" title={collapsed ? "Expand" : "Collapse"} onClick={() => setCollapsed((c) => !c)}>{collapsed ? "▸" : "▾"}</button>
+        <span className="font-medium text-fg">{name}</span>
+        {block.is_shared ? <span className="text-[11px] text-accent-strong">shared</span> : null}
+        <span className="text-[11px] text-fg-subtle">{saveState === "saving" ? "saving…" : saveState === "saved" ? "saved ✓" : ""}</span>
         <span className="flex-1" />
-        <Button variant="ghost" size="sm" onPress={onClose}>done</Button>
+        <Button variant="ghost" size="sm" isDisabled={isFirst} onPress={() => onMove(-1)}>↑</Button>
+        <Button variant="ghost" size="sm" isDisabled={isLast} onPress={() => onMove(1)}>↓</Button>
+        <Button variant="ghost" size="sm" className="text-danger" onPress={onRemove}>✕</Button>
       </div>
-      {schema.length === 0 ? <p className="text-fg-subtle">This block type has no fields.</p> : <FieldForm schema={schema} value={fields} onChange={setFields} api={api} />}
-      <Button className="mt-3 w-full" onPress={save} isDisabled={busy}>Save block</Button>
+      {collapsed ? (
+        <div className="cursor-pointer truncate px-3.5 pb-3 text-sm text-fg-subtle" onClick={() => setCollapsed(false)}>
+          {fields == null ? "…" : blockPreview(fields) || <span className="italic">empty</span>}
+        </div>
+      ) : (
+        // onBlur bubbles from the inner inputs — leaving the block flushes any pending edit
+        // immediately (flush() no-ops when nothing is pending, so tabbing between fields is free).
+        <div className="border-t border-border px-3.5 py-3.5" onBlur={() => void flush()}>
+          {fields == null ? (
+            <p className="text-sm text-fg-subtle">loading…</p>
+          ) : schema.length === 0 ? (
+            <p className="text-sm text-fg-subtle">This block has no editable fields.</p>
+          ) : (
+            <FieldForm schema={schema} value={fields} onChange={change} api={api} />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// "+ Add block" reveals a compact picker of the region's allowed types (by friendly name),
+// replacing the always-on row of every type as a wall of buttons.
+function AddBlock({ allowed, btBySlug, onAdd }: { allowed: string[]; btBySlug: Map<string, BlockType>; onAdd: (slug: string) => void }) {
+  const [open, setOpen] = useState(false);
+  if (!open) return <Button variant="secondary" size="sm" onPress={() => setOpen(true)}>+ Add block</Button>;
+  return (
+    <div className="rounded-panel border border-border bg-surface-card p-2.5">
+      <div className="mb-1.5 px-1 text-[11px] text-fg-subtle">Add a block</div>
+      <div className="flex flex-wrap gap-1.5">
+        {allowed.map((slug) => (
+          <Button key={slug} variant="ghost" size="sm" onPress={() => { onAdd(slug); setOpen(false); }}>{btBySlug.get(slug)?.name ?? slug}</Button>
+        ))}
+      </div>
+      <div className="mt-1.5 text-right">
+        <Button variant="ghost" size="sm" className="text-fg-subtle" onPress={() => setOpen(false)}>cancel</Button>
+      </div>
     </div>
   );
 }
@@ -856,9 +933,24 @@ export function errMsg(e: unknown): string {
 function slugify(s: string): string {
   return s.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
-function summarize(fields: Record<string, unknown>): string {
-  const first = Object.values(fields).find((v) => typeof v === "string" && v);
-  return typeof first === "string" ? (first.length > 48 ? first.slice(0, 48) + "…" : first) : "";
+/** Strip HTML tags + decode the few entities the WYSIWYG emits, for a clean text preview —
+ * so a collapsed rich_text block reads "Test Toakdopwad" instead of "<b>Test</b>&nbsp;…". */
+function plainText(html: string): string {
+  return html
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+/** One-line preview for a collapsed block: the first non-empty string field, tags stripped. */
+function blockPreview(fields: Record<string, unknown>): string {
+  const first = Object.values(fields).find((v) => typeof v === "string" && v.trim());
+  if (typeof first !== "string") return "";
+  const text = plainText(first);
+  return text.length > 90 ? text.slice(0, 90) + "…" : text;
 }
 function reorderMove(blocks: RenderedBlock[], region: string, i: number, d: number, reorder: (region: string, order: string[]) => void) {
   const j = i + d;
