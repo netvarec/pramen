@@ -19,12 +19,24 @@ const html = (jsName: string) => `<!doctype html>
     <title>pramen · cms editor</title>
     <link rel="stylesheet" href="/tokens.css" />
     <link rel="stylesheet" href="/app.css" />
+    <!-- Runtime config, loaded before the app so window.PRAMEN_CMS_EDITOR is set at boot.
+         A default config.js ships in dist; a host overrides it to set e.g. signInUrl. -->
+    <script src="/config.js"></script>
   </head>
   <body>
     <div id="app"></div>
     <script type="module" src="/${jsName}"></script>
   </body>
 </html>
+`;
+
+// Default runtime config — hosts override /config.js to configure the editor (e.g. an
+// external sign-in URL). Shipped so the <script src="/config.js"> never 404s.
+const DEFAULT_CONFIG_JS = `// Runtime configuration for the pramen CMS editor. Override this file in your host app to
+// point unauthenticated / expired sessions at an external sign-in page instead of the
+// built-in Setup screen:
+//   window.PRAMEN_CMS_EDITOR = { signInUrl: "/signin/" };
+window.PRAMEN_CMS_EDITOR = window.PRAMEN_CMS_EDITOR || {};
 `;
 
 // Design system = podoba. Compile Tailwind (podoba preset) → dist/app.css and
@@ -58,7 +70,8 @@ async function build(): Promise<void> {
   if (!js) throw new Error("no js output");
   const jsName = js.path.split("/").pop()!;
   await writeFile(`${dist}/index.html`, html(jsName));
-  console.log(`built dist/${jsName} + index.html`);
+  await writeFile(`${dist}/config.js`, DEFAULT_CONFIG_JS);
+  console.log(`built dist/${jsName} + index.html + config.js`);
 }
 
 await rm(dist, { recursive: true, force: true });
