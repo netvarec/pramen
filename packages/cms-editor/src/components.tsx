@@ -322,9 +322,9 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
 }
 
 // A single block, edited inline: the block IS its editor. Fields render in place (rich text
-// as the WYSIWYG, media as a thumbnail picker), and edits autosave — debounced while typing,
-// flushed on blur and on unmount — so there's no separate "save block" step and no full page
-// reload that would drop the caret. Collapse folds it to a one-line plain-text preview.
+// as the WYSIWYG, media as a thumbnail picker). Edits are held locally and committed only on
+// an explicit Save — the header + footer show an "unsaved" state until you do, and nothing is
+// written until you click Save. Collapse folds it to a one-line plain-text preview.
 function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, onPatch, onError, dragging, isOver, onDragStartBlock, onDragOverBlock, onDropBlock, onDragEndBlock }: {
   api: Api;
   block: RenderedBlock;
@@ -345,8 +345,7 @@ function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, o
   const [fields, setFields] = useState<Record<string, unknown> | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
-  const pending = useRef<Record<string, unknown> | null>(null);
-  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const saved = useRef<string>(""); // JSON of the last-persisted fields — the dirty baseline
   const cardRef = useRef<HTMLDivElement>(null);
   const blockId = block.block_id;
   const placementId = block.id;
@@ -355,39 +354,38 @@ function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, o
   // A pending optimistic block has no persisted row yet — start empty and skip the fetch
   // (its temp id would 404); when it reconciles to real ids the card remounts and fetches.
   useEffect(() => {
-    if (block.pending) { setFields({}); return; }
+    if (block.pending) { setFields({}); saved.current = "{}"; return; }
     let alive = true;
-    api.call<{ fields?: Record<string, unknown> }>("getBlock", { blockId }).then((b) => { if (alive) setFields(b?.fields ?? {}); }).catch((e) => onError(errMsg(e)));
+    api.call<{ fields?: Record<string, unknown> }>("getBlock", { blockId }).then((b) => {
+      if (!alive) return;
+      const f = b?.fields ?? {};
+      setFields(f);
+      saved.current = JSON.stringify(f);
+    }).catch((e) => onError(errMsg(e)));
     return () => { alive = false; };
   }, [api, blockId, onError, block.pending]);
 
-  const flush = useCallback(async () => {
-    if (block.pending) return; // don't write against a placeholder's temp id
-    if (timer.current) { clearTimeout(timer.current); timer.current = undefined; }
-    const next = pending.current;
-    if (!next) return;
-    pending.current = null;
+  const dirty = fields != null && JSON.stringify(fields) !== saved.current;
+
+  // Explicit save — the ONLY thing that writes. No autosave, no save-on-blur, no save-on-unmount.
+  const save = useCallback(async () => {
+    if (block.pending || fields == null) return;
+    const snapshot = JSON.stringify(fields);
+    if (snapshot === saved.current) return;
     setSaveState("saving");
     try {
-      await api.call("updateBlock", { blockId, fields: next });
-      onPatch(placementId, next);
+      await api.call("updateBlock", { blockId, fields });
+      saved.current = snapshot;
+      onPatch(placementId, fields);
       setSaveState("saved");
-      setTimeout(() => setSaveState((s) => (s === "saved" ? "idle" : s)), 1200);
+      setTimeout(() => setSaveState((s) => (s === "saved" ? "idle" : s)), 1500);
     } catch (e) {
       onError(errMsg(e));
       setSaveState("idle");
     }
-  }, [api, blockId, placementId, onPatch, onError, block.pending]);
+  }, [api, blockId, placementId, fields, onPatch, onError, block.pending]);
 
-  // Flush a pending edit if the card unmounts (nav away, reorder remount) before the debounce.
-  useEffect(() => () => { if (pending.current) void flush(); }, [flush]);
-
-  const change = (next: Record<string, unknown>) => {
-    setFields(next);
-    pending.current = next;
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => void flush(), 700);
-  };
+  const change = (next: Record<string, unknown>) => setFields(next);
 
   const schema: FieldDefinition[] = blockType?.fieldsSchema ?? [];
   const name = blockType?.name ?? block.block_type;
@@ -418,7 +416,7 @@ function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, o
         <button type="button" className="w-4 shrink-0 text-fg-subtle hover:text-fg" title={collapsed ? "Expand" : "Collapse"} onClick={() => setCollapsed((c) => !c)}>{collapsed ? "▸" : "▾"}</button>
         <span className="font-medium text-fg">{name}</span>
         {block.is_shared ? <span className="text-[11px] text-accent-strong">shared</span> : null}
-        <span className="text-[11px] text-fg-subtle">{saveState === "saving" ? "saving…" : saveState === "saved" ? "saved ✓" : ""}</span>
+        <span className={`text-[11px] ${dirty && saveState !== "saving" ? "text-accent-strong" : "text-fg-subtle"}`}>{saveState === "saving" ? "saving…" : saveState === "saved" ? "saved ✓" : dirty ? "● unsaved" : ""}</span>
         <span className="flex-1" />
         <Button variant="ghost" size="sm" isDisabled={isFirst} onPress={() => onMove(-1)}>↑</Button>
         <Button variant="ghost" size="sm" isDisabled={isLast} onPress={() => onMove(1)}>↓</Button>
@@ -429,15 +427,25 @@ function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, o
           {fields == null ? "…" : blockPreview(fields) || <span className="italic">empty</span>}
         </div>
       ) : (
-        // onBlur bubbles from the inner inputs — leaving the block flushes any pending edit
-        // immediately (flush() no-ops when nothing is pending, so tabbing between fields is free).
-        <div className="border-t border-border px-3.5 py-3.5" onBlur={() => void flush()}>
+        <div className="border-t border-border px-3.5 py-3.5">
           {fields == null ? (
             <p className="text-sm text-fg-subtle">loading…</p>
           ) : schema.length === 0 ? (
             <p className="text-sm text-fg-subtle">This block has no editable fields.</p>
           ) : (
-            <FieldForm schema={schema} value={fields} onChange={change} api={api} />
+            <>
+              <FieldForm schema={schema} value={fields} onChange={change} api={api} />
+              <div className="mt-3.5 flex items-center gap-2 border-t border-border pt-3">
+                <Button size="sm" onPress={() => void save()} isDisabled={!dirty || saveState === "saving" || block.pending}>
+                  {saveState === "saving" ? "Saving…" : "Save"}
+                </Button>
+                {dirty ? (
+                  <span className="text-[11px] text-accent-strong">Unsaved changes</span>
+                ) : saveState === "saved" ? (
+                  <span className="text-[11px] text-fg-subtle">Saved ✓</span>
+                ) : null}
+              </div>
+            </>
           )}
         </div>
       )}
