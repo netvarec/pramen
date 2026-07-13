@@ -1,6 +1,6 @@
 {
   "name": "@pramen/cms",
-  "version": "0.0.27",
+  "version": "0.0.28",
   "description": "Optional block/page builder for pramen — Drupal-Paragraphs-style typed blocks in named regions, reusable blocks, scheduled publishing, built entirely from pramen primitives.",
   "license": "MIT",
   "repository": {

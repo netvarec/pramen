@@ -1,6 +1,6 @@
 {
   "name": "@pramen/cms-astro",
-  "version": "0.0.27",
+  "version": "0.0.28",
   "description": "Astro integration for @pramen/cms — a build-time content-collection loader + a BlockRenderer for rendering CMS blocks in .astro pages.",
   "license": "MIT",
   "repository": {
