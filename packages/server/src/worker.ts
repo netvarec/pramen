@@ -108,6 +108,9 @@ function corsHeaders(origin: string | null, env: Env): Record<string, string> {
     "access-control-allow-origin": allow.includes("*") ? "*" : origin,
     "access-control-allow-methods": "GET, POST, OPTIONS",
     "access-control-allow-headers": "content-type, authorization, x-pramen-tenant, x-pramen-store, x-pramen-d1-bookmark",
+    // Cache the preflight so a browser doesn't re-OPTIONS every /rpc/<name> path. 7200s is
+    // Chrome's cap; without it each RPC pays an extra round trip after the ~5s default.
+    "access-control-max-age": "7200",
     // Expose the D1 read-your-writes bookmark so a browser client can read it off the
     // response and carry it forward on the next request.
     "access-control-expose-headers": "x-pramen-d1-bookmark",

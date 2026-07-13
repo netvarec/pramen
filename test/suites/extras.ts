@@ -38,6 +38,10 @@ export async function runExtras(base: string): Promise<void> {
     preflight.headers.get("access-control-allow-origin") === "*",
     "extras: preflight allows the cross-origin caller",
   );
+  assert(
+    preflight.headers.get("access-control-max-age") === "7200",
+    "extras: preflight is cacheable (Max-Age) so RPCs don't re-preflight",
+  );
   const real = await fetch(`${base}/rpc/listNotes`, {
     method: "POST",
     headers: { "content-type": "application/json", "x-pramen-tenant": TENANT, origin: "https://example.com", authorization: `Bearer ${admin}` },

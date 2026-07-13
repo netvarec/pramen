@@ -184,8 +184,21 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
 
   const addBlock = async (region: string, slug: string) => {
     try {
-      await api.call("addBlock", { pageId: page.id, blockTypeSlug: slug, region, fields: {} });
-      await reload();
+      // addBlock echoes the created block + placement, so append it locally instead of a
+      // full getContentType+getPage reload — one round trip instead of three.
+      const { block, placement } = await api.call<{
+        block: { id: string; title?: string | null; fields?: Record<string, unknown> | null };
+        placement: { id: string; isShared?: boolean | number };
+      }>("addBlock", { pageId: page.id, blockTypeSlug: slug, region, fields: {} });
+      const rb: RenderedBlock = {
+        id: String(placement.id),
+        block_id: String(block.id),
+        block_type: slug,
+        title: block.title ?? null,
+        fields: block.fields ?? {},
+        is_shared: Boolean(placement.isShared),
+      };
+      setAssembled((prev) => (prev ? { ...prev, regions: { ...prev.regions, [region]: [...(prev.regions[region] ?? []), rb] } } : prev));
       flash("block added");
     } catch (e) {
       setErr(errMsg(e));
