@@ -20,6 +20,20 @@ export class ApiError extends Error {
   }
 }
 
+/** Decode a JWT's `exp` claim (seconds) and report whether it has passed. A non-JWT token or
+ * one without `exp` is treated as NOT expired (fail open) — the server is the real authority.
+ * Used to bounce an expired session to sign-in before/instead of firing doomed requests. */
+export function isTokenExpired(token: string): boolean {
+  try {
+    const seg = String(token).split(".")[1];
+    if (!seg) return false;
+    const payload = JSON.parse(atob(seg.replace(/-/g, "+").replace(/_/g, "/")));
+    return typeof payload.exp === "number" && Date.now() >= payload.exp * 1000;
+  } catch {
+    return false;
+  }
+}
+
 const LS = "pramen.cmsEditor";
 export function loadConfig(): Config {
   try {
@@ -33,9 +47,21 @@ export function loadConfig(): Config {
 export function saveConfig(cfg: Config): void {
   localStorage.setItem(LS, JSON.stringify(cfg));
 }
+/** Drop the persisted session (used when handing off to an external sign-in page). */
+export function clearConfig(): void {
+  try {
+    localStorage.removeItem(LS);
+  } catch {
+    /* ignore */
+  }
+}
 
 export class Api {
-  constructor(private cfg: Config) {}
+  /** `onExpired` fires when a call is attempted with a locally-expired token — the app wires
+   * it to redirect to sign-in. We can't key off HTTP status: an expired token is rejected as
+   * anonymous and a role-gated handler then returns 403, indistinguishable from a valid token
+   * that merely lacks the role. So expiry is detected client-side from the token's `exp`. */
+  constructor(private cfg: Config, private onExpired?: () => void) {}
 
   setConfig(cfg: Config): void {
     this.cfg = cfg;
@@ -47,6 +73,12 @@ export class Api {
 
   /** Call a CMS RPC handler. Throws ApiError on a non-`ok` envelope. */
   async call<T = unknown>(name: string, input?: unknown): Promise<T> {
+    // Expired token: hand off to sign-in instead of firing a request that will 403 into an
+    // error banner. The returned promise never settles — navigation is already underway.
+    if (this.onExpired && this.cfg.token && isTokenExpired(this.cfg.token)) {
+      this.onExpired();
+      return new Promise<T>(() => {});
+    }
     const res = await fetch(`${this.base()}/rpc/${name}`, {
       method: "POST",
       headers: {
