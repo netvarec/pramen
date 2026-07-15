@@ -139,14 +139,27 @@ function CreatePage({ api, onClose, onCreated, onError }: { api: Api; onClose: (
     <Modal onClose={onClose}>
       <ModalTitle>Create a <Dim>new page</Dim> and define the essentials<Dim>.</Dim></ModalTitle>
       <div className="flex flex-col gap-4">
-        <label className="flex w-full flex-col gap-2">
+        <div className="flex w-full flex-col gap-2">
           <span className="text-sm font-medium text-fg">Content type</span>
-          <select className="h-10 w-full rounded-lg border border-border bg-surface-card px-4 text-sm text-fg outline-none focus:border-brand-green" value={typeId} onChange={(e) => setTypeId(e.target.value)}>
+          {/* Visible cards, not a dropdown: the type is an easy-to-miss choice, and picking the
+              wrong one puts the entry under a different route. Cards make the selection deliberate. */}
+          <div className="flex flex-wrap gap-2">
             {cts.map((c) => (
-              <option key={c.id} value={c.id}>{c.name}</option>
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => setTypeId(c.id)}
+                className={`rounded-lg border px-4 py-2.5 text-sm font-medium transition-colors ${
+                  typeId === c.id
+                    ? "border-brand-green bg-surface-muted text-fg"
+                    : "border-border bg-surface-card text-fg-muted hover:border-fg-subtle hover:text-fg"
+                }`}
+              >
+                {c.name}
+              </button>
             ))}
-          </select>
-        </label>
+          </div>
+        </div>
         <Input label="Title" value={title} onChange={setTitle} />
         <Input label="Slug" value={slug} onChange={setSlug} placeholder={slugify(title)} />
         <div className="mt-2 flex justify-end gap-2">
