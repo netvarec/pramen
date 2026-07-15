@@ -26,6 +26,10 @@ export interface FieldDefinition {
   min?: number;
   max?: number;
   options?: string[];
+  /** For `select`: fetch options at edit time from a query handler of this name, which must
+   * return `{ value, label }[]`. Lets a select offer live data (e.g. existing campaigns)
+   * instead of a static list. Takes precedence over `options`. */
+  optionsFrom?: string;
 }
 
 export interface RegionDefinition {

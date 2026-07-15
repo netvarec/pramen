@@ -39,9 +39,14 @@ export default function RootLayout() {
           ) : null}
           <Button variant="ghost" size="sm" className={tabCls("settings")} onPress={() => navigate("settings")}>Settings</Button>
           {extraNav.map((l) => (
+            // Companion tools live OUTSIDE this SPA (a separate static page/worker route), so
+            // open them in a new tab. A same-tab click would be caught by the client router
+            // (Navigation API) and fall to the in-app 404, since the path isn't an SPA route.
             <a
               key={l.href}
               href={l.href}
+              target="_blank"
+              rel="noopener noreferrer"
               className="rounded-md px-2.5 py-1.5 text-sm text-fg-muted transition-colors hover:bg-surface-muted hover:text-fg"
             >
               {l.label}
