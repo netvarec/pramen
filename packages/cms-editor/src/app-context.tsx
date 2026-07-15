@@ -10,7 +10,12 @@ import { Api, clearConfig, isTokenExpired, loadConfig, saveConfig, type Config }
 declare global {
   interface Window {
     /** Runtime config set by the host's /config.js (see @pramen/cms-editor build). */
-    PRAMEN_CMS_EDITOR?: { signInUrl?: string };
+    PRAMEN_CMS_EDITOR?: {
+      signInUrl?: string;
+      /** Extra top-nav links to companion tools the host serves (e.g. a curation page).
+       * Rendered as plain external `<a>` links after the built-in tabs. */
+      extraNav?: { label: string; href: string }[];
+    };
   }
 }
 

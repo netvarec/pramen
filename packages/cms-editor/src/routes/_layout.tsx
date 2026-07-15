@@ -21,6 +21,9 @@ export default function RootLayout() {
   const tabCls = (key: string) =>
     active === key ? "bg-surface-muted text-fg" : "text-fg-muted";
 
+  // Host-configured links to companion tools (e.g. a curation page), from /config.js.
+  const extraNav = typeof window !== "undefined" ? window.PRAMEN_CMS_EDITOR?.extraNav ?? [] : [];
+
   return (
     <>
       <div className="sticky top-0 z-10 flex items-center gap-4 bg-surface px-7 py-4">
@@ -35,6 +38,15 @@ export default function RootLayout() {
             <Button variant="ghost" size="sm" className={tabCls("users")} onPress={() => navigate("users")}>Users</Button>
           ) : null}
           <Button variant="ghost" size="sm" className={tabCls("settings")} onPress={() => navigate("settings")}>Settings</Button>
+          {extraNav.map((l) => (
+            <a
+              key={l.href}
+              href={l.href}
+              className="rounded-md px-2.5 py-1.5 text-sm text-fg-muted transition-colors hover:bg-surface-muted hover:text-fg"
+            >
+              {l.label}
+            </a>
+          ))}
         </nav>
         <span className="ml-3 text-fg-subtle">{cfg.tenant}</span>
         <Button variant="ghost" size="sm" onPress={reconfigure}>sign out</Button>
