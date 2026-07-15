@@ -74,6 +74,9 @@ export interface FieldDefinition {
   max?: number;
   /** select only. */
   options?: string[];
+  /** select only — fetch options at edit time from a query handler of this name (returns
+   * `{ value, label }[]`), e.g. a live list of campaigns. Takes precedence over `options`. */
+  optionsFrom?: string;
 }
 
 /** A named region on a content type; `allowedTypes` (block-type slugs) restricts what

@@ -73,12 +73,7 @@ function FieldInput({ def, value, onChange, api }: { def: FieldDefinition; value
     case "select":
       return (
         <FieldShell label={label}>
-          <select className={CONTROL} value={(value as string) ?? ""} onChange={(e) => onChange(e.target.value || null)}>
-            <option value="">—</option>
-            {(def.options ?? []).map((o) => (
-              <option key={o} value={o}>{o}</option>
-            ))}
-          </select>
+          <SelectField def={def} value={value as string | null} onChange={onChange} api={api} />
         </FieldShell>
       );
     case "media":
@@ -232,6 +227,33 @@ function Repeater({ def, value, onChange, api, label }: { def: FieldDefinition; 
         + add {def.label ?? def.name}
       </Button>
     </div>
+  );
+}
+
+// A `select` field. Static `options` render as-is; when `optionsFrom` is set, the options are
+// fetched once from that query handler (returns `{ value, label }[]`) — e.g. a live list of
+// campaigns — so the editor never has to hardcode or copy identifiers by hand.
+function SelectField({ def, value, onChange, api }: { def: FieldDefinition; value: string | null; onChange: (v: unknown) => void; api: Api }) {
+  const [dyn, setDyn] = useState<{ value: string; label: string }[] | null>(null);
+  const from = def.optionsFrom;
+  useEffect(() => {
+    if (!from) return;
+    let alive = true;
+    api
+      .call<{ value: string; label: string }[]>(from)
+      .then((r) => { if (alive) setDyn(Array.isArray(r) ? r : []); })
+      .catch(() => { if (alive) setDyn([]); });
+    return () => { alive = false; };
+  }, [from, api]);
+  const loading = Boolean(from) && dyn === null;
+  const opts = from ? dyn ?? [] : (def.options ?? []).map((o) => ({ value: o, label: o }));
+  return (
+    <select className={CONTROL} value={value ?? ""} onChange={(e) => onChange(e.target.value || null)}>
+      <option value="">{loading ? "Načítám…" : "—"}</option>
+      {opts.map((o) => (
+        <option key={o.value} value={o.value}>{o.label}</option>
+      ))}
+    </select>
   );
 }
 
