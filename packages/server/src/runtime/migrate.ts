@@ -38,7 +38,7 @@
 // A rename can't be inferred from a diff (a removed + added column is ambiguous),
 // so it must be declared with `renamedFrom`; otherwise it is applied as drop+add.
 
-import { addColumnSql, compositeKey, createTableSql, defaultSqlValue, indexName, indexStatements, sqlType } from "./ddl";
+import { addColumnSql, compositeKey, createTableSql, declaredForeignKeys, defaultSqlValue, indexName, indexStatements, sqlType } from "./ddl";
 import { digest } from "./digest";
 import { quoteIdent, type Driver } from "./driver";
 import { entitiesInPartition, partitionOf, validateSchema } from "../sdk/schema";
@@ -89,9 +89,14 @@ function isInternalTable(name: string): boolean {
 export function schemaHash(schema: SchemaDef): string {
   const canon: Record<string, unknown> = {};
   for (const [table, def] of Object.entries(schema)) {
-    // Keep the bare-`fields` shape when there are no composite uniques so existing stores'
-    // hashes are byte-identical (no spurious migration); fold uniques in only when present.
-    canon[table] = def.uniques.length ? { fields: def.fields, uniques: def.uniques } : def.fields;
+    // Keep the bare-`fields` shape when there are no composite uniques AND no FKs so
+    // existing stores' hashes are byte-identical (no spurious migration); fold each in
+    // only when present (composite unique / a belongsTo with onDelete).
+    const fks = declaredForeignKeys(def);
+    const extra: Record<string, unknown> = {};
+    if (def.uniques.length) extra.uniques = def.uniques;
+    if (fks.size) extra.fks = Object.fromEntries([...fks].map(([c, s]) => [c, `${s.target}:${s.onDelete}`]));
+    canon[table] = Object.keys(extra).length ? { fields: def.fields, ...extra } : def.fields;
   }
   return digest(canon);
 }
@@ -228,11 +233,15 @@ async function writeMeta(driver: Driver, key: string, value: string): Promise<vo
 /** Rebuild a table to exactly the declared schema: create a temp table, copy each
  * desired column from its source (renamed or same-named live column, CAST on a
  * type change; brand-new columns left NULL), drop the old table, rename the temp. */
-async function rebuildTable(driver: Driver, table: string, def: { fields: EntityFields }, live: Map<string, string>): Promise<void> {
+async function rebuildTable(
+  driver: Driver,
+  table: string,
+  def: { fields: EntityFields; relations?: import("../sdk/schema").RelationDefs },
+  live: Map<string, string>,
+  pkOf?: (entity: string) => string,
+  skipFks?: ReadonlySet<string>,
+): Promise<void> {
   const tmp = `__pramen_rebuild_${table}`;
-  await driver.exec(`DROP TABLE IF EXISTS ${quoteIdent(tmp)}`, []);
-  await driver.exec(createTableSql(tmp, def), []);
-
   const destCols: string[] = [];
   const srcExprs: string[] = [];
   for (const [name, field] of Object.entries(def.fields)) {
@@ -250,11 +259,45 @@ async function rebuildTable(driver: Driver, table: string, def: { fields: Entity
     destCols.push(quoteIdent(name));
     srcExprs.push(expr);
   }
+  // The drop+rename would trip an immediate FK check (dropping a referenced table, or a
+  // rebuilt table whose FKs momentarily see stale rows), so run the whole sequence
+  // ATOMICALLY: the D1 driver's batch() defers FK checks to the batch commit, and on the
+  // DO the ambient boot transaction (+ defer set at migrate start) already covers it.
+  const stmts: { sql: string; params: unknown[] }[] = [
+    { sql: `DROP TABLE IF EXISTS ${quoteIdent(tmp)}`, params: [] },
+    { sql: createTableSql(tmp, def, pkOf, skipFks), params: [] },
+  ];
   if (destCols.length > 0) {
-    await driver.exec(`INSERT INTO ${quoteIdent(tmp)} (${destCols.join(", ")}) SELECT ${srcExprs.join(", ")} FROM ${quoteIdent(table)}`, []);
+    stmts.push({ sql: `INSERT INTO ${quoteIdent(tmp)} (${destCols.join(", ")}) SELECT ${srcExprs.join(", ")} FROM ${quoteIdent(table)}`, params: [] });
   }
-  await driver.exec(`DROP TABLE ${quoteIdent(table)}`, []);
-  await driver.exec(`ALTER TABLE ${quoteIdent(tmp)} RENAME TO ${quoteIdent(table)}`, []);
+  stmts.push({ sql: `DROP TABLE ${quoteIdent(table)}`, params: [] });
+  stmts.push({ sql: `ALTER TABLE ${quoteIdent(tmp)} RENAME TO ${quoteIdent(table)}`, params: [] });
+  if (driver.batch) await driver.batch(stmts);
+  else for (const s of stmts) await driver.exec(s.sql, s.params); // DO: already inside the boot txn
+}
+
+/** Primary-key column of an entity (the `primaryKey()` field), defaulting to `id`. */
+function pkColumnOf(def: { fields: EntityFields } | undefined): string {
+  if (def) for (const [n, f] of Object.entries(def.fields)) if ((f as FieldDef).primaryKey) return n;
+  return "id";
+}
+
+/** Live FK columns of a table → {target, onDelete} via PRAGMA foreign_key_list. */
+async function liveForeignKeys(driver: Driver, table: string): Promise<Map<string, { target: string; onDelete: string }>> {
+  const rows = (await driver.exec(`PRAGMA foreign_key_list(${quoteIdent(table)})`, [])) as { table: string; from: string; on_delete: string }[];
+  const out = new Map<string, { target: string; onDelete: string }>();
+  for (const r of rows) out.set(r.from, { target: r.table, onDelete: (r.on_delete || "NO ACTION").toUpperCase() });
+  return out;
+}
+
+/** Does the FK column hold a non-NULL value with no matching target row? (Adding the FK
+ * over such data would fail the deferred check at commit.) */
+async function fkColumnHasOrphans(driver: Driver, table: string, col: string, target: string, targetPk: string): Promise<boolean> {
+  const rows = await driver.exec(
+    `SELECT 1 FROM ${quoteIdent(table)} c WHERE c.${quoteIdent(col)} IS NOT NULL AND NOT EXISTS (SELECT 1 FROM ${quoteIdent(target)} p WHERE p.${quoteIdent(targetPk)} = c.${quoteIdent(col)}) LIMIT 1`,
+    [],
+  );
+  return rows.length > 0;
 }
 
 export async function migrate(driver: Driver, schema: SchemaDef, opts: MigrateOptions = {}): Promise<MigrationReport> {
@@ -262,7 +305,14 @@ export async function migrate(driver: Driver, schema: SchemaDef, opts: MigrateOp
   // checked before any DDL so a bad schema fails fast on boot / the D1 path, not mid-migration.
   validateSchema(schema);
   await driver.exec(`CREATE TABLE IF NOT EXISTS _pramen_meta (key TEXT PRIMARY KEY, value TEXT)`, []);
+  // Defer FK checks to the end of the migration transaction so drop/rebuild steps don't
+  // trip an immediate FK violation. On the DO the whole migrate runs in one transaction, so
+  // this one PRAGMA covers everything; on D1 (no ambient transaction) rebuilds instead go
+  // through driver.batch(), which sets its own defer — so this is a harmless no-op there.
+  await driver.exec(`PRAGMA defer_foreign_keys = ON`, []);
   const allowDestructive = opts.allowDestructive ?? false;
+  // Resolve a referenced entity's PK column (for FOREIGN KEY ... REFERENCES emission).
+  const pkOf = (entity: string): string => pkColumnOf(schema[entity]);
 
   // When a partition is named, narrow the schema to just that partition's entities —
   // every later pass (create/alter/rebuild/drop/index/hash) iterates this subset, so
@@ -303,7 +353,7 @@ export async function migrate(driver: Driver, schema: SchemaDef, opts: MigrateOp
   for (const [table, def] of entries) {
     const existing = await tableColumns(driver, table);
     if (existing.size === 0) {
-      await driver.exec(createTableSql(table, def), []);
+      await driver.exec(createTableSql(table, def, pkOf), []);
       created.push(table);
       continue;
     }
@@ -398,6 +448,27 @@ export async function migrate(driver: Driver, schema: SchemaDef, opts: MigrateOp
       }
     }
 
+    // Foreign keys (belongsTo with onDelete). SQLite can't ALTER a table to add/change an
+    // FK, so any FK delta is enacted by a rebuild (safe — no data loss). An FK being ADDED
+    // over data with orphaned references is skipped (reported) and left out of the rebuild,
+    // mirroring the unique-over-duplicates behavior, so the migration doesn't fail.
+    const declaredFks = declaredForeignKeys(def);
+    const liveFks = await liveForeignKeys(driver, table);
+    const fkSkip = new Set<string>();
+    for (const [col, spec] of declaredFks) {
+      if (!liveFks.has(col) && (await fkColumnHasOrphans(driver, table, col, spec.target, pkOf(spec.target)))) {
+        fkSkip.add(col);
+        skipped.push(`add FK ${table}.${col} → ${spec.target} (orphaned references present)`);
+      }
+    }
+    const applyFks = new Map([...declaredFks].filter(([col]) => !fkSkip.has(col)));
+    const fkChanged =
+      applyFks.size !== liveFks.size ||
+      [...applyFks].some(([col, s]) => {
+        const l = liveFks.get(col);
+        return !l || l.target !== s.target || l.onDelete !== s.onDelete;
+      });
+
     const destructive = needsDrop || needsTypeChange || renamedSources.size > 0 || modifierRebuildDestructive;
     if (destructive && !allowDestructive) {
       // The destructive part is gated off — skip the whole rebuild (any pending safe
@@ -409,10 +480,10 @@ export async function migrate(driver: Driver, schema: SchemaDef, opts: MigrateOp
         ...destructiveReasons,
       ];
       skipped.push(`rebuild ${table} (${reasons.join(", ")})`);
-    } else if (destructive || needsAdditiveRebuild || modifierRebuildSafe) {
-      // A safe rebuild (expr-default column, default/notNull modifier change) needs no
-      // permission — it loses no data.
-      await rebuildTable(driver, table, def, live);
+    } else if (destructive || needsAdditiveRebuild || modifierRebuildSafe || fkChanged) {
+      // A safe rebuild (expr-default column, default/notNull modifier change, FK add/change)
+      // needs no permission — it loses no data.
+      await rebuildTable(driver, table, def, live, pkOf, fkSkip);
       rebuilt.push(table);
     }
 

@@ -2,7 +2,7 @@
 // for a new column. Runs in TS inside the isolate; see runtime/migrate.ts for how
 // these are applied.
 
-import type { DefaultValue, EntityFields, FieldDef } from "../sdk/schema";
+import type { DefaultValue, EntityFields, FieldDef, RelationDefs } from "../sdk/schema";
 import { quoteIdent } from "./driver";
 
 // SQLite has no boolean type; store as INTEGER 0/1. json + fileRef + uuid are
@@ -57,9 +57,47 @@ function columnSql(name: string, f: FieldDef): string {
   return s;
 }
 
-export function createTableSql(table: string, def: { fields: EntityFields }): string {
+/** Table-level FOREIGN KEY clauses for an entity's owning relations. A real FK is emitted
+ * ONLY for a `belongsTo` that declares `onDelete` — so FKs are opt-in and pre-existing
+ * logical relations are unaffected (no retroactive constraint on existing data). `pkOf`
+ * resolves the referenced entity's primary-key column. `skip` omits specific FK columns —
+ * the migrator uses it to drop an FK whose existing data has orphaned references. */
+export function foreignKeyClauses(
+  def: { relations?: RelationDefs },
+  pkOf: (entity: string) => string,
+  skip?: ReadonlySet<string>,
+): string[] {
+  const out: string[] = [];
+  for (const rel of Object.values(def.relations ?? {})) {
+    if (rel.kind !== "belongsTo" || rel.onDelete === undefined) continue; // FK only when onDelete is declared
+    if (skip?.has(rel.column)) continue;
+    const action = rel.onDelete === "cascade" ? "CASCADE" : rel.onDelete === "setNull" ? "SET NULL" : "RESTRICT";
+    out.push(`FOREIGN KEY (${quoteIdent(rel.column)}) REFERENCES ${quoteIdent(rel.target)}(${quoteIdent(pkOf(rel.target))}) ON DELETE ${action}`);
+  }
+  return out;
+}
+
+/** The FK columns an entity declares (belongsTo with onDelete) → their {target, action}.
+ * Used by the migrator to compare declared FKs against the live `foreign_key_list`. */
+export function declaredForeignKeys(def: { relations?: RelationDefs }): Map<string, { target: string; onDelete: string }> {
+  const out = new Map<string, { target: string; onDelete: string }>();
+  for (const rel of Object.values(def.relations ?? {})) {
+    if (rel.kind !== "belongsTo" || rel.onDelete === undefined) continue;
+    const action = rel.onDelete === "cascade" ? "CASCADE" : rel.onDelete === "setNull" ? "SET NULL" : "RESTRICT";
+    out.set(rel.column, { target: rel.target, onDelete: action });
+  }
+  return out;
+}
+
+export function createTableSql(
+  table: string,
+  def: { fields: EntityFields; relations?: RelationDefs },
+  pkOf?: (entity: string) => string,
+  skipFks?: ReadonlySet<string>,
+): string {
   const cols = Object.entries(def.fields).map(([n, f]) => columnSql(n, f));
-  return `CREATE TABLE IF NOT EXISTS ${quoteIdent(table)} (${cols.join(", ")})`;
+  const fks = pkOf ? foreignKeyClauses(def, pkOf, skipFks) : [];
+  return `CREATE TABLE IF NOT EXISTS ${quoteIdent(table)} (${[...cols, ...fks].join(", ")})`;
 }
 
 /** Column definition for ALTER TABLE ADD COLUMN. No PRIMARY KEY / AUTOINCREMENT.

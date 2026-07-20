@@ -71,11 +71,19 @@ export type EntityFields = Record<string, FieldDef>;
 
 // --- relations ---
 
+/** FK ON DELETE behavior for an owning relation's real foreign key. `restrict` (the
+ * default) blocks deleting a referenced row; `cascade` deletes the referencing rows;
+ * `setNull` nulls the FK column (which must be nullable). Enforced by the SQLite engine
+ * at runtime on both DO and D1. */
+export type OnDelete = "cascade" | "setNull" | "restrict";
+
 export interface BelongsToDef<T extends string = string> {
   readonly kind: "belongsTo";
   readonly target: T;
-  /** Local column holding the target's primary key. */
+  /** Local column holding the target's primary key (a real FK: REFERENCES target(pk)). */
   readonly column: string;
+  /** ON DELETE action for the FK; omitted ⇒ `restrict` (SQLite default). */
+  readonly onDelete?: OnDelete;
 }
 export interface HasManyDef<T extends string = string> {
   readonly kind: "hasMany";
@@ -98,7 +106,8 @@ export type RelationDef = BelongsToDef | HasManyDef | ManyToManyDef;
 export type RelationDefs = Record<string, RelationDef>;
 
 const relationBuilders = {
-  belongsTo: <T extends string>(target: T, column: string) => ({ kind: "belongsTo", target, column }) as const,
+  belongsTo: <T extends string>(target: T, column: string, opts?: { onDelete?: OnDelete }) =>
+    ({ kind: "belongsTo", target, column, onDelete: opts?.onDelete }) as const,
   hasMany: <T extends string>(target: T, column: string) => ({ kind: "hasMany", target, column }) as const,
   manyToMany: <T extends string>(target: T, opts: { through: string; sourceColumn: string; targetColumn: string }) =>
     ({ kind: "manyToMany", target, through: opts.through, sourceColumn: opts.sourceColumn, targetColumn: opts.targetColumn }) as const,

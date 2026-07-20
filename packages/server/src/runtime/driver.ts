@@ -69,6 +69,12 @@ export interface Driver {
   exec(sql: string, params: unknown[]): Promise<Row[]>;
   /** Run `fn` inside a transaction: commit on resolve, roll back on throw. */
   transaction<T>(fn: () => Promise<T>): Promise<T>;
+  /** Run a fixed sequence of write statements ATOMICALLY with FK checks deferred to the
+   * end — for a table rebuild that involves foreign keys (drop + recreate would trip an
+   * immediate FK check). Optional: absent on a driver whose migrate already runs inside a
+   * transaction (the DO), where the migrator falls back to sequential exec. Provided by the
+   * D1 driver (no interactive transactions — uses db.batch(), itself atomic). */
+  batch?(statements: ReadonlyArray<{ sql: string; params: unknown[] }>): Promise<void>;
 }
 
 /** DO SQLite — the in-process store. `SqlStorage` is synchronous; we wrap it as an
@@ -134,5 +140,16 @@ export class D1Driver implements Driver {
   // D1 has no interactive/atomic transactions — see the class doc. Run `fn` as-is.
   transaction<T>(fn: () => Promise<T>): Promise<T> {
     return fn();
+  }
+
+  /** D1's one atomic primitive: `session.batch()` runs the statements in a single
+   * transaction (rolled back as a unit on failure). Prepend `defer_foreign_keys` so a
+   * table rebuild's transient FK violations are checked only at the batch's commit. */
+  async batch(statements: ReadonlyArray<{ sql: string; params: unknown[] }>): Promise<void> {
+    const prepared = [
+      this.session.prepare("PRAGMA defer_foreign_keys = ON"),
+      ...statements.map((s) => (s.params.length ? this.session.prepare(s.sql).bind(...s.params) : this.session.prepare(s.sql))),
+    ];
+    await this.session.batch(prepared);
   }
 }
