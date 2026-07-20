@@ -147,7 +147,7 @@ export type FieldsOf<E> = E extends EntityDef<infer F, RelationDefs> ? F : never
 /** Extract a schema entry's relations. */
 export type RelationsOf<E> = E extends EntityDef<EntityFields, infer R> ? R : Record<string, never>;
 
-type RelValue<S extends SchemaDef, Rel> = Rel extends { kind: "belongsTo"; target: infer Tg }
+type RelValue<S extends SchemaDef, Rel> = Rel extends { kind: "belongsTo" | "oneHasOne" | "oneHasOneInverse"; target: infer Tg }
   ? Tg extends keyof S
     ? InferRow<FieldsOf<S[Tg]>> | null
     : never

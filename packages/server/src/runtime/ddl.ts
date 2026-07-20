@@ -58,8 +58,8 @@ function columnSql(name: string, f: FieldDef): string {
 }
 
 /** Table-level FOREIGN KEY clauses for an entity's owning relations. A real FK is emitted
- * ONLY for a `belongsTo` that declares `onDelete` — so FKs are opt-in and pre-existing
- * logical relations are unaffected (no retroactive constraint on existing data). `pkOf`
+ * ONLY for a `belongsTo`/`oneHasOne` that declares `onDelete` — so FKs are opt-in and
+ * pre-existing logical relations are unaffected (no retroactive constraint on data). `pkOf`
  * resolves the referenced entity's primary-key column. `skip` omits specific FK columns —
  * the migrator uses it to drop an FK whose existing data has orphaned references. */
 export function foreignKeyClauses(
@@ -69,7 +69,7 @@ export function foreignKeyClauses(
 ): string[] {
   const out: string[] = [];
   for (const rel of Object.values(def.relations ?? {})) {
-    if (rel.kind !== "belongsTo" || rel.onDelete === undefined) continue; // FK only when onDelete is declared
+    if ((rel.kind !== "belongsTo" && rel.kind !== "oneHasOne") || rel.onDelete === undefined) continue; // FK only when onDelete is declared
     if (skip?.has(rel.column)) continue;
     const action = rel.onDelete === "cascade" ? "CASCADE" : rel.onDelete === "setNull" ? "SET NULL" : "RESTRICT";
     out.push(`FOREIGN KEY (${quoteIdent(rel.column)}) REFERENCES ${quoteIdent(rel.target)}(${quoteIdent(pkOf(rel.target))}) ON DELETE ${action}`);
@@ -82,7 +82,7 @@ export function foreignKeyClauses(
 export function declaredForeignKeys(def: { relations?: RelationDefs }): Map<string, { target: string; onDelete: string }> {
   const out = new Map<string, { target: string; onDelete: string }>();
   for (const rel of Object.values(def.relations ?? {})) {
-    if (rel.kind !== "belongsTo" || rel.onDelete === undefined) continue;
+    if ((rel.kind !== "belongsTo" && rel.kind !== "oneHasOne") || rel.onDelete === undefined) continue;
     const action = rel.onDelete === "cascade" ? "CASCADE" : rel.onDelete === "setNull" ? "SET NULL" : "RESTRICT";
     out.set(rel.column, { target: rel.target, onDelete: action });
   }

@@ -102,13 +102,32 @@ export interface ManyToManyDef<T extends string = string> {
   readonly sourceColumn: string;
   readonly targetColumn: string;
 }
-export type RelationDef = BelongsToDef | HasManyDef | ManyToManyDef;
+/** One-to-one (owning side): THIS entity holds `column` = the target's primary key, and
+ * the pairing is 1:1 — mark `column` `unique()` for the DB-enforced guarantee. Reads as a
+ * single target (like belongsTo); FK-capable via `onDelete`. */
+export interface OneHasOneDef<T extends string = string> {
+  readonly kind: "oneHasOne";
+  readonly target: T;
+  readonly column: string;
+  readonly onDelete?: OnDelete;
+}
+/** One-to-one (inverse side): the TARGET holds `column` referencing THIS entity's primary
+ * key. Reads as a single target (the reverse of a oneHasOne), or null. */
+export interface OneHasOneInverseDef<T extends string = string> {
+  readonly kind: "oneHasOneInverse";
+  readonly target: T;
+  readonly column: string;
+}
+export type RelationDef = BelongsToDef | HasManyDef | ManyToManyDef | OneHasOneDef | OneHasOneInverseDef;
 export type RelationDefs = Record<string, RelationDef>;
 
 const relationBuilders = {
   belongsTo: <T extends string>(target: T, column: string, opts?: { onDelete?: OnDelete }) =>
     ({ kind: "belongsTo", target, column, onDelete: opts?.onDelete }) as const,
   hasMany: <T extends string>(target: T, column: string) => ({ kind: "hasMany", target, column }) as const,
+  oneHasOne: <T extends string>(target: T, column: string, opts?: { onDelete?: OnDelete }) =>
+    ({ kind: "oneHasOne", target, column, onDelete: opts?.onDelete }) as const,
+  oneHasOneInverse: <T extends string>(target: T, column: string) => ({ kind: "oneHasOneInverse", target, column }) as const,
   manyToMany: <T extends string>(target: T, opts: { through: string; sourceColumn: string; targetColumn: string }) =>
     ({ kind: "manyToMany", target, through: opts.through, sourceColumn: opts.sourceColumn, targetColumn: opts.targetColumn }) as const,
 };

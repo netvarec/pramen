@@ -308,7 +308,9 @@ function relationPredicate(rel: RelationDef, nested: unknown, parentEntity: stri
     const targetSub: SqlExpr = { t: "sub", outerCol: rel.targetColumn, from: rel.target, selectCol: pkOf(ctx.schema, rel.target), where: inner, negate: false };
     return { t: "sub", outerCol: pkOf(ctx.schema, parentEntity), from: rel.through, selectCol: rel.sourceColumn, where: targetSub, negate: false };
   }
-  return rel.kind === "belongsTo"
+  // oneHasOne mirrors belongsTo (this row's FK → target pk); oneHasOneInverse mirrors
+  // hasMany (target's column → this row's pk).
+  return rel.kind === "belongsTo" || rel.kind === "oneHasOne"
     ? { t: "sub", outerCol: rel.column, from: rel.target, selectCol: pkOf(ctx.schema, rel.target), where: inner, negate: false }
     : { t: "sub", outerCol: pkOf(ctx.schema, parentEntity), from: rel.target, selectCol: rel.column, where: inner, negate: false };
 }

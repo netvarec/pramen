@@ -641,12 +641,19 @@ export class Db<S extends SchemaDef = SchemaDef> {
       return rows.map((row) => ({ key: row[col], row: project(row) }));
     };
 
-    if (rel.kind === "belongsTo") {
-      // parent[column] -> target.id
+    if (rel.kind === "belongsTo" || rel.kind === "oneHasOne") {
+      // parent[column] -> target.id (single-valued; oneHasOne is belongsTo + a 1:1 unique)
       const keys = [...new Set(rows.map((r) => r[rel.column]).filter((v) => v != null))];
       const byId = new Map<unknown, Row>();
       for (const { key, row } of await fetchBy(this.pkOf(rel.target), keys)) byId.set(key, row);
       for (const r of rows) r[relName] = r[rel.column] != null ? (byId.get(r[rel.column]) ?? null) : null;
+    } else if (rel.kind === "oneHasOneInverse") {
+      // inverse 1:1 — target[column] -> parent.<pk>, single object (or null)
+      const pk = this.pkOf(parentEntity);
+      const ids = [...new Set(rows.map((r) => r[pk]).filter((v) => v != null))];
+      const byParent = new Map<unknown, Row>();
+      for (const { key, row } of await fetchBy(rel.column, ids)) if (!byParent.has(key)) byParent.set(key, row);
+      for (const r of rows) r[relName] = byParent.get(r[pk]) ?? null;
     } else if (rel.kind === "manyToMany") {
       // parent.<pk> -> junction(sourceColumn -> targetColumn) -> target.<pk>. The junction
       // is read for just its two link columns (its own ACL isn't applied — like hasMany's
