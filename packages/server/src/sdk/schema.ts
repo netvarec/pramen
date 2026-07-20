@@ -83,12 +83,25 @@ export interface HasManyDef<T extends string = string> {
   /** Column on the target referring back to this entity's primary key. */
   readonly column: string;
 }
-export type RelationDef = BelongsToDef | HasManyDef;
+/** Many-to-many via an explicit junction entity. Logical (no FK constraints), like the
+ * other relation kinds: `through` is a normal entity you define and write to directly;
+ * `sourceColumn`/`targetColumn` are its columns holding this entity's and the target's
+ * primary keys. Source, junction, and target must share a partition (single-DO traversal). */
+export interface ManyToManyDef<T extends string = string> {
+  readonly kind: "manyToMany";
+  readonly target: T;
+  readonly through: string;
+  readonly sourceColumn: string;
+  readonly targetColumn: string;
+}
+export type RelationDef = BelongsToDef | HasManyDef | ManyToManyDef;
 export type RelationDefs = Record<string, RelationDef>;
 
 const relationBuilders = {
   belongsTo: <T extends string>(target: T, column: string) => ({ kind: "belongsTo", target, column }) as const,
   hasMany: <T extends string>(target: T, column: string) => ({ kind: "hasMany", target, column }) as const,
+  manyToMany: <T extends string>(target: T, opts: { through: string; sourceColumn: string; targetColumn: string }) =>
+    ({ kind: "manyToMany", target, through: opts.through, sourceColumn: opts.sourceColumn, targetColumn: opts.targetColumn }) as const,
 };
 export type RelationBuilders = typeof relationBuilders;
 
@@ -313,6 +326,23 @@ export function validateSchema(schema: SchemaDef): void {
             `'${pE}' but target '${rel.target}' is in '${pT}'. Relations cannot cross partitions — ` +
             `put both entities in the same partition or drop the relation.`,
         );
+      }
+      if (rel.kind === "manyToMany") {
+        const through = schema[rel.through];
+        if (!through) {
+          throw new Error(`relation '${entity}.${relName}' names an unknown junction entity '${rel.through}'.`);
+        }
+        for (const [label, col] of [["sourceColumn", rel.sourceColumn], ["targetColumn", rel.targetColumn]] as const) {
+          if (!(col in through.fields)) {
+            throw new Error(`relation '${entity}.${relName}' ${label} '${col}' is not a column of junction '${rel.through}'.`);
+          }
+        }
+        if (partitionOf(schema, rel.through) !== pE) {
+          throw new Error(
+            `relation '${entity}.${relName}' junction '${rel.through}' is in a different partition than '${entity}' — ` +
+              `the source, junction, and target must share a partition (traversal is single-DO).`,
+          );
+        }
       }
     }
     for (const t of def.triggers) {

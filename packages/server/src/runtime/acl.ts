@@ -302,6 +302,12 @@ function relationPredicate(rel: RelationDef, nested: unknown, parentEntity: stri
 
   // belongsTo: parent.<fk> IN (SELECT <target pk> FROM target WHERE inner)
   // hasMany:   parent.<pk> IN (SELECT <target fk> FROM target WHERE inner)
+  // manyToMany: parent.<pk> IN (SELECT <sourceCol> FROM through
+  //               WHERE <targetCol> IN (SELECT <target pk> FROM target WHERE inner))
+  if (rel.kind === "manyToMany") {
+    const targetSub: SqlExpr = { t: "sub", outerCol: rel.targetColumn, from: rel.target, selectCol: pkOf(ctx.schema, rel.target), where: inner, negate: false };
+    return { t: "sub", outerCol: pkOf(ctx.schema, parentEntity), from: rel.through, selectCol: rel.sourceColumn, where: targetSub, negate: false };
+  }
   return rel.kind === "belongsTo"
     ? { t: "sub", outerCol: rel.column, from: rel.target, selectCol: pkOf(ctx.schema, rel.target), where: inner, negate: false }
     : { t: "sub", outerCol: pkOf(ctx.schema, parentEntity), from: rel.target, selectCol: rel.column, where: inner, negate: false };

@@ -151,7 +151,7 @@ type RelValue<S extends SchemaDef, Rel> = Rel extends { kind: "belongsTo"; targe
   ? Tg extends keyof S
     ? InferRow<FieldsOf<S[Tg]>> | null
     : never
-  : Rel extends { kind: "hasMany"; target: infer Tg }
+  : Rel extends { kind: "hasMany" | "manyToMany"; target: infer Tg }
     ? Tg extends keyof S
       ? InferRow<FieldsOf<S[Tg]>>[]
       : never

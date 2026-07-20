@@ -647,6 +647,31 @@ export class Db<S extends SchemaDef = SchemaDef> {
       const byId = new Map<unknown, Row>();
       for (const { key, row } of await fetchBy(this.pkOf(rel.target), keys)) byId.set(key, row);
       for (const r of rows) r[relName] = r[rel.column] != null ? (byId.get(r[rel.column]) ?? null) : null;
+    } else if (rel.kind === "manyToMany") {
+      // parent.<pk> -> junction(sourceColumn -> targetColumn) -> target.<pk>. The junction
+      // is read for just its two link columns (its own ACL isn't applied — like hasMany's
+      // intermediate); the target rows ARE scope-filtered by fetchBy, so an unreadable
+      // target simply drops out of the list.
+      const pk = this.pkOf(parentEntity);
+      const parentIds = [...new Set(rows.map((r) => r[pk]).filter((v) => v != null))];
+      if (parentIds.length === 0) {
+        for (const r of rows) r[relName] = [];
+        return;
+      }
+      this.touched.add(rel.through);
+      const linkSel = compileSelect({ from: rel.through, where: inList(rel.sourceColumn, parentIds) }, this.dialect);
+      const links = this.decodeRows(rel.through, await this.driver.exec(linkSel.sql, linkSel.params));
+      const targetIds = [...new Set(links.map((l) => l[rel.targetColumn]).filter((v) => v != null))];
+      const byTarget = new Map<unknown, Row>();
+      for (const { key, row } of await fetchBy(this.pkOf(rel.target), targetIds)) byTarget.set(key, row);
+      const grouped = new Map<unknown, Row[]>();
+      for (const l of links) {
+        const t = byTarget.get(l[rel.targetColumn]);
+        if (!t) continue; // target unreadable or missing -> excluded from the list
+        const src = l[rel.sourceColumn];
+        (grouped.get(src) ?? grouped.set(src, []).get(src)!).push(t);
+      }
+      for (const r of rows) r[relName] = grouped.get(r[pk]) ?? [];
     } else {
       // hasMany: target[column] -> parent.<pk> (NOT hardcoded `id` — a parent keyed by
       // slug/username would otherwise join on an undefined `r.id` and get []).
