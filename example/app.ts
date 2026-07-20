@@ -35,6 +35,9 @@ import {
   authHandlers,
   magicLinkSchema,
   createMagicLinkAuth,
+  emailTokenSchema,
+  createPasswordReset,
+  createEmailVerification,
   userHandlers,
   createUserHandlers,
   authPolicies,
@@ -51,6 +54,8 @@ const schema = defineSchema({
   ...authSchema,
   // @pramen/auth's passwordless magic-link table (requestMagicLink/loginWithMagicLink).
   ...magicLinkSchema,
+  // @pramen/auth's one-time email tokens — password reset + email verification.
+  ...emailTokenSchema,
   // @pramen/cms's block/page-builder tables (cms_pages, cms_blocks, cms_block_types, …).
   ...cmsSchema,
   // A COLLECTION-backed entity: `lectures` is an ordinary pramen entity (real, queryable
@@ -163,6 +168,38 @@ const magicLink = createMagicLinkAuth({
   },
 });
 
+// @pramen/auth: password reset. Anonymous request→reset; the emailed token is the
+// capability. Delivery + a dev token-stash mirror the magic-link wiring above.
+const passwordReset = createPasswordReset({
+  sendEmail: async (ctx, { email, token }) => {
+    const appUrl = (ctx.env.APP_URL as string) ?? "http://localhost:8787";
+    const link = `${appUrl}/reset?token=${encodeURIComponent(token)}`;
+    await ctx.mail.send({
+      to: email,
+      subject: "Reset your password",
+      text: `Reset your password: ${link}\n\nThis link expires in 1 hour. If you didn't request it, ignore this email.`,
+      html: `<p><a href="${link}">Reset your password</a></p><p>This link expires in 1 hour. If you didn't request it, ignore this email.</p>`,
+    });
+    await ctx.kv.put(`pwreset:${email}`, token, { expirationTtl: 3600 }); // dev-only: token for the e2e
+  },
+});
+
+// @pramen/auth: email verification. Authenticated request→anonymous verify; stamps
+// auth_users.emailVerified.
+const emailVerification = createEmailVerification({
+  sendEmail: async (ctx, { email, token }) => {
+    const appUrl = (ctx.env.APP_URL as string) ?? "http://localhost:8787";
+    const link = `${appUrl}/verify?token=${encodeURIComponent(token)}`;
+    await ctx.mail.send({
+      to: email,
+      subject: "Verify your email",
+      text: `Verify your email: ${link}\n\nThis link expires in 24 hours.`,
+      html: `<p><a href="${link}">Verify your email</a></p><p>This link expires in 24 hours.</p>`,
+    });
+    await ctx.kv.put(`verify:${email}`, token, { expirationTtl: 86400 }); // dev-only: token for the e2e
+  },
+});
+
 // User management over the CUSTOM org_accounts table (the multi-tenant pattern):
 // the same handlers, pointed at a different table, exposed under prefixed RPC names.
 const orgAccounts = createUserHandlers({ table: "org_accounts" });
@@ -193,6 +230,11 @@ const handlers = {
   // @pramen/auth: requestMagicLink / loginWithMagicLink (passwordless). The email is
   // sent from the `sendMagicLinkEmail` task (see `tasks` below), off the write path.
   ...magicLink.handlers,
+  // @pramen/auth: requestPasswordReset / resetPassword (anonymous; emailed token is the
+  // capability) + requestEmailVerification (authenticated) / verifyEmail (anonymous).
+  // Emails go out from the sendPasswordResetEmail / sendVerificationEmail tasks below.
+  ...passwordReset.handlers,
+  ...emailVerification.handlers,
   // @pramen/auth: user management — listUsers / setUserRoles / setUserActive (admin),
   // changeEmail / changePassword (self). Gated by authPolicies() in the ACL below.
   ...userHandlers,
@@ -215,6 +257,14 @@ const handlers = {
   // gate the CALL with `auth: ["admin"]` — without it any anonymous caller could read
   // another address's magic-link token. Not for production.
   __magicInbox: query(async (ctx, input: { email: string }) => ({ token: await ctx.kv.get(`magiclink:${input.email}`) }), {
+    auth: ["admin"],
+  }),
+  // Dev-only (admin-gated), same shape as __magicInbox: read the password-reset /
+  // email-verification token the demo "emailed", so the e2e can complete each flow.
+  __pwResetInbox: query(async (ctx, input: { email: string }) => ({ token: await ctx.kv.get(`pwreset:${input.email}`) }), {
+    auth: ["admin"],
+  }),
+  __verifyInbox: query(async (ctx, input: { email: string }) => ({ token: await ctx.kv.get(`verify:${input.email}`) }), {
     auth: ["admin"],
   }),
 
@@ -692,6 +742,9 @@ const tasks = {
   // @pramen/auth: sendMagicLinkEmail — invokes the app's sendEmail after commit, so a slow
   // transport can't hold the requestMagicLink mutation's storage transaction open.
   ...magicLink.tasks,
+  // @pramen/auth: sendPasswordResetEmail + sendVerificationEmail — same deferred-send shape.
+  ...passwordReset.tasks,
+  ...emailVerification.tasks,
 };
 
 // Cloudflare Queues consumers, keyed by QUEUE name (the oblaka `Queue` name —

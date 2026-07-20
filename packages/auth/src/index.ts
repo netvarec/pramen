@@ -27,6 +27,7 @@ export const authSchema = {
     passwordHash: hidden(t.text()), // never readable via the ORM; empty for passwordless users
     roles: t.json(), // string[]
     email: unique(t.text()), // mutable contact email (nullable, unique); the magic-link key
+    emailVerified: t.int(), // epoch ms the current `email` was confirmed; NULL = unverified (additive)
     active: defaultTo(t.bool(), true), // deactivation flag — false blocks login (additive, backfills 1)
     createdAt: t.int(),
   })),
@@ -148,11 +149,24 @@ function sessionTtlOf(ctx: HandlerContext): number {
   return Number.isFinite(v) && v > 0 ? Math.trunc(v) : TOKEN_TTL_SECONDS;
 }
 
-function parseCreds(raw: unknown): { username: string; password: string } {
+/** A permissive email shape check (one `@`, a dot in the domain). The single source of
+ * truth for `parseEmail` and the optional email at signup. */
+const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+
+function parseCreds(raw: unknown): { username: string; password: string; email?: string } {
   const o = (raw ?? {}) as Record<string, unknown>;
   if (typeof o.username !== "string" || o.username.length === 0) throw new Error("username is required");
   if (typeof o.password !== "string" || o.password.length < 8) throw new Error("password must be at least 8 characters");
-  return { username: o.username, password: o.password };
+  // Optional contact email at signup — validated + normalized when present, so password
+  // reset and email verification work without a separate changeEmail round-trip. Absent ⇒
+  // the row's email stays NULL (still allowed; the user can set it later).
+  let email: string | undefined;
+  if (o.email !== undefined && o.email !== null && o.email !== "") {
+    const e = String(o.email).trim().toLowerCase();
+    if (!EMAIL_RE.test(e)) throw new Error("a valid email is required");
+    email = e;
+  }
+  return { username: o.username, password: o.password, email };
 }
 
 /** signup / login / me. Roles are assigned server-side (default `["user"]`) — the
@@ -167,7 +181,7 @@ export const authHandlers = {
   // The enumeration-SAFE flow is the passwordless / magic-link path (createMagicLinkAuth),
   // which keys on the email and always returns the same `{ ok: true }`.
   signup: mutation(
-    async (ctx, input: { username: string; password: string }) => {
+    async (ctx, input: { username: string; password: string; email?: string }) => {
       const existing = await ctx.db.exec("SELECT 1 FROM auth_users WHERE username = ? LIMIT 1", input.username);
       if (existing.length > 0) {
         // Equalize timing with the available path (which hashes below) so the taken vs.
@@ -175,17 +189,27 @@ export const authHandlers = {
         await hashPassword(input.password);
         throw new BadRequest("username is taken");
       }
+      // A supplied email must be free (the column is unique). Same clean-400 shape as
+      // changeEmail rather than surfacing the DB constraint as a 500.
+      if (input.email) {
+        const emailTaken = await ctx.db.exec("SELECT 1 FROM auth_users WHERE email = ? LIMIT 1", input.email);
+        if (emailTaken.length > 0) throw new BadRequest("email already in use");
+      }
       const roles = DEFAULT_ROLES;
       const passwordHash = await hashPassword(input.password);
+      // Signup stores the email UNVERIFIED (emailVerified NULL). The app confirms it via
+      // createEmailVerification (requestEmailVerification runs right after signup — the
+      // client already holds the returned session token).
       await ctx.db.exec(
-        "INSERT INTO auth_users (username, passwordHash, roles, createdAt) VALUES (?, ?, ?, ?)",
+        "INSERT INTO auth_users (username, passwordHash, roles, email, createdAt) VALUES (?, ?, ?, ?, ?)",
         input.username,
         passwordHash,
         JSON.stringify(roles),
+        input.email ?? null,
         Date.now(),
       );
       const token = await signToken({ sub: input.username, roles }, secretOf(ctx), { ttlSeconds: sessionTtlOf(ctx) });
-      return { token, user: { username: input.username, roles } };
+      return { token, user: { username: input.username, roles, email: input.email ?? null } };
     },
     { input: parseCreds },
   ),
@@ -248,6 +272,24 @@ export const magicLinkSchema = {
   })),
 };
 
+// One-time email-token table shared by password reset AND email verification (spread it
+// once if you use EITHER `createPasswordReset` or `createEmailVerification`). Rows are
+// discriminated by `purpose` ("reset" | "verify"); only a SHA-256 hash of the token is
+// stored, so a DB leak never exposes a live token. `username` binds the token to the
+// account it acts on; `email` pins the address it was minted for (verification rejects a
+// token whose address the user has since changed).
+export const emailTokenSchema = {
+  auth_email_tokens: Entity((t) => ({
+    tokenHash: t.textId(), // PK = sha256(token)
+    purpose: t.text(), // "reset" | "verify"
+    username: t.text(), // the account (JWT sub) the token acts on
+    email: t.text(), // the address at mint time
+    expiresAt: t.int(), // epoch ms
+    consumedAt: t.int(), // epoch ms; NULL until redeemed (single-use)
+    createdAt: t.int(),
+  })),
+};
+
 async function sha256Hex(s: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", enc(s));
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -261,7 +303,7 @@ function mintToken(): string {
 function parseEmail(raw: unknown): { email: string } {
   const o = (raw ?? {}) as Record<string, unknown>;
   const email = typeof o.email === "string" ? o.email.trim().toLowerCase() : "";
-  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new BadRequest("a valid email is required");
+  if (!EMAIL_RE.test(email)) throw new BadRequest("a valid email is required");
   return { email };
 }
 
@@ -544,7 +586,13 @@ export function createUserHandlers(opts: { table?: string } = {}) {
       if (taken.length > 0) throw new BadRequest("email already in use");
       const updated = await usersDb(ctx).update(table, userId, { email });
       if (!updated) throw new Unauthorized("authentication required");
-      return updated;
+      // The new address is UNVERIFIED — clear any prior verification so `emailVerified`
+      // never claims an unconfirmed address. Raw (ACL-bypassing) but self-scoped by the
+      // verified identity, and it only ever CLEARS the flag (routing it through the self
+      // update policy would instead let a user set their own verified state). Any pending
+      // verify token for the old address is now dead (verifyEmail's current-email guard).
+      await ctx.db.exec(`UPDATE ${table} SET emailVerified = NULL WHERE username = ?`, userId);
+      return { ...updated, emailVerified: null };
     }),
 
     /** Self-service: change the caller's password. A credential op — it reads the
@@ -573,9 +621,9 @@ export function createUserHandlers(opts: { table?: string } = {}) {
 export const userHandlers = createUserHandlers();
 
 // Fields a self-service caller may see of their own row (never passwordHash/roles).
-const SELF_READ_FIELDS = ["username", "email", "active", "createdAt"];
+const SELF_READ_FIELDS = ["username", "email", "emailVerified", "active", "createdAt"];
 // Fields an admin may see of any user (never passwordHash).
-const ADMIN_READ_FIELDS = ["username", "roles", "email", "active", "createdAt"];
+const ADMIN_READ_FIELDS = ["username", "roles", "email", "emailVerified", "active", "createdAt"];
 
 /** ACL policy fragments that turn on the user-management handlers. Spread `admin`
  * into your admin role and `self` into your authenticated-user role:
@@ -618,4 +666,193 @@ export function authPolicies(opts: {
       policy(`${p}:self:update`, table, "update", { where: { username: $identity(idPath) }, fields: selfWrite }),
     ],
   };
+}
+
+// --- password reset + email verification -------------------------------------
+//
+// Two one-time-email-token flows, built on the same machinery as magic-link: mint a
+// random token, persist only its SHA-256 HASH + an expiry (in the shared
+// `auth_email_tokens` table, spread `emailTokenSchema`), email the raw token from a TASK
+// (off the mutation's storage transaction — a slow send can't hold the store lock), and
+// redeem it once. Both are transport-agnostic: you supply `sendEmail`; pramen owns the
+// token lifecycle. Wire the returned `tasks` into your app's task map, or the token is
+// written but the email never sends.
+
+const PURPOSE_RESET = "reset";
+const PURPOSE_VERIFY = "verify";
+
+/** Mint a one-time token for `username`, invalidate any prior pending token of the same
+ * purpose for that user (only the latest works), and persist its hash + expiry. Returns
+ * the raw token (the caller enqueues the send task with it). */
+async function issueEmailToken(ctx: HandlerContext, purpose: string, username: string, email: string, expiresAt: number): Promise<string> {
+  const token = mintToken();
+  const tokenHash = await sha256Hex(token);
+  await ctx.db.exec("DELETE FROM auth_email_tokens WHERE purpose = ? AND username = ?", purpose, username);
+  await ctx.db.exec(
+    "INSERT INTO auth_email_tokens (tokenHash, purpose, username, email, expiresAt, createdAt) VALUES (?, ?, ?, ?, ?, ?)",
+    tokenHash,
+    purpose,
+    username,
+    email,
+    expiresAt,
+    Date.now(),
+  );
+  return token;
+}
+
+/** Validate a token (right purpose, unexpired, unconsumed) and CONSUME it (single-use).
+ * Returns the account + address it was minted for. Throws Unauthorized on any failure —
+ * the same opaque error for missing / wrong-purpose / expired / already-used, so a caller
+ * learns nothing beyond "this token won't work". */
+async function redeemEmailToken(ctx: HandlerContext, purpose: string, token: string): Promise<{ username: string; email: string }> {
+  const tokenHash = await sha256Hex(token);
+  const rows = await ctx.db.exec(
+    "SELECT username, email, expiresAt, consumedAt FROM auth_email_tokens WHERE tokenHash = ? AND purpose = ? LIMIT 1",
+    tokenHash,
+    purpose,
+  );
+  const row = rows[0];
+  if (!row || row.consumedAt != null || Number(row.expiresAt) < Date.now()) throw new Unauthorized("invalid or expired token");
+  await ctx.db.exec("UPDATE auth_email_tokens SET consumedAt = ? WHERE tokenHash = ?", Date.now(), tokenHash);
+  return { username: String(row.username), email: String(row.email) };
+}
+
+/** Parse `{ token, newPassword }` for `resetPassword`. */
+function parseResetInput(raw: unknown): { token: string; newPassword: string } {
+  const o = (raw ?? {}) as Record<string, unknown>;
+  if (typeof o.token !== "string" || o.token.length === 0) throw new BadRequest("token is required");
+  if (typeof o.newPassword !== "string" || o.newPassword.length < 8) throw new BadRequest("newPassword must be at least 8 characters");
+  return { token: o.token, newPassword: o.newPassword };
+}
+
+export interface PasswordResetOptions {
+  /** Deliver the reset link. Receives the ctx + `{ email, token, username }` — build the
+   * URL your app routes to, e.g. `${ctx.env.APP_URL}/reset?token=${token}`. Called from the
+   * `sendPasswordResetEmail` TASK (after commit), like magic-link's sendEmail. */
+  sendEmail: (ctx: HandlerContext, args: { email: string; token: string; username: string }) => void | Promise<void>;
+  /** The users table to reset against (must have `username` PK + `passwordHash`/`email`).
+   * Default `auth_users`; pass your own authSchema-shaped table (as with createUserHandlers). */
+  table?: string;
+  /** How long the reset link stays valid, in seconds. Default 3600 (1h). */
+  linkTtlSeconds?: number;
+}
+
+/** Build the `requestPasswordReset` / `resetPassword` handler pair + the
+ * `sendPasswordResetEmail` task. Both handlers are ANONYMOUS — the emailed token is the
+ * capability. `requestPasswordReset` is enumeration-safe (always `{ ok: true }`, sends only
+ * when an active account matches the email); `resetPassword` redeems the single-use token
+ * and sets the new password. Spread `emailTokenSchema` into your schema and `.tasks` into
+ * your task map. */
+export function createPasswordReset(opts: PasswordResetOptions): { handlers: HandlerMap; tasks: AppTaskMap } {
+  const table = assertIdentifier(opts.table ?? "auth_users");
+  const linkTtlMs = (opts.linkTtlSeconds ?? 3600) * 1000;
+
+  const handlers: HandlerMap = {
+    /** Anonymous: request a reset link for `email`. Resolves the address to an ACTIVE
+     * account and, only then, mints a token + enqueues the send — but the response is the
+     * same `{ ok: true }` whether or not any account matched (no enumeration). */
+    requestPasswordReset: mutation(
+      async (ctx, input: { email: string }) => {
+        const rows = await ctx.db.exec(`SELECT username, active FROM ${table} WHERE email = ? LIMIT 1`, input.email);
+        const u = rows[0];
+        if (u && isActive(u.active)) {
+          const token = await issueEmailToken(ctx, PURPOSE_RESET, String(u.username), input.email, Date.now() + linkTtlMs);
+          await ctx.tasks.enqueue({ kind: "sendPasswordResetEmail", payload: { email: input.email, token, username: String(u.username) } });
+        }
+        return { ok: true };
+      },
+      { input: parseEmail },
+    ),
+
+    /** Anonymous: redeem a reset token and set the new password. Single-use (the token is
+     * consumed first). The account must still exist + be active. Any other pending reset
+     * tokens for the user are dropped on success. */
+    resetPassword: mutation(
+      async (ctx, input: { token: string; newPassword: string }) => {
+        const { username } = await redeemEmailToken(ctx, PURPOSE_RESET, input.token);
+        const rows = await ctx.db.exec(`SELECT active FROM ${table} WHERE username = ? LIMIT 1`, username);
+        if (!rows[0]) throw new Unauthorized("invalid or expired token");
+        if (!isActive(rows[0].active)) throw new Unauthorized("account is deactivated");
+        await ctx.db.exec(`UPDATE ${table} SET passwordHash = ? WHERE username = ?`, await hashPassword(input.newPassword), username);
+        await ctx.db.exec("DELETE FROM auth_email_tokens WHERE purpose = ? AND username = ?", PURPOSE_RESET, username);
+        return { ok: true };
+      },
+      { input: parseResetInput },
+    ),
+  };
+
+  const tasks: AppTaskMap = {
+    sendPasswordResetEmail: async (ctx, payload) => {
+      const p = payload as { email: string; token: string; username: string };
+      await opts.sendEmail(ctx, p);
+    },
+  };
+
+  return { handlers, tasks };
+}
+
+export interface EmailVerificationOptions {
+  /** Deliver the verification link. Receives the ctx + `{ email, token, username }` — build
+   * the URL your app routes to, e.g. `${ctx.env.APP_URL}/verify?token=${token}`. Called from
+   * the `sendVerificationEmail` TASK (after commit). */
+  sendEmail: (ctx: HandlerContext, args: { email: string; token: string; username: string }) => void | Promise<void>;
+  /** The users table (must have `username` PK + `email`/`emailVerified`). Default `auth_users`. */
+  table?: string;
+  /** How long the verification link stays valid, in seconds. Default 86400 (24h). */
+  linkTtlSeconds?: number;
+}
+
+/** Build the `requestEmailVerification` / `verifyEmail` handler pair + the
+ * `sendVerificationEmail` task. `requestEmailVerification` is AUTHENTICATED (a caller
+ * verifies their OWN current email — runs right after signup, when the client already holds
+ * the session token); `verifyEmail` is ANONYMOUS (the token is the capability) and stamps
+ * `auth_users.emailVerified`. A token is bound to the address current at request time, so a
+ * later `changeEmail` invalidates it (verifyEmail rejects a token whose address no longer
+ * matches). Spread `emailTokenSchema` into your schema and `.tasks` into your task map. */
+export function createEmailVerification(opts: EmailVerificationOptions): { handlers: HandlerMap; tasks: AppTaskMap } {
+  const table = assertIdentifier(opts.table ?? "auth_users");
+  const linkTtlMs = (opts.linkTtlSeconds ?? 86_400) * 1000;
+
+  const handlers: HandlerMap = {
+    /** Authenticated: email the caller a verification link for their CURRENT address. A
+     * no-op `{ ok: true, alreadyVerified: true }` if already verified; 400 if no email is set. */
+    requestEmailVerification: mutation(
+      async (ctx) => {
+        const userId = requireUserId(ctx);
+        const rows = await ctx.db.exec(`SELECT email, emailVerified FROM ${table} WHERE username = ? LIMIT 1`, userId);
+        const u = rows[0];
+        const email = u && typeof u.email === "string" ? u.email : "";
+        if (!email) throw new BadRequest("no email on file — set one with changeEmail first");
+        if (u.emailVerified != null) return { ok: true, alreadyVerified: true };
+        const token = await issueEmailToken(ctx, PURPOSE_VERIFY, userId, email, Date.now() + linkTtlMs);
+        await ctx.tasks.enqueue({ kind: "sendVerificationEmail", payload: { email, token, username: userId } });
+        return { ok: true };
+      },
+      { auth: "authenticated" },
+    ),
+
+    /** Anonymous: redeem a verification token and mark the address verified. Guards that the
+     * account's CURRENT email still equals the address the token was minted for — a stale
+     * token (email changed since request) is rejected, never verifying the new address. */
+    verifyEmail: mutation(
+      async (ctx, input: { token: string }) => {
+        const { username, email } = await redeemEmailToken(ctx, PURPOSE_VERIFY, input.token);
+        const rows = await ctx.db.exec(`SELECT email FROM ${table} WHERE username = ? LIMIT 1`, username);
+        const current = rows[0] && typeof rows[0].email === "string" ? String(rows[0].email) : null;
+        if (current == null || current !== email) throw new Unauthorized("invalid or expired token");
+        await ctx.db.exec(`UPDATE ${table} SET emailVerified = ? WHERE username = ?`, Date.now(), username);
+        return { ok: true, email };
+      },
+      { input: parseLinkToken },
+    ),
+  };
+
+  const tasks: AppTaskMap = {
+    sendVerificationEmail: async (ctx, payload) => {
+      const p = payload as { email: string; token: string; username: string };
+      await opts.sendEmail(ctx, p);
+    },
+  };
+
+  return { handlers, tasks };
 }

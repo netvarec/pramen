@@ -174,16 +174,36 @@ log) for independent single-writer serialization and storage.
   open. `authorizeHandler(auth, identity)` is the pure check. `createApp` forwards `auth`.
 - `@pramen/auth` (optional, verify-only core stays BYO-IdP): `authSchema` + `authHandlers`
   (`signup`/`login`/`me`, PBKDF2, server-assigned roles, HS256 tokens via `AUTH_SECRET`).
-  `auth_users` columns: `username` (PK = JWT `sub`), `passwordHash` (`hidden()`), `roles`,
-  unique mutable `email`, `active` (deactivation flag — blocks login). Also:
+  `signup` takes an OPTIONAL `email` (validated, unique, stored UNVERIFIED). `auth_users`
+  columns: `username` (PK = JWT `sub`), `passwordHash` (`hidden()`), `roles`, unique mutable
+  `email`, `emailVerified` (epoch ms the current email was confirmed; NULL = unverified),
+  `active` (deactivation flag — blocks login). Also:
   `createMagicLinkAuth({ sendEmail })` (passwordless one-time links; transport is the
   app's — Cloudflare Email Sending via the `send_email`/`EMAIL` binding declared in
   `oblaka.ts`; magic-link users keyed on the immutable `username`, never the mutable
-  `email`); and `createUserHandlers({ table })` + `authPolicies({ table, prefix, adminReadFields, … })`
+  `email`); `createUserHandlers({ table })` + `authPolicies({ table, prefix, adminReadFields, … })`
   for ACL-gated admin (`listUsers`/`setUserRoles`/`setUserActive`/`deleteUser`) + self
   (`changeEmail`/`changePassword`) management — over `auth_users` or your own
-  authSchema-shaped table. Session TTL via `AUTH_SESSION_TTL_SECONDS` (role/active
-  changes take effect on next login — no session store).
+  authSchema-shaped table (`changeEmail` clears `emailVerified`, since the new address is
+  unconfirmed). Session TTL via `AUTH_SESSION_TTL_SECONDS` (role/active changes take effect
+  on next login — no session store).
+- Password reset + email verification (`@pramen/auth`, opt-in): two one-time-email-token
+  flows built on the magic-link machinery — mint a random token, store only its SHA-256
+  **hash** + expiry in the shared `emailTokenSchema` table (`auth_email_tokens`, discriminated
+  by `purpose` "reset"|"verify"), email the raw token from a TASK (off the write path), redeem
+  once. Spread `emailTokenSchema` if you use either; wire the returned `.tasks` or the email
+  never sends. **`createPasswordReset({ sendEmail, table?, linkTtlSeconds? })`** →
+  `requestPasswordReset({ email })` (anonymous, enumeration-safe — always `{ ok: true }`,
+  sends only when an ACTIVE account matches) + `resetPassword({ token, newPassword })`
+  (anonymous, single-use, sets `passwordHash`; account must still exist + be active). Default
+  link TTL 1h. **`createEmailVerification({ sendEmail, table?, linkTtlSeconds? })`** →
+  `requestEmailVerification()` (AUTHENTICATED — verifies the caller's OWN current email; runs
+  right after signup when the client holds the session token; no-op if already verified, 400 if
+  no email) + `verifyEmail({ token })` (anonymous, stamps `emailVerified`, GUARDS that the
+  account's current email still equals the address the token was minted for, so a later
+  `changeEmail` invalidates a pending token). Default link TTL 24h. `sendEmail` gets
+  `{ email, token, username }`; tasks are `sendPasswordResetEmail` / `sendVerificationEmail`.
+  See `example/app.ts` for the wiring (dev `__pwResetInbox`/`__verifyInbox` mirror `__magicInbox`).
 - Relations: `belongsTo(target, column)` / `hasMany(target, column)`,
   `oneHasOne(target, column)` / `oneHasOneInverse(target, column)` (single-valued 1:1 —
   mark the FK column `unique()` for the DB guarantee), and

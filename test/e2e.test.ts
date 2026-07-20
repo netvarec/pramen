@@ -14,6 +14,7 @@ import { runExtras } from "./suites/extras";
 import { runAdmin } from "./suites/admin";
 import { runAuth } from "./suites/auth";
 import { runMagicLink } from "./suites/magic-link";
+import { runAuthEmail } from "./suites/auth-email";
 import { runUserManagement } from "./suites/user-management";
 import { runTasks } from "./suites/tasks";
 import { runQueue } from "./suites/queue";
@@ -81,6 +82,7 @@ describe("pramen e2e", () => {
   test("admin data API (generic per-tenant CRUD, admin-gated)", () => runAdmin(BASE), 30_000);
   test("@pramen/auth (signup/login issue verifiable tokens)", () => runAuth(BASE), 30_000);
   test("@pramen/auth magic link (passwordless one-time login)", () => runMagicLink(BASE), 30_000);
+  test("@pramen/auth password reset + email verification (one-time email tokens)", () => runAuthEmail(BASE), 30_000);
   test("@pramen/auth user management (admin + self, ACL-gated)", () => runUserManagement(BASE), 30_000);
   test("deferred tasks (transactional outbox + drain)", () => runTasks(BASE), 30_000);
   test("ctx.queue (Cloudflare Queues produce → consume)", () => runQueue(BASE), 30_000);
