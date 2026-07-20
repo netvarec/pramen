@@ -8,7 +8,7 @@ import { Api, ApiError } from "./api";
 import { FieldForm } from "./fields";
 import type { Config } from "./api";
 import type { Me } from "./app-context";
-import type { AssembledPage, AuditEntry, BlockType, ContentType, FieldDefinition, Media, Page, RegionDefinition, RenderedBlock } from "./types";
+import type { AssembledPage, AuditEntry, BlockType, CollectionMeta, ContentType, FieldDefinition, Media, Page, RegionDefinition, RenderedBlock } from "./types";
 
 export type InspectorTab = "settings" | "seo" | "workflow" | "i18n" | "audit";
 export const INSPECTOR_TABS: InspectorTab[] = ["settings", "seo", "workflow", "i18n", "audit"];
@@ -168,6 +168,136 @@ function CreatePage({ api, onClose, onCreated, onError }: { api: Api; onClose: (
         </div>
       </div>
     </Modal>
+  );
+}
+
+// --- collections -------------------------------------------------------------
+//
+// Generic list + edit views over a host-app entity registered as a collection. Both are
+// driven entirely by the CollectionMeta fetched from `listCollections` — one editor, N
+// collections, zero per-collection code. Rows are addressed by `def.idField` (the entity's
+// PK column, defaults "id"); the server resolves the real PK from the value.
+
+/** Render a list-cell value as a short string (objects/arrays are summarized, not dumped). */
+function cellText(v: unknown): string {
+  if (v == null) return "";
+  if (typeof v === "boolean") return v ? "yes" : "no";
+  if (Array.isArray(v)) return v.length === 1 ? "1 item" : `${v.length} items`;
+  if (typeof v === "object") return "—";
+  return String(v);
+}
+
+export function CollectionList({ api, def, onOpen, onNew, onError }: { api: Api; def: CollectionMeta; onOpen: (id: string) => void; onNew: () => void; onError: (s: string) => void }) {
+  const [rows, setRows] = useState<Record<string, unknown>[]>([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    let live = true;
+    setLoading(true);
+    api.call<Record<string, unknown>[]>("collectionList", { collection: def.slug })
+      .then((r) => { if (live) setRows(r); })
+      .catch((e) => onError(errMsg(e)))
+      .finally(() => { if (live) setLoading(false); });
+    return () => { live = false; };
+  }, [api, def.slug, onError]);
+
+  const labelOf = (col: string) => def.fields.find((f) => f.name === col)?.label ?? col;
+  return (
+    <>
+      <Hero lead={def.pluralLabel} em={rows.length === 0 ? "None yet" : rows.length === 1 ? `1 ${def.label.toLowerCase()}` : `${rows.length} ${def.pluralLabel.toLowerCase()}`}>
+        <Cta text="Let's" em={`add a ${def.label.toLowerCase()}`}>
+          <Button className="shrink-0" onPress={onNew}>+ New {def.label.toLowerCase()}</Button>
+        </Cta>
+      </Hero>
+      <div className={WRAP}>
+        <div className="flex flex-col gap-2">
+          {rows.map((row) => {
+            const id = String(row[def.idField] ?? "");
+            const [first, ...rest] = def.list;
+            return (
+              <div className={`${ROW} cursor-pointer hover:bg-surface-muted`} key={id} onClick={() => onOpen(id)}>
+                <span className="flex-1 truncate font-medium">{cellText(row[first ?? def.titleField]) || <Dim>untitled</Dim>}</span>
+                {rest.map((col) => (
+                  <span className="truncate text-fg-subtle" key={col} title={labelOf(col)}>{cellText(row[col])}</span>
+                ))}
+              </div>
+            );
+          })}
+          {!loading && rows.length === 0 ? <p className="text-fg-subtle">No {def.pluralLabel.toLowerCase()} yet. Create one.</p> : null}
+          {loading ? <p className="text-fg-subtle">Loading…</p> : null}
+        </div>
+      </div>
+    </>
+  );
+}
+
+export function CollectionEditor({ api, def, id, onSaved, onDeleted, onBack, onError }: { api: Api; def: CollectionMeta; id: string | null; onSaved: () => void; onDeleted: () => void; onBack: () => void; onError: (s: string) => void }) {
+  const isNew = id === null;
+  const [values, setValues] = useState<Record<string, unknown>>({});
+  const [loading, setLoading] = useState(!isNew);
+  const [missing, setMissing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [ok, setOk] = useState(false);
+
+  useEffect(() => {
+    if (isNew) { setValues({}); return; }
+    let live = true;
+    setLoading(true);
+    setMissing(false);
+    api.call<Record<string, unknown> | null>("collectionGet", { collection: def.slug, id })
+      .then((row) => { if (!live) return; if (row) setValues(row); else setMissing(true); })
+      .catch((e) => onError(errMsg(e)))
+      .finally(() => { if (live) setLoading(false); });
+    return () => { live = false; };
+  }, [api, def.slug, id, isNew, onError]);
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      if (isNew) await api.call("collectionCreate", { collection: def.slug, values });
+      else await api.call("collectionUpdate", { collection: def.slug, id, values });
+      setOk(true);
+      setTimeout(() => setOk(false), 1200);
+      onSaved();
+    } catch (e) {
+      onError(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const del = async () => {
+    if (isNew || !confirm(`Delete this ${def.label.toLowerCase()}? This cannot be undone.`)) return;
+    setBusy(true);
+    try {
+      await api.call("collectionDelete", { collection: def.slug, id });
+      onDeleted();
+    } catch (e) {
+      onError(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className={WRAP}>
+      <div className="mb-4 mt-2 flex items-center gap-3">
+        <Button variant="ghost" size="sm" onPress={onBack}>← {def.pluralLabel}</Button>
+        <h1 className="text-[22px] font-normal text-fg">{isNew ? `New ${def.label.toLowerCase()}` : `Edit ${def.label.toLowerCase()}`}</h1>
+      </div>
+      {missing ? (
+        <p className="text-fg-subtle">Not found.</p>
+      ) : loading ? (
+        <p className="text-fg-subtle">Loading…</p>
+      ) : (
+        <div className="flex max-w-[720px] flex-col gap-4">
+          {ok ? <Banner ok>saved</Banner> : null}
+          <FieldForm schema={def.fields} value={values} onChange={setValues} api={api} />
+          <div className="mt-2 flex items-center gap-2">
+            <Button onPress={save} isDisabled={busy}>{busy ? "Saving…" : isNew ? "Create" : "Save"}</Button>
+            {!isNew ? <Button variant="ghost" className="text-danger" onPress={del} isDisabled={busy}>Delete</Button> : null}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 

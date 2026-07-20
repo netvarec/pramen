@@ -6,16 +6,20 @@ import { buildRouteTree } from '@buzola/router';
 import type { RouteConfig } from '@buzola/router';
 
 import Route0 from './routes/_layout';
-const Route1 = () => import('./routes/home').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
-const Route2 = () => import('./routes/media').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
-const Route3 = () => import('./routes/page').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
-const Route4 = () => import('./routes/settings').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
-const Route5 = () => import('./routes/users').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
-const Route6 = () => import('./routes/_404').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
+const Route1 = () => import('./routes/collection-item').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
+const Route2 = () => import('./routes/collection').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
+const Route3 = () => import('./routes/home').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
+const Route4 = () => import('./routes/media').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
+const Route5 = () => import('./routes/page').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
+const Route6 = () => import('./routes/settings').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
+const Route7 = () => import('./routes/users').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
+const Route8 = () => import('./routes/_404').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
 
 // Module augmentation for type-safe page-centric routing
 declare module '@buzola/router' {
   interface BuzolaPageMap {
+    'collection-item': { slug: string; id: string };
+    'collection': { slug: string };
     'home': {};
     'media': {};
     'page': { pageId: string; tab?: string };
@@ -26,6 +30,8 @@ declare module '@buzola/router' {
 
 // Page registry — page ID → route pattern
 export const pageRegistry: Record<string, string> = {
+  'collection-item': '/collections/:slug/:id',
+  'collection': '/collections/:slug',
   'home': '/',
   'media': '/media',
   'page': '/pages/:pageId',
@@ -40,36 +46,48 @@ const routeConfigs: RouteConfig[] = [
     isLayout: true,
     children: [
       {
-        path: '/home',
-        matchPath: '/',
+        path: '/collection-item',
+        matchPath: '/collections/:slug/:id',
         component: lazy(Route1),
         preload: Route1,
       },
       {
-        path: '/media',
+        path: '/collection',
+        matchPath: '/collections/:slug',
         component: lazy(Route2),
         preload: Route2,
       },
       {
-        path: '/page',
-        matchPath: '/pages/:pageId',
+        path: '/home',
+        matchPath: '/',
         component: lazy(Route3),
         preload: Route3,
       },
       {
-        path: '/settings',
+        path: '/media',
         component: lazy(Route4),
         preload: Route4,
       },
       {
-        path: '/users',
+        path: '/page',
+        matchPath: '/pages/:pageId',
         component: lazy(Route5),
         preload: Route5,
       },
       {
-        path: '/:__notFound+',
+        path: '/settings',
         component: lazy(Route6),
         preload: Route6,
+      },
+      {
+        path: '/users',
+        component: lazy(Route7),
+        preload: Route7,
+      },
+      {
+        path: '/:__notFound+',
+        component: lazy(Route8),
+        preload: Route8,
       },
     ],
   },

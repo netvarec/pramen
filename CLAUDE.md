@@ -239,6 +239,23 @@ log) for independent single-writer serialization and storage.
   (upsert, don't blind-insert); a throw is logged, never fatal; DO path runs default-partition
   only. `@pramen/cms` ships `defineContentType`/`defineBlockType` + `cmsBootstrap({ blockTypes,
   contentTypes })` (upsert-by-slug) — see `example/app.ts`.
+- CMS collections (`@pramen/cms`): the block/page model is one opinionated shape (a routable
+  page with a mandatory slug + regions of blocks). A **collection** is the generic escape
+  hatch — it points the CMS editor at **one of YOUR OWN pramen entities** (spread into
+  `defineSchema` next to `cmsSchema`) and edits it with the SAME `FieldDefinition[]` DSL that
+  blocks use, so e.g. "Lectures" is a first-class, queryable entity (real columns, relations,
+  cell-ACL) that ALSO gets a list/form UI — no `cms_pages` row, no mandatory slug.
+  `collection(slug, { entity, label, fields, list?, titleField?, idField?, orderBy? })`
+  declares one (**column-mapped**: each scalar field is a real column; repeater/group map to a
+  `t.json()` column). Wire with `createCollectionHandlers(collections)` (spread into handlers —
+  `listCollections` for editor discovery + `collectionList`/`Get`/`Create`/`Update`/`Delete`,
+  all `editorRoles`-gated AND row-ACL'd through `ctx.db`) and `collectionPolicies(collections)`
+  (spread into the editor/admin role). Security: the generic handlers dispatch through a
+  registry keyed by `slug` (an unknown slug is a 400, never a raw table reference) and writes
+  are **whitelisted to declared fields** (a caller can't set an undeclared column like a
+  `passwordHash`). The editor discovers collections at runtime (one generic editor, N
+  collections, zero per-collection code) — nav + `/collections/:slug` list + `/collections/:slug/:id`
+  edit routes, all driven by `FieldForm`. See `example/app.ts` (the `lectures` collection).
 - Native queues: `ctx.queue.send(binding, body, { delaySeconds?, contentType? })` /
   `sendBatch(binding, msgs, opts?)` (`runtime/queue.ts`) — a facade + adapter seam (like
   `ctx.mail`) over **Cloudflare Queues**, distinct from `ctx.tasks` (NOT transactional with

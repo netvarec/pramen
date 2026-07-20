@@ -63,6 +63,24 @@ export interface ContentType {
   defaultBlocks?: DefaultBlockDefinition[] | null;
 }
 
+/** A collection: one of the host app's own pramen entities, edited generically via a
+ * field schema (mirror of @pramen/cms `CollectionMeta`). Fetched from `listCollections`
+ * and used to build the nav + the generic list/edit views. No `entity`/`idField` — those
+ * are server-only; the editor addresses a collection purely by `slug`. */
+export interface CollectionMeta {
+  slug: string;
+  label: string;
+  pluralLabel: string;
+  icon?: string;
+  fields: FieldDefinition[];
+  list: string[];
+  titleField: string;
+  /** The entity's PK column name (defaults "id" server-side) — the editor reads a row's id
+   * from this to open/save/delete it. */
+  idField: string;
+  orderBy?: { column: string; dir?: "asc" | "desc" };
+}
+
 export interface Page {
   id: string;
   typeId: string;

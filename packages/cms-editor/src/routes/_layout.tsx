@@ -7,12 +7,16 @@ import { Button } from "@podoba/react";
 import { useApp } from "../app-context";
 
 export default function RootLayout() {
-  const { cfg, isAdmin, error, reconfigure } = useApp();
+  const { cfg, isAdmin, collections, error, reconfigure } = useApp();
   const navigate = useNavigate();
   const { pathname } = useRoute();
 
+  // The active collection slug, if we're under /collections/:slug(/...).
+  const collectionSlug = pathname.startsWith("/collections/") ? pathname.split("/")[2] : undefined;
+
   // "Pages" stays lit while editing a page (/pages/:id) too.
-  const active = pathname.startsWith("/pages") || pathname === "/" ? "pages"
+  const active = collectionSlug ? `col:${collectionSlug}`
+    : pathname.startsWith("/pages") || pathname === "/" ? "pages"
     : pathname.startsWith("/media") ? "media"
     : pathname.startsWith("/users") ? "users"
     : pathname.startsWith("/settings") ? "settings"
@@ -33,6 +37,11 @@ export default function RootLayout() {
         <span className="flex-1" />
         <nav className="flex items-center gap-0.5">
           <Button variant="ghost" size="sm" className={tabCls("pages")} onPress={() => navigate("home")}>Pages</Button>
+          {collections.map((c) => (
+            <Button key={c.slug} variant="ghost" size="sm" className={tabCls(`col:${c.slug}`)} onPress={() => navigate("collection", { params: { slug: c.slug } })}>
+              {c.icon ? `${c.icon} ` : ""}{c.pluralLabel}
+            </Button>
+          ))}
           <Button variant="ghost" size="sm" className={tabCls("media")} onPress={() => navigate("media")}>Media</Button>
           {isAdmin ? (
             <Button variant="ghost" size="sm" className={tabCls("users")} onPress={() => navigate("users")}>Users</Button>

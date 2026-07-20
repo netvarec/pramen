@@ -1762,6 +1762,196 @@ export function cmsPolicies(opts: CmsPolicyOpts = {}): { public: Policy[]; edito
   };
 }
 
+// --- collections: edit arbitrary pramen entities in the CMS editor -----------
+//
+// The block/page model is one opinionated shape (a routable page with a mandatory slug +
+// regions of blocks). A COLLECTION is the generic escape hatch: it points the editor at
+// one of YOUR OWN pramen entities (spread into defineSchema alongside cmsSchema) and
+// describes how to edit it with the SAME field DSL that blocks use. So "Lectures" is a
+// first-class, queryable entity — real columns, relations, cell-ACL — that also gets a
+// list + form UI, without being bent into a cms_pages row.
+//
+// Column-mapped: each scalar FieldDefinition.name is a real column on the entity; a
+// repeater/group field maps to a t.json() column (the object↔JSON codec at the Db
+// chokepoint stores it transparently). The generic handlers dispatch through a registry
+// keyed by `slug`, so `collection`/`entity` can never be spoofed to reach an arbitrary
+// table, and writes are whitelisted to declared fields — the client can't set columns the
+// collection didn't declare (e.g. a `roles` or `passwordHash` column on the entity).
+
+/** Declares that a pramen entity is editable as a collection in the CMS editor. Both
+ * halves live here: the runtime facts (entity, idField, validation via `fields`) and the
+ * UI facts (labels, list columns, ordering). Mirror of {@link ContentTypeDef}. */
+export interface CollectionDef {
+  /** The pramen entity (table) this collection edits — one of your own entities, spread
+   * into `defineSchema` next to `cmsSchema`. The handler registry keys off `slug`, then
+   * reads this; it is never taken from client input. */
+  readonly entity: string;
+  /** URL + nav key, e.g. `"lectures"`. Unique across collections. */
+  readonly slug: string;
+  /** Singular UI label, e.g. `"Lecture"`. */
+  readonly label: string;
+  /** Plural UI label; defaults to `label + "s"`. */
+  readonly pluralLabel?: string;
+  /** Optional nav icon (emoji or short string). */
+  readonly icon?: string;
+  /** The edit-form schema — the same DSL as blocks. Each scalar field is a real column
+   * on `entity`; repeater/group map to a `t.json()` column. Also the WRITE WHITELIST:
+   * only these field names are ever written to the entity. */
+  readonly fields: readonly FieldDefinition[];
+  /** Columns shown in the list view; defaults to `[titleField]`. */
+  readonly list?: readonly string[];
+  /** Column that titles a row in the list; defaults to `"title"`. */
+  readonly titleField?: string;
+  /** Primary-key column used to load/patch a single row; defaults to `"id"`. */
+  readonly idField?: string;
+  /** Default list ordering; defaults to `{ column: "createdAt", dir: "desc" }`. */
+  readonly orderBy?: { column: string; dir?: "asc" | "desc" };
+}
+
+/** Declare a collection. Spread the results into `createCollectionHandlers` +
+ * `collectionPolicies`:
+ *
+ *   const lectures = collection("lectures", {
+ *     entity: "lectures", label: "Lecture", titleField: "title",
+ *     list: ["title", "speaker", "date"],
+ *     fields: [
+ *       { name: "title", type: "text", required: true },
+ *       { name: "speaker", type: "text" },
+ *       { name: "date", type: "date" },
+ *     ],
+ *   }); */
+export function collection(slug: string, opts: Omit<CollectionDef, "slug">): CollectionDef {
+  return { ...opts, slug };
+}
+
+/** The client-facing subset of a collection the editor fetches via `listCollections` to
+ * build its nav + generic list/edit views (no per-collection editor code, no rebuild to
+ * add one). Excludes the server-only `entity` (the editor addresses a collection by `slug`
+ * only, never by table name); `idField` IS included — it's just the PK column name, which
+ * the editor needs to read a row's id from a list result. */
+export interface CollectionMeta {
+  slug: string;
+  label: string;
+  pluralLabel: string;
+  icon?: string;
+  fields: readonly FieldDefinition[];
+  list: readonly string[];
+  titleField: string;
+  idField: string;
+  orderBy?: { column: string; dir?: "asc" | "desc" };
+}
+
+/** The public view of a collection def (defaults filled). */
+function collectionMeta(c: CollectionDef): CollectionMeta {
+  const titleField = c.titleField ?? "title";
+  return {
+    slug: c.slug,
+    label: c.label,
+    pluralLabel: c.pluralLabel ?? `${c.label}s`,
+    icon: c.icon,
+    fields: c.fields,
+    list: c.list ?? [titleField],
+    titleField,
+    idField: c.idField ?? "id",
+    orderBy: c.orderBy,
+  };
+}
+
+/** Build generic CRUD handlers over the registered collections. Spread into your app's
+ * handlers alongside `cmsHandlers`:
+ *
+ *   const handlers = { ...cmsHandlers, ...createCollectionHandlers([lectures]) };
+ *
+ * Exposes `listCollections` (editor discovery) + `collectionList` / `collectionGet` /
+ * `collectionCreate` / `collectionUpdate` / `collectionDelete`, all gated by `editorRoles`
+ * (a fast 403 before the body) AND the row ACL (they go through `ctx.db`, so
+ * `collectionPolicies` scopes them too). The `collection` param is resolved through the
+ * registry — an unknown slug is a 400, never a raw table reference. */
+export function createCollectionHandlers(collections: readonly CollectionDef[], opts: CmsHandlerOpts = {}) {
+  const editor = { auth: opts.editorRoles ?? ["editor", "admin"] };
+  const bySlug = new Map(collections.map((c) => [c.slug, c] as const));
+  const metas = collections.map(collectionMeta);
+  const def = (slug: unknown): CollectionDef => {
+    const c = typeof slug === "string" ? bySlug.get(slug) : undefined;
+    if (!c) throw new BadRequest(`unknown collection: ${String(slug)}`);
+    return c;
+  };
+  const idOf = (c: CollectionDef): string => c.idField ?? "id";
+  // Validate against the field schema, sanitize richtext, then PROJECT to declared field
+  // names only — the write whitelist. `requireRequired` is off for updates (partial patch);
+  // on for create. Nothing outside `c.fields` can reach the entity.
+  const toColumns = (c: CollectionDef, values: unknown, requireRequired: boolean): Record<string, unknown> => {
+    const obj = asObj(values);
+    validateFields([...c.fields], obj, "", { requireRequired });
+    const sanitized = sanitizeFields([...c.fields], obj);
+    const out: Record<string, unknown> = {};
+    for (const f of c.fields) if (f.name in sanitized) out[f.name] = sanitized[f.name];
+    return out;
+  };
+  const idInput = (raw: unknown): string => {
+    const id = asObj(raw).id;
+    if (typeof id !== "string" || id === "") throw new BadRequest("id is required");
+    return id;
+  };
+
+  return {
+    /** The registered collections (defaults filled) — editor discovery. Editor-gated so
+     * the collection schemas aren't exposed to anonymous callers. */
+    listCollections: query((): CollectionMeta[] => metas, editor),
+
+    collectionList: query((ctx, input: { collection: string; limit?: number; offset?: number }) => {
+      const c = def(input.collection);
+      const limit = typeof input.limit === "number" ? input.limit : 100;
+      const offset = typeof input.offset === "number" ? input.offset : undefined;
+      return cdb(ctx).find({ from: c.entity, orderBy: c.orderBy ?? { column: "createdAt", dir: "desc" }, limit, offset });
+    }, editor),
+
+    collectionGet: query(async (ctx, input: { collection: string; id: string }) => {
+      const c = def(input.collection);
+      const rows = await cdb(ctx).find({ from: c.entity, where: { [idOf(c)]: input.id }, limit: 1 });
+      return rows[0] ?? null;
+    }, editor),
+
+    collectionCreate: mutation((ctx, input: { collection: string; values: Record<string, unknown> }) => {
+      const c = def(input.collection);
+      return cdb(ctx).insert(c.entity, toColumns(c, input.values, true));
+    }, editor),
+
+    collectionUpdate: mutation(async (ctx, input: { collection: string; id: string; values: Record<string, unknown> }) => {
+      const c = def(input.collection);
+      const updated = await cdb(ctx).update(c.entity, input.id, toColumns(c, input.values, false));
+      if (updated === undefined) throw notFound(c.label);
+      return updated;
+    }, editor),
+
+    collectionDelete: mutation(async (ctx, input: { collection: string; id: string }) => {
+      const c = def(input.collection);
+      const ok = await cdb(ctx).delete(c.entity, input.id);
+      if (!ok) throw notFound(c.label);
+      return { ok: true as const };
+    }, { ...editor, input: (raw) => ({ collection: asObj(raw).collection as string, id: idInput(raw) }) }),
+  };
+}
+
+/** ACL fragments granting the editor role full CRUD over each collection's entity. Spread
+ * into your editor role next to `cmsPolicies().editor`:
+ *
+ *   role("editor", [...cmsPolicies().editor, ...collectionPolicies([lectures])])
+ *
+ * The generic collection handlers go through `ctx.db`, so without these the row ACL denies
+ * them. Your app may already declare its own policies over the entity (e.g. a public read
+ * scope) — these only ADD the editor grant the CMS UI needs. */
+export function collectionPolicies(collections: readonly CollectionDef[], opts: CmsPolicyOpts = {}): Policy[] {
+  const p = opts.prefix ?? "cms";
+  const out: Policy[] = [];
+  for (const c of collections) {
+    for (const action of ["read", "create", "update", "delete"] as const) {
+      out.push(policy(`${p}:editor:collection:${c.entity}:${action}`, c.entity, action, allow()));
+    }
+  }
+  return out;
+}
+
 // --- deferred tasks (scheduled publish/unpublish) ----------------------------
 
 /** Task handlers backing `schedulePage`. Register via `app.tasks = { ...cmsTasks }`.

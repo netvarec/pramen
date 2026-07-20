@@ -40,7 +40,7 @@ import {
   authPolicies,
 } from "@pramen/auth";
 // @pramen/cms — the block/page builder, wired as an ordinary app fragment.
-import { cmsSchema, cmsHandlers, cmsPolicies, cmsTasks, cmsRoutes, defineBlockType, defineContentType, cmsBootstrap } from "@pramen/cms";
+import { cmsSchema, cmsHandlers, cmsPolicies, cmsTasks, cmsRoutes, defineBlockType, defineContentType, cmsBootstrap, collection, createCollectionHandlers, collectionPolicies } from "@pramen/cms";
 
 // Reusable write rule: force ownerId to the authenticated caller (a client cannot
 // forge it), even if the request body tries to set a different owner.
@@ -53,6 +53,17 @@ const schema = defineSchema({
   ...magicLinkSchema,
   // @pramen/cms's block/page-builder tables (cms_pages, cms_blocks, cms_block_types, …).
   ...cmsSchema,
+  // A COLLECTION-backed entity: `lectures` is an ordinary pramen entity (real, queryable
+  // columns), registered as a CMS collection below so it gets a generic list/edit UI in the
+  // editor — the "edit arbitrary content, not just pages" escape hatch. No mandatory slug.
+  lectures: Entity((t) => ({
+    id: primaryKey(generated(t.uuid())),
+    title: t.text(),
+    speaker: defaultTo(t.text(), ""),
+    date: defaultTo(t.text(), ""),
+    abstract: defaultTo(t.text(), ""),
+    createdAt: defaultTo(t.text(), expr.now()),
+  })),
   // A custom, authSchema-shaped users table with an EXTRA `tenants` column — the
   // multi-tenant accounts pattern. createUserHandlers({ table: "org_accounts" }) +
   // authPolicies({ table: "org_accounts", ... }) manage it without a rename.
@@ -156,6 +167,26 @@ const magicLink = createMagicLinkAuth({
 // the same handlers, pointed at a different table, exposed under prefixed RPC names.
 const orgAccounts = createUserHandlers({ table: "org_accounts" });
 
+// CMS collections: register the `lectures` entity as an editable collection. The editor
+// discovers it via listCollections and renders a generic list + form (FieldForm over these
+// fields) — no page/slug involved. Scalar fields are real columns on the entity.
+const collections = [
+  collection("lectures", {
+    entity: "lectures",
+    label: "Lecture",
+    icon: "🎓",
+    titleField: "title",
+    list: ["title", "speaker", "date"],
+    orderBy: { column: "date", dir: "desc" },
+    fields: [
+      { name: "title", type: "text", required: true },
+      { name: "speaker", type: "text" },
+      { name: "date", type: "date" },
+      { name: "abstract", type: "richtext" },
+    ],
+  }),
+];
+
 const handlers = {
   // @pramen/auth: signup / login / me (issue + use HS256 tokens, no third-party IdP).
   ...authHandlers,
@@ -168,6 +199,9 @@ const handlers = {
   // @pramen/cms: block/page builder — createBlockType / createContentType / createPage /
   // addBlock / publishPage / schedulePage (editor-gated) + getPage (public content API).
   ...cmsHandlers,
+  // @pramen/cms collections: listCollections + collectionList/get/create/update/delete over
+  // the registered `lectures` entity (editor-gated). The generic "edit any entity" surface.
+  ...createCollectionHandlers(collections),
   // The same handlers over the custom org_accounts table, under prefixed names, plus
   // an app-owned setOrgAccountTenants writing the extra `tenants` column (the Tah
   // setUserTenants analog) — permitted by authPolicies adminWriteFields below.
@@ -512,6 +546,9 @@ const acl = [
     // @pramen/cms: full CRUD across the cms_ tables (admin holds the default `admin`
     // editor role, so the CMS editor handlers accept it too).
     ...cmsPolicies().editor,
+    // @pramen/cms collections: full CRUD over each registered collection's entity, so the
+    // generic collection handlers (which go through ctx.db) are permitted for admin.
+    ...collectionPolicies(collections),
   ]),
   // anonymous: applied to callers with NO verified token. A guest may create a
   // signup (public write) and read one back only by presenting its `code`
@@ -527,7 +564,7 @@ const acl = [
   // can approve/reject/publish. Both need the same CMS data ACL (full CRUD on cms_ tables);
   // the workflow gate is the per-handler `auth` (submit → editor, approve/reject → reviewer).
   // Distinct policy-name prefixes so the grants don't collide with admin's.
-  role("editor", [...cmsPolicies({ prefix: "cms-ed" }).editor]),
+  role("editor", [...cmsPolicies({ prefix: "cms-ed" }).editor, ...collectionPolicies(collections, { prefix: "cms-ed" })]),
   role("reviewer", [...cmsPolicies({ prefix: "cms-rev" }).editor]),
   role("author", [
     policy("author:read", "notes", "read", {

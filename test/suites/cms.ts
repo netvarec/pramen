@@ -419,4 +419,45 @@ export async function runCms(base: string): Promise<void> {
   // unknown page -> 404; anonymous -> 403
   assert((await call("updatePage", { pageId: "00000000-0000-0000-0000-000000000000", title: "x" }, admin)).status === 404, "cms: updatePage on an unknown page is a 404");
   assert((await call("updatePage", { pageId: lecId, title: "x" })).status === 403, "cms: updatePage requires editor auth (403)");
+
+  // --- collections: edit an arbitrary entity (`lectures`) through the generic handlers ---
+  // The example registers `collection("lectures", …)`; exercise the full CRUD over a real DO.
+  const cols = await call("listCollections", {}, admin);
+  assert(
+    cols.body.ok && (cols.body.result as Array<{ slug: string; idField: string }>).some((c) => c.slug === "lectures" && c.idField === "id"),
+    "cms: listCollections returns the registered `lectures` collection with its idField",
+  );
+  assert((await call("listCollections", {})).status === 403, "cms: listCollections requires editor auth (403)");
+
+  const madeLecture = await call("collectionCreate", { collection: "lectures", values: { title: "Reactive Backends", speaker: "Ada", date: "2026-05-01" } }, admin);
+  assert(madeLecture.body.ok && typeof madeLecture.body.result.id === "string", "cms: collectionCreate inserts a row and echoes its id");
+  const lecRowId = madeLecture.body.result.id as string;
+
+  // Write whitelist: an undeclared column in the payload is ignored, not persisted.
+  const withBogus = await call("collectionCreate", { collection: "lectures", values: { title: "Whitelisted", bogus: "x", createdAt: "hacked" } }, admin);
+  assert(withBogus.body.ok && withBogus.body.result.bogus === undefined, "cms: collectionCreate whitelists to declared fields (undeclared column dropped)");
+
+  const gotLecture = await call("collectionGet", { collection: "lectures", id: lecRowId }, admin);
+  assert(gotLecture.body.ok && gotLecture.body.result.title === "Reactive Backends", "cms: collectionGet returns the row by id");
+
+  const listed = await call("collectionList", { collection: "lectures" }, admin);
+  assert(listed.body.ok && Array.isArray(listed.body.result) && listed.body.result.length >= 2, "cms: collectionList returns the rows");
+
+  const editedLecture = await call("collectionUpdate", { collection: "lectures", id: lecRowId, values: { title: "Reactive Backends on CF" } }, admin);
+  assert(editedLecture.body.ok && editedLecture.body.result.title === "Reactive Backends on CF", "cms: collectionUpdate patches the row");
+
+  // Field validation rejects a bad type before the write.
+  const badDate = await call("collectionCreate", { collection: "lectures", values: { title: "Bad", date: "nope" } }, admin);
+  assert(badDate.status === 400, "cms: collectionCreate validates field types (bad date -> 400)");
+
+  // An unknown collection slug is a clean 400, never a raw table reference.
+  const unknownCol = await call("collectionList", { collection: "sqlite_master" }, admin);
+  assert(unknownCol.status === 400, "cms: an unknown collection slug is a 400");
+
+  // Auth: anonymous cannot touch collections.
+  assert((await call("collectionList", { collection: "lectures" })).status === 403, "cms: collections require editor auth (403)");
+
+  const delLecture = await call("collectionDelete", { collection: "lectures", id: lecRowId }, admin);
+  assert(delLecture.body.ok, "cms: collectionDelete removes the row");
+  assert((await call("collectionGet", { collection: "lectures", id: lecRowId }, admin)).body.result === null, "cms: the deleted row is gone");
 }

@@ -6,6 +6,7 @@
 import { Button, Input } from "@podoba/react";
 import { createContext, use, useEffect, useMemo, useState } from "react";
 import { Api, clearConfig, isTokenExpired, loadConfig, saveConfig, type Config } from "./api";
+import type { CollectionMeta } from "./types";
 
 declare global {
   interface Window {
@@ -45,6 +46,9 @@ interface AppContextValue {
   cfg: Config;
   me: Me | null;
   isAdmin: boolean;
+  /** Collections registered on the server (from `listCollections`) — drives the nav + the
+   * generic list/edit routes. Empty when the server registers none. */
+  collections: CollectionMeta[];
   error: string;
   setError: (s: string) => void;
   /** Sign out — drop the token so the config gate falls back to Setup. */
@@ -62,6 +66,7 @@ export function useApp(): AppContextValue {
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [cfg, setCfg] = useState<Config>(loadConfig());
   const [me, setMe] = useState<Me | null>(null);
+  const [collections, setCollections] = useState<CollectionMeta[]>([]);
   const [error, setError] = useState("");
   // A usable session = a base URL + a token that is NOT expired. An expired token counts as
   // no session: otherwise the editor mounts and every RPC 403s into an error banner.
@@ -91,6 +96,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (!authValid) return;
     // `me` gates the Users tab + drives Settings — a failing call is fine (leaves it {}).
     api.call<Me>("me").then(setMe).catch(() => setMe({}));
+    // Collections drive the nav + list/edit routes. An app that registers none (or an older
+    // server without the handler) just leaves the nav as-is — a failure is non-fatal.
+    api.call<CollectionMeta[]>("listCollections").then(setCollections).catch(() => setCollections([]));
   }, [api, authValid]);
 
   if (!authValid) {
@@ -104,6 +112,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     cfg,
     me,
     isAdmin: (me?.roles ?? []).includes("admin"),
+    collections,
     error,
     setError,
     reconfigure: () => {
