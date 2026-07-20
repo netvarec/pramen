@@ -13,6 +13,7 @@
         "@pramen/react": "workspace:*",
         "@pramen/server": "workspace:*",
         "@types/react": "^19.0.0",
+        "bcryptjs": "2.4.3",
         "lopata": "^0.19.2",
         "oblaka-iac": "^0.0.16",
         "react": "^19.0.0",
@@ -22,7 +23,7 @@
     },
     "packages/admin": {
       "name": "@pramen/admin",
-      "version": "0.0.21",
+      "version": "0.0.38",
       "dependencies": {
         "@podoba/react": "^0.0.3",
         "@podoba/tailwind": "^0.0.3",
@@ -38,18 +39,18 @@
     },
     "packages/auth": {
       "name": "@pramen/auth",
-      "version": "0.0.21",
+      "version": "0.0.38",
       "dependencies": {
         "@pramen/server": "workspace:*",
       },
     },
     "packages/client": {
       "name": "@pramen/client",
-      "version": "0.0.21",
+      "version": "0.0.38",
     },
     "packages/cms": {
       "name": "@pramen/cms",
-      "version": "0.0.21",
+      "version": "0.0.38",
       "dependencies": {
         "@pramen/server": "workspace:*",
         "xss": "^1.0.15",
@@ -63,14 +64,14 @@
     },
     "packages/cms-astro": {
       "name": "@pramen/cms-astro",
-      "version": "0.0.21",
+      "version": "0.0.38",
       "peerDependencies": {
         "astro": ">=4",
       },
     },
     "packages/cms-editor": {
       "name": "@pramen/cms-editor",
-      "version": "0.0.21",
+      "version": "0.0.38",
       "dependencies": {
         "@buzola/router": "^0.0.12",
         "@podoba/react": "^0.0.3",
@@ -89,7 +90,7 @@
     },
     "packages/react": {
       "name": "@pramen/react",
-      "version": "0.0.21",
+      "version": "0.0.38",
       "dependencies": {
         "@pramen/client": "workspace:*",
       },
@@ -99,7 +100,7 @@
     },
     "packages/server": {
       "name": "@pramen/server",
-      "version": "0.0.21",
+      "version": "0.0.38",
       "bin": {
         "pramen": "./dist/cli.js",
       },
@@ -465,6 +466,8 @@
     "axobject-query": ["axobject-query@4.1.0", "", {}, "sha512-qIj0G9wZbMGNLjLmg1PT6v2mE9AH2zlnADJD/2tC6E00hgmhUOfEB6greHPAfLRSufHqROIUTkw6E+M3lH0PTQ=="],
 
     "bail": ["bail@2.0.2", "", {}, "sha512-0xO6mYd7JB2YesxDKplafRpsiOzPt9V02ddPCLbY1xYGPOX24NTyN50qnUxgCPcSoYMhKpAuBTjQoRZCAkUDRw=="],
+
+    "bcryptjs": ["bcryptjs@2.4.3", "", {}, "sha512-V/Hy/X9Vt7f3BbPJEi8BdVFMByHi+jNXrYkW3huaybV/kQ0KJg0Y6PkEMbn+zeT+i+SiKZ/HMqJGIIt4LZDqNQ=="],
 
     "binary-extensions": ["binary-extensions@2.3.0", "", {}, "sha512-Ceh+7ox5qe7LJuLHoY0feh3pHuUDHAcRUeyL2VYghZwfpkNIy/+8Ocg0a3UuSoYzavmylwuLWQOf3hl0jjMMIw=="],
 
