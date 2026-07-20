@@ -16,14 +16,22 @@ function bind(v: unknown): unknown {
 
 export type CmpOp = "=" | "!=" | ">" | ">=" | "<" | "<=" | "LIKE";
 
+/** Substring match mode for the structured string operators (auto-escaping, so the
+ * needle's `%`/`_` are literal). Case-insensitive, matching SQLite's default LIKE. */
+export type StrMode = "contains" | "prefix" | "suffix";
+
 export type SqlExpr =
   | { t: "true" }
   | { t: "false" }
   | { t: "cmp"; op: CmpOp; col: string; value: unknown }
   | { t: "in"; col: string; values: unknown[]; negate: boolean }
   | { t: "null"; col: string; negate: boolean }
+  // Structured substring match — the needle is escaped and wrapped, so `%`/`_` in the
+  // input match literally (unlike raw `like`, where the caller controls wildcards).
+  | { t: "strmatch"; col: string; needle: string; mode: StrMode }
   | { t: "and"; parts: SqlExpr[] }
   | { t: "or"; parts: SqlExpr[] }
+  | { t: "not"; expr: SqlExpr }
   // Relation traversal: `outerCol IN (SELECT selectCol FROM from WHERE where)`.
   // Built by the ACL layer (which knows schema + the target's read scope); the
   // inner predicate compiles inline so placeholders share the outer param sequence.
@@ -34,8 +42,10 @@ export const FALSE: SqlExpr = { t: "false" };
 export const cmp = (op: CmpOp, col: string, value: unknown): SqlExpr => ({ t: "cmp", op, col, value });
 export const isNull = (col: string, negate = false): SqlExpr => ({ t: "null", col, negate });
 export const inList = (col: string, values: unknown[], negate = false): SqlExpr => ({ t: "in", col, values, negate });
+export const strMatch = (col: string, needle: string, mode: StrMode): SqlExpr => ({ t: "strmatch", col, needle, mode });
 export const and = (...parts: SqlExpr[]): SqlExpr => ({ t: "and", parts });
 export const or = (...parts: SqlExpr[]): SqlExpr => ({ t: "or", parts });
+export const not = (expr: SqlExpr): SqlExpr => ({ t: "not", expr });
 
 /** Equality (null -> IS NULL). Used by ACL scope building and relation loads. */
 export const eq = (col: string, value: unknown): SqlExpr => (value === null ? isNull(col) : cmp("=", col, value));
@@ -49,6 +59,8 @@ export function compileWhere(input: Record<string, unknown>): SqlExpr {
       parts.push(and(...(v as Record<string, unknown>[]).map(compileWhere)));
     } else if (k === "OR") {
       parts.push(or(...(v as Record<string, unknown>[]).map(compileWhere)));
+    } else if (k === "NOT") {
+      parts.push(not(compileWhere(v as Record<string, unknown>)));
     } else {
       parts.push(columnPredicate(k, v));
     }
@@ -68,6 +80,9 @@ function columnPredicate(col: string, v: unknown): SqlExpr {
         case "lt": ops.push(cmp("<", col, val)); break;
         case "lte": ops.push(cmp("<=", col, val)); break;
         case "like": ops.push(cmp("LIKE", col, val)); break;
+        case "contains": ops.push(strMatch(col, String(val), "contains")); break;
+        case "startsWith": ops.push(strMatch(col, String(val), "prefix")); break;
+        case "endsWith": ops.push(strMatch(col, String(val), "suffix")); break;
         case "in": ops.push(inList(col, val as unknown[])); break;
         case "notIn": ops.push(inList(col, val as unknown[], true)); break;
         case "isNull": ops.push(isNull(col, !val)); break; // isNull:true => IS NULL
@@ -101,6 +116,15 @@ export function compileExpr(expr: SqlExpr, dialect: Dialect, params: unknown[] =
       return { sql: `${dialect.id(expr.col)} ${expr.op} ${dialect.placeholder(params.length)}`, params };
     case "null":
       return { sql: `${dialect.id(expr.col)} IS ${expr.negate ? "NOT " : ""}NULL`, params };
+    case "strmatch": {
+      // Escape the LIKE metacharacters in the needle (\, %, _) so they match literally,
+      // then wrap with wildcards per mode. ESCAPE '\' declares the escape char (SQLite +
+      // Postgres both support it). LIKE is ASCII-case-insensitive by default.
+      const esc = expr.needle.replace(/[\\%_]/g, "\\$&");
+      const pattern = expr.mode === "contains" ? `%${esc}%` : expr.mode === "prefix" ? `${esc}%` : `%${esc}`;
+      params.push(dialect.encode(pattern));
+      return { sql: `${dialect.id(expr.col)} LIKE ${dialect.placeholder(params.length)} ESCAPE '\\'`, params };
+    }
     case "in": {
       if (expr.values.length === 0) return { sql: expr.negate ? "1" : "0", params }; // empty: notIn=>all, in=>none
       const ph = expr.values.map((v) => (params.push(dialect.encode(v)), dialect.placeholder(params.length))).join(", ");
@@ -113,6 +137,8 @@ export function compileExpr(expr: SqlExpr, dialect: Dialect, params: unknown[] =
       const sql = expr.parts.map((p) => compileExpr(p, dialect, params).sql).join(sep);
       return { sql: expr.parts.length > 1 ? `(${sql})` : sql, params };
     }
+    case "not":
+      return { sql: `NOT (${compileExpr(expr.expr, dialect, params).sql})`, params };
     case "sub": {
       // Inner predicate shares `params`, so placeholder numbering stays correct
       // across dialects (? and $n alike).
@@ -169,6 +195,13 @@ export function evalExpr(expr: SqlExpr, row: Record<string, unknown>): boolean {
       const isNullVal = v === null || v === undefined;
       return expr.negate ? !isNullVal : isNullVal;
     }
+    case "strmatch": {
+      const left = row[expr.col];
+      if (typeof left !== "string") return false;
+      const s = left.toLowerCase();
+      const n = expr.needle.toLowerCase(); // CI, mirroring SQLite's default LIKE
+      return expr.mode === "contains" ? s.includes(n) : expr.mode === "prefix" ? s.startsWith(n) : s.endsWith(n);
+    }
     case "in": {
       const left = bind(row[expr.col]);
       if (left === null || left === undefined) return false; // can't demonstrate membership
@@ -180,6 +213,8 @@ export function evalExpr(expr: SqlExpr, row: Record<string, unknown>): boolean {
       return expr.parts.every((p) => evalExpr(p, row));
     case "or":
       return expr.parts.some((p) => evalExpr(p, row));
+    case "not":
+      return !evalExpr(expr.expr, row);
     case "sub":
       // Relation traversal needs a SQL round-trip; it isn't supported in the
       // in-memory cell-ACL `when` evaluator (those predicates must be single-table).

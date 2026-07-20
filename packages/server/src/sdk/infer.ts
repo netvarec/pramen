@@ -41,7 +41,9 @@ export type InferRow<F extends EntityFields> = { [K in keyof F]: Cell<F[K]> };
  * which can drop columns per row — `InferRow` over-claims presence by design. */
 export type ProjectedRow<F extends EntityFields> = { [K in keyof F]?: Cell<F[K]> };
 
-/** Operators available on a column predicate. `like` is string-only. */
+/** Operators available on a column predicate. String ops (`like`/`contains`/
+ * `startsWith`/`endsWith`) are string-only; `contains`/`startsWith`/`endsWith` escape
+ * the needle's wildcards (unlike `like`, where the caller writes `%`/`_`). */
 export interface WhereOps<V> {
   eq?: V | null;
   ne?: V | null;
@@ -52,16 +54,20 @@ export interface WhereOps<V> {
   in?: V[];
   notIn?: V[];
   like?: V extends string ? string : never;
+  contains?: V extends string ? string : never;
+  startsWith?: V extends string ? string : never;
+  endsWith?: V extends string ? string : never;
   isNull?: boolean;
 }
 
 /** Predicate input: per-column equality shorthand or an operator object, plus
- * nestable AND/OR groups. */
+ * nestable AND/OR/NOT groups. */
 export type WhereInput<F extends EntityFields> = {
   [K in keyof F]?: FieldTsType<F[K]> | null | WhereOps<FieldTsType<F[K]>>;
 } & {
   AND?: WhereInput<F>[];
   OR?: WhereInput<F>[];
+  NOT?: WhereInput<F>;
 };
 
 // --- partition boundary: runtime-only by decision (Issue 08) ---

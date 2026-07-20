@@ -412,6 +412,9 @@ export class Db<S extends SchemaDef = SchemaDef> {
       case "or":
         for (const p of expr.parts) this.addTouchedTables(p);
         break;
+      case "not":
+        this.addTouchedTables(expr.expr);
+        break;
     }
   }
 
@@ -427,6 +430,8 @@ export class Db<S extends SchemaDef = SchemaDef> {
     for (const [k, v] of Object.entries(where as Record<string, unknown>)) {
       if (k === "AND" || k === "OR") {
         for (const g of v as unknown[]) this.assertReadableWhere(from, scope, g);
+      } else if (k === "NOT") {
+        this.assertReadableWhere(from, scope, v);
       } else if (relations[k]) {
         continue; // relation traversal: enforced against the target's scope downstream
       } else if (!scope.fields.includes(k)) {

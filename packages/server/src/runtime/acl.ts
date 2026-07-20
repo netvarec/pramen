@@ -22,7 +22,7 @@ import {
   isInputMarker,
   isResolver,
 } from "../sdk/acl";
-import { and, compileWhere, evalExpr, FALSE, or, TRUE, type SqlExpr } from "./read-engine";
+import { and, compileWhere, evalExpr, FALSE, not, or, TRUE, type SqlExpr } from "./read-engine";
 import { BadRequest, PramenError } from "./errors";
 import type { FieldDef, RelationDef, SchemaDef } from "../sdk/schema";
 
@@ -260,6 +260,8 @@ function assertReadableRelationWhere(where: Record<string, unknown>, target: str
   for (const [k, v] of Object.entries(where)) {
     if (k === "AND" || k === "OR") {
       for (const g of v as Record<string, unknown>[]) assertReadableRelationWhere(g, target, fields, ctx);
+    } else if (k === "NOT") {
+      assertReadableRelationWhere(v as Record<string, unknown>, target, fields, ctx);
     } else if (targetRels[k]) {
       continue;
     } else if (!fields.includes(k)) {
@@ -336,6 +338,8 @@ export function compileScopedWhere(
     if (k === "AND" || k === "OR") {
       const groups = (v as Record<string, unknown>[]).map((g) => compileScopedWhere(g, entity, ctx, depth, allowRelations));
       parts.push(k === "AND" ? and(...groups) : or(...groups));
+    } else if (k === "NOT") {
+      parts.push(not(compileScopedWhere(v as Record<string, unknown>, entity, ctx, depth, allowRelations)));
     } else if (relations[k]) {
       if (!allowRelations) {
         throw new BadRequest(`cell-level \`when\` cannot traverse relations: '${k}' (relations need a SQL round-trip)`);
