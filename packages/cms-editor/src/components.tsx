@@ -253,11 +253,19 @@ export function CollectionEditor({ api, def, id, onSaved, onDeleted, onBack, onE
   const save = async () => {
     setBusy(true);
     try {
-      if (isNew) await api.call("collectionCreate", { collection: def.slug, values });
-      else await api.call("collectionUpdate", { collection: def.slug, id, values });
-      setOk(true);
-      setTimeout(() => setOk(false), 1200);
-      onSaved();
+      if (isNew) {
+        // Creating: a new record has no route yet — return to the list so the caller lands
+        // somewhere stable (the new row is now in it).
+        await api.call("collectionCreate", { collection: def.slug, values });
+        onSaved();
+      } else {
+        // Editing: stay on the form. Reflect the persisted row the update echoes back (server
+        // defaults / normalization applied) and flash a confirmation instead of navigating.
+        const updated = await api.call<Record<string, unknown>>("collectionUpdate", { collection: def.slug, id, values });
+        if (updated) setValues(updated);
+        setOk(true);
+        setTimeout(() => setOk(false), 1200);
+      }
     } catch (e) {
       onError(errMsg(e));
     } finally {
