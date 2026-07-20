@@ -365,9 +365,10 @@ export const cmsSchema = {
       id: primaryKey(generated(t.uuid())),
       typeId: notNull(t.uuid()),
       title: notNull(t.text()),
-      // NOT globally unique — a slug is unique PER LOCALE (`/en/about` + `/cs/about`).
-      // pramen's unique() is single-column only, so (slug, locale) uniqueness is enforced
-      // in createPage/createTranslation; this index just speeds the lookup.
+      // A slug is unique PER LOCALE (`/en/about` + `/cs/about`) — enforced by the entity's
+      // composite `unique: [["slug","locale"]]` (below). createPage/updatePage/createTranslation
+      // also pre-check so the caller gets a clean 409 before hitting the constraint; the index
+      // also speeds slug lookups.
       slug: indexed(notNull(t.text())),
       status: defaultTo(t.text(), "draft"), // draft | published | archived
       locale: defaultTo(t.text(), "en"),
@@ -398,6 +399,7 @@ export const cmsSchema = {
       type: r.belongsTo("cms_content_types", "typeId"),
       placements: r.hasMany("cms_page_blocks", "pageId"),
     }),
+    { unique: [["slug", "locale"]] }, // a slug is unique per locale (DB-enforced)
   ),
 
   cms_page_blocks: Entity(
@@ -1170,6 +1172,47 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       input: (raw): { pageId: string } => {
         const o = asObj(raw);
         if (typeof o.pageId !== "string") throw new BadRequest("pageId is required");
+        return o as never;
+      },
+    }),
+
+    /** Edit a page's own attributes — title, slug, locale, and content-type-level `fields`
+     * (the structured data of a non-block content type, e.g. a "Lecture" with date/speaker).
+     * Blocks are edited via addBlock/updateBlock; SEO via updatePageSeo; this covers the
+     * page record itself, which was previously only settable at createPage. A slug/locale
+     * change re-checks (slug, locale) uniqueness (excluding this page); `fields` is validated
+     * + sanitized against the content type's fieldsSchema, exactly like createPage. */
+    updatePage: mutation(async (ctx, input: { pageId: string; title?: string; slug?: string; locale?: string; fields?: Record<string, unknown> }) => {
+      const db = cdb(ctx);
+      const rows = await db.find({ from: "cms_pages", where: { id: input.pageId }, limit: 1 });
+      const page = rows[0];
+      if (!page) throw notFound("page");
+      const patch: Record<string, unknown> = { updatedAt: nowStamp() };
+      if (input.title !== undefined) patch.title = input.title;
+      if (input.slug !== undefined || input.locale !== undefined) {
+        const nextSlug = input.slug ?? String(page.slug);
+        const nextLocale = input.locale ?? String(page.locale);
+        await assertSlugFree(db, nextSlug, nextLocale, String(page.id));
+        if (input.slug !== undefined) patch.slug = input.slug;
+        if (input.locale !== undefined) patch.locale = input.locale;
+      }
+      if (input.fields !== undefined) {
+        const ctRows = await db.find({ from: "cms_content_types", where: { id: page.typeId }, limit: 1 });
+        const schema = ctRows[0]?.fieldsSchema as FieldDefinition[] | undefined;
+        validateFields(schema, input.fields, "page.fields", { requireRequired: false });
+        patch.fields = await sanitizeFields(schema, input.fields);
+      }
+      const updated = await db.update("cms_pages", input.pageId, patch);
+      if (!updated) throw notFound("page");
+      return { ok: true, page: updated };
+    }, {
+      ...editor,
+      input: (raw): { pageId: string; title?: string; slug?: string; locale?: string; fields?: Record<string, unknown> } => {
+        const o = asObj(raw);
+        if (typeof o.pageId !== "string") throw new BadRequest("pageId is required");
+        for (const k of ["title", "slug", "locale"] as const) {
+          if (o[k] !== undefined && typeof o[k] !== "string") throw new BadRequest(`${k} must be a string`);
+        }
         return o as never;
       },
     }),

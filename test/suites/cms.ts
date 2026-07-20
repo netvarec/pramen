@@ -400,4 +400,23 @@ export async function runCms(base: string): Promise<void> {
   const draft2 = await call("createPage", { typeId: ct.body.result.id, title: "Roadmap", slug: "roadmap" }, admin);
   const scheduled = await call("schedulePage", { pageId: draft2.body.result.id, publishAt: Date.now() + 60_000 }, admin);
   assert(scheduled.body.ok && typeof scheduled.body.result.publishInMs === "number", "cms: schedulePage enqueues a delayed publish task");
+
+  // --- updatePage: edit the page record itself (title / slug / page-level fields) ---
+  const lecture = await call("createPage", { typeId: ct.body.result.id, title: "Intro Lecture", slug: "intro-lecture" }, admin);
+  const lecId = lecture.body.result.id as string;
+  const editTitle = await call("updatePage", { pageId: lecId, title: "Intro to CS", fields: { date: "2026-09-01" } }, admin);
+  assert(editTitle.body.ok && editTitle.body.result.page.title === "Intro to CS", "cms: updatePage edits the title");
+  const afterEdit = await call("getPage", { slug: "intro-lecture", preview: true }, admin);
+  assert(afterEdit.body.result.page.title === "Intro to CS", "cms: the title edit persists");
+  assert(afterEdit.body.result.page.fields?.date === "2026-09-01", "cms: updatePage sets a content-type-level field");
+  // slug change: reachable at the new slug, gone from the old
+  await call("updatePage", { pageId: lecId, slug: "intro-to-cs" }, admin);
+  assert((await call("getPage", { slug: "intro-lecture", preview: true }, admin)).status === 404, "cms: the page leaves its old slug");
+  assert((await call("getPage", { slug: "intro-to-cs", preview: true }, admin)).body.ok, "cms: the page is reachable at its new slug");
+  // (slug, locale) uniqueness: taking another page's slug is rejected
+  const conflict = await call("updatePage", { pageId: lecId, slug: "roadmap" }, admin);
+  assert(conflict.status === 400 || conflict.status === 409, "cms: updatePage rejects a duplicate (slug, locale)");
+  // unknown page -> 404; anonymous -> 403
+  assert((await call("updatePage", { pageId: "00000000-0000-0000-0000-000000000000", title: "x" }, admin)).status === 404, "cms: updatePage on an unknown page is a 404");
+  assert((await call("updatePage", { pageId: lecId, title: "x" })).status === 403, "cms: updatePage requires editor auth (403)");
 }
