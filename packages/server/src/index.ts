@@ -22,6 +22,10 @@ export type {
   RelationDefs,
   BelongsToDef,
   HasManyDef,
+  ManyToManyDef,
+  OneHasOneDef,
+  OneHasOneInverseDef,
+  OnDelete,
 } from "./sdk/schema";
 
 // --- app + handlers ---
