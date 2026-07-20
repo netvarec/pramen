@@ -1,10 +1,13 @@
 // Compatibility of registerPasswordVerifier with REAL Contember password hashes.
 //
-// Contember hashes with `bcryptjs@^2.4.3` at cost 10 (engine-http/src/providers.ts:
+// Contember hashes with `bcryptjs` at cost 10 (engine-http/src/providers.ts:
 // `bcrypt: async (value) => await bcrypt.hash(value, 10)`), so the hashes produced here
 // are byte-identical in format to the ones sitting in a Contember `tenant.person` table.
-// Note bcryptjs 2.x emits the `$2a$` prefix — NOT `$2b$` — which is what a real dump
-// contains.
+//
+// BOTH prefixes occur in the wild and must verify: bcryptjs 2.x emits `$2a$`, while a
+// row checked from a live Contember deployment carried `$2b$` (a newer bcryptjs). An
+// import script must therefore not filter on either prefix — `bcrypt$` is what selects
+// the verifier, and bcrypt.compare handles the rest.
 //
 // This is a unit test on the verification path; upgrade-on-login is covered end-to-end
 // by test/suites/auth-legacy-hash.ts.
@@ -44,9 +47,9 @@ test("a frozen $2a$ fixture verifies (guards against a bcryptjs upgrade changing
   expect(await verifyPassword("wrong", imported(FIXTURE_HASH))).toBe(false);
 });
 
-test("the $2b$ variant verifies too (other bcrypt implementations, and Contember's import path)", async () => {
-  // Contember's SignUpMutationResolver only ACCEPTS imported hashes starting with `$2b$`,
-  // while its own provider emits `$2a$` — so a tenant DB can hold either. Both must work.
+test("the $2b$ variant verifies too — this is what a live Contember tenant DB holds", async () => {
+  // A row read from a production Contember deployment was `$2b$10$…` (60 chars), which
+  // also matches what SignUpMutationResolver accepts on its import path.
   const b = (await bcrypt.hash("password123", 10)).replace(/^\$2a\$/, "$2b$");
   expect(b.startsWith("$2b$")).toBe(true);
   expect(await verifyPassword("password123", imported(b))).toBe(true);
