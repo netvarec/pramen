@@ -498,3 +498,54 @@ describe("migrate — partition move", () => {
     expect((await migrate(d, v2, { partition: "p" })).changed).toBe(true);
   });
 });
+
+describe("migrate — composite unique", () => {
+  const withUnique = defineSchema({
+    members: Entity((t) => ({ id: t.id(), orgId: t.text(), userId: t.text() }), undefined, { unique: [["orgId", "userId"]] }),
+  });
+  const noUnique = defineSchema({
+    members: Entity((t) => ({ id: t.id(), orgId: t.text(), userId: t.text() })),
+  });
+
+  test("creates a composite unique index that rejects duplicate tuples", async () => {
+    const db = new Database(":memory:");
+    await migrate(bunSqliteDriver(db), withUnique);
+    db.run("INSERT INTO members (orgId, userId) VALUES ('o1', 'u1')");
+    db.run("INSERT INTO members (orgId, userId) VALUES ('o1', 'u2')"); // same org, different user — ok
+    db.run("INSERT INTO members (orgId, userId) VALUES ('o2', 'u1')"); // different org, same user — ok
+    expect(() => db.run("INSERT INTO members (orgId, userId) VALUES ('o1', 'u1')")).toThrow();
+  });
+
+  test("declaring a composite unique changes the schema hash (migration re-runs)", async () => {
+    const db = new Database(":memory:");
+    const d = bunSqliteDriver(db);
+    await migrate(d, noUnique);
+    const r = await migrate(d, withUnique);
+    expect(r.changed).toBe(true);
+    expect(() => db.run("INSERT INTO members (orgId, userId) VALUES ('o1','u1'),('o1','u1')")).toThrow();
+  });
+
+  test("adding a composite unique over existing duplicate tuples is skipped, not thrown", async () => {
+    const db = new Database(":memory:");
+    const d = bunSqliteDriver(db);
+    await migrate(d, noUnique);
+    db.run("INSERT INTO members (orgId, userId) VALUES ('o1', 'u1')");
+    db.run("INSERT INTO members (orgId, userId) VALUES ('o1', 'u1')"); // pre-existing duplicate tuple
+    const r = await migrate(d, withUnique);
+    expect(r.skipped.some((s) => s.includes("composite UNIQUE members(orgId, userId)"))).toBe(true);
+    // no index built -> the duplicate stays and further inserts are unconstrained
+    db.run("INSERT INTO members (orgId, userId) VALUES ('o1', 'u1')");
+    expect(db.query("SELECT count(*) AS n FROM members").get()).toEqual({ n: 3 });
+  });
+
+  test("removing a composite unique drops the managed index", async () => {
+    const db = new Database(":memory:");
+    const d = bunSqliteDriver(db);
+    await migrate(d, withUnique);
+    db.run("INSERT INTO members (orgId, userId) VALUES ('o1', 'u1')");
+    await migrate(d, noUnique); // drop the constraint
+    // the duplicate that would have been rejected now inserts fine
+    db.run("INSERT INTO members (orgId, userId) VALUES ('o1', 'u1')");
+    expect(db.query("SELECT count(*) AS n FROM members").get()).toEqual({ n: 2 });
+  });
+});

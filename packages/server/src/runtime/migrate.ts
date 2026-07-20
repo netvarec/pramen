@@ -38,7 +38,7 @@
 // A rename can't be inferred from a diff (a removed + added column is ambiguous),
 // so it must be declared with `renamedFrom`; otherwise it is applied as drop+add.
 
-import { addColumnSql, createTableSql, defaultSqlValue, indexName, indexStatements, sqlType } from "./ddl";
+import { addColumnSql, compositeKey, createTableSql, defaultSqlValue, indexName, indexStatements, sqlType } from "./ddl";
 import { digest } from "./digest";
 import { quoteIdent, type Driver } from "./driver";
 import { entitiesInPartition, partitionOf, validateSchema } from "../sdk/schema";
@@ -88,7 +88,11 @@ function isInternalTable(name: string): boolean {
 
 export function schemaHash(schema: SchemaDef): string {
   const canon: Record<string, unknown> = {};
-  for (const [table, def] of Object.entries(schema)) canon[table] = def.fields;
+  for (const [table, def] of Object.entries(schema)) {
+    // Keep the bare-`fields` shape when there are no composite uniques so existing stores'
+    // hashes are byte-identical (no spurious migration); fold uniques in only when present.
+    canon[table] = def.uniques.length ? { fields: def.fields, uniques: def.uniques } : def.fields;
+  }
   return digest(canon);
 }
 
@@ -158,6 +162,30 @@ async function columnHasDuplicates(driver: Driver, table: string, col: string): 
     `SELECT ${quoteIdent(col)} FROM ${quoteIdent(table)} WHERE ${quoteIdent(col)} IS NOT NULL GROUP BY ${quoteIdent(col)} HAVING COUNT(*) > 1 LIMIT 1`,
     [],
   );
+  return rows.length > 0;
+}
+
+/** Managed composite-unique indexes live on `table`: `compositeKey(cols)` → index name.
+ * Only `pramen_uidx_`-prefixed multi-column unique indexes are pramen-managed, so the
+ * reconciler never touches a hand-created index. */
+async function liveCompositeUniques(driver: Driver, table: string): Promise<Map<string, string>> {
+  const idx = (await driver.exec(`PRAGMA index_list(${quoteIdent(table)})`, [])) as { name: string; unique: number }[];
+  const out = new Map<string, string>();
+  for (const i of idx) {
+    if (i.unique !== 1 || !i.name.startsWith("pramen_uidx_")) continue;
+    const cols = (await driver.exec(`PRAGMA index_info(${quoteIdent(i.name)})`, [])) as { name: string | null }[];
+    const names = cols.map((c) => c.name).filter((n): n is string => n != null);
+    if (names.length >= 2) out.set(names.join(","), i.name);
+  }
+  return out;
+}
+
+/** Does the column tuple hold a duplicate all-non-NULL combination? (A new composite
+ * UNIQUE over such data can't build its index.) Mirrors {@link columnHasDuplicates}. */
+async function compositeHasDuplicates(driver: Driver, table: string, cols: readonly string[]): Promise<boolean> {
+  const notNull = cols.map((c) => `${quoteIdent(c)} IS NOT NULL`).join(" AND ");
+  const group = cols.map((c) => quoteIdent(c)).join(", ");
+  const rows = await driver.exec(`SELECT 1 FROM ${quoteIdent(table)} WHERE ${notNull} GROUP BY ${group} HAVING COUNT(*) > 1 LIMIT 1`, []);
   return rows.length > 0;
 }
 
@@ -268,6 +296,9 @@ export async function migrate(driver: Driver, schema: SchemaDef, opts: MigrateOp
   // Per-table: columns whose new `unique()` can't be indexed (duplicate values) — the
   // index pass must skip them so it doesn't throw. They're already reported in `skipped`.
   const uniqueIndexSkip = new Map<string, Set<string>>();
+  // Per-table: composite-unique tuples (keyed by compositeKey) whose new index can't be
+  // built (duplicate tuples present) — skipped by the index pass, reported in `skipped`.
+  const compositeUniqueSkip = new Map<string, Set<string>>();
 
   for (const [table, def] of entries) {
     const existing = await tableColumns(driver, table);
@@ -392,6 +423,24 @@ export async function migrate(driver: Driver, schema: SchemaDef, opts: MigrateOp
     for (const col of dropUniqueCols) {
       await driver.exec(`DROP INDEX IF EXISTS ${quoteIdent(indexName(table, col))}`, []);
     }
+
+    // Composite UNIQUE reconciliation (managed pramen_uidx_ indexes). Drop any live one
+    // the schema no longer declares; skip creating a new one whose tuples already have
+    // duplicates (the final index pass would otherwise throw). Creation itself is the
+    // idempotent index pass below.
+    const liveComposite = await liveCompositeUniques(driver, table);
+    const declaredComposite = new Set((def.uniques ?? []).map((c) => compositeKey(c)));
+    for (const [key, idxName] of liveComposite) {
+      if (!declaredComposite.has(key)) await driver.exec(`DROP INDEX IF EXISTS ${quoteIdent(idxName)}`, []);
+    }
+    for (const cols of def.uniques ?? []) {
+      const key = compositeKey(cols);
+      if (liveComposite.has(key)) continue;
+      if (await compositeHasDuplicates(driver, table, cols)) {
+        (compositeUniqueSkip.get(table) ?? compositeUniqueSkip.set(table, new Set()).get(table)!).add(key);
+        skipped.push(`add composite UNIQUE ${table}(${cols.join(", ")}) (duplicate tuples present)`);
+      }
+    }
   }
 
   // A partition MOVE — an entity that was applied in THIS partition before but the
@@ -419,7 +468,7 @@ export async function migrate(driver: Driver, schema: SchemaDef, opts: MigrateOp
   // declaration is dropped above. A column whose new `unique()` has duplicate values is
   // skipped (reported above) so this doesn't throw.
   for (const [table, def] of entries) {
-    for (const stmt of indexStatements(table, def, uniqueIndexSkip.get(table))) await driver.exec(stmt, []);
+    for (const stmt of indexStatements(table, def, uniqueIndexSkip.get(table), compositeUniqueSkip.get(table))) await driver.exec(stmt, []);
   }
 
   // Drop tables the schema no longer declares (internal bookkeeping tables skipped).

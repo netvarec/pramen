@@ -137,18 +137,23 @@ export interface EntityDef<F extends EntityFields = EntityFields, R extends Rela
   readonly partition: string;
   /** Declarative write-triggers (see TriggerDef). Always an array (possibly empty). */
   readonly triggers: readonly TriggerDef[];
+  /** Composite (multi-column) UNIQUE constraints, each a tuple of column names, enforced
+   * via a managed unique index. Single-column uniqueness stays on the field (`unique()`).
+   * Always an array (possibly empty). */
+  readonly uniques: readonly (readonly string[])[];
 }
 
 export function Entity<F extends EntityFields, R extends RelationDefs = Record<string, never>>(
   build: (t: FieldBuilders) => F,
   relations?: (r: RelationBuilders) => R,
-  opts?: { partition?: string; triggers?: readonly TriggerDef[] },
+  opts?: { partition?: string; triggers?: readonly TriggerDef[]; unique?: readonly (readonly string[])[] },
 ): EntityDef<F, R> {
   return {
     fields: build(builders),
     relations: (relations ? relations(relationBuilders) : {}) as R,
     partition: opts?.partition ?? DEFAULT_PARTITION,
     triggers: opts?.triggers ?? [],
+    uniques: opts?.unique ?? [],
   };
 }
 
@@ -319,6 +324,16 @@ export function validateSchema(schema: SchemaDef): void {
       for (const f of watched) {
         if (!(f in def.fields)) {
           throw new Error(`trigger '${t.task}' on '${entity}' watches unknown column '${f}'.`);
+        }
+      }
+    }
+    for (const cols of def.uniques) {
+      if (cols.length < 2) {
+        throw new Error(`composite unique on '${entity}' needs at least two columns (use unique() for one).`);
+      }
+      for (const c of cols) {
+        if (!(c in def.fields)) {
+          throw new Error(`composite unique on '${entity}' references unknown column '${c}'.`);
         }
       }
     }

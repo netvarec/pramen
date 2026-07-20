@@ -77,18 +77,42 @@ export function indexName(table: string, col: string): string {
   return `pramen_idx_${table}_${col}`;
 }
 
+/** Index name for a composite (multi-column) UNIQUE constraint. The `pramen_uidx_`
+ * prefix distinguishes managed composite uniques from single-column `pramen_idx_` ones,
+ * so the migrator can enumerate and reconcile just the ones it owns. */
+export function compositeUniqueName(table: string, cols: readonly string[]): string {
+  return `pramen_uidx_${table}_${cols.join("_")}`;
+}
+
+/** Canonical key for a composite-unique column tuple (order-significant, matching the
+ * index definition). Used to compare declared vs live composite uniques. */
+export function compositeKey(cols: readonly string[]): string {
+  return cols.join(",");
+}
+
 /** CREATE [UNIQUE] INDEX statements for a table's unique/index columns (idempotent
  * via IF NOT EXISTS). Unique wins if a column declares both. `skipCols` omits specific
  * columns — the migrator uses it to avoid emitting a UNIQUE index that would throw
  * (duplicate values present on a column that just gained `unique()`); that delta is
- * reported as skipped instead. */
-export function indexStatements(table: string, def: { fields: EntityFields }, skipCols?: ReadonlySet<string>): string[] {
+ * reported as skipped instead. Entity-level composite uniques (`def.uniques`) are
+ * emitted too; `skipUniques` omits specific tuples (keyed by {@link compositeKey}). */
+export function indexStatements(
+  table: string,
+  def: { fields: EntityFields; uniques?: readonly (readonly string[])[] },
+  skipCols?: ReadonlySet<string>,
+  skipUniques?: ReadonlySet<string>,
+): string[] {
   const out: string[] = [];
   for (const [col, f] of Object.entries(def.fields)) {
     if (!f.unique && !f.index) continue;
     if (skipCols?.has(col)) continue;
     const kind = f.unique ? "UNIQUE INDEX" : "INDEX";
     out.push(`CREATE ${kind} IF NOT EXISTS ${quoteIdent(indexName(table, col))} ON ${quoteIdent(table)} (${quoteIdent(col)})`);
+  }
+  for (const cols of def.uniques ?? []) {
+    if (cols.length === 0 || skipUniques?.has(compositeKey(cols))) continue;
+    const colList = cols.map((c) => quoteIdent(c)).join(", ");
+    out.push(`CREATE UNIQUE INDEX IF NOT EXISTS ${quoteIdent(compositeUniqueName(table, cols))} ON ${quoteIdent(table)} (${colList})`);
   }
   return out;
 }
