@@ -41,9 +41,22 @@ import {
   userHandlers,
   createUserHandlers,
   authPolicies,
+  registerPasswordVerifier,
 } from "@pramen/auth";
 // @pramen/cms — the block/page builder, wired as an ordinary app fragment.
 import { cmsSchema, cmsHandlers, cmsPolicies, cmsTasks, cmsRoutes, defineBlockType, defineContentType, cmsBootstrap, collection, createCollectionHandlers, collectionPolicies } from "@pramen/cms";
+
+// @pramen/auth: teach login one imported hash scheme. Unsalted `sha256` stands in for
+// whatever the system you are migrating FROM used — the real-world case is usually
+// bcrypt (`registerPasswordVerifier("bcrypt", (p, payload) => bcryptjs.compare(p, payload))`),
+// which is not used here only because it would pull a pure-JS bcrypt into the example.
+// Either way login upgrades the row to PBKDF2 on the first successful sign-in, so the
+// imported scheme drains away as users return.
+registerPasswordVerifier("sha256", async (password, payload) => {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(password));
+  const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return hex === payload.toLowerCase();
+});
 
 // Reusable write rule: force ownerId to the authenticated caller (a client cannot
 // forge it), even if the request body tries to set a different owner.
@@ -238,6 +251,53 @@ const handlers = {
   // @pramen/auth: user management — listUsers / setUserRoles / setUserActive (admin),
   // changeEmail / changePassword (self). Gated by authPolicies() in the ACL below.
   ...userHandlers,
+
+  // --- demo/test support for registerPasswordVerifier -------------------------
+  // A real import writes these rows with a script against the DB, not over RPC. These
+  // two exist so the upgrade-on-login path is exercisable end-to-end; both are
+  // admin-gated and neither belongs in a production app.
+  seedImportedUser: mutation(
+    async (ctx, input: { username: string; sha256Hex: string; scheme: string }) => {
+      await ctx.db.exec(
+        "INSERT INTO auth_users (username, passwordHash, roles, createdAt) VALUES (?, ?, ?, ?)",
+        input.username,
+        `${input.scheme}$${input.sha256Hex}`,
+        JSON.stringify(["user"]),
+        Date.now(),
+      );
+      return { ok: true };
+    },
+    {
+      auth: ["admin"],
+      input: (raw): { username: string; sha256Hex: string; scheme: string } => {
+        const o = (raw ?? {}) as Record<string, unknown>;
+        if (typeof o.username !== "string" || !o.username) throw new Error("username must be a string");
+        if (typeof o.sha256Hex !== "string" || !/^[0-9a-f]{64}$/i.test(o.sha256Hex)) throw new Error("sha256Hex must be a 64-char hex digest");
+        // `scheme` is settable so a test can also seed an UNREGISTERED scheme and prove
+        // it fails closed. Constrained to word chars so it can't smuggle a `$`.
+        const scheme = o.scheme === undefined ? "sha256" : o.scheme;
+        if (typeof scheme !== "string" || !/^\w+$/.test(scheme)) throw new Error("scheme must be a word");
+        return { username: o.username, sha256Hex: o.sha256Hex, scheme };
+      },
+    },
+  ),
+  // Reports only the SCHEME prefix of a stored hash, never the hash — enough to observe
+  // the upgrade, nothing an admin couldn't already infer.
+  passwordHashScheme: query(
+    async (ctx, input: { username: string }) => {
+      const rows = await ctx.db.exec("SELECT passwordHash FROM auth_users WHERE username = ? LIMIT 1", input.username);
+      if (!rows[0]) return { scheme: null };
+      return { scheme: String(rows[0].passwordHash).split("$")[0] };
+    },
+    {
+      auth: ["admin"],
+      input: (raw): { username: string } => {
+        const o = (raw ?? {}) as Record<string, unknown>;
+        if (typeof o.username !== "string" || !o.username) throw new Error("username must be a string");
+        return { username: o.username };
+      },
+    },
+  ),
   // @pramen/cms: block/page builder — createBlockType / createContentType / createPage /
   // addBlock / publishPage / schedulePage (editor-gated) + getPage (public content API).
   ...cmsHandlers,

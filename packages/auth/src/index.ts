@@ -94,7 +94,64 @@ function parseStoredHash(stored: string): { iterations: number; hash: string; sa
   return { iterations, hash, saltB64, hashB64 };
 }
 
+// --- foreign hash schemes (opt-in, for migrating in from another system) -----
+//
+// Importing users from an existing app means importing hashes that are NOT PBKDF2 —
+// bcrypt from Contember/Rails, `pbkdf2_sha256$` from Django, and so on. Those cannot be
+// converted (that needs the plaintext), so the only alternative would be forcing every
+// user to reset their password.
+//
+// Instead: store the foreign hash under its own scheme prefix (`bcrypt$<payload>`),
+// register a verifier for that scheme, and let login UPGRADE it. On the one successful
+// login where the plaintext is briefly in hand, the row is rehashed to PBKDF2. The
+// scheme deletes itself as users return; nothing has to be migrated ahead of time.
+//
+// pramen deliberately does NOT bundle an implementation. bcrypt needs a pure-JS library
+// (WebCrypto has none) which is real bundle weight, and it is useless to the apps that
+// never import anything — so the app supplies it:
+//
+//   import bcrypt from "bcryptjs";
+//   registerPasswordVerifier("bcrypt", (password, payload) => bcrypt.compare(password, payload));
+//
+// then import rows with `passwordHash = "bcrypt$" + row.password_hash` (a bcrypt hash is
+// itself `$2b$10$...`, so the stored value reads `bcrypt$$2b$10$...`).
+
+/** Verify `password` against a foreign hash `payload` (the stored value with its
+ * `<scheme>$` prefix already stripped). May be sync or async; throwing counts as a
+ * failed verification, never a 500. */
+export type PasswordVerifier = (password: string, payload: string) => boolean | Promise<boolean>;
+
+const foreignVerifiers = new Map<string, PasswordVerifier>();
+
+/** Register a verifier for an imported hash scheme. Call once at module scope, before
+ * any login can run. `pbkdf2` is built in and cannot be overridden. */
+export function registerPasswordVerifier(scheme: string, verify: PasswordVerifier): void {
+  if (!scheme || scheme.includes("$")) throw new Error(`invalid hash scheme '${scheme}' (must be non-empty and contain no '$')`);
+  if (scheme === "pbkdf2") throw new Error("'pbkdf2' is built in and cannot be overridden");
+  foreignVerifiers.set(scheme, verify);
+}
+
+/** True if `stored` is a foreign (non-PBKDF2) hash, i.e. one that login should upgrade
+ * after a successful verify. Also true for an unparseable value, which never verifies. */
+export function isForeignHash(stored: string): boolean {
+  return stored.split("$")[0] !== "pbkdf2";
+}
+
 export async function verifyPassword(password: string, stored: string): Promise<boolean> {
+  const scheme = stored.split("$")[0];
+  if (scheme !== "pbkdf2") {
+    const verify = foreignVerifiers.get(scheme);
+    // Unknown scheme (including the empty passwordHash of a passwordless user) never
+    // verifies — same as before this feature existed.
+    if (!verify) return false;
+    try {
+      return await verify(password, stored.slice(scheme.length + 1));
+    } catch {
+      // A broken/garbage payload must fail closed, not surface as a 500 that
+      // distinguishes it from a wrong password.
+      return false;
+    }
+  }
   const parsed = parseStoredHash(stored);
   if (!parsed) return false;
   const key = await crypto.subtle.importKey("raw", enc(password), "PBKDF2", false, ["deriveBits"]);
@@ -264,6 +321,22 @@ export const authHandlers = {
       // Only after the password verifies (so this can't enumerate accounts): a
       // deactivated user gets no new token. Existing tokens expire within the TTL.
       if (!isActive(u.active)) throw new Unauthorized("account is deactivated");
+      // Upgrade an imported foreign hash (see registerPasswordVerifier). This is the one
+      // moment the plaintext is in hand for a user whose hash predates pramen, so rehash
+      // to PBKDF2 and drop the old scheme. Deliberately AFTER the active check, so a
+      // deactivated account is never rewritten. Best-effort: a failed upgrade must not
+      // fail an otherwise valid login — the row simply upgrades on a later attempt.
+      if (isForeignHash(String(u.passwordHash))) {
+        try {
+          await ctx.db.exec(
+            "UPDATE auth_users SET passwordHash = ? WHERE username = ?",
+            await hashPassword(input.password),
+            String(u.username),
+          );
+        } catch {
+          /* keep the legacy hash; the next login retries */
+        }
+      }
       const roles = JSON.parse(String(u.roles)) as string[];
       const token = await signToken({ sub: String(u.username), roles }, secretOf(ctx), { ttlSeconds: sessionTtlOf(ctx) });
       return { token, user: { username: String(u.username), roles } };

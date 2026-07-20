@@ -17,6 +17,7 @@ import { runMagicLink } from "./suites/magic-link";
 import { runAuthEmail } from "./suites/auth-email";
 import { runUserManagement } from "./suites/user-management";
 import { runRevocation } from "./suites/auth-revocation";
+import { runLegacyHash } from "./suites/auth-legacy-hash";
 import { runTasks } from "./suites/tasks";
 import { runQueue } from "./suites/queue";
 import { runRelWhere } from "./suites/relwhere";
@@ -86,6 +87,7 @@ describe("pramen e2e", () => {
   test("@pramen/auth password reset + email verification (one-time email tokens)", () => runAuthEmail(BASE), 30_000);
   test("@pramen/auth user management (admin + self, ACL-gated)", () => runUserManagement(BASE), 30_000);
   test("@pramen/auth session refresh + hard revocation (denylist + WS exp)", () => runRevocation(BASE, WS), 30_000);
+  test("@pramen/auth imported hash verification + upgrade-on-login", () => runLegacyHash(BASE), 30_000);
   test("deferred tasks (transactional outbox + drain)", () => runTasks(BASE), 30_000);
   test("ctx.queue (Cloudflare Queues produce → consume)", () => runQueue(BASE), 30_000);
   test("relation-aware where (belongsTo/hasMany traversal + ACL scoping)", () => runRelWhere(BASE), 30_000);

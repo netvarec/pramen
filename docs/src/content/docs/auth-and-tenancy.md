@@ -104,6 +104,54 @@ username) — login never resolves identity by the mutable `email` column. Decla
 `send_email` binding in `oblaka.ts` (`EmailService`); see
 [Quick start — Workers binding](https://developers.cloudflare.com/email-service/).
 
+### Migrating in existing password hashes
+
+Moving users in from another system means importing hashes that are not PBKDF2 —
+bcrypt from Contember or Rails, `pbkdf2_sha256$` from Django, and so on. They cannot be
+converted (that needs the plaintext), so the alternative would be forcing every user to
+reset their password.
+
+Instead, store the foreign hash under its own **scheme prefix** and register a verifier
+for it. Login accepts it, then **upgrades the row to PBKDF2** on the first successful
+sign-in — the one moment the plaintext is in hand:
+
+```ts
+import bcrypt from "bcryptjs";
+import { registerPasswordVerifier } from "@pramen/auth";
+
+// Call once at module scope, before any login can run.
+registerPasswordVerifier("bcrypt", (password, payload) => bcrypt.compare(password, payload));
+```
+
+Import rows with the prefix applied. A bcrypt hash is itself `$2b$10$…`, so the stored
+value reads `bcrypt$$2b$10$…`:
+
+```sql
+INSERT INTO auth_users (username, passwordHash, roles, email, createdAt)
+VALUES (?, 'bcrypt$' || ?, '["user"]', ?, ?);
+```
+
+Nothing else changes. Users log in with their existing passwords, each row converts
+silently as its owner returns, and the scheme drains away — accounts that never come
+back simply keep their old hash, which costs nothing.
+
+pramen does **not** bundle a bcrypt implementation. WebCrypto has none, so it would
+mean a pure-JS library in every bundle, including the apps that never import anything.
+The verifier is yours to supply.
+
+Notes:
+
+- **Unregistered schemes fail closed.** An unknown prefix never verifies — same as
+  before the hook existed. A verifier that throws is also treated as a failed
+  verification, never a 500.
+- **Only successful logins upgrade.** A wrong password, or a deactivated account,
+  leaves the row untouched.
+- **Timing.** The not-found path is equalized against PBKDF2. A foreign scheme with a
+  different cost profile (bcrypt cost 10 is cheaper than PBKDF2-600k) is
+  distinguishable by timing, which leaks *which scheme a given account uses* — roughly,
+  whether the account predates the migration. Usually acceptable; worth knowing.
+- `resetPassword` and `changePassword` always write PBKDF2, so those paths upgrade too.
+
 ### User management
 
 `createUserHandlers()` + `authPolicies()` add admin + self-service account management
