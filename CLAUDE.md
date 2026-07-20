@@ -184,12 +184,19 @@ log) for independent single-writer serialization and storage.
   (`changeEmail`/`changePassword`) management — over `auth_users` or your own
   authSchema-shaped table. Session TTL via `AUTH_SESSION_TTL_SECONDS` (role/active
   changes take effect on next login — no session store).
-- Relations: `belongsTo(target, column)` / `hasMany(target, column)` and
-  `manyToMany(target, { through, sourceColumn, targetColumn })` — all **logical** (no FK
-  constraints; substrate-identical on DO + D1). m2n goes through an **explicit junction
-  entity** you define + write to directly (a plain entity with the two id columns; no
-  synthetic tables, no new write API — `ctx.db.insert(through, { sourceColumn, targetColumn })`
-  to link, `delete` to unlink). Source, junction, and target must share a partition.
+- Relations: `belongsTo(target, column)` / `hasMany(target, column)`,
+  `oneHasOne(target, column)` / `oneHasOneInverse(target, column)` (single-valued 1:1 —
+  mark the FK column `unique()` for the DB guarantee), and
+  `manyToMany(target, { through, sourceColumn, targetColumn })` (**logical**: an **explicit
+  junction entity** you write to directly — `ctx.db.insert(through, …)` to link, `delete` to
+  unlink; no synthetic tables/write API). All must keep source/junction/target in one partition.
+- **Real foreign keys** are **opt-in** on an owning relation via `onDelete`:
+  `belongsTo(target, column, { onDelete: "cascade" | "setNull" | "restrict" })` (also
+  `oneHasOne`) emits a `FOREIGN KEY … REFERENCES … ON DELETE` enforced by the engine on
+  both DO and D1 (cascade/set-null/restrict + insert integrity). Without `onDelete` a
+  relation stays logical (no constraint, no migration). Adding/changing an FK is a table
+  rebuild (SQLite can't ALTER it): deferred on the DO's boot transaction, and via the D1
+  driver's atomic `batch()` on D1; an FK over orphaned data is skipped + reported, not fatal.
 - `where` can traverse relations: `{ owner: { name: "x" } }` (belongsTo/hasMany) or
   `{ tags: { name: "x" } }` (manyToMany, via a nested subquery through the junction)
   compiles to a subquery in both user queries and policy `where`; `with: { tags: true }`
