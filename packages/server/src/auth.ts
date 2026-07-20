@@ -226,6 +226,9 @@ function toIdentity(claims: Record<string, unknown>): Identity {
       ? [claims.role]
       : [];
   const identity: Identity = { roles, userId: (claims.sub ?? claims.userId) as string | undefined };
+  // Carry `exp` (a STANDARD claim, so the passthrough loop skips it) so a WebSocket can
+  // re-check expiry per message — its identity is fixed at upgrade and never re-verified.
+  if (typeof claims.exp === "number") identity.exp = claims.exp;
   for (const [k, v] of Object.entries(claims)) {
     if (!STANDARD_CLAIMS.has(k)) identity[k] = v; // carry custom claims (tier, …)
   }

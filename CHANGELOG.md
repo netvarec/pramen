@@ -10,7 +10,34 @@ there are no backward-compatibility guarantees yet.
 
 ## [Unreleased]
 
+### Added
+
+- **Session revocation, without a session store.** Tokens are stateless (roles baked in at
+  login), so a token used to outlive any change to the account behind it. Two mechanisms
+  close that gap. **`refreshSession()`** (`@pramen/auth`, authenticated — in both
+  `authHandlers` and `createMagicLinkAuth`) re-reads `roles`/`active` and reissues a token:
+  refreshing at ~half-TTL keeps `AUTH_SESSION_TTL_SECONDS` short (bounding how long a stale
+  role lingers) and picks up a role **grant** immediately — e.g. after a subscription
+  checkout — with no re-login. It 401s for a deleted or deactivated account, so a refresh
+  can't launder a revoked session into a longer-lived one. For hard revocation, a **KV
+  denylist**: `setUserActive(false)` / `deleteUser` write `authDenied:<username>`, which the
+  Worker checks right after resolving identity — before both the DO and D1 paths — and fails
+  **closed** with 401 (never a silent downgrade to anonymous), covering HTTP and the
+  WebSocket upgrade. The entry self-expires at the session TTL, so the list never grows;
+  reactivation lifts it (the key is username-scoped and would otherwise block a fresh login).
+  `denySession` / `allowSession` / `isSessionDenied` are exported from `@pramen/server` for
+  app-driven revocation.
+
 ### Fixed
+
+- **A live WebSocket could outlive its token.** The token was verified once at upgrade and
+  the identity fixed for the life of the socket, so a long-lived or hibernating connection
+  kept calling and receiving pushes indefinitely past `exp` — role changes and revocation
+  only ever bit on reconnect. The DO now re-checks `exp` on every message: an expired socket
+  gets an `unauthorized` error frame and is closed with **4401**, and expired sockets are
+  dropped from the broadcast path instead of pushed to. `Identity` carries `exp` (a standard
+  claim, so it needed explicit plumbing past the custom-claim passthrough); synthetic
+  `callPrivileged` identities carry none and are never treated as expired.
 
 - **`@pramen/client` `call()` no longer silently resolves `undefined`.** A 2xx response
   that isn't the `{ ok: true, result }` envelope (e.g. a trailing-slash base url routed to

@@ -63,10 +63,12 @@ column — never returned by a read), `roles`, a mutable unique `email`, and an
 - **`login({ username, password })`** → `{ token, user }`. A wrong password, unknown
   user, or **deactivated** account all return `401` (no account enumeration).
 - **`me()`** → the caller's `Identity`.
+- **`refreshSession()`** (authenticated) → `{ token, user }` with **freshly read**
+  roles and `active`, at the configured TTL.
 
-Token lifetime defaults to 1h; set `AUTH_SESSION_TTL_SECONDS` to tune it (a shorter
-TTL tightens the window before a role change or deactivation takes effect — see
-[user management](#user-management)).
+Token lifetime defaults to 1h; set `AUTH_SESSION_TTL_SECONDS` to tune it. Because
+`refreshSession` lets a client renew silently, a short TTL costs nothing in UX — see
+[Sessions & revocation](#sessions-revocation).
 
 ### Magic link (passwordless)
 
@@ -94,6 +96,8 @@ const handlers = { ...authHandlers, ...magic /* … */ };
   token, persists its hash, and calls `sendEmail`.
 - **`loginWithMagicLink({ token })`** → `{ token, user }`. Validates (unexpired,
   unconsumed), consumes single-use, and find-or-creates the user.
+- **`refreshSession()`** — the same handler `authHandlers` exposes, at this factory's
+  configured TTL. Passwordless users renew without a new email round-trip.
 
 Magic-link users are keyed by their **`username`** (their email address *is* their
 username) — login never resolves identity by the mutable `email` column. Declare the
@@ -123,10 +127,10 @@ const acl = [
 - **Self:** `changeEmail` (unique, validated), `changePassword` (verifies the current
   one).
 
-Role and `active` changes take effect on the user's **next login** — the verify-only
-core has no session store, so a token stays valid until it expires. Shorten
-`AUTH_SESSION_TTL_SECONDS` to narrow that window, or keep a per-user denylist in
-`ctx.kv` for immediate revocation.
+Deactivating or deleting a user **revokes their outstanding tokens immediately** — the
+handlers write a KV denylist entry the Worker enforces. A `setUserRoles` change is
+softer: it lands on the user's next `refreshSession` (or login). Both are covered in
+[Sessions & revocation](#sessions-revocation).
 
 **Custom table.** `createUserHandlers({ table })` points the same handlers at your own
 `auth_users`-shaped table — e.g. one with an extra `tenants` column for multi-tenant
@@ -146,6 +150,71 @@ const policies = authPolicies({
 The table must have a `username` PK (and, for `changeEmail`/`changePassword`,
 `email`/`passwordHash` columns); extra columns are ignored by the built-ins and
 managed by your own handlers.
+
+## Sessions & revocation
+
+Tokens are **stateless**: roles and `active` are baked in at login, and the Worker does
+no per-request database lookup. That is what keeps the core verify-only and reads
+cheap — but it means a token outlives a change to the account behind it. pramen closes
+that gap two ways, still with no session store.
+
+### Silent refresh
+
+**`refreshSession()`** (authenticated; in both `authHandlers` and
+`createMagicLinkAuth`) re-reads `roles` and `active` for the caller and reissues a
+token — `{ token, user }`, the same shape as `login`. It throws `401` if the account
+is gone or deactivated, so a refresh can never launder a revoked session into a new,
+longer-lived one.
+
+Refreshing at **~half the TTL** lets you keep `AUTH_SESSION_TTL_SECONDS` short without
+ever logging the user out, which bounds how long a stale role can linger. It also
+works in the granting direction: a new role applies **immediately**, no re-login —
+call it right after a subscription checkout or plan upgrade.
+
+```ts
+// after the purchase that granted the role
+const { token } = await pramen.call("refreshSession");
+pramen.setToken(token); // also reconnects the live socket under the new identity
+```
+
+### Hard revocation (denylist)
+
+For a deactivation, deletion, or credential compromise, waiting out the TTL is not
+good enough. `setUserActive(false)` and `deleteUser` write a **KV denylist** entry
+(`authDenied:<username>`) that the Worker checks immediately after resolving identity —
+before any handler, and before both the DO and D1 paths, so it covers HTTP and the
+WebSocket upgrade alike. A denied token fails **closed** with `401` (it is *not*
+downgraded to anonymous), so revocation takes effect on the **next request** rather
+than the next login.
+
+The entry carries an `expirationTtl` equal to the session TTL, so it self-expires
+exactly when the last token that could have been outstanding at revocation time does —
+the denylist only ever holds recently-revoked users and never grows unbounded.
+Reactivating (`setUserActive(true)`) lifts the entry: the key is username-scoped, so a
+stale entry would otherwise lock out even a fresh login.
+
+The helpers are exported from `@pramen/server` so an app can revoke on its own signals
+(a compromise report, a fraud check) without going through `createUserHandlers`:
+
+```ts
+import { denySession, allowSession, isSessionDenied } from "@pramen/server";
+
+await denySession(ctx.kv, username, 3600); // block every token for this user, up to 1h
+```
+
+> KV is eventually consistent — a denylist write can take up to ~60s to become visible
+> in every region, and the entry TTL is clamped to KV's 60s minimum. Treat it as a kill
+> switch, not a transactional gate. Routine role changes belong on `refreshSession`.
+
+### Live connections
+
+A WebSocket verifies its token **once, at upgrade**, and the identity is then fixed for
+the life of the socket — so a long-lived or hibernating connection could otherwise
+outlive its TTL indefinitely. The DO therefore re-checks the token's `exp` on every
+message: an expired socket receives an `unauthorized` error frame, is closed with
+**4401**, and stops receiving subscription pushes. The client should re-authenticate
+and reconnect (`@pramen/client`'s `setToken` does this for you). See
+[Live Queries](/docs/live-queries).
 
 ## Tenancy
 

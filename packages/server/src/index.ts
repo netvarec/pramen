@@ -71,6 +71,9 @@ export type {
   WhereOps,
 } from "./sdk/infer";
 
+// --- kv (ctx.kv) + session denylist (hard token revocation) ---
+export { Kv, denySession, allowSession, isSessionDenied } from "./runtime/kv";
+
 // --- files ---
 export type { FileRef, Files, SignUploadOpts, SignDownloadOpts, HeadResult } from "./sdk/files";
 export { R2Adapter, MemoryAdapter, createFiles, handleFileRequest } from "./runtime/storage";

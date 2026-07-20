@@ -36,3 +36,16 @@ Browser WebSockets can't set headers, so `/live` also accepts the bearer token a
 tenant via the query string (`?token=...&tenant=...`); the Worker folds them into
 headers for the rest of the flow. The `@pramen/client` library handles this for you —
 see [Clients](/docs/client).
+
+## Token expiry
+
+The token is verified **once, at upgrade** — the socket's identity is fixed from then
+on. So that a long-lived (or hibernating) connection can't outlive its session, the DO
+re-checks the token's `exp` on every message: an expired socket gets an `unauthorized`
+error frame, is closed with code **4401**, and stops receiving pushes.
+
+Treat 4401 as "re-authenticate, then reconnect". Calling `setToken` on
+`@pramen/client` with a token from
+[`refreshSession`](/docs/auth-and-tenancy#silent-refresh) resets the socket for you.
+Revoking a user (deactivate/delete) blocks the *upgrade* via the denylist, so a
+revoked client is cut off as soon as it reconnects.

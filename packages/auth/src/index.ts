@@ -16,7 +16,7 @@
 // magicLinkSchema too). It is transport-agnostic: you supply sendEmail; pramen owns
 // the token lifecycle. See createMagicLinkAuth below.
 
-import { Entity, mutation, query, defaultTo, unique, hidden, policy, allow, $identity, BadRequest, Unauthorized } from "@pramen/server";
+import { Entity, mutation, query, defaultTo, unique, hidden, policy, allow, $identity, BadRequest, Unauthorized, denySession, allowSession } from "@pramen/server";
 import type { AppTaskMap, HandlerContext, HandlerMap, Policy } from "@pramen/server";
 
 // --- schema fragment: spread into your defineSchema so the table is migrated ---
@@ -169,8 +169,38 @@ function parseCreds(raw: unknown): { username: string; password: string; email?:
   return { username: o.username, password: o.password, email };
 }
 
-/** signup / login / me. Roles are assigned server-side (default `["user"]`) — the
- * client never picks its own roles. Spread into your handler map. */
+/** Build the `refreshSession` handler: an AUTHENTICATED mutation that re-reads the caller's
+ * `roles` + `active` from the users table (keyed on `username` = the JWT `sub`) and reissues a
+ * fresh token with the configured session TTL — the same `{ token, user }` shape as `login`.
+ * Throws Unauthorized if the row is gone or the account is deactivated (the `isActive` helper).
+ *
+ * Why it exists: the core is stateless verify-only, so roles/active are baked into a token at
+ * login. refreshSession lets a client (1) silently refresh at ~half-TTL, so AUTH_SESSION_TTL_SECONDS
+ * can be kept SHORT (bounded revocation lag) without logging the user out; and (2) pick up a role
+ * GRANT immediately — e.g. right after a subscription checkout flips the role — with no re-login.
+ * Shared by password users (`authHandlers`) and magic-link users (`createMagicLinkAuth`): both
+ * store the row in the same authSchema-shaped table keyed on the immutable `username`. `ttlOf`
+ * supplies each factory's own configured TTL. */
+function buildRefreshSession(ttlOf: (ctx: HandlerContext) => number, table = "auth_users") {
+  return mutation(
+    async (ctx) => {
+      const userId = requireUserId(ctx);
+      const rows = await ctx.db.exec(`SELECT username, roles, active FROM ${table} WHERE username = ? LIMIT 1`, userId);
+      const u = rows[0];
+      // Gone or deactivated ⇒ no fresh token (mirrors login). The Worker denylist already
+      // fails a deactivated user's outstanding token closed; this ensures refresh can't
+      // launder a revoked session into a new, longer-lived one either.
+      if (!u || !isActive(u.active)) throw new Unauthorized("session is no longer valid");
+      const roles = JSON.parse(String(u.roles)) as string[];
+      const token = await signToken({ sub: String(u.username), roles }, secretOf(ctx), { ttlSeconds: ttlOf(ctx) });
+      return { token, user: { username: String(u.username), roles } };
+    },
+    { auth: "authenticated" },
+  );
+}
+
+/** signup / login / me / refreshSession. Roles are assigned server-side (default `["user"]`)
+ * — the client never picks its own roles. Spread into your handler map. */
 export const authHandlers = {
   // NOTE on username enumeration: signup returns a distinct "username is taken" error,
   // which is an enumeration oracle. This is INHERENT to systems where the username is a
@@ -242,6 +272,11 @@ export const authHandlers = {
   ),
 
   me: query((ctx) => ctx.identity),
+
+  // Re-read roles/active for the caller and reissue a token at the env-configured session
+  // TTL (AUTH_SESSION_TTL_SECONDS). Lets a short TTL bound revocation lag without logging
+  // the user out, and picks up role grants without re-login. See buildRefreshSession.
+  refreshSession: buildRefreshSession(sessionTtlOf),
 };
 
 // --- magic link (passwordless) login ---------------------------------------
@@ -357,6 +392,11 @@ export function createMagicLinkAuth(opts: MagicLinkOptions): { handlers: Handler
   const defaultRoles = opts.defaultRoles ?? DEFAULT_ROLES;
 
   const handlers: HandlerMap = {
+    // Silent token refresh for magic-link users (same table, keyed on username). Reissues
+    // at this factory's configured session TTL. Shared implementation with authHandlers —
+    // when both are spread into one app, either definition serves either user.
+    refreshSession: buildRefreshSession(() => sessionTtl),
+
     /** Admin-only: create a passwordless user with the given roles (defaults if omitted)
      * and email them a fresh magic link. Idempotent — inviting an existing user just
      * resends the link and leaves their roles alone (admin uses setUserRoles for changes).
@@ -489,12 +529,19 @@ export function createMagicLinkAuth(opts: MagicLinkOptions): { handlers: Handler
 // roles (admin manages everyone; the authenticated user manages only itself). Because
 // the admin read policy restricts `fields`, `passwordHash` is never projected back.
 //
-// Role/active changes are baked into the JWT at login, so setUserRoles / setUserActive
-// take effect on the user's NEXT login — not instantly. That lag is the cost of the
-// stateless, verify-only core (no session store, by design). Tune the revocation window
-// with the AUTH_SESSION_TTL_SECONDS env var (default 3600); for immediate revocation an
-// app can keep a per-user denylist in ctx.kv and check it in a route/middleware —
-// deliberately left to the app rather than building a session store into the core.
+// Roles are baked into the JWT at login, so the core is stateless verify-only. Two
+// mechanisms close the gap that leaves, without a session store:
+//  - `refreshSession` (authHandlers / createMagicLinkAuth): an authenticated caller
+//    re-reads roles/active and gets a fresh token. A client refreshing at ~half-TTL lets
+//    AUTH_SESSION_TTL_SECONDS (default 3600) stay short — bounding how long a stale
+//    setUserRoles/setUserActive lingers — and picks up a role GRANT immediately (no re-login).
+//  - KV denylist (HARD revocation, independent of TTL): setUserActive(false) and deleteUser
+//    write an `authDenied:<username>` entry via `denySession(ctx.kv, …)`; the core Worker
+//    checks `isSessionDenied` right after resolving identity and fails a revoked token closed
+//    (401) — so a deactivate/delete takes effect on the NEXT request, not the next login. The
+//    entry self-expires at the session TTL (the list never grows); reactivation lifts it
+//    (`allowSession`). `denySession`/`allowSession`/`isSessionDenied` are exported from
+//    @pramen/server so an app can revoke on its own compromise signals too.
 
 /** SQLite has no bool: `active` is stored 0/1 (NULL on a pre-column row = active). */
 function isActive(v: unknown): boolean {
@@ -553,8 +600,11 @@ export function createUserHandlers(opts: { table?: string } = {}) {
       return updated;
     }),
 
-    /** Admin: activate / deactivate a user. Deactivating blocks future logins (and
-     * token refresh); existing tokens still expire naturally within the TTL. */
+    /** Admin: activate / deactivate a user. Deactivating blocks future logins AND
+     * refreshSession, AND revokes OUTSTANDING tokens immediately via the KV denylist (the
+     * Worker fails them closed) — so revocation no longer waits out the token TTL. The
+     * denylist entry self-expires at the session TTL. Reactivating LIFTS the entry (it is
+     * username-scoped, so a stale entry would otherwise lock out even a fresh login). */
     setUserActive: mutation(async (ctx, input: { username: string; active: boolean }) => {
       if (typeof input?.username !== "string" || input.username.length === 0) throw new BadRequest("username is required");
       if (typeof input?.active !== "boolean") throw new BadRequest("active must be a boolean");
@@ -563,6 +613,9 @@ export function createUserHandlers(opts: { table?: string } = {}) {
       }
       const updated = await usersDb(ctx).update(table, input.username, { active: input.active });
       if (!updated) throw new BadRequest("user not found");
+      // KV is not part of the mutation's transaction — do it after the update succeeds.
+      if (input.active === false) await denySession(ctx.kv, input.username, sessionTtlOf(ctx));
+      else await allowSession(ctx.kv, input.username);
       return updated;
     }),
 
@@ -573,6 +626,8 @@ export function createUserHandlers(opts: { table?: string } = {}) {
       if (input.username === ctx.identity?.userId) throw new BadRequest("cannot delete your own account");
       const deleted = await usersDb(ctx).delete(table, input.username);
       if (!deleted) throw new BadRequest("user not found");
+      // Revoke any outstanding tokens for the now-deleted user (self-expires at the TTL).
+      await denySession(ctx.kv, input.username, sessionTtlOf(ctx));
       return { ok: true };
     }),
 

@@ -59,7 +59,14 @@ const handlers = { ...authHandlers, /* your handlers */ };
 **user management** — `createUserHandlers()` + `authPolicies()` for ACL-gated admin
 (`listUsers`/`setUserRoles`/`setUserActive`/`deleteUser`) and self-service
 (`changeEmail`/`changePassword`), over `auth_users` or your own authSchema-shaped
-table (e.g. with an extra `tenants` column). See the
+table (e.g. with an extra `tenants` column).
+
+Sessions stay stateless without giving up revocation: `refreshSession()` reissues a
+token from freshly-read roles (refresh at ~half-TTL to keep the TTL short, or right
+after a checkout to pick up a new role with no re-login), while deactivating or
+deleting a user hits a **KV denylist** the Worker enforces on the very next request —
+HTTP or WebSocket. Live sockets re-check their token's `exp` per message and close
+4401 rather than outliving it. See the
 [Auth & Tenancy docs](docs/src/content/docs/auth-and-tenancy.md).
 
 ### ACL

@@ -185,8 +185,18 @@ log) for independent single-writer serialization and storage.
   for ACL-gated admin (`listUsers`/`setUserRoles`/`setUserActive`/`deleteUser`) + self
   (`changeEmail`/`changePassword`) management — over `auth_users` or your own
   authSchema-shaped table (`changeEmail` clears `emailVerified`, since the new address is
-  unconfirmed). Session TTL via `AUTH_SESSION_TTL_SECONDS` (role/active changes take effect
-  on next login — no session store).
+  unconfirmed). Session TTL via `AUTH_SESSION_TTL_SECONDS` (default 3600). The stateless
+  verify-only core closes the "roles are baked into the token" gap two ways, no session store:
+  **`refreshSession`** (in `authHandlers` + `createMagicLinkAuth`, authenticated) re-reads
+  roles/active and reissues a token — a client refreshing at ~half-TTL lets the TTL stay short
+  (bounded revocation lag) and picks up a role GRANT immediately (no re-login); and a **KV
+  denylist** for HARD revocation — `setUserActive(false)`/`deleteUser` write `authDenied:<username>`
+  (self-expiring at the session TTL, lifted on reactivation), which the core Worker checks right
+  after `resolveIdentity` and fails a revoked token CLOSED (401 — not a downgrade to anonymous),
+  covering HTTP + the WS upgrade. Helpers `denySession`/`allowSession`/`isSessionDenied` are
+  exported from `@pramen/server` for app-driven revocation. A live WebSocket also re-checks the
+  token's `exp` per message (identity is fixed at upgrade), closing 4401 so a socket can't outlive
+  its TTL.
 - Password reset + email verification (`@pramen/auth`, opt-in): two one-time-email-token
   flows built on the magic-link machinery — mint a random token, store only its SHA-256
   **hash** + expiry in the shared `emailTokenSchema` table (`auth_email_tokens`, discriminated

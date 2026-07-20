@@ -25,7 +25,7 @@ import { Db } from "./runtime/db";
 import { digest } from "./runtime/digest";
 import { compileAcl, type AclContext, type CompiledAcl } from "./runtime/acl";
 import { DoSqliteDriver, type Driver } from "./runtime/driver";
-import { BadRequest, toResponse, toWsError } from "./runtime/errors";
+import { BadRequest, Unauthorized, toResponse, toWsError } from "./runtime/errors";
 import { Kv } from "./runtime/kv";
 import { registryKey } from "./runtime/registry";
 import { DEFAULT_PARTITION } from "./sdk/schema";
@@ -64,6 +64,10 @@ export interface DoEnv {
 
 /** Per-socket subscription cap — bounds memory and per-mutation re-run cost. */
 const MAX_SUBSCRIPTIONS = 64;
+
+/** WebSocket close code for an auth failure (RFC 6455 leaves 4000-4999 to the app;
+ * 4401 mirrors HTTP 401). Sent when a socket's token has expired since upgrade. */
+const WS_CLOSE_UNAUTHORIZED = 4401;
 
 export class PramenDOBase extends DurableObject<DoEnv> {
   private readonly app: PramenApp;
@@ -336,9 +340,16 @@ export class PramenDOBase extends DurableObject<DoEnv> {
     // socket's (tenant, partition) — fixed at connect time, survives via the attachment
     // — and ensure the schema is migrated before any handler/ctx.db work. Idempotent
     // (the `migrated` flag), so a no-op after the first call.
-    const { tenant, partition } = this.getAttachment(ws);
-    this.tenant = tenant;
-    this.partition = partition;
+    const att = this.getAttachment(ws);
+    this.tenant = att.tenant;
+    this.partition = att.partition;
+
+    // The token was verified ONCE at upgrade; a live/hibernating socket can outlive its
+    // TTL. Re-check `exp` per message so an expired session can't keep calling/subscribing
+    // (role changes + the denylist only bite on reconnect, which this forces). Fail the
+    // frame and close 4401 so the client re-auths. Synthetic identities carry no exp.
+    if (this.isExpired(att.identity)) return this.rejectExpired(ws, msg.id);
+
     await this.ensureMigrated();
 
     switch (msg.type) {
@@ -417,6 +428,18 @@ export class PramenDOBase extends DurableObject<DoEnv> {
     for (const ws of this.ctx.getWebSockets()) {
       try {
         const att = this.getAttachment(ws);
+        // A live socket whose token expired while connected must not keep receiving pushes.
+        // Close it 4401 and drop its subscriptions instead of pushing (an expired hibernating
+        // socket already has no in-memory subs, so this only bites still-live ones).
+        if (this.isExpired(att.identity)) {
+          try {
+            ws.close(WS_CLOSE_UNAUTHORIZED, "session expired");
+          } catch {
+            /* already closing */
+          }
+          this.subsBySocket.delete(ws);
+          continue;
+        }
         const subs = this.getSubs(ws);
         let dirty = false;
         for (const sub of subs) {
@@ -601,6 +624,25 @@ export class PramenDOBase extends DurableObject<DoEnv> {
       return JSON.parse(raw) as Identity;
     } catch {
       return null;
+    }
+  }
+
+  /** Has this socket's token expired? `exp` (epoch seconds) rides the socket attachment
+   * from the upgrade-time identity. A synthetic / non-expiring identity has no `exp` and is
+   * never expired, so callPrivileged and admin sockets keep working. */
+  private isExpired(identity: Identity | null): boolean {
+    const exp = identity?.exp;
+    return typeof exp === "number" && Date.now() / 1000 >= exp;
+  }
+
+  /** Reject a message from an expired socket: send the protocol's auth-failure error frame,
+   * then close 4401 (the client should re-authenticate and reconnect). */
+  private rejectExpired(ws: WebSocket, id: string): void {
+    this.send(ws, toWsError(id, new Unauthorized("session expired")));
+    try {
+      ws.close(WS_CLOSE_UNAUTHORIZED, "session expired");
+    } catch {
+      /* already closing */
     }
   }
 

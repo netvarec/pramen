@@ -15,7 +15,7 @@ import { compileAcl } from "./runtime/acl";
 import { Db } from "./runtime/db";
 import { D1Driver, type D1SessionStart, type Driver } from "./runtime/driver";
 import { toResponse } from "./runtime/errors";
-import { Kv } from "./runtime/kv";
+import { Kv, isSessionDenied } from "./runtime/kv";
 import { listDOs, partitionDoName } from "./runtime/registry";
 import { createFiles, handleFileRequest, handleMediaRequest, R2Adapter } from "./runtime/storage";
 import type { Identity } from "./sdk/acl";
@@ -311,6 +311,18 @@ export function makeWorker(app: PramenApp) {
     }
 
     const identity = await resolveIdentity(req, strategyFor(env));
+
+    // Hard revocation (deactivate / delete / compromise), independent of token TTL: a
+    // revoked `sub` is on the KV denylist (written by @pramen/auth's setUserActive(false)
+    // / deleteUser, self-expiring at the session TTL). Check it HERE, at identity-resolution
+    // time — before the DO proxy AND the D1 store path, and before the admin routes — so it
+    // covers HTTP and the WebSocket upgrade alike. A denied token fails CLOSED (401); we do
+    // NOT silently downgrade to anonymous — a revoked user should see a clear auth failure.
+    // Synthetic identities (callPrivileged) never pass through here, so they're unaffected.
+    const sub = typeof identity?.userId === "string" ? identity.userId : undefined;
+    if (sub && (await isSessionDenied(new Kv(env.KV), sub))) {
+      return withCors(json({ ok: false, error: "session revoked", code: "unauthorized" }, 401), cors);
+    }
 
     // --- admin: list known (tenant, partition) DOs from the registry ---
     if (url.pathname === "/tenants") {

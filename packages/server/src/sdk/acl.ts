@@ -12,6 +12,11 @@ export type Action = "read" | "create" | "update" | "delete";
 export interface Identity {
   role?: string;
   roles?: string[];
+  /** The verified token's `exp` (epoch seconds), when present. Carried so a long-lived
+   * WebSocket — whose identity is fixed at upgrade and never re-verified — can enforce
+   * expiry per message (see durable-object.ts). Absent for non-expiring / synthetic
+   * (callPrivileged) identities, which are therefore never treated as expired. */
+  exp?: number;
   [key: string]: unknown;
 }
 

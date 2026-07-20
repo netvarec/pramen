@@ -374,8 +374,21 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
       adminReadFields, … })` — ACL-gated admin (`listUsers`/`setUserRoles`/`setUserActive`/`deleteUser`)
       + self (`changeEmail`/`changePassword`) over `auth_users` or any authSchema-shaped table (e.g. one
       with an extra `tenants` column). Authorized declaratively by the ACL (not imperative role checks);
-      `passwordHash` is `hidden()` so it's never projected. `active` blocks login; role/active changes take
-      effect on next login (no session store) — `AUTH_SESSION_TTL_SECONDS` tunes the window.
+      `passwordHash` is `hidden()` so it's never projected. `active` blocks login.
+- [x] `@pramen/auth` session revocation (the stateless-token gap, closed without a session store):
+      **`refreshSession`** (authenticated, in `authHandlers` + `createMagicLinkAuth`) re-reads roles/active
+      and reissues a token — refreshing at ~half-TTL keeps `AUTH_SESSION_TTL_SECONDS` short (bounding how
+      long a stale role lingers) and picks up a role GRANT with no re-login; it 401s for a gone/deactivated
+      account so a refresh can't launder a revoked session. **KV denylist** for hard revocation:
+      `setUserActive(false)`/`deleteUser` write `authDenied:<username>` (self-expiring at the session TTL,
+      lifted on reactivation since the key is username-scoped), checked in the Worker right after
+      `resolveIdentity` — before the DO *and* D1 paths — and failed CLOSED (401, not a downgrade to
+      anonymous), so it covers HTTP and the WS upgrade. `denySession`/`allowSession`/`isSessionDenied` are
+      exported from `@pramen/server` for app-driven revocation. A live **WebSocket re-checks the token's
+      `exp` per message** (identity is fixed at upgrade, so a hibernating socket would otherwise outlive its
+      TTL): error frame + close 4401, and expired sockets are dropped from the broadcast path. `Identity`
+      carries `exp` (a STANDARD claim, so it needed explicit plumbing past the custom-claim passthrough);
+      synthetic `callPrivileged` identities have none and are never expired.
 - [x] Relation-aware `where` (query + ACL): a `where` key naming a relation takes a nested clause over
       the related entity (`{ owner: { name: "Alice" } }`), compiled to a subquery — belongsTo →
       `fk IN (SELECT pk FROM target WHERE …)`, hasMany → `pk IN (SELECT fk FROM target WHERE …)` — via a
