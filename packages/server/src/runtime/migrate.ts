@@ -230,9 +230,44 @@ async function writeMeta(driver: Driver, key: string, value: string): Promise<vo
   await driver.exec(`INSERT OR REPLACE INTO _pramen_meta (key, value) VALUES (?, ?)`, [key, value]);
 }
 
+/** Live tables (excluding internals and `table` itself) holding a foreign key that
+ * REFERENCES `table`, with everything needed to drop + faithfully restore them around a
+ * rebuild of `table`: their column list, their exact CREATE TABLE DDL, and their index
+ * DDL (both verbatim from sqlite_master). Needed because `DROP TABLE parent` performs an
+ * implicit `DELETE FROM parent`, and `defer_foreign_keys` defers only violation CHECKS —
+ * ON DELETE actions still fire (CASCADE/SET NULL corrupt the holders' rows; RESTRICT
+ * aborts immediately). SQLite's official escape (`PRAGMA foreign_keys=OFF`) is
+ * unavailable on DO SQLite and D1, so the holders are quarantined instead. */
+async function liveReferencingHolders(
+  driver: Driver,
+  table: string,
+): Promise<{ name: string; cols: string[]; createSql: string; indexSql: string[] }[]> {
+  const tables = (await driver.exec(`SELECT name, sql FROM sqlite_master WHERE type = 'table'`, [])) as { name: string; sql: string | null }[];
+  const out: { name: string; cols: string[]; createSql: string; indexSql: string[] }[] = [];
+  for (const t of tables) {
+    if (t.name === table || isInternalTable(t.name) || !t.sql) continue;
+    const fks = (await driver.exec(`PRAGMA foreign_key_list(${quoteIdent(t.name)})`, [])) as { table: string }[];
+    if (!fks.some((fk) => fk.table === table)) continue;
+    const cols = [...(await tableColumns(driver, t.name)).keys()];
+    const idx = (await driver.exec(`SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ? AND sql IS NOT NULL`, [t.name])) as { sql: string }[];
+    out.push({ name: t.name, cols, createSql: t.sql, indexSql: idx.map((r) => r.sql) });
+  }
+  return out;
+}
+
 /** Rebuild a table to exactly the declared schema: create a temp table, copy each
  * desired column from its source (renamed or same-named live column, CAST on a
- * type change; brand-new columns left NULL), drop the old table, rename the temp. */
+ * type change; brand-new columns left NULL), drop the old table, rename the temp.
+ *
+ * FK safety: dropping the old table implicit-DELETEs its rows, which fires the ON DELETE
+ * actions of any live FK that references it — even under `defer_foreign_keys` (deferral
+ * postpones checks, not actions). So every live referencing holder is QUARANTINED first
+ * (bare FK-less copy of its rows, table dropped) and restored from its verbatim DDL after
+ * the swap — all inside the same atomic step, so the holders' rows can never be cascaded
+ * away, nulled, or trip a RESTRICT mid-rebuild. A SELF-referential FK gets the same
+ * treatment applied to the rebuilt table itself: the plain tmp+rename swap would give tmp
+ * a live FK into the old table right when it's dropped, so the swap goes through a bare
+ * (FK-less) copy instead — quarantine out, recreate final, copy back. */
 async function rebuildTable(
   driver: Driver,
   table: string,
@@ -259,19 +294,66 @@ async function rebuildTable(
     destCols.push(quoteIdent(name));
     srcExprs.push(expr);
   }
+
+  const holders = await liveReferencingHolders(driver, table);
+  // Self-referential FK — declared in the new shape (and surviving skipFks) or live on
+  // the old table — forces the bare-copy swap for the table itself.
+  const declaredSelf = [...declaredForeignKeys(def)].some(([col, s]) => s.target === table && !skipFks?.has(col));
+  const liveSelf = [...(await liveForeignKeys(driver, table)).values()].some((s) => s.target === table);
+  const selfRef = declaredSelf || liveSelf;
+
   // The drop+rename would trip an immediate FK check (dropping a referenced table, or a
   // rebuilt table whose FKs momentarily see stale rows), so run the whole sequence
   // ATOMICALLY: the D1 driver's batch() defers FK checks to the batch commit, and on the
   // DO the ambient boot transaction (+ defer set at migrate start) already covers it.
-  const stmts: { sql: string; params: unknown[] }[] = [
-    { sql: `DROP TABLE IF EXISTS ${quoteIdent(tmp)}`, params: [] },
-    { sql: createTableSql(tmp, def, pkOf, skipFks), params: [] },
-  ];
-  if (destCols.length > 0) {
-    stmts.push({ sql: `INSERT INTO ${quoteIdent(tmp)} (${destCols.join(", ")}) SELECT ${srcExprs.join(", ")} FROM ${quoteIdent(table)}`, params: [] });
+  const stmts: { sql: string; params: unknown[] }[] = [];
+  // Quarantine tables are bare column lists — untyped, no constraints, no FKs. Values
+  // round-trip verbatim (they were already coerced by the original table's affinity).
+  const bareCopy = (name: string, quotedCols: string[]): string => `CREATE TABLE ${quoteIdent(name)} (${quotedCols.join(", ")})`;
+  // 1. Quarantine every live holder referencing this table (FK-less row copy, then drop),
+  //    so the swap's implicit DELETE has no FK actions left to fire into them.
+  for (const h of holders) {
+    const q = `__pramen_q_${h.name}`;
+    const cols = h.cols.map((c) => quoteIdent(c)).join(", ");
+    stmts.push({ sql: `DROP TABLE IF EXISTS ${quoteIdent(q)}`, params: [] });
+    stmts.push({ sql: bareCopy(q, h.cols.map((c) => quoteIdent(c))), params: [] });
+    stmts.push({ sql: `INSERT INTO ${quoteIdent(q)} (${cols}) SELECT ${cols} FROM ${quoteIdent(h.name)}`, params: [] });
+    stmts.push({ sql: `DROP TABLE ${quoteIdent(h.name)}`, params: [] });
   }
-  stmts.push({ sql: `DROP TABLE ${quoteIdent(table)}`, params: [] });
-  stmts.push({ sql: `ALTER TABLE ${quoteIdent(tmp)} RENAME TO ${quoteIdent(table)}`, params: [] });
+  // 2. Swap the table itself.
+  stmts.push({ sql: `DROP TABLE IF EXISTS ${quoteIdent(tmp)}`, params: [] });
+  if (selfRef) {
+    // Bare-copy swap: out to an FK-less temp, drop, recreate final, copy back. The final
+    // INSERT lists only the copied columns, so a new expr-default column still backfills.
+    stmts.push({ sql: bareCopy(tmp, destCols), params: [] });
+    if (destCols.length > 0) {
+      stmts.push({ sql: `INSERT INTO ${quoteIdent(tmp)} (${destCols.join(", ")}) SELECT ${srcExprs.join(", ")} FROM ${quoteIdent(table)}`, params: [] });
+    }
+    stmts.push({ sql: `DROP TABLE ${quoteIdent(table)}`, params: [] });
+    stmts.push({ sql: createTableSql(table, def, pkOf, skipFks), params: [] });
+    if (destCols.length > 0) {
+      stmts.push({ sql: `INSERT INTO ${quoteIdent(table)} (${destCols.join(", ")}) SELECT ${destCols.join(", ")} FROM ${quoteIdent(tmp)}`, params: [] });
+    }
+    stmts.push({ sql: `DROP TABLE ${quoteIdent(tmp)}`, params: [] });
+  } else {
+    stmts.push({ sql: createTableSql(tmp, def, pkOf, skipFks), params: [] });
+    if (destCols.length > 0) {
+      stmts.push({ sql: `INSERT INTO ${quoteIdent(tmp)} (${destCols.join(", ")}) SELECT ${srcExprs.join(", ")} FROM ${quoteIdent(table)}`, params: [] });
+    }
+    stmts.push({ sql: `DROP TABLE ${quoteIdent(table)}`, params: [] });
+    stmts.push({ sql: `ALTER TABLE ${quoteIdent(tmp)} RENAME TO ${quoteIdent(table)}`, params: [] });
+  }
+  // 3. Restore each holder verbatim (its DDL references this table by name, so its FK
+  //    binds to the rebuilt table). Row order/content unchanged; deferred checks validate
+  //    the restored FKs once at commit.
+  for (const h of holders) {
+    const q = `__pramen_q_${h.name}`;
+    const cols = h.cols.map((c) => quoteIdent(c)).join(", ");
+    stmts.push({ sql: h.createSql, params: [] });
+    stmts.push({ sql: `INSERT INTO ${quoteIdent(h.name)} (${cols}) SELECT ${cols} FROM ${quoteIdent(q)}`, params: [] });
+    stmts.push({ sql: `DROP TABLE ${quoteIdent(q)}`, params: [] });
+    for (const idx of h.indexSql) stmts.push({ sql: idx, params: [] });
+  }
   if (driver.batch) await driver.batch(stmts);
   else for (const s of stmts) await driver.exec(s.sql, s.params); // DO: already inside the boot txn
 }

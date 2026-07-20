@@ -5,7 +5,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { Entity, defineSchema } from "../packages/server/src/sdk/schema";
+import { defaultTo, defineSchema, Entity, expr } from "../packages/server/src/sdk/schema";
 import { migrate } from "../packages/server/src/runtime/migrate";
 import { bunSqliteDriver } from "./sqlite-driver";
 
@@ -118,5 +118,88 @@ describe("foreign keys — migration", () => {
     expect(fkList(db)).toHaveLength(1);
     await migrate(d, noFk);
     expect(fkList(db)).toHaveLength(0);
+  });
+});
+
+// Rebuilding a table that live FKs REFERENCE (the parent side) must not fire the
+// children's ON DELETE actions: `DROP TABLE parent` implicit-DELETEs its rows, and
+// defer_foreign_keys defers only checks, not actions — so without the holder
+// quarantine, CASCADE wipes the children, SET NULL corrupts them, and RESTRICT
+// aborts the migration. The parent rebuild is triggered by an expr-default column
+// (a safe, ungated rebuild).
+describe("foreign keys — rebuilding the referenced (parent) table", () => {
+  const parentV2 = (action: "cascade" | "setNull" | "restrict") =>
+    defineSchema({
+      authors: Entity((t) => ({ id: t.id(), name: t.text(), createdAt: defaultTo(t.text(), expr.now()) })),
+      posts: Entity(
+        (t) => ({ id: t.id(), title: t.text(), authorId: t.int() }),
+        (r) => ({ author: r.belongsTo("authors", "authorId", { onDelete: action }) }),
+      ),
+    });
+
+  for (const action of ["cascade", "setNull", "restrict"] as const) {
+    test(`children with ${action} survive a parent rebuild, FK + index intact`, async () => {
+      const db = new Database(":memory:");
+      const d = bunSqliteDriver(db);
+      await migrate(d, withOnDelete(action));
+      db.run("INSERT INTO authors (id, name) VALUES (1, 'A'), (2, 'B')");
+      db.run("INSERT INTO posts (title, authorId) VALUES ('p1', 1), ('p2', 2)");
+      const r = await migrate(d, parentV2(action)); // authors gains an expr-default column -> rebuild
+      expect(r.rebuilt).toContain("authors");
+      expect(r.skipped).toHaveLength(0);
+      const posts = db.query("SELECT title, authorId FROM posts ORDER BY title").all() as { title: string; authorId: number | null }[];
+      expect(posts).toEqual([
+        { title: "p1", authorId: 1 },
+        { title: "p2", authorId: 2 },
+      ]);
+      // the new column backfilled existing parent rows
+      expect(count(db, "SELECT count(*) AS n FROM authors WHERE createdAt IS NOT NULL")).toBe(2);
+      // the children's FK survived and still enforces
+      expect(fkList(db)).toHaveLength(1);
+      expect(() => db.run("INSERT INTO posts (title, authorId) VALUES ('bad', 999)")).toThrow();
+    });
+  }
+
+  test("DO-shaped path (no batch, ambient transaction) preserves children too", async () => {
+    const db = new Database(":memory:");
+    const { batch: _batch, ...noBatch } = bunSqliteDriver(db);
+    await migrate(noBatch, withOnDelete("cascade"));
+    db.run("INSERT INTO authors (id, name) VALUES (1, 'A')");
+    db.run("INSERT INTO posts (title, authorId) VALUES ('kept', 1)");
+    db.run("BEGIN"); // the DO wraps boot migration in storage.transaction()
+    const r = await migrate(noBatch, parentV2("cascade"));
+    db.run("COMMIT");
+    expect(r.rebuilt).toContain("authors");
+    expect(count(db, "SELECT count(*) AS n FROM posts")).toBe(1);
+    expect(fkList(db)).toHaveLength(1);
+  });
+
+  test("self-referential FK: the table rebuilds through a bare copy, rows intact", async () => {
+    const selfV1 = defineSchema({
+      categories: Entity(
+        (t) => ({ id: t.id(), name: t.text(), parentId: t.int() }),
+        (r) => ({ parent: r.belongsTo("categories", "parentId", { onDelete: "setNull" }) }),
+      ),
+    });
+    const selfV2 = defineSchema({
+      categories: Entity(
+        (t) => ({ id: t.id(), name: t.text(), parentId: t.int(), createdAt: defaultTo(t.text(), expr.now()) }),
+        (r) => ({ parent: r.belongsTo("categories", "parentId", { onDelete: "setNull" }) }),
+      ),
+    });
+    const db = new Database(":memory:");
+    const d = bunSqliteDriver(db);
+    await migrate(d, selfV1);
+    db.run("INSERT INTO categories (id, name, parentId) VALUES (1, 'root', NULL), (2, 'child', 1)");
+    const r = await migrate(d, selfV2);
+    expect(r.rebuilt).toContain("categories");
+    const rows = db.query("SELECT id, parentId FROM categories ORDER BY id").all() as { id: number; parentId: number | null }[];
+    expect(rows).toEqual([
+      { id: 1, parentId: null },
+      { id: 2, parentId: 1 },
+    ]);
+    // the self-FK survived and still acts
+    db.run("DELETE FROM categories WHERE id = 1");
+    expect((db.query("SELECT parentId FROM categories WHERE id = 2").get() as { parentId: number | null }).parentId).toBe(null);
   });
 });

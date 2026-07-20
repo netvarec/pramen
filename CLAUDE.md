@@ -197,6 +197,11 @@ log) for independent single-writer serialization and storage.
   relation stays logical (no constraint, no migration). Adding/changing an FK is a table
   rebuild (SQLite can't ALTER it): deferred on the DO's boot transaction, and via the D1
   driver's atomic `batch()` on D1; an FK over orphaned data is skipped + reported, not fatal.
+  Rebuilding a table that live FKs REFERENCE quarantines + restores the referencing tables
+  inside the same atomic step (`DROP TABLE parent` implicit-DELETEs its rows, and
+  `defer_foreign_keys` defers only checks, NOT ON DELETE actions — without the quarantine a
+  parent rebuild would cascade-wipe/null the children or abort on RESTRICT); a
+  self-referential FK swaps through a bare FK-less copy for the same reason.
 - `where` can traverse relations: `{ owner: { name: "x" } }` (belongsTo/hasMany) or
   `{ tags: { name: "x" } }` (manyToMany, via a nested subquery through the junction)
   compiles to a subquery in both user queries and policy `where`; `with: { tags: true }`
