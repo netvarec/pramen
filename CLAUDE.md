@@ -184,10 +184,22 @@ log) for independent single-writer serialization and storage.
   (`changeEmail`/`changePassword`) management — over `auth_users` or your own
   authSchema-shaped table. Session TTL via `AUTH_SESSION_TTL_SECONDS` (role/active
   changes take effect on next login — no session store).
-- `where` can traverse relations: `{ owner: { name: "x" } }` (belongsTo/hasMany)
-  compiles to a subquery in both user queries and policy `where`. The related
-  entity's read scope is AND-merged (traversal can't widen access). Cell-`when`
+- Relations: `belongsTo(target, column)` / `hasMany(target, column)` and
+  `manyToMany(target, { through, sourceColumn, targetColumn })` — all **logical** (no FK
+  constraints; substrate-identical on DO + D1). m2n goes through an **explicit junction
+  entity** you define + write to directly (a plain entity with the two id columns; no
+  synthetic tables, no new write API — `ctx.db.insert(through, { sourceColumn, targetColumn })`
+  to link, `delete` to unlink). Source, junction, and target must share a partition.
+- `where` can traverse relations: `{ owner: { name: "x" } }` (belongsTo/hasMany) or
+  `{ tags: { name: "x" } }` (manyToMany, via a nested subquery through the junction)
+  compiles to a subquery in both user queries and policy `where`; `with: { tags: true }`
+  eager-loads the target list through the junction. The related entity's read scope is
+  AND-merged (traversal can't widen access; an unreadable target drops out). Cell-`when`
   predicates stay single-table.
+- `where` string ops: `like` (raw `%`/`_` wildcards) plus `contains`/`startsWith`/`endsWith`
+  (auto-escape the needle so `%`/`_` are literal; case-insensitive). `NOT: { … }` negates a
+  nested clause; `AND`/`OR` take arrays. Composite uniqueness: `Entity(fields, relations,
+  { unique: [["a","b"]] })` (a managed multi-column unique index); single-column stays `unique(t.x())`.
 - Handlers: `query()` / `mutation()` from `@pramen/server`. Context is
   `{ db, kv, files, env, identity, tasks, mail, queue }`. Mutations are auto-wrapped in
   `storage.transaction()` by `runtime/dispatch.ts` (commit on return, rollback on
