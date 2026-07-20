@@ -351,7 +351,7 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
             <Button key={t} variant="ghost" size="sm" className={tab === t ? "bg-surface-muted text-fg" : "text-fg-muted"} onPress={() => onTab(t)}>{t}</Button>
           ))}
         </div>
-        {tab === "settings" ? <Settings page={page} /> : null}
+        {tab === "settings" ? <Settings api={api} page={page} ct={ct} initialFields={(assembled?.page.fields as Record<string, unknown>) ?? {}} onSaved={onChange} onError={setErr} /> : null}
         {tab === "seo" ? <SeoPanel api={api} page={page} onError={setErr} /> : null}
         {tab === "workflow" ? <Workflow api={api} page={page} onChanged={(p) => { onChange(p); }} onError={setErr} /> : null}
         {tab === "i18n" ? <I18n api={api} page={page} onError={setErr} /> : null}
@@ -519,20 +519,50 @@ function AddBlock({ allowed, btBySlug, onAdd }: { allowed: string[]; btBySlug: M
   );
 }
 
-function Settings({ page }: { page: Page }) {
-  // The core CMS API doesn't expose a general page-rename handler; keep this read-only +
-  // link the essentials. (A future `updatePage` handler would back editable title/slug.)
+// Edit the page record itself — title/slug/locale and, for a content type with page-level
+// fields (e.g. a "Lecture" with date/speaker), its structured `fields`. Backed by updatePage.
+function Settings({ api, page, ct, initialFields, onSaved, onError }: { api: Api; page: Page; ct: ContentType | null; initialFields: Record<string, unknown>; onSaved: (p: Page) => void; onError: (s: string) => void }) {
+  const [title, setTitle] = useState(page.title);
+  const [slug, setSlug] = useState(page.slug);
+  const [locale, setLocale] = useState(page.locale);
+  const [fields, setFields] = useState<Record<string, unknown>>(initialFields);
+  const [ok, setOk] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const schema: FieldDefinition[] = ct?.fieldsSchema ?? [];
+
+  useEffect(() => { setTitle(page.title); setSlug(page.slug); setLocale(page.locale); }, [page.id, page.title, page.slug, page.locale]);
+  useEffect(() => { setFields(initialFields); }, [initialFields]);
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      const r = await api.call<{ page?: Page }>("updatePage", { pageId: page.id, title, slug, locale, ...(schema.length ? { fields } : {}) });
+      if (r?.page) onSaved(r.page);
+      setOk(true);
+      setTimeout(() => setOk(false), 1500);
+    } catch (e) {
+      onError(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
-    <KV>
-      <span>Title</span>
-      <span>{page.title}</span>
-      <span>Slug</span>
-      <span>/{page.slug}</span>
-      <span>Locale</span>
-      <span>{page.locale}</span>
-      <span>Status</span>
-      <span>{page.status}</span>
-    </KV>
+    <div className="flex flex-col gap-4">
+      <Section>Page</Section>
+      {ok ? <Banner ok>saved</Banner> : null}
+      <Input label="Title" value={title} onChange={setTitle} />
+      <Input label="Slug" value={slug} onChange={setSlug} />
+      <Input label="Locale" value={locale} onChange={setLocale} />
+      {schema.length ? (
+        <>
+          <Section>Fields</Section>
+          <FieldForm schema={schema} value={fields} onChange={setFields} api={api} />
+        </>
+      ) : null}
+      <Button onPress={save} isDisabled={busy || !title.trim() || !slug.trim()}>{busy ? "Saving…" : "Save"}</Button>
+      <KV><span>Status</span><span>{page.status}</span></KV>
+    </div>
   );
 }
 

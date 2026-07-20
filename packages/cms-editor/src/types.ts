@@ -70,6 +70,7 @@ export interface Page {
   slug: string;
   status: string;
   locale: string;
+  fields?: Record<string, unknown> | null; // content-type-level structured data (fieldsSchema)
   translationGroupId?: string | null;
   metaTitle?: string | null;
   metaDescription?: string | null;
