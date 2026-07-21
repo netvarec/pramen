@@ -42,6 +42,8 @@ import {
   createUserHandlers,
   authPolicies,
   registerPasswordVerifier,
+  createAuthHandlers,
+  hashPassword,
 } from "@pramen/auth";
 // @pramen/cms — the block/page builder, wired as an ordinary app fragment.
 import { cmsSchema, cmsHandlers, cmsPolicies, cmsTasks, cmsRoutes, defineBlockType, defineContentType, cmsBootstrap, collection, createCollectionHandlers, collectionPolicies } from "@pramen/cms";
@@ -240,6 +242,32 @@ const collections = [
 const handlers = {
   // @pramen/auth: signup / login / me (issue + use HS256 tokens, no third-party IdP).
   ...authHandlers,
+  // Alternate login resolvers, for apps whose username is an opaque id and whose members
+  // know only their email (see createAuthHandlers / loginBy).
+  loginByEmail: createAuthHandlers({ loginBy: "email" }).login,
+  loginEither: createAuthHandlers({ loginBy: "either" }).login,
+  // Test support: seed a member keyed by an opaque id with a real (PBKDF2) password.
+  seedIdentityUser: mutation(
+    async (ctx, input: { username: string; email: string; password: string }) => {
+      await ctx.db.exec(
+        "INSERT INTO auth_users (username, passwordHash, roles, email, createdAt) VALUES (?, ?, ?, ?, ?)",
+        input.username,
+        await hashPassword(input.password),
+        JSON.stringify(["user"]),
+        input.email,
+        Date.now(),
+      );
+      return { ok: true };
+    },
+    {
+      auth: ["admin"],
+      input: (raw) => {
+        const o = (raw ?? {}) as Record<string, unknown>;
+        for (const k of ["username", "email", "password"]) if (typeof o[k] !== "string" || !o[k]) throw new Error(`${k} is required`);
+        return { username: o.username as string, email: o.email as string, password: o.password as string };
+      },
+    },
+  ),
   // @pramen/auth: requestMagicLink / loginWithMagicLink (passwordless). The email is
   // sent from the `sendMagicLinkEmail` task (see `tasks` below), off the write path.
   ...magicLink.handlers,

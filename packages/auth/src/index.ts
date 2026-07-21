@@ -256,101 +256,138 @@ function buildRefreshSession(ttlOf: (ctx: HandlerContext) => number, table = "au
   );
 }
 
-/** signup / login / me / refreshSession. Roles are assigned server-side (default `["user"]`)
- * — the client never picks its own roles. Spread into your handler map. */
-export const authHandlers = {
-  // NOTE on username enumeration: signup returns a distinct "username is taken" error,
-  // which is an enumeration oracle. This is INHERENT to systems where the username is a
-  // user-chosen, publicly-visible identifier — the caller learns "taken" the moment the
-  // name shows up anywhere, so hiding it at signup buys little. What we CAN close is the
-  // timing side channel: both the taken and the available paths run the same expensive
-  // PBKDF2 hash before responding, so response time doesn't leak which path was taken.
-  // The enumeration-SAFE flow is the passwordless / magic-link path (createMagicLinkAuth),
-  // which keys on the email and always returns the same `{ ok: true }`.
-  signup: mutation(
-    async (ctx, input: { username: string; password: string; email?: string }) => {
-      const existing = await ctx.db.exec("SELECT 1 FROM auth_users WHERE username = ? LIMIT 1", input.username);
-      if (existing.length > 0) {
-        // Equalize timing with the available path (which hashes below) so the taken vs.
-        // available decision isn't a fast timing oracle on top of the response-body one.
-        await hashPassword(input.password);
-        throw new BadRequest("username is taken");
-      }
-      // A supplied email must be free (the column is unique). Same clean-400 shape as
-      // changeEmail rather than surfacing the DB constraint as a 500.
-      if (input.email) {
-        const emailTaken = await ctx.db.exec("SELECT 1 FROM auth_users WHERE email = ? LIMIT 1", input.email);
-        if (emailTaken.length > 0) throw new BadRequest("email already in use");
-      }
-      const roles = DEFAULT_ROLES;
-      const passwordHash = await hashPassword(input.password);
-      // Signup stores the email UNVERIFIED (emailVerified NULL). The app confirms it via
-      // createEmailVerification (requestEmailVerification runs right after signup — the
-      // client already holds the returned session token).
-      await ctx.db.exec(
-        "INSERT INTO auth_users (username, passwordHash, roles, email, createdAt) VALUES (?, ?, ?, ?, ?)",
-        input.username,
-        passwordHash,
-        JSON.stringify(roles),
-        input.email ?? null,
-        Date.now(),
-      );
-      const token = await signToken({ sub: input.username, roles }, secretOf(ctx), { ttlSeconds: sessionTtlOf(ctx) });
-      return { token, user: { username: input.username, roles, email: input.email ?? null } };
-    },
-    { input: parseCreds },
-  ),
+export interface AuthHandlerOptions {
+  /** Which column `login` resolves the submitted identifier against.
+   *
+   * - `"username"` (default) — the PK only, the historical behaviour.
+   * - `"email"` — the email column only. For apps where the username is an opaque id
+   *   (a migrated tenant identity, say) and members know only their email address.
+   * - `"either"` — username first (it is the PK, so it cannot be ambiguous), then email.
+   *   Use when two populations coexist: migrated members keyed by an opaque id, and
+   *   newer accounts that signed up with their email as the username.
+   *
+   * Email lookup tries an exact match, then falls back to a case-insensitive one — but
+   * ONLY when that matches exactly one row, so a pair of addresses differing just by
+   * case can never resolve to an arbitrary account. */
+  loginBy?: "username" | "email" | "either";
+}
 
-  login: mutation(
-    async (ctx, input: { username: string; password: string }) => {
-      const rows = await ctx.db.exec(
-        "SELECT username, passwordHash, roles, active FROM auth_users WHERE username = ? LIMIT 1",
-        input.username,
-      );
-      const u = rows[0];
-      if (!u) {
-        // No such user: still run a full PBKDF2 verify against a fixed dummy hash so the
-        // not-found path costs the same as a wrong-password path — no timing oracle that
-        // distinguishes "unknown username" from "bad password".
-        await verifyPassword(input.password, await dummyPasswordHash());
-        throw new Unauthorized("invalid username or password");
-      }
-      if (!(await verifyPassword(input.password, String(u.passwordHash)))) {
-        throw new Unauthorized("invalid username or password");
-      }
-      // Only after the password verifies (so this can't enumerate accounts): a
-      // deactivated user gets no new token. Existing tokens expire within the TTL.
-      if (!isActive(u.active)) throw new Unauthorized("account is deactivated");
-      // Upgrade an imported foreign hash (see registerPasswordVerifier). This is the one
-      // moment the plaintext is in hand for a user whose hash predates pramen, so rehash
-      // to PBKDF2 and drop the old scheme. Deliberately AFTER the active check, so a
-      // deactivated account is never rewritten. Best-effort: a failed upgrade must not
-      // fail an otherwise valid login — the row simply upgrades on a later attempt.
-      if (isForeignHash(String(u.passwordHash))) {
-        try {
-          await ctx.db.exec(
-            "UPDATE auth_users SET passwordHash = ? WHERE username = ?",
-            await hashPassword(input.password),
-            String(u.username),
-          );
-        } catch {
-          /* keep the legacy hash; the next login retries */
+/** Build signup / login / me / refreshSession. Roles are assigned server-side (default
+ * `["user"]`) — the client never picks its own roles. Spread into your handler map. */
+export function createAuthHandlers(opts: AuthHandlerOptions = {}) {
+  const loginBy = opts.loginBy ?? "username";
+
+  /** Resolve the submitted identifier to a row, per `loginBy`. Returns undefined when
+   * nothing matches; the caller still runs a dummy verify so the timing is flat. */
+  async function findLoginRow(ctx: HandlerContext, identifier: string): Promise<Record<string, unknown> | undefined> {
+    const cols = "SELECT username, passwordHash, roles, active FROM auth_users";
+    if (loginBy !== "email") {
+      const byName = await ctx.db.exec(`${cols} WHERE username = ? LIMIT 1`, identifier);
+      if (byName[0]) return byName[0];
+      if (loginBy === "username") return undefined;
+    }
+    const exact = await ctx.db.exec(`${cols} WHERE email = ? LIMIT 1`, identifier);
+    if (exact[0]) return exact[0];
+    // Case-insensitive fallback, accepted only when unambiguous: `unique(email)` is
+    // case-SENSITIVE, so two rows may differ only by case and neither may be picked
+    // arbitrarily.
+    const loose = await ctx.db.exec(`${cols} WHERE lower(email) = lower(?) LIMIT 2`, identifier);
+    return loose.length === 1 ? loose[0] : undefined;
+  }
+
+  return {
+    // NOTE on username enumeration: signup returns a distinct "username is taken" error,
+    // which is an enumeration oracle. This is INHERENT to systems where the username is a
+    // user-chosen, publicly-visible identifier — the caller learns "taken" the moment the
+    // name shows up anywhere, so hiding it at signup buys little. What we CAN close is the
+    // timing side channel: both the taken and the available paths run the same expensive
+    // PBKDF2 hash before responding, so response time doesn't leak which path was taken.
+    // The enumeration-SAFE flow is the passwordless / magic-link path (createMagicLinkAuth),
+    // which keys on the email and always returns the same `{ ok: true }`.
+    signup: mutation(
+      async (ctx, input: { username: string; password: string; email?: string }) => {
+        const existing = await ctx.db.exec("SELECT 1 FROM auth_users WHERE username = ? LIMIT 1", input.username);
+        if (existing.length > 0) {
+          // Equalize timing with the available path (which hashes below) so the taken vs.
+          // available decision isn't a fast timing oracle on top of the response-body one.
+          await hashPassword(input.password);
+          throw new BadRequest("username is taken");
         }
-      }
-      const roles = JSON.parse(String(u.roles)) as string[];
-      const token = await signToken({ sub: String(u.username), roles }, secretOf(ctx), { ttlSeconds: sessionTtlOf(ctx) });
-      return { token, user: { username: String(u.username), roles } };
-    },
-    { input: parseCreds },
-  ),
+        // A supplied email must be free (the column is unique). Same clean-400 shape as
+        // changeEmail rather than surfacing the DB constraint as a 500.
+        if (input.email) {
+          const emailTaken = await ctx.db.exec("SELECT 1 FROM auth_users WHERE email = ? LIMIT 1", input.email);
+          if (emailTaken.length > 0) throw new BadRequest("email already in use");
+        }
+        const roles = DEFAULT_ROLES;
+        const passwordHash = await hashPassword(input.password);
+        // Signup stores the email UNVERIFIED (emailVerified NULL). The app confirms it via
+        // createEmailVerification (requestEmailVerification runs right after signup — the
+        // client already holds the returned session token).
+        await ctx.db.exec(
+          "INSERT INTO auth_users (username, passwordHash, roles, email, createdAt) VALUES (?, ?, ?, ?, ?)",
+          input.username,
+          passwordHash,
+          JSON.stringify(roles),
+          input.email ?? null,
+          Date.now(),
+        );
+        const token = await signToken({ sub: input.username, roles }, secretOf(ctx), { ttlSeconds: sessionTtlOf(ctx) });
+        return { token, user: { username: input.username, roles, email: input.email ?? null } };
+      },
+      { input: parseCreds },
+    ),
 
-  me: query((ctx) => ctx.identity),
+    login: mutation(
+      async (ctx, input: { username: string; password: string }) => {
+        const u = await findLoginRow(ctx, input.username);
+        if (!u) {
+          // No such user: still run a full PBKDF2 verify against a fixed dummy hash so the
+          // not-found path costs the same as a wrong-password path — no timing oracle that
+          // distinguishes "unknown username" from "bad password".
+          await verifyPassword(input.password, await dummyPasswordHash());
+          throw new Unauthorized("invalid username or password");
+        }
+        if (!(await verifyPassword(input.password, String(u.passwordHash)))) {
+          throw new Unauthorized("invalid username or password");
+        }
+        // Only after the password verifies (so this can't enumerate accounts): a
+        // deactivated user gets no new token. Existing tokens expire within the TTL.
+        if (!isActive(u.active)) throw new Unauthorized("account is deactivated");
+        // Upgrade an imported foreign hash (see registerPasswordVerifier). This is the one
+        // moment the plaintext is in hand for a user whose hash predates pramen, so rehash
+        // to PBKDF2 and drop the old scheme. Deliberately AFTER the active check, so a
+        // deactivated account is never rewritten. Best-effort: a failed upgrade must not
+        // fail an otherwise valid login — the row simply upgrades on a later attempt.
+        if (isForeignHash(String(u.passwordHash))) {
+          try {
+            await ctx.db.exec(
+              "UPDATE auth_users SET passwordHash = ? WHERE username = ?",
+              await hashPassword(input.password),
+              String(u.username),
+            );
+          } catch {
+            /* keep the legacy hash; the next login retries */
+          }
+        }
+        const roles = JSON.parse(String(u.roles)) as string[];
+        const token = await signToken({ sub: String(u.username), roles }, secretOf(ctx), { ttlSeconds: sessionTtlOf(ctx) });
+        return { token, user: { username: String(u.username), roles } };
+      },
+      { input: parseCreds },
+    ),
 
-  // Re-read roles/active for the caller and reissue a token at the env-configured session
-  // TTL (AUTH_SESSION_TTL_SECONDS). Lets a short TTL bound revocation lag without logging
-  // the user out, and picks up role grants without re-login. See buildRefreshSession.
-  refreshSession: buildRefreshSession(sessionTtlOf),
-};
+    me: query((ctx) => ctx.identity),
+
+    // Re-read roles/active for the caller and reissue a token at the env-configured session
+    // TTL (AUTH_SESSION_TTL_SECONDS). Lets a short TTL bound revocation lag without logging
+    // the user out, and picks up role grants without re-login. See buildRefreshSession.
+    refreshSession: buildRefreshSession(sessionTtlOf),
+  };
+}
+
+/** Default handlers: login resolves by username only (the historical behaviour). */
+export const authHandlers = createAuthHandlers();
 
 // --- magic link (passwordless) login ---------------------------------------
 //
