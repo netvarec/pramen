@@ -187,23 +187,45 @@ function cellText(v: unknown): string {
   return String(v);
 }
 
+/** Page size for collection lists. collectionList defaults to 100 server-side, so a
+ * request without an explicit limit silently truncates — and the header then reports the
+ * truncated count as if it were the total, which reads as "that is all there is". */
+const COLLECTION_PAGE_SIZE = 50;
+
 export function CollectionList({ api, def, onOpen, onNew, onError }: { api: Api; def: CollectionMeta; onOpen: (id: string) => void; onNew: () => void; onError: (s: string) => void }) {
   const [rows, setRows] = useState<Record<string, unknown>[]>([]);
+  const [offset, setOffset] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
+
+  const load = useCallback(
+    (off: number) => {
+      setLoading(true);
+      return api
+        .call<Record<string, unknown>[]>("collectionList", { collection: def.slug, limit: COLLECTION_PAGE_SIZE, offset: off })
+        .then((r) => {
+          setRows((prev) => (off === 0 ? r : [...prev, ...r]));
+          // A full page means there is probably more; a short one is definitely the end.
+          setHasMore(r.length === COLLECTION_PAGE_SIZE);
+          setOffset(off + r.length);
+        })
+        .catch((e) => onError(errMsg(e)))
+        .finally(() => setLoading(false));
+    },
+    [api, def.slug, onError],
+  );
+
   useEffect(() => {
-    let live = true;
-    setLoading(true);
-    api.call<Record<string, unknown>[]>("collectionList", { collection: def.slug })
-      .then((r) => { if (live) setRows(r); })
-      .catch((e) => onError(errMsg(e)))
-      .finally(() => { if (live) setLoading(false); });
-    return () => { live = false; };
-  }, [api, def.slug, onError]);
+    setRows([]);
+    setOffset(0);
+    setHasMore(false);
+    void load(0);
+  }, [load]);
 
   const labelOf = (col: string) => def.fields.find((f) => f.name === col)?.label ?? col;
   return (
     <>
-      <Hero lead={def.pluralLabel} em={rows.length === 0 ? "None yet" : rows.length === 1 ? `1 ${def.label.toLowerCase()}` : `${rows.length} ${def.pluralLabel.toLowerCase()}`}>
+      <Hero lead={def.pluralLabel} em={rows.length === 0 ? "None yet" : rows.length === 1 ? `1 ${def.label.toLowerCase()}` : `${rows.length}${hasMore ? "+" : ""} ${def.pluralLabel.toLowerCase()}`}>
         <Cta text="Let's" em={`add a ${def.label.toLowerCase()}`}>
           <Button className="shrink-0" onPress={onNew}>+ New {def.label.toLowerCase()}</Button>
         </Cta>
@@ -225,6 +247,11 @@ export function CollectionList({ api, def, onOpen, onNew, onError }: { api: Api;
           {!loading && rows.length === 0 ? <p className="text-fg-subtle">No {def.pluralLabel.toLowerCase()} yet. Create one.</p> : null}
           {loading ? <p className="text-fg-subtle">Loading…</p> : null}
         </div>
+        {hasMore && !loading ? (
+          <div className="mt-3.5 text-center">
+            <Button variant="secondary" size="sm" onPress={() => void load(offset)}>Load more</Button>
+          </div>
+        ) : null}
       </div>
     </>
   );
