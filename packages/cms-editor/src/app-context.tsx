@@ -13,6 +13,10 @@ declare global {
     /** Runtime config set by the host's /config.js (see @pramen/cms-editor build). */
     PRAMEN_CMS_EDITOR?: {
       signInUrl?: string;
+      /** Hide the Pages tab for deployments that use collections only — no block/page
+       * building. The tab is otherwise always shown and lands on an empty list, which
+       * reads as "the CMS is broken" rather than "this site has no pages". */
+      hidePages?: boolean;
       /** Extra top-nav links to companion tools the host serves (e.g. a curation page).
        * Rendered as plain external `<a>` links after the built-in tabs. */
       extraNav?: { label: string; href: string }[];

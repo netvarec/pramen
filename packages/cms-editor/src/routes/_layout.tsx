@@ -27,6 +27,8 @@ export default function RootLayout() {
 
   // Host-configured links to companion tools (e.g. a curation page), from /config.js.
   const extraNav = typeof window !== "undefined" ? window.PRAMEN_CMS_EDITOR?.extraNav ?? [] : [];
+  // Collections-only deployments hide the block/page builder entirely.
+  const hidePages = typeof window !== "undefined" ? window.PRAMEN_CMS_EDITOR?.hidePages === true : false;
 
   return (
     <>
@@ -36,7 +38,9 @@ export default function RootLayout() {
         </span>
         <span className="flex-1" />
         <nav className="flex items-center gap-0.5">
-          <Button variant="ghost" size="sm" className={tabCls("pages")} onPress={() => navigate("home")}>Pages</Button>
+          {hidePages ? null : (
+            <Button variant="ghost" size="sm" className={tabCls("pages")} onPress={() => navigate("home")}>Pages</Button>
+          )}
           {collections.map((c) => (
             <Button key={c.slug} variant="ghost" size="sm" className={tabCls(`col:${c.slug}`)} onPress={() => navigate("collection", { params: { slug: c.slug } })}>
               {c.icon ? `${c.icon} ` : ""}{c.pluralLabel}
