@@ -5,8 +5,10 @@ description: Cut and publish a pramen release — bump all @pramen/* packages in
 
 # Releasing pramen
 
-All five `@pramen/*` packages publish to npm **in lockstep** (one shared version):
-`@pramen/server`, `@pramen/client`, `@pramen/react`, `@pramen/auth`, `@pramen/admin`.
+All eight `@pramen/*` packages publish to npm **in lockstep** (one shared version):
+`@pramen/client`, `@pramen/server`, `@pramen/react`, `@pramen/auth`, `@pramen/cms`,
+`@pramen/cms-astro`, `@pramen/cms-editor`, `@pramen/admin`. The list lives in
+`scripts/packages.ts` (`PUBLISH_PKGS`) — don't hardcode it here or anywhere else.
 
 Publishing is **CI-driven via a version tag**. You do not run `npm publish` by hand —
 pushing a `vX.Y.Z` tag triggers `.github/workflows/release.yml`, which typechecks,
@@ -22,9 +24,9 @@ bun run bump patch        # 0.0.2 -> 0.0.3   (or: minor | major | explicit X.Y.Z
 git push --follow-tags    # pushes the release commit + tag -> triggers publish
 ```
 
-`bun run bump` (`scripts/bump.ts`) does it all: rewrites the `version` in all five
-`package.json`s, commits `release: vX.Y.Z`, and creates the `vX.Y.Z` tag. It **refuses
-a dirty working tree** — the bump must be its own commit.
+`bun run bump` (`scripts/bump.ts`) does it all: rewrites the `version` in every
+`PUBLISH_PKGS` `package.json`, commits `release: vX.Y.Z`, and creates the `vX.Y.Z` tag.
+It **refuses a dirty working tree** — the bump must be its own commit.
 
 ## Steps to drive a release
 
@@ -37,11 +39,21 @@ a dirty working tree** — the bump must be its own commit.
      ```bash
      git rev-parse --abbrev-ref HEAD && git status --porcelain && git fetch origin && git log --oneline origin/main..HEAD
      ```
-   - CI is green on the commit you're releasing (the same gates run again in
-     `release.yml`, but catch failures locally first):
+   - Local gates pass (the same ones run again in `release.yml`, but catch failures
+     here first):
      ```bash
      bun run typecheck && bun test
      ```
+   - CI is green on the exact commit you're releasing:
+     ```bash
+     gh run list --limit 5 --json conclusion,name,headSha -q '.[] | "\(.conclusion)\t\(.name)\t\(.headSha[0:7])"'
+     ```
+     If a local gate is red but CI is green on that commit, **stop and diagnose before
+     bumping** — don't assume it's environmental. Report the specific test and root
+     cause to the user and let them decide. (Precedent: the `pramen init` scaffold test
+     used to resolve `@pramen/server` via Bun auto-install, so it asserted against the
+     last *published* package over the network and went red on a cold cache. Fixed by
+     linking the repo's `node_modules` into the temp dir.)
    - Optionally preview the plan: `bun run bump <type> --dry-run` (changes nothing).
 
 3. **Bump** (creates the commit + tag locally):
@@ -66,18 +78,30 @@ a dirty working tree** — the bump must be its own commit.
    ```bash
    gh run watch $(gh run list --workflow=release.yml --limit=1 --json databaseId -q '.[0].databaseId') --exit-status
    ```
-   On success, confirm the new version is live, e.g. `npm view @pramen/server version`.
+   On success, confirm **every** package is live at the new version — a partial publish
+   leaves the registry out of lockstep, and checking just one hides it:
+   ```bash
+   for p in client server react auth cms cms-astro cms-editor admin; do
+     printf "@pramen/%-12s %s\n" "$p" "$(npm view @pramen/$p version 2>/dev/null || echo '(not published)')"
+   done
+   ```
 
 ## Notes & gotchas
 
 - **Lockstep is intentional** — every package ships the same version, even ones with
   no changes. For independent per-package versions + changelogs you'd graduate to
   changesets; don't hand-edit individual versions out of lockstep.
-- **Adding a new `@pramen/*` package to the release set:** add it to the `PKGS` array
-  in **both** `scripts/bump.ts` and `scripts/publish.ts` (`publish.ts` lists them in
-  dependency order: `client → server → react → auth → admin`). It then joins on the
-  next tag without forcing a version change of the rest (publish skips already-live
-  versions).
+- **Adding a new `@pramen/*` package to the release set:** add it to `PUBLISH_PKGS` in
+  **`scripts/packages.ts`** — the single source of truth both `bump.ts` and
+  `publish.ts` import. Keep it in **dependency order** (a package after anything it
+  depends on); `publish.ts` publishes in that order, `bump.ts` is order-insensitive.
+  It then joins on the next tag without forcing a version change of the rest (publish
+  skips already-live versions).
+  - `assertNoPackageDrift()` runs at the top of both scripts and **fails the bump or
+    publish** if any non-private `packages/*` workspace is missing from the list — so
+    a new package can't be silently left out of a release (which is exactly how
+    `cms`/`cms-astro`/`cms-editor` got skipped once). A package opts out of publishing
+    with `"private": true` in its `package.json`.
   - **Critical npm-side prerequisite (do this BEFORE the first release that includes
     the new package):** on npmjs.com, configure the package's **Trusted Publisher**
     (Settings → Trusted Publisher → GitHub Actions: repo `netvarec/pramen`, workflow
