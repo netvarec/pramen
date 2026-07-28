@@ -400,6 +400,13 @@ const handlers = {
     ctx.db.find({ from: "notes", orderBy: { column: "id", dir: "desc" } }),
   ),
 
+  // Column projection (issue #22): fetch only id + title, so a wide column (here
+  // `body`) never crosses RPC on the D1 path. Row ACL still applies; `select` must
+  // name readable columns (a hidden/unreadable one is a 403).
+  listNoteTitles: query((ctx) =>
+    ctx.db.find({ from: "notes", select: ["id", "title"], orderBy: { column: "id", dir: "desc" } }),
+  ),
+
   getNote: query(async (ctx, input: { id: number }) => {
     const rows = await ctx.db.find({ from: "notes", where: { id: input.id }, limit: 1 });
     return rows[0] ?? null;

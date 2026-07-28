@@ -58,6 +58,14 @@ export async function runD1(base: string): Promise<void> {
   const owners = new Set(adminList.body.result.map((n: any) => n.ownerId));
   assert(owners.has("alice") && owners.has("bob"), "D1: admin read sees all owners");
 
+  // --- column projection (#22): `select` narrows the SQL to the named columns, so a
+  // wide column never crosses RPC on the D1 path. Row ACL still applies. ---
+  const titles = await post("listNoteTitles", {}, T.alice);
+  assert(
+    titles.body.result.length > 0 && titles.body.result.every((n: any) => "id" in n && "title" in n && !("body" in n) && !("ownerId" in n)),
+    "D1: `select` fetches only the named columns (wide/other columns absent)",
+  );
+
   // --- field projection: reader can't see `body` ---
   const readerList = await post("listNotes", {}, T.reader);
   assert(
