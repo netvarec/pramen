@@ -309,6 +309,14 @@ log) for independent single-writer serialization and storage.
   use it to call external services from handlers (`ctx.env.STRIPE_SECRET_KEY as string`).
 - No raw SQL in handlers — go through `ctx.db` (`find` is compiled by
   `runtime/read-engine.ts`). `ctx.db.exec` is an escape hatch.
+- Reads are **column-projected**, never `SELECT *`: the compiled SELECT names the caller's
+  readable columns (base ∪ conditional-`when` fields, or all-non-hidden when unrestricted)
+  plus the PK / order / relation-join / `when`-input columns the engine needs — so
+  `hidden()` and unreadable-for-this-caller columns never cross RPC (they were fetched by
+  `SELECT *` then dropped in JS before). `find`/`page` also take an optional **`select:
+  [...]`** projection to fetch only named columns (each must be readable — a hidden/
+  unreadable one is a 403); the wide column a handler doesn't need then stays off the wire.
+  This is the D1-over-RPC fix from GitHub #22. `Db.projectionColumns` in `runtime/db.ts`.
 - `insert`/`update` echo the persisted row projected to the caller's readable fields
   ∪ the columns they wrote ∪ the PK — never leaks an unreadable field, never `{}`
   (a write-only caller still gets the generated id). `projectWrite` in `runtime/db.ts`.
