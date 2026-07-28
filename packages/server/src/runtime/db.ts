@@ -69,6 +69,32 @@ function normalizeOrder(orderBy: unknown): OrderBy[] | undefined {
   return (Array.isArray(orderBy) ? orderBy : [orderBy]) as OrderBy[];
 }
 
+/** Single-table columns a compiled predicate reads (for cell-`when` grants: the SELECT
+ * must fetch a `when`'s input columns or the per-row visibility check can't evaluate).
+ * cell-`when` is single-table, so there's never a `sub` node to cross into. */
+function columnsInExpr(expr: SqlExpr | null | undefined, out: Set<string> = new Set()): Set<string> {
+  if (!expr) return out;
+  switch (expr.t) {
+    case "cmp":
+    case "in":
+    case "null":
+    case "strmatch":
+      out.add(expr.col);
+      break;
+    case "and":
+    case "or":
+      for (const p of expr.parts) columnsInExpr(p, out);
+      break;
+    case "not":
+      columnsInExpr(expr.expr, out);
+      break;
+    case "sub":
+      out.add(expr.outerCol); // inner `where` is over another table — not this row's columns
+      break;
+  }
+  return out;
+}
+
 type OrderSpec<S extends SchemaDef, T extends keyof S> = {
   column: keyof FieldsOf<S[T]> & string;
   dir?: "asc" | "desc";
@@ -82,6 +108,12 @@ export interface FindSpec<S extends SchemaDef, T extends keyof S> {
   offset?: number;
   /** Eager-load relations. Each loaded relation is independently ACL-checked. */
   with?: Partial<Record<keyof RelationsOf<S[T]> & string, true>>;
+  /** Fetch only these columns (a projection). Each must be readable — a hidden or
+   * unreadable column is a 403, like ordering by one. This narrows the SQL SELECT so a
+   * wide `json`/`text` column the handler doesn't need never crosses RPC on the D1 path;
+   * the PK, order, and relation-join columns are always fetched internally regardless.
+   * (Unselected columns are absent at runtime; the return type is not yet narrowed.) */
+  select?: readonly (keyof FieldsOf<S[T]> & string)[];
 }
 
 /** Cursor (keyset) pagination input — `after` is an opaque cursor from a prior page. */
@@ -92,6 +124,9 @@ export interface PageSpec<S extends SchemaDef, T extends keyof S> {
   limit?: number;
   after?: string;
   with?: Partial<Record<keyof RelationsOf<S[T]> & string, true>>;
+  /** Fetch only these columns (see FindSpec.select). Order/cursor columns are always
+   * fetched regardless, so a projection never breaks keyset pagination. */
+  select?: readonly (keyof FieldsOf<S[T]> & string)[];
 }
 
 export interface Page<R> {
@@ -284,8 +319,11 @@ export class Db<S extends SchemaDef = SchemaDef> {
     const where = this.readWhere(from, spec.where, scope);
     const orderBy = normalizeOrder(spec.orderBy);
     if (orderBy) this.assertReadableCols(from, scope, orderBy.map((o) => o.column));
-    const raw = await this.selectRaw(from, where, orderBy, spec.limit, spec.offset);
-    return (await this.finishRows(from, raw, scope, spec.with as Selected)) as (InferRow<FieldsOf<S[T]>> &
+    const select = spec.select && spec.select.length > 0 ? [...new Set(spec.select as readonly string[])] : undefined;
+    if (select) this.assertSelectable(from, scope, select);
+    const columns = this.projectionColumns(from, scope, { select, orderBy, withSel: spec.with as Selected });
+    const raw = await this.selectRaw(from, where, orderBy, spec.limit, spec.offset, columns);
+    return (await this.finishRows(from, raw, scope, spec.with as Selected, select)) as (InferRow<FieldsOf<S[T]>> &
       RelationsResult<S, T>)[];
   }
 
@@ -306,14 +344,20 @@ export class Db<S extends SchemaDef = SchemaDef> {
     let where = this.readWhere(from, spec.where, scope);
     if (spec.after != null) where = and(where, keysetAfter(order, decodeCursor(spec.after)));
 
+    const select = spec.select && spec.select.length > 0 ? [...new Set(spec.select as readonly string[])] : undefined;
+    if (select) this.assertSelectable(from, scope, select);
+    // `order` (incl. the PK tiebreaker) is threaded into the projection, so the cursor
+    // can always be encoded from the raw row even when the caller narrowed `select`.
+    const columns = this.projectionColumns(from, scope, { select, orderBy: order, withSel: spec.with as Selected });
+
     const limit = spec.limit ?? DEFAULT_PAGE_SIZE;
-    const raw = await this.selectRaw(from, where, order, limit + 1); // +1 to detect a next page
+    const raw = await this.selectRaw(from, where, order, limit + 1, undefined, columns); // +1 to detect a next page
     const hasMore = raw.length > limit;
     if (hasMore) raw.length = limit;
 
     const last = raw[raw.length - 1];
     const cursor = last ? encodeCursor(order, last) : null; // from raw row (has all order cols)
-    const items = (await this.finishRows(from, raw, scope, spec.with as Selected)) as (InferRow<FieldsOf<S[T]>> &
+    const items = (await this.finishRows(from, raw, scope, spec.with as Selected, select)) as (InferRow<FieldsOf<S[T]>> &
       RelationsResult<S, T>)[];
     return { items, cursor, hasMore };
   }
@@ -440,9 +484,91 @@ export class Db<S extends SchemaDef = SchemaDef> {
     }
   }
 
-  private async selectRaw(from: string, where: SqlExpr, orderBy?: OrderBy[], limit?: number, offset?: number): Promise<Row[]> {
-    const { sql, params } = compileSelect({ from, where, orderBy, limit, offset }, this.dialect);
+  private async selectRaw(
+    from: string,
+    where: SqlExpr,
+    orderBy?: OrderBy[],
+    limit?: number,
+    offset?: number,
+    columns?: readonly string[],
+  ): Promise<Row[]> {
+    const { sql, params } = compileSelect({ from, where, orderBy, limit, offset, columns }, this.dialect);
     return this.decodeRows(from, await this.driver.exec(sql, params));
+  }
+
+  /** All column names of a table (schema order). */
+  private allColsOf(table: string): string[] {
+    const fields = this.schema[table]?.fields;
+    return fields ? Object.keys(fields) : [];
+  }
+
+  /** The parent-side join column an eager-load of `relName` reads off each parent row:
+   * belongsTo/oneHasOne carry the FK on this row; the others group by this row's PK
+   * (which the projection adds separately). Null for an unknown relation. */
+  private joinColOf(from: string, relName: string): string | null {
+    const rel = this.schema[from]?.relations?.[relName] as RelationDef | undefined;
+    if (!rel) return null;
+    return rel.kind === "belongsTo" || rel.kind === "oneHasOne" ? rel.column : this.pkOf(from);
+  }
+
+  /** Validate a `select` projection: every column must be readable. Hidden columns are
+   * never selectable (as with ordering); a base or conditionally-granted column is fine,
+   * but a column outside the caller's read grant is a 403. Skipped when the scope is
+   * unrestricted or a field-resolver may grant anything. */
+  private assertSelectable(from: string, scope: Scope, cols: readonly string[]): void {
+    const hidden = new Set(this.hiddenColsOf(from));
+    for (const c of cols) if (hidden.has(c)) throw new AclDenied(from, "read", c);
+    if (scope.fields === null || scope.fieldsFns.length > 0) return;
+    const allowed = new Set(scope.fields);
+    for (const cg of scope.conditional) for (const f of cg.fields) allowed.add(f);
+    for (const c of cols) if (!allowed.has(c)) throw new AclDenied(from, "read", c);
+  }
+
+  /** The columns to SELECT for a read over `from` under `scope` — replacing `SELECT *`,
+   * which fetches every column (wide `json`/`text` + `hidden()`) and drops them in JS,
+   * paying full RPC cost on the D1 path. Names exactly what can surface:
+   *   - the visible field set: an explicit `select`, else the base readable fields ∪ every
+   *     conditional-`when` field, else all non-hidden columns when the scope is
+   *     unrestricted (fields === null) or a field-resolver (fieldsFn) may expose anything;
+   *   - PLUS the columns the machinery needs regardless of visibility — the PK (identity /
+   *     relation grouping / cursor), the order-by columns, each eager-loaded relation's
+   *     parent-side join column, and any cell-`when` input columns — some of which the
+   *     caller can't read; they're fetched, used, then stripped by projectRow/stripHidden
+   *     before return.
+   * Returns undefined (→ `SELECT *`) only for a schemaless/unknown table. */
+  private projectionColumns(
+    from: string,
+    scope: Scope,
+    opts: { select?: readonly string[]; orderBy?: OrderBy[]; withSel?: Selected } = {},
+  ): readonly string[] | undefined {
+    const all = this.allColsOf(from);
+    if (all.length === 0) return undefined; // unknown schema — leave as SELECT *
+    const hidden = new Set(this.hiddenColsOf(from));
+
+    let visible: string[];
+    if (opts.select && scope.fieldsFns.length === 0) {
+      visible = opts.select.filter((c) => !hidden.has(c));
+    } else if (scope.fields === null || scope.fieldsFns.length > 0) {
+      visible = all.filter((c) => !hidden.has(c)); // unrestricted / resolver may expose anything
+    } else {
+      const set = new Set(scope.fields);
+      for (const cg of scope.conditional) for (const f of cg.fields) set.add(f);
+      visible = [...set].filter((c) => !hidden.has(c));
+    }
+
+    const cols = new Set<string>(visible);
+    cols.add(this.pkOf(from));
+    for (const o of opts.orderBy ?? []) cols.add(o.column);
+    for (const cg of scope.conditional) for (const c of columnsInExpr(cg.when)) cols.add(c); // cell-`when` inputs
+    if (opts.withSel) {
+      for (const relName of Object.keys(opts.withSel)) {
+        if (!opts.withSel[relName]) continue;
+        const jc = this.joinColOf(from, relName);
+        if (jc) cols.add(jc);
+      }
+    }
+    const allSet = new Set(all);
+    return [...cols].filter((c) => allSet.has(c)); // only ever name real columns
   }
 
   // --- JSON codec: a `json` or `fileRef` column is stored as a JSON TEXT cell but
@@ -593,13 +719,21 @@ export class Db<S extends SchemaDef = SchemaDef> {
     return this.decodeRow(from, (await this.driver.exec(sql, params))[0] as Row | undefined);
   }
 
-  private async finishRows(from: string, raw: Row[], scope: Scope, withSel: Selected): Promise<Row[]> {
+  private async finishRows(from: string, raw: Row[], scope: Scope, withSel: Selected, select?: readonly string[]): Promise<Row[]> {
     const relNames = withSel ? Object.keys(withSel).filter((k) => withSel[k]) : [];
     for (const relName of relNames) await this.loadRelation(from, raw, relName);
-    // Hidden columns are stripped even under an unrestricted/SYSTEM scope (never readable).
-    if (scope.fields === null) return raw.map((r) => this.stripHidden(from, r));
+    const sel = select && select.length > 0 ? new Set(select) : undefined;
     return raw.map((r) => {
-      const projected = this.stripHidden(from, projectRow(r, effectiveFields(scope, r, this.acl.identity)));
+      // Per-row visible fields = ACL effective set (null = all), then narrowed to the
+      // caller's `select`. Hidden columns are stripped even under unrestricted/SYSTEM.
+      const eff = effectiveFields(scope, r, this.acl.identity);
+      let base: Row;
+      if (eff === null && !sel) base = r;
+      else {
+        const fields = eff === null ? [...sel!] : sel ? eff.filter((f) => sel.has(f)) : eff;
+        base = projectRow(r, fields);
+      }
+      const projected = this.stripHidden(from, base);
       for (const relName of relNames) projected[relName] = r[relName]; // relations survive projection
       return projected;
     });
@@ -636,7 +770,11 @@ export class Db<S extends SchemaDef = SchemaDef> {
     const fetchBy = async (col: string, values: unknown[]): Promise<Array<{ key: unknown; row: Row }>> => {
       if (values.length === 0) return [];
       const where = scope.where ? and(inList(col, values), scope.where) : inList(col, values);
-      const { sql, params } = compileSelect({ from: rel.target, where }, this.dialect);
+      // Project the target to its readable columns (+ the join `col`, matched before
+      // projecting) so a wide relation target isn't shipped whole over RPC either.
+      const cols = this.projectionColumns(rel.target, scope);
+      const columns = cols ? [...new Set([...cols, col])] : undefined;
+      const { sql, params } = compileSelect({ from: rel.target, where, columns }, this.dialect);
       const rows = this.decodeRows(rel.target, await this.driver.exec(sql, params));
       return rows.map((row) => ({ key: row[col], row: project(row) }));
     };
@@ -666,7 +804,12 @@ export class Db<S extends SchemaDef = SchemaDef> {
         return;
       }
       this.touched.add(rel.through);
-      const linkSel = compileSelect({ from: rel.through, where: inList(rel.sourceColumn, parentIds) }, this.dialect);
+      // The junction is read for ONLY its two link columns (source→target); its other
+      // columns are irrelevant to the join and needn't cross RPC.
+      const linkSel = compileSelect(
+        { from: rel.through, where: inList(rel.sourceColumn, parentIds), columns: [rel.sourceColumn, rel.targetColumn] },
+        this.dialect,
+      );
       const links = this.decodeRows(rel.through, await this.driver.exec(linkSel.sql, linkSel.params));
       const targetIds = [...new Set(links.map((l) => l[rel.targetColumn]).filter((v) => v != null))];
       const byTarget = new Map<unknown, Row>();

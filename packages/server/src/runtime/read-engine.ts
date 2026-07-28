@@ -233,6 +233,12 @@ export interface QuerySpec {
   readonly orderBy?: OrderBy[];
   readonly limit?: number;
   readonly offset?: number;
+  /** Explicit projection: the columns to SELECT (already validated schema keys, quoted
+   * here). When absent, falls back to `SELECT *`. The Db layer computes this from the
+   * caller's readable field set (+ the PK / order / relation-join columns the read
+   * machinery needs), so wide `json`/`text` and `hidden()` columns don't cross RPC on
+   * the D1 path — instead of `SELECT *` then dropping them in JS. */
+  readonly columns?: readonly string[];
 }
 
 export type AggFn = "count" | "sum" | "avg" | "min" | "max";
@@ -274,7 +280,8 @@ export function compileAggregate(
 
 export function compileSelect(spec: QuerySpec, dialect: Dialect): CompiledSql {
   const params: unknown[] = [];
-  let sql = `SELECT * FROM ${dialect.id(spec.from)}`;
+  const cols = spec.columns && spec.columns.length > 0 ? spec.columns.map((c) => dialect.id(c)).join(", ") : "*";
+  let sql = `SELECT ${cols} FROM ${dialect.id(spec.from)}`;
 
   if (spec.where && spec.where.t !== "true") {
     const { sql: where } = compileExpr(spec.where, dialect, params);
