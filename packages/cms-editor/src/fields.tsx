@@ -2,7 +2,8 @@
 // group/repeater. Media fields open a picker (upload + choose from the library).
 
 import { Button, Heading, Input, ModalDialog, ModalOverlay, ModalSurface, Text, Textarea } from "@podoba/react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { BlockEditor } from "@podoba/react/editor";
+import { useEffect, useState, type ReactNode } from "react";
 import type { Api } from "./api";
 import type { FieldDefinition, Media } from "./types";
 
@@ -98,104 +99,14 @@ function FieldInput({ def, value, onChange, api }: { def: FieldDefinition; value
 }
 
 // --- rich text (WYSIWYG) --------------------------------------------------------------
-// A dependency-free contentEditable editor. Emits an HTML string, so it round-trips with
-// existing rich_text content and every set:html renderer — no value migration, no bundled
-// ProseMirror. TipTap is the upgrade path if tables/embeds are ever needed.
-
-const RT_TOOLS: Array<{ label: string; title: string; run: (exec: (c: string, a?: string) => void) => void }> = [
-  { label: "B", title: "Bold", run: (x) => x("bold") },
-  { label: "I", title: "Italic", run: (x) => x("italic") },
-  { label: "H2", title: "Heading", run: (x) => x("formatBlock", "H2") },
-  { label: "H3", title: "Subheading", run: (x) => x("formatBlock", "H3") },
-  { label: "¶", title: "Paragraph", run: (x) => x("formatBlock", "P") },
-  { label: "• List", title: "Bulleted list", run: (x) => x("insertUnorderedList") },
-  { label: "1. List", title: "Numbered list", run: (x) => x("insertOrderedList") },
-  { label: "Link", title: "Add link", run: (x) => {
-    const raw = window.prompt("Link URL (https://, mailto:, /path)", "https://");
-    if (!raw) return;
-    const url = safeLinkUrl(raw);
-    if (!url) { window.alert("Only http(s), mailto, tel, or relative (/, #) links are allowed."); return; }
-    x("createLink", url);
-  } },
-  { label: "Unlink", title: "Remove link", run: (x) => x("unlink") },
-  { label: "Clear", title: "Clear formatting", run: (x) => x("removeFormat") },
-];
-
-/** Allow-list for a link href: http(s), mailto, tel, or a relative/anchor path.
- * The prefix allow-list inherently rejects `javascript:`/`data:`/`vbscript:` (they
- * don't match), so a bare script URL never reaches execCommand. */
-function safeLinkUrl(raw: string): string | null {
-  const url = raw.trim();
-  return /^(https?:\/\/|mailto:|tel:|\/|#)/i.test(url) ? url : null;
-}
-
-/** NOTE: this is cosmetic paste-cleaning, NOT a security boundary. It cannot be relied
- * on for XSS defense — an editor-role caller can POST any `richtext` value straight to
- * the RPC handler, never touching this editor. Stored-XSS is prevented on the SERVER by
- * sanitizeRichText() in @pramen/cms on write (which also covers raw writes / imports).
- * Here we just tidy obviously-unwanted markup so the editor doesn't render junk. */
-function scrubHtml(html: string): string {
-  return html
-    .replace(/<\s*(script|style)[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi, "")
-    .replace(/\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "")
-    .replace(/(href|src)\s*=\s*("javascript:[^"]*"|'javascript:[^']*')/gi, '$1="#"');
-}
+// The `richtext` field is podoba's Notion-style BlockEditor (Tiptap): `/` slash palette,
+// block conversion, inline bubble toolbar. Still an HTML string in/out, so it round-trips
+// with existing rich_text content + every set:html renderer — no value migration. The
+// server's sanitizeRichText() (@pramen/cms) remains the XSS boundary on write; ProseMirror
+// parses HTML to its schema on load, so scripts never survive into the editor either.
 
 export function RichText({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const last = useRef<string>("");
-
-  // Sync only EXTERNAL changes (e.g. switching blocks) into the DOM — never on our own
-  // keystrokes, or the caret jumps to the start on every character.
-  useEffect(() => {
-    const el = ref.current;
-    if (el && value !== last.current) {
-      // Scrub on load too — content may have entered the store via raw writes or imports,
-      // not just this editor. contentEditable requires innerHTML; scrubHtml strips
-      // scripts / inline handlers / javascript: URLs first.
-      el.innerHTML = scrubHtml(value || "");
-      last.current = value || "";
-    }
-  }, [value]);
-
-  const emit = () => {
-    const html = scrubHtml(ref.current?.innerHTML ?? "");
-    last.current = html;
-    onChange(html);
-  };
-  const exec = (command: string, arg?: string) => {
-    ref.current?.focus();
-    document.execCommand(command, false, arg);
-    emit();
-  };
-  // Paste as plain text — avoids importing Word/Docs style-junk into the HTML.
-  const onPaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    document.execCommand("insertText", false, e.clipboardData.getData("text/plain"));
-  };
-
-  return (
-    <div className="overflow-hidden rounded-lg border border-border bg-surface-card">
-      <div className="flex flex-wrap gap-0.5 border-b border-border bg-surface-muted px-2 py-1.5">
-        {RT_TOOLS.map((t) => (
-          // preventDefault on mousedown keeps the editor's selection while the button is clicked.
-          <button key={t.label} type="button" className="rounded border-0 bg-transparent px-2.5 py-0.5 text-xs text-fg-muted hover:bg-surface-card hover:text-fg" title={t.title} onMouseDown={(e) => e.preventDefault()} onClick={() => t.run(exec)}>
-            {t.label}
-          </button>
-        ))}
-      </div>
-      <div
-        ref={ref}
-        className="prose prose-sm min-h-[180px] max-w-none px-4 py-3.5 text-sm leading-relaxed text-fg outline-none empty:before:text-fg-subtle empty:before:content-[attr(data-placeholder)]"
-        contentEditable
-        suppressContentEditableWarning
-        data-placeholder="Write…"
-        onInput={emit}
-        onBlur={emit}
-        onPaste={onPaste}
-      />
-    </div>
-  );
+  return <BlockEditor value={value} onChange={onChange} minHeight={180} placeholder="Write, or press '/' for blocks…" />;
 }
 
 function Repeater({ def, value, onChange, api, label }: { def: FieldDefinition; value: Record<string, unknown>[]; onChange: (v: unknown[]) => void; api: Api; label: ReactNode }) {

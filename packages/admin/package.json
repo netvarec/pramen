@@ -21,9 +21,9 @@
     "access": "public"
   },
   "dependencies": {
-    "@podoba/react": "^0.0.30",
-    "@podoba/tokens": "^0.0.30",
-    "@podoba/tailwind": "^0.0.30",
+    "@podoba/react": "^0.0.32",
+    "@podoba/tokens": "^0.0.32",
+    "@podoba/tailwind": "^0.0.32",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
