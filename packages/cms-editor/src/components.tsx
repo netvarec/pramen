@@ -394,11 +394,20 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
   const patchRegion = (region: string, fn: (list: RenderedBlock[]) => RenderedBlock[]) =>
     setAssembled((prev) => (prev ? { ...prev, regions: { ...prev.regions, [region]: fn(prev.regions[region] ?? []) } } : prev));
 
-  const addBlock = async (region: string, slug: string) => {
+  // Add a block, optionally AT an index (`at`) rather than appended — the Notion-style
+  // insert-between. addBlock always appends server-side, so when `at` lands mid-list we
+  // follow up with a reorderRegion to move the new placement into place.
+  const addBlock = async (region: string, slug: string, at?: number) => {
     // Optimistic: show a placeholder immediately (no wait for the round trip), then
     // reconcile with the persisted row addBlock echoes — or roll it back on failure.
     const tempId = `tmp:${crypto.randomUUID()}`;
-    patchRegion(region, (list) => [...list, { id: tempId, block_id: tempId, block_type: slug, title: null, fields: {}, is_shared: false, pending: true }]);
+    const existingIds = (assembled?.regions[region] ?? []).map((b) => b.id);
+    const index = at != null && at >= 0 && at < existingIds.length ? at : existingIds.length;
+    patchRegion(region, (list) => {
+      const next = [...list];
+      next.splice(index, 0, { id: tempId, block_id: tempId, block_type: slug, title: null, fields: {}, is_shared: false, pending: true });
+      return next;
+    });
     try {
       const { block, placement } = await api.call<{
         block: { id: string; title?: string | null; fields?: Record<string, unknown> | null };
@@ -413,6 +422,13 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
         is_shared: Boolean(placement.isShared),
       };
       patchRegion(region, (list) => list.map((b) => (b.id === tempId ? rb : b)));
+      // Inserted mid-list: the server appended, so persist the intended order (this
+      // reloads, like a drag-reorder does).
+      if (index < existingIds.length) {
+        const order = [...existingIds];
+        order.splice(index, 0, rb.id);
+        await reorder(region, order);
+      }
     } catch (e) {
       patchRegion(region, (list) => list.filter((b) => b.id !== tempId));
       setErr(errMsg(e));
@@ -492,26 +508,30 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
             <div className="mb-10" key={r.name}>
               <div className="mb-1 text-caption font-medium uppercase tracking-wide text-fg-subtle">{r.label ?? r.name}</div>
               {blocks.map((b, i) => (
-                <BlockCard
-                  key={b.id}
-                  api={api}
-                  block={b}
-                  blockType={btBySlug.get(b.block_type)}
-                  isFirst={i === 0}
-                  isLast={i === blocks.length - 1}
-                  onMove={(d) => reorderMove(blocks, r.name, i, d, reorder)}
-                  onRemove={() => removeBlock(b)}
-                  onPatch={patchBlockFields}
-                  onDirtyChange={reportDirty}
-                  onError={setErr}
-                  dragging={drag?.region === r.name && drag.from === i}
-                  isOver={!!drag && drag.region === r.name && drag.over === i && drag.from !== i}
-                  onDragStartBlock={() => beginDrag(r.name, i)}
-                  onDragOverBlock={() => hoverDrag(r.name, i)}
-                  onDropBlock={() => dropDrag(r.name)}
-                  onDragEndBlock={cancelDrag}
-                />
+                <div key={b.id}>
+                  {/* Between-blocks insert point — a hover "+" that adds AT index i. */}
+                  <Inserter compact allowed={allowed} btBySlug={btBySlug} onAdd={(slug) => addBlock(r.name, slug, i)} />
+                  <BlockCard
+                    api={api}
+                    block={b}
+                    blockType={btBySlug.get(b.block_type)}
+                    isFirst={i === 0}
+                    isLast={i === blocks.length - 1}
+                    onMove={(d) => reorderMove(blocks, r.name, i, d, reorder)}
+                    onRemove={() => removeBlock(b)}
+                    onPatch={patchBlockFields}
+                    onDirtyChange={reportDirty}
+                    onError={setErr}
+                    dragging={drag?.region === r.name && drag.from === i}
+                    isOver={!!drag && drag.region === r.name && drag.over === i && drag.from !== i}
+                    onDragStartBlock={() => beginDrag(r.name, i)}
+                    onDragOverBlock={() => hoverDrag(r.name, i)}
+                    onDropBlock={() => dropDrag(r.name)}
+                    onDragEndBlock={cancelDrag}
+                  />
+                </div>
               ))}
+              {/* End inserter — appends. */}
               <div className="mt-1">
                 <Inserter allowed={allowed} btBySlug={btBySlug} onAdd={(slug) => addBlock(r.name, slug)} />
               </div>
@@ -697,7 +717,7 @@ function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, o
 // palette. A slim "＋ Add block" affordance expands into a searchable list of the
 // region's allowed block types (type to filter; ↑/↓ + Enter to pick, Esc/blur to
 // close). Insertion appends to the region; reorder via drag to position.
-function Inserter({ allowed, btBySlug, onAdd }: { allowed: string[]; btBySlug: Map<string, BlockType>; onAdd: (slug: string) => void }) {
+function Inserter({ allowed, btBySlug, onAdd, compact }: { allowed: string[]; btBySlug: Map<string, BlockType>; onAdd: (slug: string) => void; compact?: boolean }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [idx, setIdx] = useState(0);
@@ -716,6 +736,23 @@ function Inserter({ allowed, btBySlug, onAdd }: { allowed: string[]; btBySlug: M
   const pick = (slug?: string) => { if (slug) onAdd(slug); close(); };
 
   if (!open) {
+    // Compact: a thin between-blocks divider that reveals a centered "+" on hover.
+    if (compact) {
+      return (
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          aria-label="Insert block here"
+          className="group/ins flex h-3 w-full items-center justify-center opacity-0 transition-opacity hover:opacity-100"
+        >
+          <span className="flex h-full w-full items-center">
+            <span className="h-px flex-1 bg-brand-green/40" />
+            <span className="mx-1 rounded bg-brand-green/15 px-1 text-caption leading-none text-brand-green">＋</span>
+            <span className="h-px flex-1 bg-brand-green/40" />
+          </span>
+        </button>
+      );
+    }
     return (
       <button
         type="button"
