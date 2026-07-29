@@ -481,15 +481,16 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
         </div>
       </div>
 
-      <div className="overflow-auto py-1.5">
+      {/* The canvas: one inline document. `pl-8` reserves the left gutter that each
+          block's drag handle occupies on hover. Regions are titled sections. */}
+      <div className="overflow-auto py-1.5 pl-8 pr-2">
         {err ? <Banner>{err}</Banner> : null}
         {regions.map((r) => {
           const blocks = assembled?.regions[r.name] ?? [];
           const allowed = r.allowedTypes && r.allowedTypes.length ? r.allowedTypes : blockTypes.map((b) => b.slug);
           return (
-            <div className="mb-8" key={r.name}>
-              <h3 className="m-0 mb-3 text-[22px] font-normal text-fg">{r.label ?? r.name}</h3>
-              {blocks.length === 0 ? <p className="mb-3 text-sm text-fg-subtle">No blocks yet — add one below.</p> : null}
+            <div className="mb-10" key={r.name}>
+              <div className="mb-1 text-caption font-medium uppercase tracking-wide text-fg-subtle">{r.label ?? r.name}</div>
               {blocks.map((b, i) => (
                 <BlockCard
                   key={b.id}
@@ -511,7 +512,9 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
                   onDragEndBlock={cancelDrag}
                 />
               ))}
-              <AddBlock allowed={allowed} btBySlug={btBySlug} onAdd={(slug) => addBlock(r.name, slug)} />
+              <div className="mt-1">
+                <Inserter allowed={allowed} btBySlug={btBySlug} onAdd={(slug) => addBlock(r.name, slug)} />
+              </div>
             </div>
           );
         })}
@@ -610,60 +613,62 @@ function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, o
   const name = blockType?.name ?? block.block_type;
 
   return (
-    // The card is the drop target; the ⠿ handle is the only draggable element, so
-    // dragging never fights the inline contentEditable text selection. The handle's drag
-    // image is set to the whole card so you drag a preview of the block, not just the grip.
+    // One inline document row (no card chrome). The row is the drop target; the ⠿
+    // handle in the hover gutter is the only draggable element, so dragging never
+    // fights the inline text selection. Its drag image is the whole row.
     <div
       ref={cardRef}
-      className={`mb-2.5 rounded-panel border bg-surface-card transition-colors ${isOver ? "border-brand-green" : "border-border"} ${dragging ? "opacity-40" : ""} ${block.pending ? "pointer-events-none opacity-60" : ""}`}
+      className={`group relative rounded-lg px-2 py-1 transition-colors ${isOver ? "ring-2 ring-brand-green" : ""} ${dragging ? "opacity-40" : ""} ${block.pending ? "pointer-events-none opacity-60" : ""}`}
       onDragOver={(e) => { e.preventDefault(); onDragOverBlock(); }}
       onDrop={(e) => { e.preventDefault(); onDropBlock(); }}
     >
-      <div className="flex items-center gap-2.5 px-3.5 py-2.5">
-        <span
-          draggable
-          onDragStart={(e) => {
-            if (cardRef.current) e.dataTransfer.setDragImage(cardRef.current, 12, 12);
-            e.dataTransfer.effectAllowed = "move";
-            e.dataTransfer.setData("text/plain", "");
-            onDragStartBlock();
-          }}
-          onDragEnd={onDragEndBlock}
-          className="shrink-0 cursor-grab select-none px-0.5 text-fg-subtle hover:text-fg active:cursor-grabbing"
-          title="Drag to reorder"
-        >⠿</span>
+      {/* Left gutter — drag handle, revealed on hover, sitting in the canvas's pl-8. */}
+      <span
+        draggable
+        onDragStart={(e) => {
+          if (cardRef.current) e.dataTransfer.setDragImage(cardRef.current, 12, 12);
+          e.dataTransfer.effectAllowed = "move";
+          e.dataTransfer.setData("text/plain", "");
+          onDragStartBlock();
+        }}
+        onDragEnd={onDragEndBlock}
+        className="absolute -left-6 top-1.5 cursor-grab select-none px-1 text-fg-subtle opacity-0 transition-opacity hover:text-fg group-hover:opacity-100 active:cursor-grabbing"
+        title="Drag to reorder"
+      >⠿</span>
+
+      {/* Header — subtle type label + state + actions, mostly revealed on hover. */}
+      <div className="flex items-center gap-2 opacity-60 transition-opacity group-hover:opacity-100">
         <button type="button" className="w-4 shrink-0 text-fg-subtle hover:text-fg" title={collapsed ? "Expand" : "Collapse"} onClick={() => setCollapsed((c) => !c)}>{collapsed ? "▸" : "▾"}</button>
-        <span className="font-medium text-fg">{name}</span>
-        {block.is_shared ? <span className="text-[11px] text-accent-strong">shared</span> : null}
-        <span className={`text-[11px] ${dirty && saveState !== "saving" ? "text-accent-strong" : "text-fg-subtle"}`}>{saveState === "saving" ? "saving…" : saveState === "saved" ? "saved ✓" : dirty ? "● unsaved" : ""}</span>
+        <span className="text-caption font-medium uppercase tracking-wide text-fg-subtle">{name}</span>
+        {block.is_shared ? <span className="text-caption text-accent-strong">shared</span> : null}
+        <span className={`text-caption ${dirty && saveState !== "saving" ? "text-accent-strong" : "text-fg-subtle"}`}>{saveState === "saving" ? "saving…" : saveState === "saved" ? "saved ✓" : dirty ? "● unsaved" : ""}</span>
         <span className="flex-1" />
         <Button variant="ghost" size="sm" isDisabled={isFirst} onPress={() => onMove(-1)}>↑</Button>
         <Button variant="ghost" size="sm" isDisabled={isLast} onPress={() => onMove(1)}>↓</Button>
         <Button variant="ghost" size="sm" className="text-danger" onPress={onRemove}>✕</Button>
       </div>
+
       {collapsed ? (
-        <div className="cursor-pointer truncate px-3.5 pb-3 text-sm text-fg-subtle" onClick={() => setCollapsed(false)}>
+        <div className="cursor-pointer truncate pb-1 pl-6 text-small text-fg-subtle" onClick={() => setCollapsed(false)}>
           {fields == null ? "…" : blockPreview(fields) || <span className="italic">empty</span>}
         </div>
       ) : (
-        <div className="border-t border-border px-3.5 py-3.5">
+        <div className="pb-1 pl-6">
           {fields == null ? (
-            <p className="text-sm text-fg-subtle">loading…</p>
+            <p className="text-small text-fg-subtle">loading…</p>
           ) : schema.length === 0 ? (
-            <p className="text-sm text-fg-subtle">This block has no editable fields.</p>
+            <p className="text-small text-fg-subtle">This block has no editable fields.</p>
           ) : (
             <>
               <FieldForm schema={schema} value={fields} onChange={change} api={api} />
-              <div className="mt-3.5 flex items-center gap-2 border-t border-border pt-3">
-                <Button size="sm" onPress={() => void save()} isDisabled={!dirty || saveState === "saving" || block.pending}>
-                  {saveState === "saving" ? "Saving…" : "Save"}
-                </Button>
-                {dirty ? (
-                  <span className="text-[11px] text-accent-strong">Unsaved changes</span>
-                ) : saveState === "saved" ? (
-                  <span className="text-[11px] text-fg-subtle">Saved ✓</span>
-                ) : null}
-              </div>
+              {dirty || saveState === "saving" ? (
+                <div className="mt-2 flex items-center gap-2">
+                  <Button size="sm" onPress={() => void save()} isDisabled={!dirty || saveState === "saving" || block.pending}>
+                    {saveState === "saving" ? "Saving…" : "Save block"}
+                  </Button>
+                  <span className="text-caption text-accent-strong">Unsaved changes</span>
+                </div>
+              ) : null}
             </>
           )}
         </div>
@@ -672,21 +677,74 @@ function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, o
   );
 }
 
-// "+ Add block" reveals a compact picker of the region's allowed types (by friendly name),
-// replacing the always-on row of every type as a wall of buttons.
-function AddBlock({ allowed, btBySlug, onAdd }: { allowed: string[]; btBySlug: Map<string, BlockType>; onAdd: (slug: string) => void }) {
+// Notion-style block inserter — the page-canvas analogue of the BlockEditor's `/`
+// palette. A slim "＋ Add block" affordance expands into a searchable list of the
+// region's allowed block types (type to filter; ↑/↓ + Enter to pick, Esc/blur to
+// close). Insertion appends to the region; reorder via drag to position.
+function Inserter({ allowed, btBySlug, onAdd }: { allowed: string[]; btBySlug: Map<string, BlockType>; onAdd: (slug: string) => void }) {
   const [open, setOpen] = useState(false);
-  if (!open) return <Button variant="secondary" size="sm" onPress={() => setOpen(true)}>+ Add block</Button>;
+  const [q, setQ] = useState("");
+  const [idx, setIdx] = useState(0);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const items = useMemo(() => {
+    const list = allowed.map((slug) => ({ slug, name: btBySlug.get(slug)?.name ?? slug }));
+    const s = q.trim().toLowerCase();
+    return s ? list.filter((x) => x.name.toLowerCase().includes(s) || x.slug.toLowerCase().includes(s)) : list;
+  }, [allowed, btBySlug, q]);
+
+  useEffect(() => { if (open) inputRef.current?.focus(); }, [open]);
+  useEffect(() => { setIdx(0); }, [q]);
+
+  const close = () => { setOpen(false); setQ(""); };
+  const pick = (slug?: string) => { if (slug) onAdd(slug); close(); };
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="flex w-full items-center gap-2 rounded-lg px-1 py-1.5 text-left text-small text-fg-subtle opacity-70 transition-colors hover:bg-surface-muted hover:text-fg-muted hover:opacity-100"
+      >
+        <span className="text-base leading-none">＋</span>
+        <span>Add block</span>
+      </button>
+    );
+  }
   return (
-    <div className="rounded-panel border border-border bg-surface-card p-2.5">
-      <div className="mb-1.5 px-1 text-[11px] text-fg-subtle">Add a block</div>
-      <div className="flex flex-wrap gap-1.5">
-        {allowed.map((slug) => (
-          <Button key={slug} variant="ghost" size="sm" onPress={() => { onAdd(slug); setOpen(false); }}>{btBySlug.get(slug)?.name ?? slug}</Button>
-        ))}
-      </div>
-      <div className="mt-1.5 text-right">
-        <Button variant="ghost" size="sm" className="text-fg-subtle" onPress={() => setOpen(false)}>cancel</Button>
+    <div className="rounded-lg border border-border bg-surface-card p-1 shadow-md">
+      <input
+        ref={inputRef}
+        value={q}
+        placeholder="Filter blocks…"
+        spellCheck={false}
+        className="mb-1 w-full rounded-md bg-surface px-2.5 py-1.5 text-small text-fg outline-none placeholder:text-fg-subtle"
+        onChange={(e) => setQ(e.target.value)}
+        onBlur={() => setTimeout(close, 120)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") close();
+          else if (e.key === "ArrowDown") { e.preventDefault(); setIdx((n) => (n + 1) % Math.max(items.length, 1)); }
+          else if (e.key === "ArrowUp") { e.preventDefault(); setIdx((n) => (n - 1 + Math.max(items.length, 1)) % Math.max(items.length, 1)); }
+          else if (e.key === "Enter") { e.preventDefault(); pick(items[idx]?.slug); }
+        }}
+      />
+      <div className="max-h-64 overflow-auto">
+        {items.length === 0 ? (
+          <div className="px-2.5 py-2 text-small text-fg-subtle">No matching block types</div>
+        ) : (
+          items.map((x, n) => (
+            <button
+              key={x.slug}
+              type="button"
+              onMouseEnter={() => setIdx(n)}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => pick(x.slug)}
+              className={`flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-small ${n === idx ? "bg-surface-muted text-fg" : "text-fg-muted hover:bg-surface-muted"}`}
+            >
+              {x.name}
+            </button>
+          ))
+        )}
       </div>
     </div>
   );
