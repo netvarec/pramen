@@ -2,7 +2,7 @@
 // route modules under `routes/` are thin adapters: they pull `api`/`me`/`setError` from
 // the app context and wire URL params + navigation into these components.
 
-import { Button, Input, Textarea } from "@podoba/react";
+import { Button, Heading, Input, ModalDialog, ModalOverlay, ModalSurface, Textarea } from "@podoba/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Api, ApiError } from "./api";
 import { FieldForm } from "./fields";
@@ -33,7 +33,7 @@ function Hero({ lead, em, children }: { lead: string; em: string; children?: Rea
 function Cta({ text, em, children }: { text: string; em: string; children: ReactNode }) {
   return (
     <div className="flex min-w-[360px] items-center gap-4 rounded-full bg-brand-green py-3 pl-7 pr-3 max-[820px]:min-w-0">
-      <span className="text-lg text-[#0f3a25]">
+      <span className="text-callout text-fg-on-brand">
         {text} <span className="font-semibold">{em}</span>
       </span>
       {children}
@@ -46,32 +46,38 @@ function Section({ children }: { children: ReactNode }) {
 }
 
 function Pill({ status, children }: { status?: string; children: ReactNode }) {
+  // Token-only colors (no hardcoded hex) so status pills flip correctly under the
+  // podoba dark theme. `fg-on-brand` is the AA-safe ink on the fixed brand surfaces.
   const tone =
     status === "published" || status === "active"
-      ? "bg-brand-green text-[#0f3a25] border-transparent"
+      ? "bg-brand-green text-fg-on-brand border-transparent"
       : status === "in_review" || status === "review"
-        ? "bg-accent-yellow text-[#4a3512] border-transparent"
+        ? "bg-accent-yellow text-fg-on-brand border-transparent"
         : status === "rejected" || status === "archived" || status === "inactive"
           ? "border-danger text-danger bg-surface-card"
           : "border-border text-fg-muted bg-surface-card";
-  return <span className={`inline-block whitespace-nowrap rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${tone}`}>{children}</span>;
+  return <span className={`inline-block whitespace-nowrap rounded-full border px-2.5 py-0.5 text-caption font-medium ${tone}`}>{children}</span>;
 }
 
+// Modal chrome on podoba's shared overlay: focus trap, Esc-to-close, backdrop
+// dismiss, the token blur-scrim and enter/exit animation — all for free. The caller
+// API (conditionally mounted + `onClose`) is preserved, so call sites don't change.
 function Modal({ onClose, wide, children }: { onClose: () => void; wide?: boolean; children: ReactNode }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(20,15,5,0.28)] p-6" onClick={onClose}>
-      <div
-        className={`max-h-[86vh] w-full overflow-auto rounded-panel border border-border bg-surface-card px-9 py-8 shadow-[0_24px_60px_rgba(30,20,10,0.12)] ${wide ? "max-w-[680px]" : "max-w-[520px]"}`}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {children}
-      </div>
-    </div>
+    <ModalOverlay isOpen isDismissable onOpenChange={(open) => !open && onClose()}>
+      <ModalSurface className={`w-full px-9 py-8 ${wide ? "max-w-[680px]" : "max-w-[520px]"}`}>
+        <ModalDialog className="max-h-[86vh] overflow-auto outline-none">{children}</ModalDialog>
+      </ModalSurface>
+    </ModalOverlay>
   );
 }
 
 function ModalTitle({ children }: { children: ReactNode }) {
-  return <h2 className="mb-5 text-[28px] font-normal leading-[1.15] text-fg">{children}</h2>;
+  return (
+    <Heading level="1" className="mb-5 font-normal">
+      {children}
+    </Heading>
+  );
 }
 
 function KV({ children, className }: { children: ReactNode; className?: string }) {
@@ -79,12 +85,14 @@ function KV({ children, className }: { children: ReactNode; className?: string }
 }
 
 function Card({ children }: { children: ReactNode }) {
-  return <div className="overflow-auto rounded-panel border border-border bg-surface-card p-6">{children}</div>;
+  // rounded-lg is the unified podoba card radius (the 1.1rem soft-panel radius was retired).
+  return <div className="overflow-auto rounded-lg border border-border bg-surface-card p-6">{children}</div>;
 }
 
 function Banner({ ok, children }: { ok?: boolean; children: ReactNode }) {
+  // Token-only colors so the banner reads correctly in dark mode too.
   return (
-    <div className={`my-2 rounded-lg border px-3.5 py-2.5 text-[13px] ${ok ? "border-brand-green bg-brand-green/20 text-[#0f3a25]" : "border-danger bg-surface-card text-danger"}`}>{children}</div>
+    <div className={`my-2 rounded-lg border px-3.5 py-2.5 text-small ${ok ? "border-brand-green bg-brand-green/20 text-fg" : "border-danger bg-surface-card text-danger"}`}>{children}</div>
   );
 }
 

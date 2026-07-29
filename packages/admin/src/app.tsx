@@ -1,17 +1,18 @@
-// The pramen admin dashboard. A single focused inspector: config bar -> tenant
-// vessel -> schema strata (tables) -> row browser, with view/edit/create/delete
-// over the /admin/data primitives. Editing is a robust JSON textarea (no schema
-// guessing). All API failures render verbatim (error + code) in a banner.
+// The pramen admin dashboard. A single focused inspector: connection + tenant ->
+// schema strata (tables) -> row browser, with view/edit/create/delete over the
+// /admin/data primitives. Editing is a robust JSON textarea (no schema guessing).
+// All API failures render verbatim (error + code) in a banner.
+//
+// Design system = podoba (@podoba/react + tokens). The chrome is podoba's AppShell
+// (topbar + sidebar + main); data uses its Table/Dialog/Select/Card/Badge. Dark mode
+// is free — the token vars flip under `[data-theme="dark"]`.
 
-import { Button, Input } from "@podoba/react";
+import { AppShell, Badge, Button, Card, Dialog, Heading, Input, MoonIcon, Select, SelectItem, SunIcon, Table, Text, Topbar, type TableColumn } from "@podoba/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, type Config, type Row, type SchemaResult } from "./api";
 
-const LS = { base: "pramen.admin.baseUrl", token: "pramen.admin.token", tenant: "pramen.admin.tenant" };
+const LS = { base: "pramen.admin.baseUrl", token: "pramen.admin.token", tenant: "pramen.admin.tenant", theme: "pramen.admin.theme" };
 const PAGE = 25;
-
-// Tokenized bare control (podoba filled-field skin) for the native inputs/selects.
-const CONTROL = "h-10 w-full rounded-lg border border-border bg-surface-card px-4 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus:border-brand-green";
 
 const useLocal = (key: string, initial: string): [string, (v: string) => void] => {
   const [v, setV] = useState(() => localStorage.getItem(key) ?? initial);
@@ -31,7 +32,7 @@ function renderCell(v: unknown) {
   if (typeof v === "object") {
     const s = JSON.stringify(v);
     return (
-      <span className="block max-w-[280px] truncate font-mono text-xs text-fg-muted" title={s}>
+      <span className="block max-w-[280px] truncate font-mono text-caption text-fg-muted" title={s}>
         {s}
       </span>
     );
@@ -50,6 +51,12 @@ export function App() {
   const [baseUrl, setBaseUrl] = useLocal(LS.base, "http://localhost:8787");
   const [token, setToken] = useLocal(LS.token, "");
   const [tenant, setTenant] = useLocal(LS.tenant, "main");
+  const [theme, setTheme] = useLocal(LS.theme, "light");
+
+  // podoba tokens flip on `[data-theme="dark"]` — no `dark:` prefixes needed.
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme === "dark" ? "dark" : "light";
+  }, [theme]);
 
   const cfg: Config = useMemo(() => ({ baseUrl, token }), [baseUrl, token]);
 
@@ -209,174 +216,247 @@ export function App() {
   const tableNames = schema ? Object.keys(schema.tables) : [];
   const page = Math.floor(offset / PAGE) + 1;
   const totalPages = count != null ? Math.max(1, Math.ceil(count / PAGE)) : null;
+  // Manual tenants (not in the discovered list) still show in the Select as an option.
+  const tenantOptions = tenants.includes(tenant) || !tenant ? tenants : [tenant, ...tenants];
+
+  // Row table = one column per schema field + a trailing actions column. Rebuilt each
+  // render so the edit/del closures capture current cfg/tenant/table (cheap; few cols).
+  const tableColumns: TableColumn<Row>[] = [
+    ...columns.map((c) => ({ key: c, header: c, render: (row: Row) => renderCell(row[c]) })),
+    {
+      key: "__actions",
+      header: "actions",
+      align: "right" as const,
+      render: (row: Row) => (
+        <div className="flex justify-end gap-1">
+          <Button variant="ghost" size="sm" onPress={() => void openEdit(row)}>
+            edit
+          </Button>
+          <Button variant="destructive" size="sm" isDisabled={busy} onPress={() => void del(row)}>
+            del
+          </Button>
+        </div>
+      ),
+    },
+  ];
+
+  const sidebar = (
+    <div className="flex flex-col gap-6 p-5">
+      <div className="flex flex-col gap-3">
+        <Input label="base url" size="sm" value={baseUrl} onChange={setBaseUrl} placeholder="http://localhost:8787" />
+        <Input label="admin token" size="sm" type="password" value={token} onChange={setToken} placeholder="paste an admin JWT" />
+        <Text size="caption" tone="subtle">
+          Every endpoint checks roles for &quot;admin&quot;.
+        </Text>
+      </div>
+
+      {tenantOptions.length > 0 ? (
+        <div className="flex items-end gap-1.5">
+          <div className="min-w-0 flex-1">
+            <Select
+              label="Tenant"
+              placeholder="select a tenant"
+              selectedKey={tenant || null}
+              onSelectionChange={(k) => setTenant(String(k))}
+            >
+              {tenantOptions.map((t) => (
+                <SelectItem key={t} id={t}>
+                  {t === tenant && !tenants.includes(t) ? `${t} (manual)` : t}
+                </SelectItem>
+              ))}
+            </Select>
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="shrink-0"
+            onPress={() => {
+              const next = prompt("Tenant name", tenant);
+              if (next != null && next.trim()) setTenant(next.trim());
+            }}
+          >
+            edit
+          </Button>
+        </div>
+      ) : (
+        <Input label="Tenant" size="sm" value={tenant} onChange={setTenant} placeholder="main" />
+      )}
+
+      <div className="flex flex-col gap-2">
+        <Text size="caption" tone="muted" className="font-medium uppercase tracking-wide">
+          Schema
+        </Text>
+        {schema ? (
+          <div className="flex items-center gap-2 rounded-full border border-border px-3 py-1 font-mono text-caption" title="applied schema hash">
+            <span className={`h-2 w-2 rounded-full ${schema.hash ? "bg-brand-green" : "bg-fg-subtle"}`} />
+            <span className={schema.hash ? "text-fg-muted" : "text-fg-subtle"}>{schema.hash ? schema.hash.slice(0, 12) : "no schema hash"}</span>
+          </div>
+        ) : (
+          <Text size="small" tone="subtle">
+            {token ? "—" : "enter a token"}
+          </Text>
+        )}
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <Text size="caption" tone="muted" className="font-medium uppercase tracking-wide">
+          Tables{tableNames.length ? ` · ${tableNames.length}` : ""}
+        </Text>
+        {tableNames.length > 0 ? (
+          <ul className="flex flex-col gap-1">
+            {tableNames.map((t) => (
+              <li key={t}>
+                <button
+                  className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-small transition-colors ${t === table ? "bg-surface-card font-medium text-fg" : "text-fg-muted hover:bg-surface-card"}`}
+                  onClick={() => setTable(t)}
+                >
+                  <span>{t}</span>
+                  <Text size="caption" tone="subtle">
+                    {schema!.tables[t].length}
+                  </Text>
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <Text size="small" tone="subtle">
+            {token ? "no tables" : ""}
+          </Text>
+        )}
+      </div>
+    </div>
+  );
+
+  const topbar = (
+    <Topbar className="px-6">
+      <Topbar.Brand>
+        <span className="text-callout font-bold text-fg">pramen</span>
+        <span className="text-fg-subtle">admin</span>
+      </Topbar.Brand>
+      <Topbar.Actions>
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+          onPress={() => setTheme(theme === "dark" ? "light" : "dark")}
+        >
+          {theme === "dark" ? <SunIcon className="h-4 w-4" /> : <MoonIcon className="h-4 w-4" />}
+        </Button>
+      </Topbar.Actions>
+    </Topbar>
+  );
 
   return (
     <>
-      <div className="flex flex-wrap items-end gap-4 border-b border-border bg-surface px-7 py-4">
-        <div className="flex items-baseline gap-1.5">
-          <span className="text-[15px] font-bold text-fg">pramen</span>
-          <span className="text-fg-subtle">admin</span>
-        </div>
-        <div className="min-w-[220px] flex-1">
-          <Input label="base url" value={baseUrl} onChange={setBaseUrl} placeholder="http://localhost:8787" spellCheck="false" />
-        </div>
-        <div className="min-w-[260px] flex-1">
-          <Input label="admin token" type="password" value={token} onChange={setToken} placeholder='paste an admin JWT (roles include "admin")' spellCheck="false" />
-        </div>
-        <div className="w-full text-xs text-fg-subtle">Must be an admin token — every endpoint checks roles for &quot;admin&quot;.</div>
-      </div>
+      <AppShell topbar={topbar} sidebar={sidebar} sidebarLabel="Admin navigation" drawerToggleLabel="Toggle navigation">
+        {err && (
+          <Card variant="outlined" padding="none" className="mb-4 flex items-center justify-between gap-3 border-danger px-4 py-2.5">
+            <Text size="small" className="text-danger">
+              {err.message} <code className="font-mono">{err.code}</code>
+            </Text>
+            <Button variant="ghost" size="sm" onPress={() => setErr(null)}>
+              dismiss
+            </Button>
+          </Card>
+        )}
 
-      <div className="grid grid-cols-[260px_1fr] gap-5 px-7 py-5 max-[820px]:grid-cols-1">
-        <aside className="flex flex-col gap-2">
-          <p className="text-sm text-fg-subtle">Tenant</p>
-          <div className="flex items-center gap-1.5">
-            {tenants.length > 0 ? (
-              <select className={CONTROL} value={tenants.includes(tenant) ? tenant : ""} onChange={(e) => setTenant(e.target.value)}>
-                {!tenants.includes(tenant) && <option value="">{tenant} (manual)</option>}
-                {tenants.map((t) => (
-                  <option key={t} value={t}>{t}</option>
-                ))}
-              </select>
-            ) : (
-              <input className={CONTROL} value={tenant} onChange={(e) => setTenant(e.target.value)} placeholder="main" spellCheck={false} />
-            )}
-            <Button variant="ghost" size="sm" className="shrink-0" onPress={() => {
-              const next = prompt("Tenant name", tenant);
-              if (next != null && next.trim()) setTenant(next.trim());
-            }}>edit</Button>
-          </div>
-
-          <p className="mt-3 text-sm text-fg-subtle">Schema</p>
-          {schema ? (
-            <div className={`flex items-center gap-2 rounded-full border border-border px-3 py-1 font-mono text-xs ${schema.hash ? "text-fg-muted" : "text-fg-subtle"}`} title="applied schema hash">
-              <span className={`h-2 w-2 rounded-full ${schema.hash ? "bg-brand-green" : "bg-fg-subtle"}`} />
-              {schema.hash ? schema.hash.slice(0, 12) : "no schema hash"}
-            </div>
-          ) : (
-            <div className="mb-3.5 text-fg-subtle">{token ? "—" : "enter a token"}</div>
-          )}
-
-          <p className="mt-3 text-sm text-fg-subtle">Tables{tableNames.length ? ` · ${tableNames.length}` : ""}</p>
-          {tableNames.length > 0 ? (
-            <ul className="flex flex-col gap-1">
-              {tableNames.map((t) => (
-                <li key={t}>
-                  <button
-                    className={`flex w-full items-center justify-between rounded-lg border px-3 py-2 text-left text-sm transition-colors ${t === table ? "border-fg bg-surface-card text-fg" : "border-transparent text-fg-muted hover:bg-surface-card"}`}
-                    onClick={() => setTable(t)}
-                  >
-                    <span className="font-medium">{t}</span>
-                    <span className="text-xs text-fg-subtle">{schema!.tables[t].length} cols</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <div className="text-fg-subtle">{token ? "no tables" : ""}</div>
-          )}
-        </aside>
-
-        <main className="min-w-0">
-          {err && (
-            <div className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-danger bg-surface-card px-4 py-2.5 text-sm text-danger">
-              <div>
-                {err.message} <code className="font-mono">{err.code}</code>
-              </div>
-              <Button variant="ghost" size="sm" onPress={() => setErr(null)}>dismiss</Button>
-            </div>
-          )}
-
-          {!table ? (
-            <div className="rounded-panel border border-border bg-surface-card px-8 py-12 text-center">
-              <div className="mb-2 text-xl text-fg">{token ? "select a table" : "paste an admin token to begin"}</div>
-              <div className="text-fg-muted">The dashboard talks to the pramen Worker over HTTP. Tenant defaults to <code className="font-mono text-accent-strong">main</code>.</div>
-            </div>
-          ) : (
-            <>
-              <div className="mb-3 flex items-center gap-3">
-                <h2 className="m-0 text-2xl font-normal text-fg">{table}</h2>
-                <span className="rounded-full border border-border px-2.5 py-0.5 text-[11px] text-fg-muted">{count == null ? "…" : `${count} row${count === 1 ? "" : "s"}`}</span>
-                <span className="flex-1" />
-                <Button variant="ghost" size="sm" onPress={() => void loadRows()} isDisabled={loading}>refresh</Button>
-                <Button size="sm" onPress={openCreate}>+ new row</Button>
-              </div>
-
-              <div className="mb-3 flex items-center gap-2">
-                <Button variant="secondary" size="sm" isDisabled={offset === 0 || loading} onPress={() => setOffset(Math.max(0, offset - PAGE))}>‹ prev</Button>
-                <span className="text-sm text-fg-muted">
-                  page {page}
-                  {totalPages != null ? ` / ${totalPages}` : ""}
-                </span>
-                <Button variant="secondary" size="sm" isDisabled={loading || (count != null && offset + PAGE >= count)} onPress={() => setOffset(offset + PAGE)}>next ›</Button>
-              </div>
-
-              {loading && !rows ? (
-                <div className="py-12 text-center text-fg-subtle">loading…</div>
-              ) : rows && rows.length === 0 ? (
-                <div className="py-12 text-center text-fg-subtle">no rows on this page</div>
-              ) : rows ? (
-                <div className="overflow-x-auto rounded-panel border border-border">
-                  <table className="w-full border-collapse text-sm">
-                    <thead>
-                      <tr>
-                        {columns.map((c) => (
-                          <th key={c} className="whitespace-nowrap border-b border-border bg-surface-card px-3 py-2 text-left font-medium text-fg-muted">{c}</th>
-                        ))}
-                        <th className="border-b border-border bg-surface-card px-3 py-2 text-right font-medium text-fg-muted">actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {rows.map((row, i) => (
-                        <tr key={(row.id as string) ?? i} className="hover:bg-surface-card">
-                          {columns.map((c) => (
-                            <td key={c} className="border-b border-border px-3 py-2 align-top">{renderCell(row[c])}</td>
-                          ))}
-                          <td className="border-b border-border px-3 py-2 align-top">
-                            <div className="flex justify-end gap-1">
-                              <Button variant="ghost" size="sm" onPress={() => void openEdit(row)}>edit</Button>
-                              <Button variant="ghost" size="sm" className="text-danger" onPress={() => void del(row)} isDisabled={busy}>del</Button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : null}
-            </>
-          )}
-        </main>
-      </div>
-
-      {editor && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(20,15,5,0.28)] p-6" onClick={(e) => e.target === e.currentTarget && setEditor(null)}>
-          <div className="flex max-h-[86vh] w-full max-w-[680px] flex-col overflow-hidden rounded-panel border border-border bg-surface-card shadow-[0_24px_60px_rgba(30,20,10,0.12)]">
-            <div className="flex items-center gap-2 border-b border-border px-6 py-4">
-              <h3 className="m-0 text-lg font-normal text-fg">{editor.mode === "create" ? `new ${table} row` : `edit ${table} · id=${JSON.stringify(editor.original?.id)}`}</h3>
+        {!table ? (
+          <Card variant="outlined" padding="lg" className="text-center">
+            <Heading level="3" className="mb-2">
+              {token ? "select a table" : "paste an admin token to begin"}
+            </Heading>
+            <Text tone="muted">
+              The dashboard talks to the pramen Worker over HTTP. Tenant defaults to <code className="font-mono text-accent-strong">main</code>.
+            </Text>
+          </Card>
+        ) : (
+          <>
+            <div className="mb-4 flex items-center gap-3">
+              <Heading level="2">{table}</Heading>
+              <Badge color="grey" label={count == null ? "…" : `${count} row${count === 1 ? "" : "s"}`} />
               <span className="flex-1" />
-              <Button variant="ghost" size="sm" onPress={() => setEditor(null)}>✕</Button>
-            </div>
-            <div className="flex flex-col gap-2 overflow-auto px-6 py-4">
-              <label className="text-sm font-medium text-fg">row json {editor.mode === "edit" ? "(only changed fields are sent as the patch)" : "(sent as values)"}</label>
-              <textarea
-                className="min-h-[280px] w-full resize-y rounded-lg border border-border bg-surface-card px-4 py-3 font-mono text-[13px] text-fg outline-none focus:border-brand-green"
-                value={editor.text}
-                spellCheck={false}
-                onChange={(e) => setEditor({ ...editor, text: e.target.value })}
-              />
-              {editErr && <div className="mt-2 rounded-lg border border-danger bg-surface-card px-3.5 py-2.5 text-[13px] text-danger">{editErr}</div>}
-            </div>
-            <div className="flex items-center gap-2 border-t border-border px-6 py-4">
-              <span className="text-fg-subtle">{editor.mode === "edit" ? "id is never modified" : "id is assigned by the server unless provided"}</span>
-              <span className="flex-1" />
-              <Button variant="ghost" onPress={() => setEditor(null)}>cancel</Button>
-              <Button onPress={() => void saveEditor()} isDisabled={busy}>
-                {busy ? "saving…" : editor.mode === "create" ? "create" : "save changes"}
+              <Button variant="ghost" size="sm" isDisabled={loading} onPress={() => void loadRows()}>
+                refresh
+              </Button>
+              <Button size="sm" onPress={openCreate}>
+                + new row
               </Button>
             </div>
-          </div>
-        </div>
-      )}
+
+            <div className="mb-3 flex items-center gap-2">
+              <Button variant="secondary" size="sm" isDisabled={offset === 0 || loading} onPress={() => setOffset(Math.max(0, offset - PAGE))}>
+                ‹ prev
+              </Button>
+              <Text size="small" tone="muted">
+                page {page}
+                {totalPages != null ? ` / ${totalPages}` : ""}
+              </Text>
+              <Button variant="secondary" size="sm" isDisabled={loading || (count != null && offset + PAGE >= count)} onPress={() => setOffset(offset + PAGE)}>
+                next ›
+              </Button>
+            </div>
+
+            {loading && !rows ? (
+              <Text tone="subtle" className="block py-12 text-center">
+                loading…
+              </Text>
+            ) : rows ? (
+              <Card variant="outlined" padding="none" className="overflow-hidden">
+                <Table columns={tableColumns} data={rows} getRowKey={(r, i) => String((r.id as string) ?? i)} emptyMessage="no rows on this page" aria-label={`${table} rows`} />
+              </Card>
+            ) : null}
+          </>
+        )}
+      </AppShell>
+
+      <Dialog
+        isOpen={editor != null}
+        onOpenChange={(open) => {
+          if (!open) setEditor(null);
+        }}
+        size="lg"
+        title={editor ? (editor.mode === "create" ? `new ${table} row` : `edit ${table} · id=${JSON.stringify(editor.original?.id)}`) : undefined}
+        description={editor?.mode === "edit" ? "Only changed fields are sent as the patch." : editor ? "Sent as the row's values." : undefined}
+      >
+        {() =>
+          editor && (
+            <div className="flex flex-col gap-4">
+              <label className="flex flex-col gap-2">
+                <Text size="small" weight="medium">
+                  row json
+                </Text>
+                {/* A code field: token-styled native textarea so JSON stays monospaced
+                    (podoba's Textarea is a sans-serif form control). */}
+                <textarea
+                  className="min-h-[300px] w-full resize-y rounded-lg border border-border bg-surface px-4 py-3 font-mono text-caption text-fg outline-none transition-colors focus:border-brand-green focus:ring-2 focus:ring-ring"
+                  value={editor.text}
+                  spellCheck={false}
+                  onChange={(e) => setEditor({ ...editor, text: e.target.value })}
+                />
+              </label>
+              {editErr && (
+                <Card variant="outlined" padding="none" className="border-danger px-3.5 py-2.5">
+                  <Text size="small" className="text-danger">
+                    {editErr}
+                  </Text>
+                </Card>
+              )}
+              <div className="flex items-center gap-2">
+                <Text size="small" tone="subtle">
+                  {editor.mode === "edit" ? "id is never modified" : "id is assigned by the server unless provided"}
+                </Text>
+                <span className="flex-1" />
+                <Button variant="ghost" onPress={() => setEditor(null)}>
+                  cancel
+                </Button>
+                <Button isDisabled={busy} onPress={() => void saveEditor()}>
+                  {busy ? "saving…" : editor.mode === "create" ? "create" : "save changes"}
+                </Button>
+              </div>
+            </div>
+          )
+        }
+      </Dialog>
     </>
   );
 }

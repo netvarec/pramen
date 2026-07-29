@@ -1,7 +1,7 @@
 // Schema-driven field forms: one input per FieldDefinition type, recursively composed for
 // group/repeater. Media fields open a picker (upload + choose from the library).
 
-import { Button, Input, Textarea } from "@podoba/react";
+import { Button, Heading, Input, ModalDialog, ModalOverlay, ModalSurface, Text, Textarea } from "@podoba/react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Api } from "./api";
 import type { FieldDefinition, Media } from "./types";
@@ -310,26 +310,36 @@ export function MediaPicker({ api, onClose, onPick }: { api: Api; onClose: () =>
     }
   };
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(20,15,5,0.28)] p-6" onClick={onClose}>
-      <div className="max-h-[86vh] w-full max-w-[680px] overflow-auto rounded-panel border border-border bg-surface-card px-9 py-8 shadow-[0_24px_60px_rgba(30,20,10,0.12)]" onClick={(e) => e.stopPropagation()}>
-        <h2 className="mb-5 text-[28px] font-normal text-fg">Choose <span className="text-fg-subtle">a file</span> from the library</h2>
-        {err ? <div className="my-2 rounded-lg border border-danger bg-surface-card px-3.5 py-2.5 text-[13px] text-danger">{err}</div> : null}
-        <label className="mb-4 flex w-full flex-col gap-2">
-          <span className="text-sm font-medium text-fg">Upload a new file</span>
-          <input type="file" className="text-sm text-fg-muted" disabled={busy} onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
-        </label>
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-2.5">
-          {media.map((m) => (
-            <div key={m.id} className="cursor-pointer overflow-hidden rounded-lg border border-border bg-surface-card" onClick={() => onPick(m.id)}>
-              {(m.file.contentType ?? "").startsWith("image/") ? <img className="block h-[130px] w-full object-cover" src={api.resolve(`/media/${m.file.key}`)} alt="" /> : <div className="h-[130px] bg-surface-muted" />}
-              <div className="truncate px-2 py-1.5 text-[11px] text-fg-muted">{m.file.filename ?? m.id}</div>
-            </div>
-          ))}
-        </div>
-        <div className="mt-3 text-right">
-          <Button variant="ghost" onPress={onClose}>close</Button>
-        </div>
-      </div>
-    </div>
+    <ModalOverlay isOpen isDismissable onOpenChange={(open) => !open && onClose()}>
+      <ModalSurface className="w-full max-w-[680px] px-9 py-8">
+        <ModalDialog className="max-h-[86vh] overflow-auto outline-none">
+          <Heading level="1" className="mb-5 font-normal">
+            Choose <span className="text-fg-subtle">a file</span> from the library
+          </Heading>
+          {err ? (
+            <div className="my-2 rounded-lg border border-danger bg-surface-card px-3.5 py-2.5 text-small text-danger">{err}</div>
+          ) : null}
+          <label className="mb-4 flex w-full flex-col gap-2">
+            <Text size="small" weight="medium">
+              Upload a new file
+            </Text>
+            <input type="file" className="text-small text-fg-muted" disabled={busy} onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
+          </label>
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-2.5">
+            {media.map((m) => (
+              <div key={m.id} className="cursor-pointer overflow-hidden rounded-lg border border-border bg-surface-card" onClick={() => onPick(m.id)}>
+                {(m.file.contentType ?? "").startsWith("image/") ? <img className="block h-[130px] w-full object-cover" src={api.resolve(`/media/${m.file.key}`)} alt="" /> : <div className="h-[130px] bg-surface-muted" />}
+                <div className="truncate px-2 py-1.5 text-caption text-fg-muted">{m.file.filename ?? m.id}</div>
+              </div>
+            ))}
+          </div>
+          <div className="mt-3 text-right">
+            <Button variant="ghost" onPress={onClose}>
+              close
+            </Button>
+          </div>
+        </ModalDialog>
+      </ModalSurface>
+    </ModalOverlay>
   );
 }

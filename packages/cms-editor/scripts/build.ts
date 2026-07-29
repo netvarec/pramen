@@ -3,7 +3,7 @@
 // change and serves a preview on http://localhost:5175.
 
 import { buzolaPlugin } from "@buzola/bun-plugin";
-import { rm, mkdir, writeFile, copyFile } from "node:fs/promises";
+import { rm, mkdir, writeFile, copyFile, cp } from "node:fs/promises";
 import { extname } from "node:path";
 
 const root = new URL("..", import.meta.url).pathname;
@@ -17,7 +17,7 @@ const html = (jsName: string) => `<!doctype html>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>pramen · cms editor</title>
-    <link rel="stylesheet" href="/tokens.css" />
+    <link rel="stylesheet" href="/fonts.css" />
     <link rel="stylesheet" href="/app.css" />
     <!-- Runtime config, loaded before the app so window.PRAMEN_CMS_EDITOR is set at boot.
          A default config.js ships in dist; a host overrides it to set e.g. signInUrl. -->
@@ -39,14 +39,17 @@ const DEFAULT_CONFIG_JS = `// Runtime configuration for the pramen CMS editor. O
 window.PRAMEN_CMS_EDITOR = window.PRAMEN_CMS_EDITOR || {};
 `;
 
-// Design system = podoba. Compile Tailwind (podoba preset) → dist/app.css and
-// copy the podoba token CSS vars → dist/tokens.css; index.html <link>s both.
+// Design system = podoba (Tailwind v4). app.css @imports tailwindcss + the podoba
+// token vars + @theme, so dist/app.css is self-contained (no separate tokens.css).
+// The NC Fontina web font ships as CSS + a woff2 in @podoba/tokens; copy both to dist/
+// and <link> fonts.css directly so its `url('./fonts/…')` stays relative to dist/.
 async function styles(): Promise<void> {
-  await copyFile(`${root}node_modules/@podoba/tokens/src/variables.css`, `${dist}/tokens.css`);
-  const args = ["tailwindcss", "-c", `${root}tailwind.config.ts`, "-i", `${root}src/app.css`, "-o", `${dist}/app.css`];
+  const args = ["@tailwindcss/cli", "-i", `${root}src/app.css`, "-o", `${dist}/app.css`];
   if (!watch) args.push("--minify");
   const proc = Bun.spawn(["bunx", ...args], { cwd: root, stdout: "inherit", stderr: "inherit" });
   if ((await proc.exited) !== 0) throw new Error("tailwind build failed");
+  await cp(`${root}node_modules/@podoba/tokens/src/fonts`, `${dist}/fonts`, { recursive: true });
+  await copyFile(`${root}node_modules/@podoba/tokens/src/fonts.css`, `${dist}/fonts.css`);
 }
 
 async function build(): Promise<void> {
