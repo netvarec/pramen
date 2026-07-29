@@ -584,7 +584,9 @@ function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, o
 
   const dirty = fields != null && JSON.stringify(fields) !== saved.current;
 
-  // Explicit save — the ONLY thing that writes. No autosave, no save-on-blur, no save-on-unmount.
+  // Writes the block. Fired by the debounced autosave below AND by the manual "Save
+  // now" button (which also serves as the retry path if an autosave fails). Idempotent:
+  // no-ops when nothing changed since the last persist.
   const save = useCallback(async () => {
     if (block.pending || fields == null) return;
     const snapshot = JSON.stringify(fields);
@@ -601,6 +603,20 @@ function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, o
       setSaveState("idle");
     }
   }, [api, blockId, placementId, fields, onPatch, onError, block.pending]);
+
+  // Debounced autosave — persist ~800ms after the last edit (Notion-style). Keyed on
+  // `fields`, so it fires only on an actual edit: a failed save leaves `fields`
+  // unchanged and does NOT auto-retry (no hot loop) — the next edit, or the manual
+  // Save button, retries. The editor's unsaved guard still covers the debounce window
+  // if you navigate away mid-edit.
+  const saveRef = useRef(save);
+  saveRef.current = save;
+  useEffect(() => {
+    if (fields == null || block.pending) return;
+    if (JSON.stringify(fields) === saved.current) return; // not dirty
+    const t = setTimeout(() => void saveRef.current(), 800);
+    return () => clearTimeout(t);
+  }, [fields, block.pending]);
 
   const change = (next: Record<string, unknown>) => setFields(next);
 
@@ -663,10 +679,10 @@ function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, o
               <FieldForm schema={schema} value={fields} onChange={change} api={api} />
               {dirty || saveState === "saving" ? (
                 <div className="mt-2 flex items-center gap-2">
-                  <Button size="sm" onPress={() => void save()} isDisabled={!dirty || saveState === "saving" || block.pending}>
-                    {saveState === "saving" ? "Saving…" : "Save block"}
+                  <Button variant="secondary" size="sm" onPress={() => void save()} isDisabled={!dirty || saveState === "saving" || block.pending}>
+                    {saveState === "saving" ? "Saving…" : "Save now"}
                   </Button>
-                  <span className="text-caption text-accent-strong">Unsaved changes</span>
+                  <span className="text-caption text-fg-subtle">{saveState === "saving" ? "" : "Autosaving…"}</span>
                 </div>
               ) : null}
             </>
