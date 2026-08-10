@@ -1,6 +1,6 @@
 {
   "name": "@pramen/client",
-  "version": "0.0.43",
+  "version": "0.0.44",
   "description": "Typed client for a pramen backend — RPC over HTTP + live queries over WebSocket.",
   "license": "MIT",
   "repository": {
