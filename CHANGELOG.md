@@ -30,6 +30,24 @@ there are no backward-compatibility guarantees yet.
 
 ### Fixed
 
+- **`@pramen/auth` was unusable on Cloudflare.** Password hashing used 600k PBKDF2
+  iterations (OWASP guidance), but workerd caps PBKDF2 at **100k** and throws rather than
+  clamping — `NotSupportedError: Pbkdf2 failed: iteration counts above 100000 are not
+  supported`. Every `signup` and `login` returned a 500 on any real deployment. New hashes
+  are now written at the platform maximum, which is also the strongest KDF Workers offers
+  (WebCrypto there has no scrypt or argon2). Lowering the count is safe because the
+  iteration count is encoded in the stored string and read back on verify.
+
+  This escaped the entire test suite because Bun — which runs the tests, and which
+  `lopata` runs workers on — has no such cap, so the bug was reachable only by deploying.
+  The new regression test therefore asserts the **number recorded in the stored hash**
+  rather than any behaviour, since behaviour under Bun cannot tell 100k from 600k.
+
+  Verification also gained a diagnosis: the count comes FROM the stored hash, so a row
+  written at 600k by an earlier release (or by a Bun/Node deployment sharing a database
+  with a Worker) can never be verified on Workers. That now raises an error naming the
+  count, the cap and the remedies, instead of a bare `NotSupportedError` — or, if a caller
+  swallowed it, a silent "wrong password" that locks the account out with nothing logged.
 - **A live WebSocket could outlive its token.** The token was verified once at upgrade and
   the identity fixed for the life of the socket, so a long-lived or hibernating connection
   kept calling and receiving pushes indefinitely past `exp` — role changes and revocation

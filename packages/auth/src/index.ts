@@ -52,22 +52,61 @@ const b64urlStr = (s: string) => b64url(enc(s));
 
 // --- password hashing (PBKDF2-SHA256) ---
 
-// OWASP 2026 guidance for PBKDF2-HMAC-SHA256 is ~600k iterations. The iteration
-// count (and hash alg) are ENCODED in the stored string — `pbkdf2$sha256$<iters>$
-// <saltB64>$<hashB64>` — and verifyPassword parses them from the stored hash, so a
-// future bump here keeps verifying older hashes; only NEW hashes use the new count.
-const PBKDF2_ITERATIONS = 600_000;
+/** workerd's hard ceiling on PBKDF2 iterations.
+ *
+ * It does not clamp — it throws:
+ *
+ *   NotSupportedError: Pbkdf2 failed: iteration counts above 100000 are not
+ *   supported (requested 600000).
+ *
+ * Bun, Node and browsers have no such cap, so anything above this passes every local
+ * test — including under lopata, which is a Bun runtime — and then fails on the first
+ * real deployment. This value is the platform limit, not a tuning knob. */
+const PBKDF2_MAX_ITERATIONS = 100_000;
+
+/** Iterations for NEW hashes.
+ *
+ * OWASP 2026 guidance for PBKDF2-HMAC-SHA256 is ~600k, and this was 600k until it
+ * turned out that every signup and login 500s on Workers (see PBKDF2_MAX_ITERATIONS).
+ * pramen deploys to workerd, so the platform ceiling is the real bound: WebCrypto there
+ * offers no scrypt or argon2 either, making 100k the strongest KDF available.
+ *
+ * The count (and hash alg) are ENCODED in the stored string —
+ * `pbkdf2$sha256$<iters>$<saltB64>$<hashB64>` — and verifyPassword parses them back
+ * out, so changing this never breaks verification of an already-stored hash, as long
+ * as the stored count is itself within the cap. */
+const PBKDF2_ITERATIONS = Math.min(600_000, PBKDF2_MAX_ITERATIONS);
 const PBKDF2_HASH = "SHA-256";
+
+/** Derive 256 PBKDF2 bits, turning workerd's iteration-cap rejection into a diagnosis.
+ *
+ * Hashing can no longer request too many, but VERIFY takes its count from the stored
+ * hash — so a row written at 600k by pramen <= 0.0.43, or by a Bun/Node-only
+ * deployment sharing a database with a Worker, cannot be verified on Workers at all.
+ * That would otherwise surface as `NotSupportedError` from deep inside WebCrypto, or —
+ * worse, if a caller swallowed it — as a plain "wrong password" locking the account
+ * out with nothing in the logs to explain why. */
+async function deriveBits(password: string, salt: Uint8Array, iterations: number, hash: string): Promise<Uint8Array> {
+  const key = await crypto.subtle.importKey("raw", enc(password), "PBKDF2", false, ["deriveBits"]);
+  try {
+    return new Uint8Array(await crypto.subtle.deriveBits({ name: "PBKDF2", salt, iterations, hash }, key, 256));
+  } catch (cause) {
+    if (iterations > PBKDF2_MAX_ITERATIONS) {
+      throw new Error(
+        `password hash uses ${iterations} PBKDF2 iterations, above the ${PBKDF2_MAX_ITERATIONS} this runtime allows. `
+          + `It was written by pramen <= 0.0.43 or on a runtime without the cap (Bun/Node), and cannot be verified here. `
+          + `Reset the affected passwords, or re-import the rows under a foreign scheme (see registerPasswordVerifier).`,
+        { cause },
+      );
+    }
+    throw cause;
+  }
+}
 
 export async function hashPassword(password: string): Promise<string> {
   const salt = crypto.getRandomValues(new Uint8Array(16));
-  const key = await crypto.subtle.importKey("raw", enc(password), "PBKDF2", false, ["deriveBits"]);
-  const bits = await crypto.subtle.deriveBits(
-    { name: "PBKDF2", salt, iterations: PBKDF2_ITERATIONS, hash: PBKDF2_HASH },
-    key,
-    256,
-  );
-  return `pbkdf2$sha256$${PBKDF2_ITERATIONS}$${b64(salt)}$${b64(new Uint8Array(bits))}`;
+  const bits = await deriveBits(password, salt, PBKDF2_ITERATIONS, PBKDF2_HASH);
+  return `pbkdf2$sha256$${PBKDF2_ITERATIONS}$${b64(salt)}$${b64(bits)}`;
 }
 
 /** Constant-time string compare (avoids leaking the hash via timing). */
@@ -154,13 +193,8 @@ export async function verifyPassword(password: string, stored: string): Promise<
   }
   const parsed = parseStoredHash(stored);
   if (!parsed) return false;
-  const key = await crypto.subtle.importKey("raw", enc(password), "PBKDF2", false, ["deriveBits"]);
-  const bits = await crypto.subtle.deriveBits(
-    { name: "PBKDF2", salt: unb64(parsed.saltB64), iterations: parsed.iterations, hash: parsed.hash },
-    key,
-    256,
-  );
-  return constantTimeEqual(b64(new Uint8Array(bits)), parsed.hashB64);
+  const bits = await deriveBits(password, unb64(parsed.saltB64), parsed.iterations, parsed.hash);
+  return constantTimeEqual(b64(bits), parsed.hashB64);
 }
 
 // A fixed placeholder hash (current params), computed once and reused, so a login for a
