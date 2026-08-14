@@ -30,6 +30,25 @@ there are no backward-compatibility guarantees yet.
 
 ### Fixed
 
+- **The admin dashboard rendered blank against any real deployment.** `GET /tenants`
+  returns `DoRef[]` (`{tenant, partition}` — one entry per registered Durable Object),
+  but `@pramen/admin` typed the call `string[]` and passed each entry straight to
+  `<SelectItem>`. React throws on an object child, so the whole dashboard failed to
+  render for anyone whose deployment had even one tenant, which is all of them. Present
+  since the tenant picker was added and shipped through 0.0.44.
+
+  The client now normalizes: tenant names are extracted, deduped (a tenant spanning
+  several partitions is one choice in a picker that selects tenants) and sorted, so KV
+  listing order cannot reshuffle the list. A plain `string[]` is still accepted — the
+  admin is a client you point at arbitrary deployments, which need not run the version
+  that built the bundle.
+
+  The server side is unchanged: its shape carries the partition, and flattening it there
+  would have been a lossy breaking change to fix a consumer's parse. The new test pins
+  the contract by annotating the fixture with the server's own exported `DoRef` type, so
+  a change to that shape now fails `bun run typecheck` instead of silently blanking the
+  admin again.
+
 - **`@pramen/auth` was unusable on Cloudflare.** Password hashing used 600k PBKDF2
   iterations (OWASP guidance), but workerd caps PBKDF2 at **100k** and throws rather than
   clamping — `NotSupportedError: Pbkdf2 failed: iteration counts above 100000 are not
