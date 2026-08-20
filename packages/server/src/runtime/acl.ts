@@ -20,6 +20,7 @@ import {
   isDeny,
   isIdentityMarker,
   isInputMarker,
+  isNowMarker,
   isResolver,
 } from "../sdk/acl";
 import { and, compileWhere, evalExpr, FALSE, not, or, TRUE, type SqlExpr } from "./read-engine";
@@ -172,10 +173,12 @@ function getPath(obj: unknown, path: string): unknown {
 
 const UNRESOLVED = Symbol("unresolved");
 
-// Resolve a value that may be an $identity marker (against the caller) or an
-// $input marker (against the request input — a capability/by-key grant). An
-// unresolvable marker yields UNRESOLVED, which makes its rule match nothing.
+// Resolve a value that may be an $identity marker (against the caller), an
+// $input marker (against the request input — a capability/by-key grant), or a
+// $now marker (the evaluation instant). An unresolvable marker yields UNRESOLVED,
+// which makes its rule match nothing. $now always resolves.
 function resolveValue(v: unknown, identity: Identity | null, input: unknown): unknown {
+  if (isNowMarker(v)) return new Date().toISOString();
   if (isIdentityMarker(v)) {
     const value = getPath(identity, v.path);
     return value === undefined ? UNRESOLVED : value;
@@ -187,7 +190,7 @@ function resolveValue(v: unknown, identity: Identity | null, input: unknown): un
   return v;
 }
 
-// Resolve every $identity/$input marker in a SINGLE level of a where-rule (bare
+// Resolve every $identity/$input/$now marker in a SINGLE level of a where-rule (bare
 // values, operator objects, in/notIn arrays). AND/OR groups are split off by
 // `compileScopedWhere` before this runs, so this only ever sees plain columns.
 // Returns a plain WhereInput, or null if any marker is unresolvable — in which
@@ -199,7 +202,7 @@ function resolveValue(v: unknown, identity: Identity | null, input: unknown): un
 function resolveMarkers(rule: Record<string, unknown>, identity: Identity | null, input: unknown): Record<string, unknown> | null {
   const out: Record<string, unknown> = {};
   for (const [key, v] of Object.entries(rule)) {
-    const isMarker = isIdentityMarker(v) || isInputMarker(v);
+    const isMarker = isIdentityMarker(v) || isInputMarker(v) || isNowMarker(v);
     if (v !== null && typeof v === "object" && !isMarker && !Array.isArray(v)) {
       const ops: Record<string, unknown> = {};
       for (const [op, val] of Object.entries(v as Record<string, unknown>)) {
@@ -317,7 +320,7 @@ function relationPredicate(rel: RelationDef, nested: unknown, parentEntity: stri
 
 /** Compile a where-rule (user query or policy) into a SqlExpr. Plain columns go
  * through the marker-resolving compiler; relation keys (`{ rel: { … } }`) become
- * security-scoped subqueries. Supports operators, AND/OR, and $identity/$input
+ * security-scoped subqueries. Supports operators, AND/OR, and $identity/$input/$now
  * markers; an unresolvable marker makes its branch match nothing. Schema-less
  * contexts (no relations) behave exactly like the flat compiler.
  *

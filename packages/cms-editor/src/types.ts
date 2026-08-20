@@ -11,6 +11,8 @@ export type FieldType =
   | "boolean"
   | "date"
   | "datetime"
+  /** A publication timestamp — rendered as publish-now / schedule / unpublish. */
+  | "publish"
   | "media"
   | "select"
   | "repeater"
