@@ -4,7 +4,7 @@
 // Setup screen instead of mounting the router at all.
 
 import { Button, Input } from "@podoba/react";
-import { createContext, use, useEffect, useMemo, useState } from "react";
+import { createContext, use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Api, clearConfig, isTokenExpired, loadConfig, saveConfig, type Config } from "./api";
 import type { CollectionMeta } from "./types";
 
@@ -57,6 +57,14 @@ interface AppContextValue {
   setError: (s: string) => void;
   /** Sign out — drop the token so the config gate falls back to Setup. */
   reconfigure: () => void;
+  /** Ask the current screen whether it is safe to navigate away; `false` cancels.
+   * `beforeunload` only covers a real page unload, so in-app navigation (the topbar, sign
+   * out) would otherwise discard unsaved edits with no prompt. With no guard registered
+   * this is always `true`. */
+  confirmNavigation: () => boolean;
+  /** Register the current screen's guard (`null` on unmount). Screens that can hold
+   * unsaved edits — the page editor — register here; the root layout consults it. */
+  setNavGuard: (fn: (() => boolean) | null) => void;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -76,6 +84,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // no session: otherwise the editor mounts and every RPC 403s into an error banner.
   const authValid = Boolean(cfg.baseUrl && cfg.token) && !isTokenExpired(cfg.token);
   const api = useMemo(() => new Api(cfg, SIGN_IN_URL ? redirectToSignIn : undefined), [cfg]);
+
+  // Unsaved-changes guard for in-app navigation. A ref, not state: the guard is read at
+  // click time and re-registering it must never re-render the whole app. Both accessors are
+  // stable so a screen's register effect runs once per mount.
+  const navGuard = useRef<(() => boolean) | null>(null);
+  const setNavGuard = useCallback((fn: (() => boolean) | null) => { navGuard.current = fn; }, []);
+  const confirmNavigation = useCallback(() => navGuard.current?.() ?? true, []);
 
   // When an external sign-in page is configured, bounce there on boot AND the moment the
   // token expires mid-session (poll + on tab focus), so an idle editor never sits on a dead
@@ -119,6 +134,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     collections,
     error,
     setError,
+    confirmNavigation,
+    setNavGuard,
     reconfigure: () => {
       if (SIGN_IN_URL) { redirectToSignIn(); return; }
       setMe(null); setError(""); setCfg({ ...cfg, token: "" });
