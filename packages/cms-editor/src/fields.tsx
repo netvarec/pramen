@@ -27,13 +27,18 @@ function FieldShell({ label, children }: { label: ReactNode; children: ReactNode
  * because the server decides "is this published yet?" by comparing against its own clock:
  * storing an editor's wall-clock time made "Publish now" in UTC+2 look two hours in the
  * future, so a row published this way stayed invisible until the clock caught up.
+ *
+ * Returns "" for anything Date can't parse — a legacy or hand-written column value must
+ * not reach the input as `NaN-NaN-NaNTNaN:NaN`, which the browser silently discards.
  */
-function toLocalInput(d: Date): string {
+function toLocalInput(value: string): string {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "";
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-/** A `datetime-local` string (local wall clock) → the UTC ISO instant we store. */
+/** A `datetime-local` string (local wall clock) -> the UTC ISO instant we store. */
 function fromLocalInput(local: string): string | null {
   const at = new Date(local);
   return Number.isNaN(at.getTime()) ? null : at.toISOString();
@@ -45,17 +50,48 @@ function formatWhen(value: string): string {
 }
 
 /**
+ * Re-render once the row crosses from "scheduled" to "published".
+ *
+ * `scheduled` is derived from the clock, so without this a form left open across the
+ * scheduled instant keeps claiming "Scheduled for 14:00" well after 14:00. The timeout is
+ * clamped to the 32-bit setTimeout ceiling — a longer delay overflows and fires
+ * immediately — and `tick` is a dependency so a clamped wait re-arms instead of giving up.
+ */
+function useTickAt(at: number | null): void {
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (at === null) return;
+    const ms = at - Date.now();
+    if (ms <= 0) return;
+    const timer = setTimeout(() => setTick((n) => n + 1), Math.min(ms + 1000, 2 ** 31 - 1));
+    return () => clearTimeout(timer);
+  }, [at, tick]);
+}
+
+/**
  * The three states a `publish` field can be in, as the decision an editor is making:
  * publish it now, publish it at a chosen time, or take it down.
  *
  * A bare datetime-local input made "publish this" mean "work out the current time and
  * type it in", and "unpublish" mean "clear a text box" — neither of which reads as the
  * action it is.
+ *
+ * NOTE for the caller: these are <button>s, so this must NOT be rendered inside a
+ * <label> — a <button> is labelable, and clicking the label text would forward a click
+ * to the first one (publishing the row).
  */
 function PublishControl({ value, onChange }: { value: string; onChange: (v: string | null) => void }) {
   const [scheduling, setScheduling] = useState(false);
+  // The picker's own text, kept separate from the stored instant. A `datetime-local`
+  // reports "" for ANY incomplete state, so deleting the year to retype it would
+  // otherwise read as "unpublish" — and the debounced autosave would take the row off
+  // the site mid-keystroke. Only an explicit Unpublish clears the stored value.
+  const [draft, setDraft] = useState("");
   const published = Boolean(value);
-  const scheduled = published && new Date(value).getTime() > Date.now();
+  const at = published ? new Date(value).getTime() : Number.NaN;
+  const scheduled = Number.isFinite(at) && at > Date.now();
+
+  useTickAt(scheduled ? at : null);
 
   const status = !published
     ? { text: "Not published", tone: "text-fg-muted" }
@@ -63,16 +99,23 @@ function PublishControl({ value, onChange }: { value: string; onChange: (v: stri
       ? { text: `Scheduled for ${formatWhen(value)}`, tone: "text-accent-strong" }
       : { text: `Published ${formatWhen(value)}`, tone: "text-fg" };
 
+  const toggleScheduler = () => {
+    setDraft(toLocalInput(value));
+    setScheduling((s) => !s);
+  };
+
   return (
     <div className="flex flex-col gap-2">
       <span className={`text-sm ${status.tone}`}>{status.text}</span>
       <div className="flex flex-wrap items-center gap-2">
-        {published ? null : (
+        {/* Also offered while SCHEDULED: taking a scheduled row live early otherwise meant
+            hand-typing the current time, the very thing this control exists to remove. */}
+        {!published || scheduled ? (
           <Button size="sm" onPress={() => { setScheduling(false); onChange(new Date().toISOString()); }}>
             Publish now
           </Button>
-        )}
-        <Button variant="secondary" size="sm" onPress={() => setScheduling((s) => !s)}>
+        ) : null}
+        <Button variant="secondary" size="sm" onPress={toggleScheduler}>
           {scheduled ? "Change schedule" : published ? "Change time" : "Schedule…"}
         </Button>
         {published ? (
@@ -87,10 +130,15 @@ function PublishControl({ value, onChange }: { value: string; onChange: (v: stri
         <input
           className={CONTROL}
           type="datetime-local"
-          // Shown in the editor's own timezone; stored as UTC.
-          value={value ? toLocalInput(new Date(value)) : ""}
+          // Shown in the editor's own timezone; stored as UTC. Driven by `draft`, not
+          // `value`, so a half-typed date survives instead of snapping back.
+          value={draft}
           autoFocus
-          onChange={(e) => onChange(e.target.value ? fromLocalInput(e.target.value) : null)}
+          onChange={(e) => {
+            setDraft(e.target.value);
+            const iso = e.target.value ? fromLocalInput(e.target.value) : null;
+            if (iso) onChange(iso);
+          }}
         />
       ) : null}
     </div>
@@ -142,10 +190,14 @@ function FieldInput({ def, value, onChange, api }: { def: FieldDefinition; value
         </FieldShell>
       );
     case "publish":
+      // Deliberately NOT FieldShell: it wraps children in a <label>, whose implicit
+      // control would be PublishControl's first <button> ("Publish now") — clicking the
+      // label text would then publish the row. Same reason the boolean case opts out.
       return (
-        <FieldShell label={label}>
+        <div className="flex w-full flex-col gap-2">
+          <span className="text-sm font-medium text-fg">{label}</span>
           <PublishControl value={typeof value === "string" ? value : ""} onChange={onChange as (v: string | null) => void} />
-        </FieldShell>
+        </div>
       );
     case "boolean":
       return (
