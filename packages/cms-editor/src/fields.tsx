@@ -3,7 +3,7 @@
 
 import { Button, Heading, Input, ModalDialog, ModalOverlay, ModalSurface, Text, Textarea } from "@podoba/react";
 import { BlockEditor } from "@podoba/react/editor";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, type DragEvent, type ReactNode } from "react";
 import type { Api } from "./api";
 import type { FieldDefinition, Media } from "./types";
 
@@ -14,7 +14,9 @@ const CONTROL = "h-10 w-full rounded-lg border border-border bg-surface-card px-
 function FieldShell({ label, children }: { label: ReactNode; children: ReactNode }) {
   return (
     <label className="flex w-full flex-col gap-2">
-      <span className="text-sm font-medium text-fg">{label}</span>
+      {/* No label element at all when there is no label — an empty one still occupies a
+          row and, with a required marker, showed a stray asterisk above the control. */}
+      {label === undefined ? null : <span className="text-sm font-medium text-fg">{label}</span>}
       {children}
     </label>
   );
@@ -157,7 +159,11 @@ export function FieldForm({ schema, value, onChange, api }: { schema: FieldDefin
 }
 
 function FieldInput({ def, value, onChange, api }: { def: FieldDefinition; value: unknown; onChange: (v: unknown) => void; api: Api }) {
-  const label: ReactNode = (
+  // An explicitly EMPTY label means "render no label at all" — the single-field repeater
+  // asks for that, because the list already carries the name and repeating it on every
+  // row is noise. Without this the required marker still rendered, leaving a bare red
+  // asterisk floating above each input.
+  const label: ReactNode = def.label === "" ? undefined : (
     <>
       {def.label ?? def.name} {def.required ? <span className="text-danger">*</span> : null}
     </>
@@ -244,33 +250,135 @@ export function RichText({ value, onChange }: { value: string; onChange: (v: str
   return <BlockEditor value={value} onChange={onChange} minHeight={180} placeholder="Write, or press '/' for blocks…" />;
 }
 
+/**
+ * A repeater's items.
+ *
+ * Two shapes, because a list of one field and a list of six are different things to edit.
+ * A SINGLE-field repeater (bullet points) renders one row per item — handle, input,
+ * actions — with no card and no field label repeated down the page saying the same word.
+ * Anything wider keeps a card, with a header that summarises the item so eight slides are
+ * scannable without expanding each one.
+ *
+ * Reordering is drag-and-drop from the ⠿ handle, mirroring the block canvas. ↑/↓ stay,
+ * because dragging is unavailable to keyboard users and awkward on touch.
+ */
 function Repeater({ def, value, onChange, api, label }: { def: FieldDefinition; value: Record<string, unknown>[]; onChange: (v: unknown[]) => void; api: Api; label: ReactNode }) {
   const items = Array.isArray(value) ? value : [];
+  const fields = def.fields ?? [];
+  // One field, and not itself a tall control — the case where the card is pure overhead.
+  const compact = fields.length === 1 && !["repeater", "group", "richtext", "media"].includes(fields[0].type);
+
+  const [drag, setDrag] = useState<{ from: number; over: number } | null>(null);
+
   const upd = (i: number, v: Record<string, unknown>) => onChange(items.map((it, j) => (j === i ? v : it)));
   const add = () => onChange([...items, {}]);
   const del = (i: number) => onChange(items.filter((_, j) => j !== i));
-  const move = (i: number, d: number) => {
-    const j = i + d;
-    if (j < 0 || j >= items.length) return;
+  const moveTo = (from: number, to: number) => {
+    if (from === to || to < 0 || to >= items.length) return;
     const next = items.slice();
-    [next[i], next[j]] = [next[j], next[i]];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
     onChange(next);
   };
+  const move = (i: number, d: number) => moveTo(i, i + d);
+
+  const atMax = def.max != null && items.length >= def.max;
+  const atMin = def.min != null && items.length <= def.min;
+
+  /**
+   * The card header's summary: the item's first bit of human-readable text.
+   *
+   * Restricted to prose-ish field types on purpose. Taking the first non-empty STRING
+   * instead titled every slide with the uuid of its image, which is worse than no summary
+   * at all — the point is to tell two rows apart at a glance.
+   */
+  const summarise = (it: Record<string, unknown>): string => {
+    const readable = ["text", "textarea", "richtext", "select", "url"];
+    for (const f of fields) {
+      if (!readable.includes(f.type)) continue;
+      const v = it[f.name];
+      if (typeof v === "string" && v.trim()) return v.replace(/<[^>]+>/g, " ").trim().slice(0, 80);
+    }
+    return "";
+  };
+
+  const dropZone = (i: number) => ({
+    onDragOver: (e: DragEvent) => {
+      if (!drag) return;
+      e.preventDefault();
+      setDrag((d) => (d && d.over !== i ? { ...d, over: i } : d));
+    },
+    onDrop: (e: DragEvent) => {
+      if (!drag) return;
+      e.preventDefault();
+      moveTo(drag.from, i);
+      setDrag(null);
+    },
+  });
+
+  const handle = (i: number) => (
+    <span
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.effectAllowed = "move";
+        // Firefox refuses to start a drag without a payload.
+        e.dataTransfer.setData("text/plain", String(i));
+        setDrag({ from: i, over: i });
+      }}
+      onDragEnd={() => setDrag(null)}
+      className="cursor-grab select-none px-1 text-fg-subtle transition-colors hover:text-fg active:cursor-grabbing"
+      title="Drag to reorder"
+      aria-hidden
+    >⠿</span>
+  );
+
+  const rowState = (i: number) =>
+    `${drag && drag.over === i && drag.from !== i ? "ring-2 ring-brand-green" : ""} ${drag && drag.from === i ? "opacity-40" : ""}`;
+
+  const actions = (i: number) => (
+    <div className="flex shrink-0 items-center">
+      <button type="button" className="px-1.5 text-fg-subtle hover:text-fg disabled:opacity-30" title="Move up" disabled={i === 0} onClick={() => move(i, -1)}>↑</button>
+      <button type="button" className="px-1.5 text-fg-subtle hover:text-fg disabled:opacity-30" title="Move down" disabled={i === items.length - 1} onClick={() => move(i, 1)}>↓</button>
+      <button type="button" className="px-1.5 text-fg-subtle hover:text-danger disabled:opacity-30" title="Remove" disabled={atMin} onClick={() => del(i)}>✕</button>
+    </div>
+  );
+
   return (
     <div className="flex flex-col gap-2">
       <span className="text-sm font-medium text-fg">{label}</span>
-      {items.map((it, i) => (
-        <div className="rounded-lg border border-border bg-surface-muted p-3.5" key={i}>
-          <div className="mb-2 flex justify-end gap-1">
-            <Button variant="ghost" size="sm" onPress={() => move(i, -1)}>↑</Button>
-            <Button variant="ghost" size="sm" onPress={() => move(i, 1)}>↓</Button>
-            <Button variant="ghost" size="sm" className="text-danger" onPress={() => del(i)}>✕</Button>
-          </div>
-          <FieldForm schema={def.fields ?? []} value={it} onChange={(v) => upd(i, v)} api={api} />
-        </div>
-      ))}
-      <Button variant="secondary" size="sm" className="self-start" onPress={add} isDisabled={def.max != null && items.length >= def.max}>
-        + add {def.label ?? def.name}
+
+      {items.length === 0 ? <span className="text-sm text-fg-muted">None yet.</span> : null}
+
+      <div className={`flex flex-col ${compact ? "gap-1" : "gap-2"}`}>
+        {items.map((it, i) =>
+          compact ? (
+            // One row. The single field's own label is suppressed — it would repeat the
+            // list's label on every line ("Bod", "Bod", "Bod"…).
+            <div key={i} className={`group flex items-center gap-1 rounded-lg px-1 py-0.5 transition-colors ${rowState(i)}`} {...dropZone(i)}>
+              {handle(i)}
+              <div className="min-w-0 flex-1">
+                <FieldInput def={{ ...fields[0], label: "" }} value={it[fields[0].name]} onChange={(v) => upd(i, { ...it, [fields[0].name]: v })} api={api} />
+              </div>
+              <div className="opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">{actions(i)}</div>
+            </div>
+          ) : (
+            <div key={i} className={`group rounded-lg border border-border bg-surface-muted transition-colors ${rowState(i)}`} {...dropZone(i)}>
+              <div className="flex items-center gap-1 border-b border-border px-2 py-1.5">
+                {handle(i)}
+                <span className="text-caption text-fg-subtle">{i + 1}</span>
+                <span className="min-w-0 flex-1 truncate text-sm text-fg-muted">{summarise(it)}</span>
+                {actions(i)}
+              </div>
+              <div className="p-3.5">
+                <FieldForm schema={fields} value={it} onChange={(v) => upd(i, v)} api={api} />
+              </div>
+            </div>
+          ),
+        )}
+      </div>
+
+      <Button variant="secondary" size="sm" className="self-start" onPress={add} isDisabled={atMax}>
+        + Add
       </Button>
     </div>
   );
