@@ -895,7 +895,13 @@ function PageFields({ api, page, schema, initialFields, onDirtyChange, onError }
   const [fields, setFields] = useState<Record<string, unknown>>(initialFields);
   const [ok, setOk] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [dirty, setDirty] = useState(false);
+
+  // Dirty is DERIVED from a snapshot of what's persisted, the way BlockCard does it — not a
+  // one-way flag set on every keystroke. Typing a character and deleting it again leaves the
+  // form matching the store, and the guard this feeds now fronts the whole topbar: a sticky
+  // flag would mean confirming your way past a prompt with nothing to save.
+  const saved = useRef(JSON.stringify(initialFields));
+  const dirty = JSON.stringify(fields) !== saved.current;
 
   // Re-seed the form ONLY when the editor switches to a different page — never on a mere
   // `initialFields` identity change. Every reload() (add/remove/reorder a block, save the
@@ -907,7 +913,7 @@ function PageFields({ api, page, schema, initialFields, onDirtyChange, onError }
     if (seededFor.current === page.id) return;
     seededFor.current = page.id;
     setFields(initialFields);
-    setDirty(false);
+    saved.current = JSON.stringify(initialFields);
   }, [page.id, initialFields]);
 
   // Join the editor's unsaved-changes guard (mirrors BlockCard).
@@ -915,10 +921,12 @@ function PageFields({ api, page, schema, initialFields, onDirtyChange, onError }
   useEffect(() => () => { onDirtyChange("page", false); }, [onDirtyChange]);
 
   const save = async () => {
+    // Snapshot BEFORE the round trip: an edit made while it's in flight must stay dirty.
+    const snapshot = JSON.stringify(fields);
     setBusy(true);
     try {
       await api.call("updatePage", { pageId: page.id, fields });
-      setDirty(false);
+      saved.current = snapshot;
       setOk(true);
       setTimeout(() => setOk(false), 1500);
     } catch (e) {
@@ -935,7 +943,7 @@ function PageFields({ api, page, schema, initialFields, onDirtyChange, onError }
         {dirty ? <span className="text-[11px] text-accent-strong">● unsaved</span> : null}
       </div>
       {ok ? <Banner ok>saved</Banner> : null}
-      <FieldForm schema={schema} value={fields} onChange={(v) => { setFields(v); setDirty(true); }} api={api} />
+      <FieldForm schema={schema} value={fields} onChange={setFields} api={api} />
       <div className="mt-3">
         <Button onPress={save} isDisabled={busy}>{busy ? "Saving…" : "Save"}</Button>
       </div>
