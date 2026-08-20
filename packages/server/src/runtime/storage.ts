@@ -215,10 +215,16 @@ function rfc5987(name: string): string {
   return encodeURIComponent(codePoints(name, 255)).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
 }
 
-// Truncate by CODE POINT, not UTF-16 unit — a raw slice can cut a surrogate pair in half,
-// and a lone surrogate makes encodeURIComponent throw.
+// Truncate by CODE POINT, not UTF-16 unit — a raw slice can cut a surrogate pair in half —
+// and drop unpaired surrogates, which `encodeURIComponent` throws a URIError on. They can
+// arrive in the INPUT, not just from truncation: JSON admits "\ud800", and one survives the
+// signed token intact (JSON.stringify escapes it back to ASCII, so the TextEncoder never
+// folds it to U+FFFD, and JSON.parse restores it). Unthrown, that 500s every download of the
+// file, forever. `Array.from` iterates code points, so a lone surrogate is a 1-unit element
+// while a real pair is 2.
 function codePoints(name: string, max: number): string {
-  return Array.from(name).slice(0, max).join("");
+  const lone = (c: string) => c.length === 1 && c.charCodeAt(0) >= 0xd800 && c.charCodeAt(0) <= 0xdfff;
+  return Array.from(name).filter((c) => !lone(c)).slice(0, max).join("");
 }
 
 // The full header value: an ASCII-only quoted fallback for old clients, plus the `filename*`
@@ -291,6 +297,10 @@ const CORS: Record<string, string> = {
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET, PUT, OPTIONS",
   "access-control-allow-headers": "content-type, authorization",
+  // Neither is CORS-safelisted, so without this a browser client that `fetch()`es a download
+  // (rather than navigating to it) reads both as null — and the filename encoding below
+  // would be invisible to exactly the cross-origin SPAs `CORS_ORIGINS` exists for.
+  "access-control-expose-headers": "content-disposition, content-length",
 };
 
 const fileError = (status: number, code: string, msg: string) =>

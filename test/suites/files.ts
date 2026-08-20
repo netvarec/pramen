@@ -82,6 +82,22 @@ export async function runFiles(base: string): Promise<void> {
   assert(cd.includes("filename*=UTF-8''%E6%8A%A5%E5%91%8A.pdf"), "files: download carries the UTF-8 filename* parameter");
   assert(cd.includes(`filename="__.pdf"`), "files: download keeps an ASCII-only quoted fallback");
 
+  // --- an UNPAIRED surrogate in the filename doesn't poison the download ---
+  // JSON admits "\ud800", and it survives the signed token intact (JSON.stringify escapes it
+  // back to ASCII, so the TextEncoder never folds it to U+FFFD). Left in, encodeURIComponent
+  // throws a URIError and the file 500s for every caller, forever. It is dropped instead.
+  const lone = await call("createNote", { title: "lone-surrogate", body: "malformed name" }, T.alice);
+  const lonePrep = await call("requestUpload", { contentType: "application/pdf", filename: "a\uD800b.pdf" }, T.alice);
+  await put(lonePrep.body.result.url, "pdf bytes", "application/pdf");
+  await call("attachToNote", { id: lone.body.result.id, ref: lonePrep.body.result.ref }, T.alice);
+  const loneDl = await call("getNoteAttachment", { id: lone.body.result.id }, T.alice);
+  const loneDownloaded = await get(loneDl.body.result.url);
+  assert(loneDownloaded.status === 200, "files: an unpaired surrogate in the filename still downloads (200, not 500)");
+  assert(
+    (loneDownloaded.headers.get("content-disposition") ?? "").includes(`filename="ab.pdf"`),
+    "files: the unpaired surrogate is dropped from the filename",
+  );
+
   // --- ACL: bob can't read alice's note, so he gets no download url ---
   const bobDl = await call("getNoteAttachment", { id: noteId }, T.bob);
   assert(bobDl.body.ok && bobDl.body.result === null, "files: another author cannot sign a download (row ACL)");
