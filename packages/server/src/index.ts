@@ -34,12 +34,13 @@ export { query, mutation, authorizeHandler } from "./sdk/handlers";
 export type { Handler, HandlerContext, HandlerKind, HandlerMap, HandlerOpts, HandlerAuth, Tasks, TaskHandler, AppTaskMap, BootstrapContext, BootstrapFn } from "./sdk/handlers";
 
 // --- ACL ---
-export { $identity, $input, allow, deny, policy, resolve, role, isAllow, isDeny, isResolver, isIdentityMarker, isInputMarker } from "./sdk/acl";
+export { $identity, $input, $now, allow, deny, policy, resolve, role, isAllow, isDeny, isResolver, isIdentityMarker, isInputMarker, isNowMarker } from "./sdk/acl";
 export type {
   Action,
   Identity,
   IdentityMarker,
   InputMarker,
+  NowMarker,
   Policy,
   PolicyRule,
   PolicyRules,

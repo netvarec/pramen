@@ -63,14 +63,29 @@ export interface FieldDefinition {
     | "datetime"
     /**
      * A publication timestamp with three states: unset (hidden), a past time
-     * (published), or a future time (scheduled). Stored exactly like `datetime` — an ISO
-     * string, or empty/null for "not published" — but the editor renders it as
+     * (published), or a future time (scheduled). The editor renders it as
      * publish-now / schedule / unpublish rather than a bare date picker, because that is
      * the decision an editor is actually making.
      *
+     * Validated as a `datetime` on the wire, but NOT interchangeable with one: the
+     * `publish` control always writes a UTC instant with a `Z` suffix
+     * (`2026-08-20T12:00:00.000Z`), where the `datetime` control writes the picker's
+     * naive local string (`2026-08-20T14:00`). Both land in the same TEXT column and
+     * both pass validation, yet they sort and range-compare lexicographically against
+     * each other as if hours apart — so converting an existing `datetime` field to
+     * `publish` needs a backfill of the stored values, not just a type change.
+     *
      * A collection has no page-style publish workflow, so this is how a row goes live.
-     * Scope the anonymous read policy to it (`{ publishedAt: { isNull: false } }`) and it
-     * is a real access boundary, not merely a UI filter.
+     * Scope the anonymous read policy to it with `$now()` from `@pramen/server`:
+     *
+     * ```ts
+     * policy("cms_lectures", { read: { where: { publishedAt: { lte: $now() } } } })
+     * ```
+     *
+     * That, and not `{ publishedAt: { isNull: false } }`, is the real access boundary.
+     * `isNull: false` matches a FUTURE timestamp too, so a row the editor scheduled for
+     * next week would be anonymously readable the moment it was saved — the scheduling
+     * affordance would be a UI label over no enforcement at all.
      */
     | "publish"
     | "media"

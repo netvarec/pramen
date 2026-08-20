@@ -162,8 +162,13 @@ log) for independent single-writer serialization and storage.
   (SQLite forbids `ALTER ADD COLUMN` with a non-constant default), which is additive
   (backfills existing rows) and ungated.
 - Auth/ACL: an unauthenticated caller is the `anonymous` role (define it for public
-  reads/writes; absent ⇒ deny). A policy `where` may use `$identity("path")` (caller)
-  or `$input("path")` (request input — a capability/by-unguessable-key read). Public,
+  reads/writes; absent ⇒ deny). A policy `where` may use `$identity("path")` (caller),
+  `$input("path")` (request input — a capability/by-unguessable-key read), or `$now()`
+  (the evaluation instant, as an ISO-8601 UTC string — for a time-boxed grant like
+  scheduled publication: `{ publishedAt: { lte: $now() } }`, which `isNull: false`
+  can't express since a future timestamp is non-null. Lexicographic TEXT comparison,
+  so the column must hold `toISOString()` values — NOT `expr.now()`'s
+  `'YYYY-MM-DD HH:MM:SS'`, which doesn't compare against the ISO form). Public,
   pre-auth routes go in `app.routes` (matched before auth; use `ctx.callPrivileged`
   to forward a privileged mutation into the DO) — for signature-authed webhooks.
 - Per-handler call authorization (the ACL only gates `ctx.db`): `query(fn, { auth })` /

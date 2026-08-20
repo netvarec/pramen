@@ -1,5 +1,5 @@
 // ACL primitives — the portable definition layer: role(), policy(), allow(),
-// deny(), $identity(). Resolution semantics live in runtime/acl.ts.
+// deny(), $identity(), $now(). Resolution semantics live in runtime/acl.ts.
 //
 // Model: an Identity carries one or more roles. A policy grants a (role) access
 // to an (entity, action), optionally restricted by a row-level `where` predicate
@@ -58,6 +58,38 @@ export function $input(path: string): InputMarker {
 
 export function isInputMarker(v: unknown): v is InputMarker {
   return typeof v === "object" && v !== null && (v as Record<symbol, unknown>)[INPUT_MARKER] === true;
+}
+
+// --- $now markers: the request's evaluation instant inside a where rule, for a
+// time-boxed grant (scheduled publication, an expiring share link).
+
+const NOW_MARKER = Symbol.for("pramen.nowMarker");
+
+export interface NowMarker {
+  readonly [NOW_MARKER]: true;
+}
+
+/** The current UTC instant in a policy `where`, resolved per request, as an ISO-8601
+ * string with a `Z` suffix — exactly what `new Date().toISOString()` produces.
+ *
+ * This is what makes a time boundary an ACL predicate rather than a filter every
+ * handler has to remember: `{ publishedAt: { lte: $now() } }` hides a row scheduled
+ * for the future from every caller the policy governs, not merely from the queries
+ * that thought to ask. `{ publishedAt: { isNull: false } }` cannot express it — a
+ * future timestamp is non-null, so a scheduled row would be readable the moment it
+ * is saved.
+ *
+ * Comparison is lexicographic TEXT, which is exact for ISO-8601 UTC but NOT
+ * cross-format: `expr.now()` defaults store `'YYYY-MM-DD HH:MM:SS'` (space, no `Z`)
+ * and will not compare correctly against this. Store the column with
+ * `toISOString()` — as the CMS `publish` field does — or compare it against
+ * `expr.now()`-shaped values only. */
+export function $now(): NowMarker {
+  return { [NOW_MARKER]: true };
+}
+
+export function isNowMarker(v: unknown): v is NowMarker {
+  return typeof v === "object" && v !== null && (v as Record<symbol, unknown>)[NOW_MARKER] === true;
 }
 
 // --- allow / deny markers ---
