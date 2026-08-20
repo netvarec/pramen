@@ -88,6 +88,17 @@ export interface FieldDefinition {
      * affordance would be a UI label over no enforcement at all.
      */
     | "publish"
+    /**
+     * A URL segment, derived from another field as you type.
+     *
+     * Set `from` to the field it follows (usually the title). The editor keeps them in
+     * sync only while the slug is untouched — once it has been edited, or on a row that
+     * already has one, it stops following, because silently rewriting a slug changes a
+     * live URL and breaks every link to it.
+     *
+     * Stored as text. Uniqueness is the schema's job (`unique(t.text())`).
+     */
+    | "slug"
     | "media"
     | "select"
     | "repeater"
@@ -104,6 +115,8 @@ export interface FieldDefinition {
   /** select only — fetch options at edit time from a query handler of this name (returns
    * `{ value, label }[]`), e.g. a live list of campaigns. Takes precedence over `options`. */
   optionsFrom?: string;
+  /** slug only — the sibling field this one is derived from (e.g. `"title"`). */
+  from?: string;
 }
 
 /** A named region on a content type; `allowedTypes` (block-type slugs) restricts what
@@ -134,7 +147,7 @@ export type RichText = string | { type: string; content?: unknown[] };
 
 /** Map one FieldDefinition (as a const literal) to the TS type of its RENDERED value.
  * Media resolves to `ResolvedMedia` (the assemble-time shape a component receives). */
-export type FieldTsType<D extends FieldDefinition> = D["type"] extends "text" | "textarea" | "url" | "select" | "date" | "datetime" | "publish"
+export type FieldTsType<D extends FieldDefinition> = D["type"] extends "text" | "textarea" | "url" | "select" | "date" | "datetime" | "publish" | "slug"
   ? string
   : D["type"] extends "richtext"
     ? RichText
@@ -310,6 +323,7 @@ function tsTypeOf(f: FieldDefinition): string {
     case "date":
     case "datetime":
     case "publish":
+    case "slug":
       return "string";
     case "richtext":
       return "RichText";
@@ -524,6 +538,8 @@ export function validateFields(schema: FieldDefinition[] | undefined | null, val
       case "textarea":
       case "url":
       case "select":
+      // A slug is text on the wire; only the editor control differs.
+      case "slug":
         if (typeof v !== "string") throw new BadRequest(`field '${at}' must be a string`);
         if (def.type === "select" && def.options && !def.options.includes(v)) {
           throw new BadRequest(`field '${at}' must be one of: ${def.options.join(", ")}`);

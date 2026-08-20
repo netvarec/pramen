@@ -3,7 +3,7 @@
 
 import { Button, Heading, Input, ModalDialog, ModalOverlay, ModalSurface, Text, Textarea } from "@podoba/react";
 import { BlockEditor } from "@podoba/react/editor";
-import { useEffect, useState, type DragEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import type { Api } from "./api";
 import type { FieldDefinition, Media } from "./types";
 
@@ -152,7 +152,8 @@ export function FieldForm({ schema, value, onChange, api }: { schema: FieldDefin
   return (
     <div className="flex flex-col gap-4">
       {schema.map((def) => (
-        <FieldInput key={def.name} def={def} value={value[def.name]} onChange={(v) => set(def.name, v)} api={api} />
+        // `siblings` is only read by field types that derive from another field (slug).
+        <FieldInput key={def.name} def={def} value={value[def.name]} onChange={(v) => set(def.name, v)} api={api} siblings={value} />
       ))}
     </div>
   );
@@ -170,7 +171,7 @@ export function FieldForm({ schema, value, onChange, api }: { schema: FieldDefin
  * accessible-name computation via `aria-labelledby`. Those three go through the bare
  * `CONTROL` skin instead, the same way `number`/`date` already do.
  */
-function FieldInput({ def, value, onChange, api, hideLabelAs }: { def: FieldDefinition; value: unknown; onChange: (v: unknown) => void; api: Api; hideLabelAs?: string }) {
+function FieldInput({ def, value, onChange, api, hideLabelAs, siblings }: { def: FieldDefinition; value: unknown; onChange: (v: unknown) => void; api: Api; hideLabelAs?: string; siblings?: Record<string, unknown> }) {
   const label: ReactNode = hideLabelAs !== undefined ? undefined : (
     <>
       {def.label ?? def.name} {def.required ? <span className="text-danger">*</span> : null}
@@ -213,6 +214,16 @@ function FieldInput({ def, value, onChange, api, hideLabelAs }: { def: FieldDefi
         <FieldShell label={label}>
           <input className={CONTROL} type={def.type === "date" ? "date" : "datetime-local"} aria-label={hideLabelAs} value={(value as string) ?? ""} onChange={(e) => onChange(e.target.value || null)} />
         </FieldShell>
+      );
+    case "slug":
+      return (
+        <SlugField
+          def={def}
+          label={label}
+          value={typeof value === "string" ? value : ""}
+          source={typeof siblings?.[def.from ?? ""] === "string" ? (siblings[def.from ?? ""] as string) : ""}
+          onChange={onChange as (v: string) => void}
+        />
       );
     case "publish":
       // Deliberately NOT FieldShell: it wraps children in a <label>, whose implicit
@@ -428,6 +439,74 @@ function Repeater({ def, value, onChange, api, label }: { def: FieldDefinition; 
         + Add {def.label ?? def.name}
       </Button>
     </div>
+  );
+}
+
+/**
+ * Turn a title into a URL segment.
+ *
+ * Diacritics are decomposed and their marks dropped, so Czech text transliterates the way
+ * a reader expects — "Vrátnice výrobního závodu" becomes "vratnice-vyrobniho-zavodu"
+ * rather than losing the accented letters entirely.
+ */
+export function slugify(input: string): string {
+  return input
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+}
+
+/**
+ * A slug that follows another field while it is untouched.
+ *
+ * It deliberately stops following the moment the value differs from what it last derived
+ * — which includes every row that already has a slug. Renaming a published project must
+ * not silently change its URL and break every link to it; "Generate from …" is there for
+ * when that IS what you want.
+ */
+function SlugField({ def, label, value, source, onChange }: { def: FieldDefinition; label: ReactNode; value: string; source: string; onChange: (v: string) => void }) {
+  // What this control last wrote. While the field still holds it, the field is "untouched"
+  // and free to follow; anything else means a human typed it.
+  const derived = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!def.from || !source) return;
+    const next = slugify(source);
+    if (next === value) return;
+    // Follow only an empty field or one still holding our own last derivation.
+    if (value === "" || value === derived.current) {
+      derived.current = next;
+      onChange(next);
+    }
+  }, [source, value, def.from, onChange]);
+
+  const suggestion = source ? slugify(source) : "";
+  const canGenerate = Boolean(suggestion) && suggestion !== value;
+
+  return (
+    <FieldShell label={label}>
+      <input
+        className={CONTROL}
+        value={value}
+        onChange={(e) => {
+          derived.current = null; // typed by hand — stop following from here on
+          onChange(slugify(e.target.value));
+        }}
+        placeholder={suggestion}
+      />
+      {canGenerate ? (
+        <button
+          type="button"
+          className="self-start text-caption text-fg-subtle underline hover:text-fg"
+          onClick={() => { derived.current = suggestion; onChange(suggestion); }}
+        >
+          Generate from {def.from}: {suggestion}
+        </button>
+      ) : null}
+    </FieldShell>
   );
 }
 
