@@ -61,6 +61,18 @@ export interface FieldDefinition {
     | "boolean"
     | "date"
     | "datetime"
+    /**
+     * A publication timestamp with three states: unset (hidden), a past time
+     * (published), or a future time (scheduled). Stored exactly like `datetime` — an ISO
+     * string, or empty/null for "not published" — but the editor renders it as
+     * publish-now / schedule / unpublish rather than a bare date picker, because that is
+     * the decision an editor is actually making.
+     *
+     * A collection has no page-style publish workflow, so this is how a row goes live.
+     * Scope the anonymous read policy to it (`{ publishedAt: { isNull: false } }`) and it
+     * is a real access boundary, not merely a UI filter.
+     */
+    | "publish"
     | "media"
     | "select"
     | "repeater"
@@ -107,7 +119,7 @@ export type RichText = string | { type: string; content?: unknown[] };
 
 /** Map one FieldDefinition (as a const literal) to the TS type of its RENDERED value.
  * Media resolves to `ResolvedMedia` (the assemble-time shape a component receives). */
-export type FieldTsType<D extends FieldDefinition> = D["type"] extends "text" | "textarea" | "url" | "select" | "date" | "datetime"
+export type FieldTsType<D extends FieldDefinition> = D["type"] extends "text" | "textarea" | "url" | "select" | "date" | "datetime" | "publish"
   ? string
   : D["type"] extends "richtext"
     ? RichText
@@ -282,6 +294,7 @@ function tsTypeOf(f: FieldDefinition): string {
     case "select":
     case "date":
     case "datetime":
+    case "publish":
       return "string";
     case "richtext":
       return "RichText";
@@ -514,6 +527,8 @@ export function validateFields(schema: FieldDefinition[] | undefined | null, val
         if (typeof v !== "string" || !isDateString(v)) throw new BadRequest(`field '${at}' must be a date (YYYY-MM-DD)`);
         break;
       case "datetime":
+      // `publish` is a datetime on the wire; only the editor control differs.
+      case "publish":
         if (typeof v !== "string" || !isDateTimeString(v)) throw new BadRequest(`field '${at}' must be a date-time (ISO 8601)`);
         break;
       case "media":

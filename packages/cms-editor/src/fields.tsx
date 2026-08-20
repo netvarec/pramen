@@ -20,6 +20,83 @@ function FieldShell({ label, children }: { label: ReactNode; children: ReactNode
   );
 }
 
+/**
+ * `YYYY-MM-DDTHH:MM` in LOCAL time — what <input type="datetime-local"> shows and expects.
+ *
+ * It is only ever the DISPLAY format. The stored value is always a UTC ISO string,
+ * because the server decides "is this published yet?" by comparing against its own clock:
+ * storing an editor's wall-clock time made "Publish now" in UTC+2 look two hours in the
+ * future, so a row published this way stayed invisible until the clock caught up.
+ */
+function toLocalInput(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** A `datetime-local` string (local wall clock) → the UTC ISO instant we store. */
+function fromLocalInput(local: string): string | null {
+  const at = new Date(local);
+  return Number.isNaN(at.getTime()) ? null : at.toISOString();
+}
+
+function formatWhen(value: string): string {
+  const at = new Date(value);
+  return Number.isNaN(at.getTime()) ? value : at.toLocaleString();
+}
+
+/**
+ * The three states a `publish` field can be in, as the decision an editor is making:
+ * publish it now, publish it at a chosen time, or take it down.
+ *
+ * A bare datetime-local input made "publish this" mean "work out the current time and
+ * type it in", and "unpublish" mean "clear a text box" — neither of which reads as the
+ * action it is.
+ */
+function PublishControl({ value, onChange }: { value: string; onChange: (v: string | null) => void }) {
+  const [scheduling, setScheduling] = useState(false);
+  const published = Boolean(value);
+  const scheduled = published && new Date(value).getTime() > Date.now();
+
+  const status = !published
+    ? { text: "Not published", tone: "text-fg-muted" }
+    : scheduled
+      ? { text: `Scheduled for ${formatWhen(value)}`, tone: "text-accent-strong" }
+      : { text: `Published ${formatWhen(value)}`, tone: "text-fg" };
+
+  return (
+    <div className="flex flex-col gap-2">
+      <span className={`text-sm ${status.tone}`}>{status.text}</span>
+      <div className="flex flex-wrap items-center gap-2">
+        {published ? null : (
+          <Button size="sm" onPress={() => { setScheduling(false); onChange(new Date().toISOString()); }}>
+            Publish now
+          </Button>
+        )}
+        <Button variant="secondary" size="sm" onPress={() => setScheduling((s) => !s)}>
+          {scheduled ? "Change schedule" : published ? "Change time" : "Schedule…"}
+        </Button>
+        {published ? (
+          // Clearing the value is what takes the row off the site — the read policy is
+          // scoped to this field being set.
+          <Button variant="ghost" size="sm" className="text-danger" onPress={() => { setScheduling(false); onChange(null); }}>
+            Unpublish
+          </Button>
+        ) : null}
+      </div>
+      {scheduling ? (
+        <input
+          className={CONTROL}
+          type="datetime-local"
+          // Shown in the editor's own timezone; stored as UTC.
+          value={value ? toLocalInput(new Date(value)) : ""}
+          autoFocus
+          onChange={(e) => onChange(e.target.value ? fromLocalInput(e.target.value) : null)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
 export function FieldForm({ schema, value, onChange, api }: { schema: FieldDefinition[]; value: Record<string, unknown>; onChange: (v: Record<string, unknown>) => void; api: Api }) {
   const set = (name: string, v: unknown) => onChange({ ...value, [name]: v });
   return (
@@ -62,6 +139,12 @@ function FieldInput({ def, value, onChange, api }: { def: FieldDefinition; value
       return (
         <FieldShell label={label}>
           <input className={CONTROL} type={def.type === "date" ? "date" : "datetime-local"} value={(value as string) ?? ""} onChange={(e) => onChange(e.target.value || null)} />
+        </FieldShell>
+      );
+    case "publish":
+      return (
+        <FieldShell label={label}>
+          <PublishControl value={typeof value === "string" ? value : ""} onChange={onChange as (v: string | null) => void} />
         </FieldShell>
       );
     case "boolean":
