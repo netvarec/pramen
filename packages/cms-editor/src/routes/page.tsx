@@ -13,7 +13,7 @@ export default createPage()
   .params({ pageId: "string", tab: "?string" })
   .route("/pages/:pageId")
   .render(function PageEditorRoute({ params }) {
-    const { api, setError } = useApp();
+    const { api, setError, setNavGuard } = useApp();
     const navigate = useNavigate();
     const [page, setPage] = useState<Page | null>(null);
     const [blockTypes, setBlockTypes] = useState<BlockType[]>([]);
@@ -57,6 +57,7 @@ export default createPage()
         onTab={setTab}
         onBack={() => navigate("home")}
         onChange={setPage}
+        registerGuard={setNavGuard}
       />
     );
   });

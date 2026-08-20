@@ -67,6 +67,37 @@ export async function runFiles(base: string): Promise<void> {
     "files: download carries the original filename",
   );
 
+  // --- a non-ASCII filename survives the round trip ---
+  // Regression: the quoted `filename="…"` is a WebIDL ByteString, so reflecting the raw
+  // name into it threw on any code point > U+00FF and 500'd the download. The ASCII
+  // fallback is folded; the real name rides in the RFC 5987 `filename*` parameter.
+  const cjk = await call("createNote", { title: "cjk-file", body: "非 ASCII" }, T.alice);
+  const cjkPrep = await call("requestUpload", { contentType: "application/pdf", filename: "报告.pdf" }, T.alice);
+  await put(cjkPrep.body.result.url, "pdf bytes", "application/pdf");
+  await call("attachToNote", { id: cjk.body.result.id, ref: cjkPrep.body.result.ref }, T.alice);
+  const cjkDl = await call("getNoteAttachment", { id: cjk.body.result.id }, T.alice);
+  const cjkDownloaded = await get(cjkDl.body.result.url);
+  assert(cjkDownloaded.status === 200, "files: a non-ASCII filename still downloads (200, not 500)");
+  const cd = cjkDownloaded.headers.get("content-disposition") ?? "";
+  assert(cd.includes("filename*=UTF-8''%E6%8A%A5%E5%91%8A.pdf"), "files: download carries the UTF-8 filename* parameter");
+  assert(cd.includes(`filename="__.pdf"`), "files: download keeps an ASCII-only quoted fallback");
+
+  // --- an UNPAIRED surrogate in the filename doesn't poison the download ---
+  // JSON admits "\ud800", and it survives the signed token intact (JSON.stringify escapes it
+  // back to ASCII, so the TextEncoder never folds it to U+FFFD). Left in, encodeURIComponent
+  // throws a URIError and the file 500s for every caller, forever. It is dropped instead.
+  const lone = await call("createNote", { title: "lone-surrogate", body: "malformed name" }, T.alice);
+  const lonePrep = await call("requestUpload", { contentType: "application/pdf", filename: "a\uD800b.pdf" }, T.alice);
+  await put(lonePrep.body.result.url, "pdf bytes", "application/pdf");
+  await call("attachToNote", { id: lone.body.result.id, ref: lonePrep.body.result.ref }, T.alice);
+  const loneDl = await call("getNoteAttachment", { id: lone.body.result.id }, T.alice);
+  const loneDownloaded = await get(loneDl.body.result.url);
+  assert(loneDownloaded.status === 200, "files: an unpaired surrogate in the filename still downloads (200, not 500)");
+  assert(
+    (loneDownloaded.headers.get("content-disposition") ?? "").includes(`filename="ab.pdf"`),
+    "files: the unpaired surrogate is dropped from the filename",
+  );
+
   // --- ACL: bob can't read alice's note, so he gets no download url ---
   const bobDl = await call("getNoteAttachment", { id: noteId }, T.bob);
   assert(bobDl.body.ok && bobDl.body.result === null, "files: another author cannot sign a download (row ACL)");

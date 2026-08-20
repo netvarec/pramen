@@ -346,16 +346,22 @@ export function CollectionEditor({ api, def, id, onSaved, onDeleted, onBack, onE
 
 // --- page editor -------------------------------------------------------------
 
-export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange }: { api: Api; page: Page; blockTypes: BlockType[]; tab: InspectorTab; onTab: (t: InspectorTab) => void; onBack: () => void; onChange: (p: Page) => void }) {
+export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange, registerGuard }: { api: Api; page: Page; blockTypes: BlockType[]; tab: InspectorTab; onTab: (t: InspectorTab) => void; onBack: () => void; onChange: (p: Page) => void; registerGuard: (fn: (() => boolean) | null) => void }) {
   const [ct, setCt] = useState<ContentType | null>(null);
   const [assembled, setAssembled] = useState<AssembledPage | null>(null);
   const [err, setErr] = useState("");
 
-  // Unsaved-changes guard. Each BlockCard reports its dirty state up; while any block has
-  // unsaved edits, warn before leaving the editor (← all pages) and before a browser unload
-  // (refresh / close / navigating off-site). Reorder/add/remove keep block state — React
-  // reuses BlockCard instances by key — so those don't lose edits and need no guard; only
-  // unmounting the whole editor (leaving) or a page unload discards the local edits.
+  // Unsaved-changes guard. Every editable surface on the canvas — each BlockCard, plus the
+  // page's own PageFields form (keyed "page") — reports its dirty state up; while anything
+  // is dirty, warn before leaving. PageFields must participate: for a content type with no
+  // regions it is the ENTIRE editor, sitting right under the back button. Reorder/add/remove
+  // keep local state — React reuses instances by key — so those don't lose edits and need no
+  // guard; only unmounting the editor or a page unload discards them.
+  //
+  // Three exits, three mechanisms, one predicate (`confirmLeave`): the ← all pages buttons
+  // ask directly, `beforeunload` covers refresh/close/off-site, and `registerGuard` publishes
+  // it to the root layout so the topbar (wordmark, tabs, sign out) asks too — an in-app
+  // navigation fires no `beforeunload`, so without that it would discard edits silently.
   const dirtyRef = useRef<Set<string>>(new Set());
   const [dirtyCount, setDirtyCount] = useState(0);
   const reportDirty = useCallback((id: string, isDirty: boolean) => {
@@ -365,8 +371,17 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
     else s.delete(id);
     setDirtyCount(s.size);
   }, []);
-  const confirmLeave = () =>
-    dirtyRef.current.size === 0 || window.confirm(`You have unsaved changes in ${dirtyRef.current.size} block${dirtyRef.current.size === 1 ? "" : "s"}. Leave without saving?`);
+  // Stable (reads `dirtyRef`, never state), so the layout can hold it for the editor's
+  // whole lifetime. Synchronous by design — a caller decides whether to navigate on the
+  // return value, which a modal dialog could not answer in time.
+  const confirmLeave = useCallback(
+    () => dirtyRef.current.size === 0 || window.confirm(`You have ${dirtyRef.current.size} unsaved change${dirtyRef.current.size === 1 ? "" : "s"}. Leave without saving?`),
+    [],
+  );
+  useEffect(() => {
+    registerGuard(confirmLeave);
+    return () => registerGuard(null);
+  }, [registerGuard, confirmLeave]);
 
   const btBySlug = useMemo(() => new Map(blockTypes.map((b) => [b.slug, b])), [blockTypes]);
 
@@ -390,6 +405,8 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
   }, [dirtyCount]);
 
   const regions: RegionDefinition[] = ct?.regions ?? [];
+  /** The content type's PAGE-level fields — rendered on the canvas, not in the inspector. */
+  const pageSchema: FieldDefinition[] = ct?.fieldsSchema ?? [];
 
   const patchRegion = (region: string, fn: (list: RenderedBlock[]) => RenderedBlock[]) =>
     setAssembled((prev) => (prev ? { ...prev, regions: { ...prev.regions, [region]: fn(prev.regions[region] ?? []) } } : prev));
@@ -478,11 +495,20 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
     reorder(region, ids);
   };
 
+  // Shown wherever the back button is — including the no-regions layout, whose only editable
+  // surface is PageFields, so the rail that used to carry this badge isn't rendered at all.
+  const dirtyBadge = dirtyCount > 0
+    ? <span className="text-[11px] text-accent-strong">● {dirtyCount} unsaved change{dirtyCount === 1 ? "" : "s"}</span>
+    : null;
+
   return (
-    <div className="grid min-h-[calc(100vh-68px)] grid-cols-[260px_1fr_400px] gap-5 px-7 pb-7 pt-2 max-[820px]:grid-cols-1">
+    // With no regions the left rail would be a 260px column holding just a back button,
+    // so it collapses and the content column takes the space.
+    <div className={`grid min-h-[calc(100vh-68px)] gap-5 px-7 pb-7 pt-2 max-[820px]:grid-cols-1 ${regions.length ? "grid-cols-[260px_1fr_400px]" : "grid-cols-[1fr_400px]"}`}>
+      {regions.length === 0 ? null : (
       <div className="overflow-auto rounded-panel bg-surface-muted p-[18px]">
         <Button variant="ghost" size="sm" onPress={() => { if (confirmLeave()) onBack(); }}>← all pages</Button>
-        {dirtyCount > 0 ? <p className="mt-2 text-[11px] text-accent-strong">● {dirtyCount} unsaved block{dirtyCount === 1 ? "" : "s"}</p> : null}
+        {dirtyBadge ? <p className="mt-2">{dirtyBadge}</p> : null}
         <Section>Regions</Section>
         {regions.map((r) => (
           <div key={r.name} className={`${ROW} mb-2`}>
@@ -496,11 +522,25 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
           <Pill status={page.status}>{page.status}</Pill>
         </div>
       </div>
+      )}
 
       {/* The canvas: one inline document. `pl-8` reserves the left gutter that each
           block's drag handle occupies on hover. Regions are titled sections. */}
       <div className="overflow-auto py-1.5 pl-8 pr-2">
         {err ? <Banner>{err}</Banner> : null}
+        {regions.length === 0 ? (
+          <div className="mb-2 flex items-center gap-2">
+            <Button variant="ghost" size="sm" onPress={() => { if (confirmLeave()) onBack(); }}>← all pages</Button>
+            <Pill status={page.status}>{page.status}</Pill>
+            {dirtyBadge}
+          </div>
+        ) : null}
+        {/* The page's own fields are CONTENT, so they belong on the canvas at full width —
+            not in the inspector. For a content type with no regions (a fixed layout, all
+            of it page fields) this is the entire editor; the canvas is never empty. */}
+        {pageSchema.length ? (
+          <PageFields api={api} page={page} schema={pageSchema} initialFields={(assembled?.page.fields as Record<string, unknown>) ?? {}} onDirtyChange={reportDirty} onError={setErr} />
+        ) : null}
         {regions.map((r) => {
           const blocks = assembled?.regions[r.name] ?? [];
           const allowed = r.allowedTypes && r.allowedTypes.length ? r.allowedTypes : blockTypes.map((b) => b.slug);
@@ -538,7 +578,9 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
             </div>
           );
         })}
-        {regions.length === 0 ? <p className="text-fg-subtle">This page's content type has no regions.</p> : null}
+        {regions.length === 0 && pageSchema.length === 0
+          ? <p className="text-fg-subtle">This page's content type defines no fields or regions.</p>
+          : null}
       </div>
 
       <div className="overflow-auto rounded-panel border border-border bg-surface-card p-5">
@@ -547,7 +589,7 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
             <Button key={t} variant="ghost" size="sm" className={tab === t ? "bg-surface-muted text-fg" : "text-fg-muted"} onPress={() => onTab(t)}>{t}</Button>
           ))}
         </div>
-        {tab === "settings" ? <Settings api={api} page={page} ct={ct} initialFields={(assembled?.page.fields as Record<string, unknown>) ?? {}} onSaved={onChange} onError={setErr} /> : null}
+        {tab === "settings" ? <PageMeta api={api} page={page} onSaved={onChange} onError={setErr} /> : null}
         {tab === "seo" ? <SeoPanel api={api} page={page} onError={setErr} /> : null}
         {tab === "workflow" ? <Workflow api={api} page={page} onChanged={(p) => { onChange(p); }} onError={setErr} /> : null}
         {tab === "i18n" ? <I18n api={api} page={page} onError={setErr} /> : null}
@@ -803,24 +845,28 @@ function Inserter({ allowed, btBySlug, onAdd, compact }: { allowed: string[]; bt
   );
 }
 
-// Edit the page record itself — title/slug/locale and, for a content type with page-level
-// fields (e.g. a "Lecture" with date/speaker), its structured `fields`. Backed by updatePage.
-function Settings({ api, page, ct, initialFields, onSaved, onError }: { api: Api; page: Page; ct: ContentType | null; initialFields: Record<string, unknown>; onSaved: (p: Page) => void; onError: (s: string) => void }) {
+/**
+ * Page META — title / slug / locale. Settings, not content, so it lives in the inspector.
+ *
+ * Split from the page's FIELDS (below) because the two are different things: the fields
+ * are what the page SAYS, and burying them in a 400px inspector made a page whose content
+ * type has no regions look empty — a wide, blank canvas next to a cramped form.
+ */
+function PageMeta({ api, page, onSaved, onError }: { api: Api; page: Page; onSaved: (p: Page) => void; onError: (s: string) => void }) {
   const [title, setTitle] = useState(page.title);
   const [slug, setSlug] = useState(page.slug);
   const [locale, setLocale] = useState(page.locale);
-  const [fields, setFields] = useState<Record<string, unknown>>(initialFields);
   const [ok, setOk] = useState(false);
   const [busy, setBusy] = useState(false);
-  const schema: FieldDefinition[] = ct?.fieldsSchema ?? [];
 
   useEffect(() => { setTitle(page.title); setSlug(page.slug); setLocale(page.locale); }, [page.id, page.title, page.slug, page.locale]);
-  useEffect(() => { setFields(initialFields); }, [initialFields]);
 
   const save = async () => {
     setBusy(true);
     try {
-      const r = await api.call<{ page?: Page }>("updatePage", { pageId: page.id, title, slug, locale, ...(schema.length ? { fields } : {}) });
+      // Meta only — `fields` is deliberately omitted so saving here can never clobber
+      // content edited in the canvas (updatePage patches only what it is given).
+      const r = await api.call<{ page?: Page }>("updatePage", { pageId: page.id, title, slug, locale });
       if (r?.page) onSaved(r.page);
       setOk(true);
       setTimeout(() => setOk(false), 1500);
@@ -838,14 +884,69 @@ function Settings({ api, page, ct, initialFields, onSaved, onError }: { api: Api
       <Input label="Title" value={title} onChange={setTitle} />
       <Input label="Slug" value={slug} onChange={setSlug} />
       <Input label="Locale" value={locale} onChange={setLocale} />
-      {schema.length ? (
-        <>
-          <Section>Fields</Section>
-          <FieldForm schema={schema} value={fields} onChange={setFields} api={api} />
-        </>
-      ) : null}
       <Button onPress={save} isDisabled={busy || !title.trim() || !slug.trim()}>{busy ? "Saving…" : "Save"}</Button>
       <KV><span>Status</span><span>{page.status}</span></KV>
+    </div>
+  );
+}
+
+/** The page's own FIELDS — its content. Rendered in the canvas, at full width. */
+function PageFields({ api, page, schema, initialFields, onDirtyChange, onError }: { api: Api; page: Page; schema: FieldDefinition[]; initialFields: Record<string, unknown>; onDirtyChange: (id: string, dirty: boolean) => void; onError: (s: string) => void }) {
+  const [fields, setFields] = useState<Record<string, unknown>>(initialFields);
+  const [ok, setOk] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  // Dirty is DERIVED from a snapshot of what's persisted, the way BlockCard does it — not a
+  // one-way flag set on every keystroke. Typing a character and deleting it again leaves the
+  // form matching the store, and the guard this feeds now fronts the whole topbar: a sticky
+  // flag would mean confirming your way past a prompt with nothing to save.
+  const saved = useRef(JSON.stringify(initialFields));
+  const dirty = JSON.stringify(fields) !== saved.current;
+
+  // Re-seed the form ONLY when the editor switches to a different page — never on a mere
+  // `initialFields` identity change. Every reload() (add/remove/reorder a block, save the
+  // slug) replaces `assembled` wholesale, and when `page.fields` is SQL NULL the caller's
+  // `?? {}` fallback mints a fresh object on EVERY render — keying off the object would
+  // silently drop in-progress edits and clear the "● unsaved" badge with no warning.
+  const seededFor = useRef(page.id);
+  useEffect(() => {
+    if (seededFor.current === page.id) return;
+    seededFor.current = page.id;
+    setFields(initialFields);
+    saved.current = JSON.stringify(initialFields);
+  }, [page.id, initialFields]);
+
+  // Join the editor's unsaved-changes guard (mirrors BlockCard).
+  useEffect(() => { onDirtyChange("page", dirty); }, [dirty, onDirtyChange]);
+  useEffect(() => () => { onDirtyChange("page", false); }, [onDirtyChange]);
+
+  const save = async () => {
+    // Snapshot BEFORE the round trip: an edit made while it's in flight must stay dirty.
+    const snapshot = JSON.stringify(fields);
+    setBusy(true);
+    try {
+      await api.call("updatePage", { pageId: page.id, fields });
+      saved.current = snapshot;
+      setOk(true);
+      setTimeout(() => setOk(false), 1500);
+    } catch (e) {
+      onError(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="mb-10">
+      <div className="mb-1 flex items-center gap-2">
+        <span className="text-caption font-medium uppercase tracking-wide text-fg-subtle">Content</span>
+        {dirty ? <span className="text-[11px] text-accent-strong">● unsaved</span> : null}
+      </div>
+      {ok ? <Banner ok>saved</Banner> : null}
+      <FieldForm schema={schema} value={fields} onChange={setFields} api={api} />
+      <div className="mt-3">
+        <Button onPress={save} isDisabled={busy}>{busy ? "Saving…" : "Save"}</Button>
+      </div>
     </div>
   );
 }
