@@ -515,6 +515,12 @@ export interface ValidateOpts {
 function isDateString(v: string): boolean {
   return /^\d{4}-\d{2}-\d{2}$/.test(v) && Number.isFinite(Date.parse(v));
 }
+/** A URL segment: lowercase a-z/0-9 groups joined by single hyphens, capped like the editor
+ * control caps it. Normalization lives in the editor, but the editor is not the only writer —
+ * a script or another client posting "Hello World/../x" would otherwise land it in a route. */
+function isSlugString(v: string): boolean {
+  return v.length <= 80 && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(v);
+}
 /** A date-time: `YYYY-MM-DDTHH:MM[:SS[.sss]][Z|±HH:MM]` (ISO 8601 / datetime-local). */
 function isDateTimeString(v: string): boolean {
   return /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:\d{2})?$/.test(v) && Number.isFinite(Date.parse(v));
@@ -538,12 +544,15 @@ export function validateFields(schema: FieldDefinition[] | undefined | null, val
       case "textarea":
       case "url":
       case "select":
-      // A slug is text on the wire; only the editor control differs.
-      case "slug":
         if (typeof v !== "string") throw new BadRequest(`field '${at}' must be a string`);
         if (def.type === "select" && def.options && !def.options.includes(v)) {
           throw new BadRequest(`field '${at}' must be one of: ${def.options.join(", ")}`);
         }
+        break;
+      // A slug is text on the wire; only the editor control differs.
+      case "slug":
+        if (typeof v !== "string") throw new BadRequest(`field '${at}' must be a string`);
+        if (!isSlugString(v)) throw new BadRequest(`field '${at}' must be a slug (lowercase letters, digits and single hyphens)`);
         break;
       case "richtext":
         if (typeof v !== "string" && typeof v !== "object") throw new BadRequest(`field '${at}' must be rich text`);
