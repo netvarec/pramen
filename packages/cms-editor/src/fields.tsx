@@ -450,12 +450,27 @@ function Repeater({ def, value, onChange, api, label }: { def: FieldDefinition; 
  * rather than losing the accented letters entirely.
  */
 export function slugify(input: string): string {
+  // Trailing trim AFTER the length cap — slicing a hyphen-terminated prefix out of a long
+  // title would otherwise leave the slug ending in "-".
+  return slugifyInput(input).replace(/-+$/, "");
+}
+
+/**
+ * Per-keystroke normalization: everything `slugify` does EXCEPT the trailing-hyphen trim.
+ *
+ * The input is controlled, so anything this strips can never be typed at all — trimming the
+ * trailing "-" here would make a separator unenterable (type "my-", `slugify` hands back
+ * "my", the value prop never changes, React restores the DOM). The full `slugify` runs on
+ * blur instead, once the word is finished.
+ */
+function slugifyInput(input: string): string {
   return input
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-+/, "")
     .slice(0, 80);
 }
 
@@ -471,16 +486,28 @@ function SlugField({ def, label, value, source, onChange }: { def: FieldDefiniti
   // What this control last wrote. While the field still holds it, the field is "untouched"
   // and free to follow; anything else means a human typed it.
   const derived = useRef<string | null>(null);
+  // Whether a human has edited this field. Once true it stays true for the session —
+  // emptying the field is an edit, not an invitation to start following again.
+  const touched = useRef(false);
+  // The source we last saw. Seeded on the first run so merely OPENING a row never derives:
+  // a row saved before this field existed has a filled title and an empty slug, and an
+  // onChange there marks the block dirty and autosaves something nobody asked for. Only a
+  // real change to the source field derives; "Generate from …" covers the rest.
+  const lastSource = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!def.from || !source) return;
+    if (!def.from) return;
+    const prev = lastSource.current;
+    lastSource.current = source;
+    if (prev === null || prev === source || !source) return;
+    if (touched.current) return;
+    // Follow only an empty field or one still holding our own last derivation — an existing
+    // slug is a live URL, and renaming its page must not break every link to it.
+    if (value !== "" && value !== derived.current) return;
     const next = slugify(source);
     if (next === value) return;
-    // Follow only an empty field or one still holding our own last derivation.
-    if (value === "" || value === derived.current) {
-      derived.current = next;
-      onChange(next);
-    }
+    derived.current = next;
+    onChange(next);
   }, [source, value, def.from, onChange]);
 
   const suggestion = source ? slugify(source) : "";
@@ -492,8 +519,13 @@ function SlugField({ def, label, value, source, onChange }: { def: FieldDefiniti
         className={CONTROL}
         value={value}
         onChange={(e) => {
-          derived.current = null; // typed by hand — stop following from here on
-          onChange(slugify(e.target.value));
+          touched.current = true; // typed by hand — stop following from here on
+          derived.current = null;
+          onChange(slugifyInput(e.target.value));
+        }}
+        onBlur={() => {
+          const clean = slugify(value);
+          if (clean !== value) onChange(clean);
         }}
         placeholder={suggestion}
       />
@@ -501,7 +533,7 @@ function SlugField({ def, label, value, source, onChange }: { def: FieldDefiniti
         <button
           type="button"
           className="self-start text-caption text-fg-subtle underline hover:text-fg"
-          onClick={() => { derived.current = suggestion; onChange(suggestion); }}
+          onClick={() => { derived.current = suggestion; touched.current = false; onChange(suggestion); }}
         >
           Generate from {def.from}: {suggestion}
         </button>
