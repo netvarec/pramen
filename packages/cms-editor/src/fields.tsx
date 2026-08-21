@@ -3,7 +3,7 @@
 
 import { Button, Heading, Input, ModalDialog, ModalOverlay, ModalSurface, Text, Textarea } from "@podoba/react";
 import { BlockEditor } from "@podoba/react/editor";
-import { useEffect, useState, type DragEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import type { Api } from "./api";
 import type { FieldDefinition, Media } from "./types";
 
@@ -152,7 +152,8 @@ export function FieldForm({ schema, value, onChange, api }: { schema: FieldDefin
   return (
     <div className="flex flex-col gap-4">
       {schema.map((def) => (
-        <FieldInput key={def.name} def={def} value={value[def.name]} onChange={(v) => set(def.name, v)} api={api} />
+        // `siblings` is only read by field types that derive from another field (slug).
+        <FieldInput key={def.name} def={def} value={value[def.name]} onChange={(v) => set(def.name, v)} api={api} siblings={value} />
       ))}
     </div>
   );
@@ -170,7 +171,7 @@ export function FieldForm({ schema, value, onChange, api }: { schema: FieldDefin
  * accessible-name computation via `aria-labelledby`. Those three go through the bare
  * `CONTROL` skin instead, the same way `number`/`date` already do.
  */
-function FieldInput({ def, value, onChange, api, hideLabelAs }: { def: FieldDefinition; value: unknown; onChange: (v: unknown) => void; api: Api; hideLabelAs?: string }) {
+function FieldInput({ def, value, onChange, api, hideLabelAs, siblings }: { def: FieldDefinition; value: unknown; onChange: (v: unknown) => void; api: Api; hideLabelAs?: string; siblings?: Record<string, unknown> }) {
   const label: ReactNode = hideLabelAs !== undefined ? undefined : (
     <>
       {def.label ?? def.name} {def.required ? <span className="text-danger">*</span> : null}
@@ -213,6 +214,16 @@ function FieldInput({ def, value, onChange, api, hideLabelAs }: { def: FieldDefi
         <FieldShell label={label}>
           <input className={CONTROL} type={def.type === "date" ? "date" : "datetime-local"} aria-label={hideLabelAs} value={(value as string) ?? ""} onChange={(e) => onChange(e.target.value || null)} />
         </FieldShell>
+      );
+    case "slug":
+      return (
+        <SlugField
+          def={def}
+          label={label}
+          value={typeof value === "string" ? value : ""}
+          source={typeof siblings?.[def.from ?? ""] === "string" ? (siblings[def.from ?? ""] as string) : ""}
+          onChange={onChange as (v: string) => void}
+        />
       );
     case "publish":
       // Deliberately NOT FieldShell: it wraps children in a <label>, whose implicit
@@ -428,6 +439,106 @@ function Repeater({ def, value, onChange, api, label }: { def: FieldDefinition; 
         + Add {def.label ?? def.name}
       </Button>
     </div>
+  );
+}
+
+/**
+ * Turn a title into a URL segment.
+ *
+ * Diacritics are decomposed and their marks dropped, so Czech text transliterates the way
+ * a reader expects — "Vrátnice výrobního závodu" becomes "vratnice-vyrobniho-zavodu"
+ * rather than losing the accented letters entirely.
+ */
+export function slugify(input: string): string {
+  // Trailing trim AFTER the length cap — slicing a hyphen-terminated prefix out of a long
+  // title would otherwise leave the slug ending in "-".
+  return slugifyInput(input).replace(/-+$/, "");
+}
+
+/**
+ * Per-keystroke normalization: everything `slugify` does EXCEPT the trailing-hyphen trim.
+ *
+ * The input is controlled, so anything this strips can never be typed at all — trimming the
+ * trailing "-" here would make a separator unenterable (type "my-", `slugify` hands back
+ * "my", the value prop never changes, React restores the DOM). The full `slugify` runs on
+ * blur instead, once the word is finished.
+ */
+function slugifyInput(input: string): string {
+  return input
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-+/, "")
+    .slice(0, 80);
+}
+
+/**
+ * A slug that follows another field while it is untouched.
+ *
+ * It deliberately stops following the moment the value differs from what it last derived
+ * — which includes every row that already has a slug. Renaming a published project must
+ * not silently change its URL and break every link to it; "Generate from …" is there for
+ * when that IS what you want.
+ */
+function SlugField({ def, label, value, source, onChange }: { def: FieldDefinition; label: ReactNode; value: string; source: string; onChange: (v: string) => void }) {
+  // What this control last wrote. While the field still holds it, the field is "untouched"
+  // and free to follow; anything else means a human typed it.
+  const derived = useRef<string | null>(null);
+  // Whether a human has edited this field. Once true it stays true for the session —
+  // emptying the field is an edit, not an invitation to start following again.
+  const touched = useRef(false);
+  // The source we last saw. Seeded on the first run so merely OPENING a row never derives:
+  // a row saved before this field existed has a filled title and an empty slug, and an
+  // onChange there marks the block dirty and autosaves something nobody asked for. Only a
+  // real change to the source field derives; "Generate from …" covers the rest.
+  const lastSource = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!def.from) return;
+    const prev = lastSource.current;
+    lastSource.current = source;
+    if (prev === null || prev === source || !source) return;
+    if (touched.current) return;
+    // Follow only an empty field or one still holding our own last derivation — an existing
+    // slug is a live URL, and renaming its page must not break every link to it.
+    if (value !== "" && value !== derived.current) return;
+    const next = slugify(source);
+    if (next === value) return;
+    derived.current = next;
+    onChange(next);
+  }, [source, value, def.from, onChange]);
+
+  const suggestion = source ? slugify(source) : "";
+  const canGenerate = Boolean(suggestion) && suggestion !== value;
+
+  return (
+    <FieldShell label={label}>
+      <input
+        className={CONTROL}
+        value={value}
+        onChange={(e) => {
+          touched.current = true; // typed by hand — stop following from here on
+          derived.current = null;
+          onChange(slugifyInput(e.target.value));
+        }}
+        onBlur={() => {
+          const clean = slugify(value);
+          if (clean !== value) onChange(clean);
+        }}
+        placeholder={suggestion}
+      />
+      {canGenerate ? (
+        <button
+          type="button"
+          className="self-start text-caption text-fg-subtle underline hover:text-fg"
+          onClick={() => { derived.current = suggestion; touched.current = false; onChange(suggestion); }}
+        >
+          Generate from {def.from}: {suggestion}
+        </button>
+      ) : null}
+    </FieldShell>
   );
 }
 

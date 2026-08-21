@@ -88,6 +88,17 @@ export interface FieldDefinition {
      * affordance would be a UI label over no enforcement at all.
      */
     | "publish"
+    /**
+     * A URL segment, derived from another field as you type.
+     *
+     * Set `from` to the field it follows (usually the title). The editor keeps them in
+     * sync only while the slug is untouched — once it has been edited, or on a row that
+     * already has one, it stops following, because silently rewriting a slug changes a
+     * live URL and breaks every link to it.
+     *
+     * Stored as text. Uniqueness is the schema's job (`unique(t.text())`).
+     */
+    | "slug"
     | "media"
     | "select"
     | "repeater"
@@ -104,6 +115,8 @@ export interface FieldDefinition {
   /** select only — fetch options at edit time from a query handler of this name (returns
    * `{ value, label }[]`), e.g. a live list of campaigns. Takes precedence over `options`. */
   optionsFrom?: string;
+  /** slug only — the sibling field this one is derived from (e.g. `"title"`). */
+  from?: string;
 }
 
 /** A named region on a content type; `allowedTypes` (block-type slugs) restricts what
@@ -134,7 +147,7 @@ export type RichText = string | { type: string; content?: unknown[] };
 
 /** Map one FieldDefinition (as a const literal) to the TS type of its RENDERED value.
  * Media resolves to `ResolvedMedia` (the assemble-time shape a component receives). */
-export type FieldTsType<D extends FieldDefinition> = D["type"] extends "text" | "textarea" | "url" | "select" | "date" | "datetime" | "publish"
+export type FieldTsType<D extends FieldDefinition> = D["type"] extends "text" | "textarea" | "url" | "select" | "date" | "datetime" | "publish" | "slug"
   ? string
   : D["type"] extends "richtext"
     ? RichText
@@ -310,6 +323,7 @@ function tsTypeOf(f: FieldDefinition): string {
     case "date":
     case "datetime":
     case "publish":
+    case "slug":
       return "string";
     case "richtext":
       return "RichText";
@@ -501,6 +515,12 @@ export interface ValidateOpts {
 function isDateString(v: string): boolean {
   return /^\d{4}-\d{2}-\d{2}$/.test(v) && Number.isFinite(Date.parse(v));
 }
+/** A URL segment: lowercase a-z/0-9 groups joined by single hyphens, capped like the editor
+ * control caps it. Normalization lives in the editor, but the editor is not the only writer —
+ * a script or another client posting "Hello World/../x" would otherwise land it in a route. */
+function isSlugString(v: string): boolean {
+  return v.length <= 80 && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(v);
+}
 /** A date-time: `YYYY-MM-DDTHH:MM[:SS[.sss]][Z|±HH:MM]` (ISO 8601 / datetime-local). */
 function isDateTimeString(v: string): boolean {
   return /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:\d{2})?$/.test(v) && Number.isFinite(Date.parse(v));
@@ -528,6 +548,11 @@ export function validateFields(schema: FieldDefinition[] | undefined | null, val
         if (def.type === "select" && def.options && !def.options.includes(v)) {
           throw new BadRequest(`field '${at}' must be one of: ${def.options.join(", ")}`);
         }
+        break;
+      // A slug is text on the wire; only the editor control differs.
+      case "slug":
+        if (typeof v !== "string") throw new BadRequest(`field '${at}' must be a string`);
+        if (!isSlugString(v)) throw new BadRequest(`field '${at}' must be a slug (lowercase letters, digits and single hyphens)`);
         break;
       case "richtext":
         if (typeof v !== "string" && typeof v !== "object") throw new BadRequest(`field '${at}' must be rich text`);

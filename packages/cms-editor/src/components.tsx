@@ -5,7 +5,7 @@
 import { Button, Heading, Input, ModalDialog, ModalOverlay, ModalSurface, Textarea } from "@podoba/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Api, ApiError } from "./api";
-import { FieldForm } from "./fields";
+import { FieldForm, slugify } from "./fields";
 import type { Config } from "./api";
 import type { Me } from "./app-context";
 import type { AssembledPage, AuditEntry, BlockType, CollectionMeta, ContentType, FieldDefinition, Media, Page, RegionDefinition, RenderedBlock } from "./types";
@@ -1466,9 +1466,6 @@ function fmtBytes(n?: number): string {
 export function errMsg(e: unknown): string {
   if (e instanceof ApiError) return e.message;
   return e instanceof Error ? e.message : String(e);
-}
-function slugify(s: string): string {
-  return s.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 /** Strip HTML tags + decode the few entities the WYSIWYG emits, for a clean text preview —
  * so a collapsed rich_text block reads "Test Toakdopwad" instead of "<b>Test</b>&nbsp;…". */

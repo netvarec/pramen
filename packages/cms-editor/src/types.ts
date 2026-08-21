@@ -13,6 +13,8 @@ export type FieldType =
   | "datetime"
   /** A publication timestamp — rendered as publish-now / schedule / unpublish. */
   | "publish"
+  /** A URL segment, derived from the field named by `from` while it is untouched. */
+  | "slug"
   | "media"
   | "select"
   | "repeater"
@@ -32,6 +34,8 @@ export interface FieldDefinition {
    * return `{ value, label }[]`. Lets a select offer live data (e.g. existing campaigns)
    * instead of a static list. Takes precedence over `options`. */
   optionsFrom?: string;
+  /** For `slug`: the sibling field this one is derived from (e.g. `"title"`). */
+  from?: string;
 }
 
 export interface RegionDefinition {
