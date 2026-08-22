@@ -6,6 +6,8 @@
 // and/or a set of permitted `fields`. Access is deny-by-default; policies only
 // ever grant. Across the identity's roles, grants OR-merge (any role can allow).
 
+import type { CellValue, JsonValue, Row } from "./infer";
+
 export type Action = "read" | "create" | "update" | "delete";
 
 /** Runtime identity. Augment with your own properties (userId, tier, …). */
@@ -17,7 +19,7 @@ export interface Identity {
    * expiry per message (see durable-object.ts). Absent for non-expiring / synthetic
    * (callPrivileged) identities, which are therefore never treated as expired. */
   exp?: number;
-  [key: string]: unknown;
+  [key: string]: JsonValue | undefined;
 }
 
 // --- $identity markers: reference an identity property inside a where rule ---
@@ -34,8 +36,8 @@ export function $identity(path: string): IdentityMarker {
   return { [IDENTITY_MARKER]: true, path };
 }
 
-export function isIdentityMarker(v: unknown): v is IdentityMarker {
-  return typeof v === "object" && v !== null && (v as Record<symbol, unknown>)[IDENTITY_MARKER] === true;
+export function isIdentityMarker(v: WhereValue): v is IdentityMarker {
+  return typeof v === "object" && v !== null && (v as Partial<IdentityMarker>)[IDENTITY_MARKER] === true;
 }
 
 // --- $input markers: reference a request-input field inside a where rule, for a
@@ -56,8 +58,8 @@ export function $input(path: string): InputMarker {
   return { [INPUT_MARKER]: true, path };
 }
 
-export function isInputMarker(v: unknown): v is InputMarker {
-  return typeof v === "object" && v !== null && (v as Record<symbol, unknown>)[INPUT_MARKER] === true;
+export function isInputMarker(v: WhereValue): v is InputMarker {
+  return typeof v === "object" && v !== null && (v as Partial<InputMarker>)[INPUT_MARKER] === true;
 }
 
 // --- $now markers: the request's evaluation instant inside a where rule, for a
@@ -88,8 +90,8 @@ export function $now(): NowMarker {
   return { [NOW_MARKER]: true };
 }
 
-export function isNowMarker(v: unknown): v is NowMarker {
-  return typeof v === "object" && v !== null && (v as Record<symbol, unknown>)[NOW_MARKER] === true;
+export function isNowMarker(v: WhereValue): v is NowMarker {
+  return typeof v === "object" && v !== null && (v as Partial<NowMarker>)[NOW_MARKER] === true;
 }
 
 // --- allow / deny markers ---
@@ -110,8 +112,21 @@ export function deny(): DenyMarker {
 
 // --- policy rules ---
 
-/** A where rule: column -> value, where value may be a literal or an $identity marker. */
-export type WhereRule = Record<string, unknown | IdentityMarker>;
+/** A value inside a `where` rule: a literal cell value, a per-request marker, an
+ * operator object (`{ gte: 5 }`), a nested relation predicate, or an AND/OR group. */
+export type WhereValue =
+  | CellValue
+  | IdentityMarker
+  | InputMarker
+  | NowMarker
+  | WhereRule
+  | WhereValue[];
+
+/** A where rule: column (or `AND`/`OR`/`NOT`) -> value. An interface so it can recur
+ * through `WhereValue` for nested relation predicates and boolean groups. */
+export interface WhereRule {
+  [key: string]: WhereValue;
+}
 
 /** A per-row (cell-level) field grant: `fields` are permitted only for rows that
  * match `when`. Additive over the policy's flat `fields` — a conditional grant can
@@ -125,7 +140,7 @@ export interface ConditionalFields {
 /** Escape hatch for cell-level ACL: a late per-row resolver. Given the identity and
  * the fetched (or candidate, on write) row, returns the extra permitted fields —
  * additive over `fields`; `null` means all fields for that row. */
-export type FieldsFn = (identity: Identity | null, row: Record<string, unknown>) => string[] | null;
+export type FieldsFn = (identity: Identity | null, row: Row) => string[] | null;
 
 /** Per-relation ACL inside a parent read policy. */
 export interface RelationAclRule {
@@ -143,10 +158,10 @@ export interface RelationAclRule {
 }
 
 /** A forced column value on write: a literal, or computed from the identity. */
-export type SetValue = unknown | ((identity: Identity | null) => unknown);
+export type SetValue = CellValue | ((identity: Identity | null) => CellValue);
 
 /** Server-side validation on write; throw to reject. Runs on the final values. */
-export type Validator = (args: { identity: Identity | null; values: Record<string, unknown> }) => void;
+export type Validator = (args: { identity: Identity | null; values: Row }) => void;
 
 export interface PolicyRules {
   /** Row-level predicate (AND of equalities). Omit/empty = all rows. */
@@ -175,10 +190,10 @@ export interface PolicyRules {
 export interface ResolverDb {
   find(spec: {
     from: string;
-    where?: Record<string, unknown>;
+    where?: WhereRule;
     orderBy?: { column: string; dir?: "asc" | "desc" };
     limit?: number;
-  }): Promise<Array<Record<string, unknown>>>;
+  }): Promise<Row[]>;
 }
 
 export interface ResolverContext {

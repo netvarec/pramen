@@ -13,6 +13,7 @@ import { migrate } from "../packages/server/src/runtime/migrate";
 import { compileSelect, eq } from "../packages/server/src/runtime/read-engine";
 import { postgresDialect, sqliteDialect } from "../packages/server/src/runtime/driver";
 import { bunSqliteDriver } from "./sqlite-driver";
+import type { Row } from "@pramen/server";
 
 const schema = defineSchema({
   notes: Entity((t) => ({ id: t.id(), title: t.text(), body: t.text(), ownerId: t.text() })),
@@ -47,8 +48,8 @@ describe("Db + ACL over an async (D1-like) sqlite Driver", () => {
     // exact cell-level ACL behaviour, now over an async non-DO substrate.
     const team = new Db(driver, ctx({ userId: "alice", roles: ["teammate"] }), schema);
     const rows = await team.find({ from: "notes", orderBy: { column: "id", dir: "asc" } });
-    const mine = rows.find((r) => r.id === aliceNote.id) as Record<string, unknown>;
-    const other = rows.find((r) => r.id === bobNote.id) as Record<string, unknown>;
+    const mine = rows.find((r) => r.id === aliceNote.id) as Row;
+    const other = rows.find((r) => r.id === bobNote.id) as Row;
     expect(mine.body).toBe("alice-secret");
     expect("body" in other).toBe(false);
 

@@ -79,7 +79,11 @@ export function parseRegistryKey(key: string): DoRef | null {
 /** Enumerate every registered `(tenant, partition)` pair from the registry KV.
  * Paginates over the full listing (cursor / list_complete) — never truncates at the
  * 1000-key page limit. */
-export async function listDOs(kv: KVNamespace): Promise<DoRef[]> {
+/** The slice of KV that DO enumeration needs — narrower than the whole namespace, so
+ * callers (and test doubles) only have to provide `list`. */
+export type KvLister = Pick<KVNamespace, "list">;
+
+export async function listDOs(kv: KvLister): Promise<DoRef[]> {
   const out: DoRef[] = [];
   let cursor: string | undefined;
   for (;;) {

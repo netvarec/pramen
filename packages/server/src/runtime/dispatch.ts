@@ -20,6 +20,8 @@ import type { Files } from "../sdk/files";
 import type { ResolverDb } from "../sdk/acl";
 import type { SchemaDef } from "../sdk/schema";
 import { authorizeHandler, type AppTaskMap, type HandlerContext, type HandlerKind, type HandlerMap, type Tasks } from "../sdk/handlers";
+import type { EnvBag } from "../sdk/handlers";
+import type { JsonValue } from "../sdk/infer";
 
 export interface DispatchResult {
   readonly result: unknown;
@@ -53,10 +55,10 @@ export async function dispatch(
   driver: Driver,
   kv: Kv,
   files: Files,
-  env: Readonly<Record<string, unknown>>,
+  env: EnvBag,
   acl: AclContext,
   name: string,
-  input: unknown,
+  input: JsonValue,
 ): Promise<DispatchResult> {
   const handler = handlers[name];
   if (!handler) throw new BadRequest(`unknown handler: ${name}`);
@@ -68,7 +70,7 @@ export async function dispatch(
   }
 
   // Validate/parse the request input at the boundary, if the handler declares it.
-  let parsed = input;
+  let parsed: unknown = input;
   if (handler.input) {
     try {
       parsed = handler.input(input);

@@ -5,7 +5,7 @@ import { Button, Heading, Input, ModalDialog, ModalOverlay, ModalSurface, Text, 
 import { BlockEditor } from "@podoba/react/editor";
 import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import type { Api } from "./api";
-import type { FieldDefinition, Media } from "./types";
+import type { FieldDefinition, FieldValue, FieldValues, Media } from "./types";
 
 // Tokenized bare control (podoba's filled-field skin) for the native inputs that
 // don't map cleanly onto a podoba primitive (number/date/select/file).
@@ -147,8 +147,8 @@ function PublishControl({ value, onChange }: { value: string; onChange: (v: stri
   );
 }
 
-export function FieldForm({ schema, value, onChange, api }: { schema: FieldDefinition[]; value: Record<string, unknown>; onChange: (v: Record<string, unknown>) => void; api: Api }) {
-  const set = (name: string, v: unknown) => onChange({ ...value, [name]: v });
+export function FieldForm({ schema, value, onChange, api }: { schema: FieldDefinition[]; value: FieldValues; onChange: (v: FieldValues) => void; api: Api }) {
+  const set = (name: string, v: FieldValue) => onChange({ ...value, [name]: v });
   return (
     <div className="flex flex-col gap-4">
       {schema.map((def) => (
@@ -171,13 +171,13 @@ export function FieldForm({ schema, value, onChange, api }: { schema: FieldDefin
  * accessible-name computation via `aria-labelledby`. Those three go through the bare
  * `CONTROL` skin instead, the same way `number`/`date` already do.
  */
-function FieldInput({ def, value, onChange, api, hideLabelAs, siblings }: { def: FieldDefinition; value: unknown; onChange: (v: unknown) => void; api: Api; hideLabelAs?: string; siblings?: Record<string, unknown> }) {
+function FieldInput({ def, value, onChange, api, hideLabelAs, siblings }: { def: FieldDefinition; value: FieldValue; onChange: (v: FieldValue) => void; api: Api; hideLabelAs?: string; siblings?: FieldValues }) {
   const label: ReactNode = hideLabelAs !== undefined ? undefined : (
     <>
       {def.label ?? def.name} {def.required ? <span className="text-danger">*</span> : null}
     </>
   );
-  const asText = (v: unknown) => (typeof v === "string" ? v : v == null ? "" : JSON.stringify(v));
+  const asText = (v: FieldValue) => (typeof v === "string" ? v : v == null ? "" : JSON.stringify(v));
   switch (def.type) {
     case "text":
     case "url": {
@@ -258,12 +258,12 @@ function FieldInput({ def, value, onChange, api, hideLabelAs, siblings }: { def:
       return (
         <FieldShell label={label}>
           <div className="rounded-lg border border-border bg-surface-muted p-3.5">
-            <FieldForm schema={def.fields ?? []} value={(value as Record<string, unknown>) ?? {}} onChange={onChange as (v: Record<string, unknown>) => void} api={api} />
+            <FieldForm schema={def.fields ?? []} value={(value as FieldValues) ?? {}} onChange={onChange as (v: FieldValues) => void} api={api} />
           </div>
         </FieldShell>
       );
     case "repeater":
-      return <Repeater def={def} value={(value as Record<string, unknown>[]) ?? []} onChange={onChange as (v: unknown[]) => void} api={api} label={label} />;
+      return <Repeater def={def} value={(value as FieldValues[]) ?? []} onChange={onChange as (v: FieldValues[]) => void} api={api} label={label} />;
     default:
       return null;
   }
@@ -292,7 +292,7 @@ export function RichText({ value, onChange }: { value: string; onChange: (v: str
  * Reordering is drag-and-drop from the ⠿ handle, mirroring the block canvas. ↑/↓ stay,
  * because dragging is unavailable to keyboard users and awkward on touch.
  */
-function Repeater({ def, value, onChange, api, label }: { def: FieldDefinition; value: Record<string, unknown>[]; onChange: (v: unknown[]) => void; api: Api; label: ReactNode }) {
+function Repeater({ def, value, onChange, api, label }: { def: FieldDefinition; value: FieldValues[]; onChange: (v: FieldValues[]) => void; api: Api; label: ReactNode }) {
   const items = Array.isArray(value) ? value : [];
   const fields = def.fields ?? [];
   // One field, and not itself a tall control — the case where the card is pure overhead.
@@ -300,7 +300,7 @@ function Repeater({ def, value, onChange, api, label }: { def: FieldDefinition; 
 
   const [drag, setDrag] = useState<{ from: number; over: number } | null>(null);
 
-  const upd = (i: number, v: Record<string, unknown>) => onChange(items.map((it, j) => (j === i ? v : it)));
+  const upd = (i: number, v: FieldValues) => onChange(items.map((it, j) => (j === i ? v : it)));
   const add = () => onChange([...items, {}]);
   const del = (i: number) => onChange(items.filter((_, j) => j !== i));
   const moveTo = (from: number, to: number) => {
@@ -322,7 +322,7 @@ function Repeater({ def, value, onChange, api, label }: { def: FieldDefinition; 
    * instead titled every slide with the uuid of its image, which is worse than no summary
    * at all — the point is to tell two rows apart at a glance.
    */
-  const summarise = (it: Record<string, unknown>): string => {
+  const summarise = (it: FieldValues): string => {
     const readable = ["text", "textarea", "richtext", "select", "url"];
     for (const f of fields) {
       if (!readable.includes(f.type)) continue;
@@ -545,7 +545,7 @@ function SlugField({ def, label, value, source, onChange }: { def: FieldDefiniti
 // A `select` field. Static `options` render as-is; when `optionsFrom` is set, the options are
 // fetched once from that query handler (returns `{ value, label }[]`) — e.g. a live list of
 // campaigns — so the editor never has to hardcode or copy identifiers by hand.
-function SelectField({ def, value, onChange, api, ariaLabel }: { def: FieldDefinition; value: string | null; onChange: (v: unknown) => void; api: Api; ariaLabel?: string }) {
+function SelectField({ def, value, onChange, api, ariaLabel }: { def: FieldDefinition; value: string | null; onChange: (v: FieldValue) => void; api: Api; ariaLabel?: string }) {
   const [dyn, setDyn] = useState<{ value: string; label: string }[] | null>(null);
   const from = def.optionsFrom;
   useEffect(() => {

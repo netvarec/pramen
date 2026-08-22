@@ -4,6 +4,7 @@
 // projection, cell-level ACL, writes, and aggregates all run over D1, not just the
 // DO. (Live queries are intentionally DO-only and not exercised here.)
 
+import type { JsonValue } from "@pramen/server";
 import { assert, token } from "../lib";
 
 export async function runD1(base: string): Promise<void> {
@@ -14,20 +15,26 @@ export async function runD1(base: string): Promise<void> {
   // `bookmark` (when set) is echoed as the read-your-writes session anchor, mirroring
   // what @pramen/client does transparently. Returns the response bookmark header too,
   // so the suite can assert the Sessions-API plumbing is threaded end-to-end.
-  const postH = (name: string, input: unknown, bearer?: string, bookmark?: string) =>
-    fetch(`${base}/rpc/${name}`, {
+  const postH = (name: string, input: JsonValue, bearer?: string, bookmark?: string) => {
+    const headers = new Headers({
+      "content-type": "application/json",
+      "x-pramen-tenant": TENANT,
+      "x-pramen-store": "d1",
+    });
+    if (bearer) headers.set("authorization", `Bearer ${bearer}`);
+    if (bookmark) headers.set("x-pramen-d1-bookmark", bookmark);
+    return fetch(`${base}/rpc/${name}`, {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-pramen-tenant": TENANT,
-        "x-pramen-store": "d1",
-        ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
-        ...(bookmark ? { "x-pramen-d1-bookmark": bookmark } : {}),
-      },
+      headers,
       body: JSON.stringify(input ?? {}),
-    }).then(async (r) => ({ status: r.status, body: (await r.json()) as any, bookmark: r.headers.get("x-pramen-d1-bookmark") }));
+    }).then(async (r) => ({
+      status: r.status,
+      body: (await r.json()) as any,
+      bookmark: r.headers.get("x-pramen-d1-bookmark"),
+    }));
+  };
 
-  const post = (name: string, input: unknown, bearer?: string) => postH(name, input, bearer).then(({ status, body }) => ({ status, body }));
+  const post = (name: string, input: JsonValue, bearer?: string) => postH(name, input, bearer).then(({ status, body }) => ({ status, body }));
 
   const T = {
     admin: await token("admin", ["admin"]),

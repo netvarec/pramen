@@ -17,7 +17,21 @@
 // the token lifecycle. See createMagicLinkAuth below.
 
 import { Entity, mutation, query, defaultTo, unique, hidden, policy, allow, $identity, BadRequest, Unauthorized, denySession, allowSession } from "@pramen/server";
-import type { AppTaskMap, HandlerContext, HandlerMap, Policy } from "@pramen/server";
+import type { AppTaskMap, CellValue, HandlerContext, HandlerMap, JsonObject, JsonValue, Policy, Row } from "@pramen/server";
+
+/** What an auth factory contributes to an app: RPC handlers plus the task handlers
+ * that deliver their emails. */
+export interface AuthModule {
+  handlers: HandlerMap;
+  tasks: AppTaskMap;
+}
+
+/** Validated signup / login credentials, parsed from the request input. */
+interface Credentials {
+  username: string;
+  password: string;
+  email?: string;
+}
 
 // --- schema fragment: spread into your defineSchema so the table is migrated ---
 
@@ -209,7 +223,7 @@ function dummyPasswordHash(): Promise<string> {
 // --- HS256 token signing (matches the verifier in @pramen/server auth.ts) ---
 
 export async function signToken(
-  claims: Record<string, unknown>,
+  claims: JsonObject,
   secret: string,
   opts: { ttlSeconds?: number } = {},
 ): Promise<string> {
@@ -244,8 +258,8 @@ function sessionTtlOf(ctx: HandlerContext): number {
  * truth for `parseEmail` and the optional email at signup. */
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
-function parseCreds(raw: unknown): { username: string; password: string; email?: string } {
-  const o = (raw ?? {}) as Record<string, unknown>;
+function parseCreds(raw: JsonValue): Credentials {
+  const o = (raw ?? {}) as JsonObject;
   if (typeof o.username !== "string" || o.username.length === 0) throw new Error("username is required");
   if (typeof o.password !== "string" || o.password.length < 8) throw new Error("password must be at least 8 characters");
   // Optional contact email at signup — validated + normalized when present, so password
@@ -313,7 +327,7 @@ export function createAuthHandlers(opts: AuthHandlerOptions = {}) {
 
   /** Resolve the submitted identifier to a row, per `loginBy`. Returns undefined when
    * nothing matches; the caller still runs a dummy verify so the timing is flat. */
-  async function findLoginRow(ctx: HandlerContext, identifier: string): Promise<Record<string, unknown> | undefined> {
+  async function findLoginRow(ctx: HandlerContext, identifier: string): Promise<Row | undefined> {
     const cols = "SELECT username, passwordHash, roles, active FROM auth_users";
     if (loginBy !== "email") {
       const byName = await ctx.db.exec(`${cols} WHERE username = ? LIMIT 1`, identifier);
@@ -479,15 +493,15 @@ function mintToken(): string {
   return b64url(crypto.getRandomValues(new Uint8Array(32)));
 }
 
-function parseEmail(raw: unknown): { email: string } {
-  const o = (raw ?? {}) as Record<string, unknown>;
+function parseEmail(raw: JsonValue): { email: string } {
+  const o = (raw ?? {}) as JsonObject;
   const email = typeof o.email === "string" ? o.email.trim().toLowerCase() : "";
   if (!EMAIL_RE.test(email)) throw new BadRequest("a valid email is required");
   return { email };
 }
 
-function parseLinkToken(raw: unknown): { token: string } {
-  const o = (raw ?? {}) as Record<string, unknown>;
+function parseLinkToken(raw: JsonValue): { token: string } {
+  const o = (raw ?? {}) as JsonObject;
   if (typeof o.token !== "string" || o.token.length === 0) throw new BadRequest("token is required");
   return { token: o.token };
 }
@@ -530,7 +544,7 @@ export interface MagicLinkOptions {
  * You MUST spread `magicLink.tasks` into your app's task map — without it, tokens
  * get written but the email never sends (the drainer retries then dead-letters).
  * Both handlers are anonymous — gate nothing; the token is the capability. */
-export function createMagicLinkAuth(opts: MagicLinkOptions): { handlers: HandlerMap; tasks: AppTaskMap } {
+export function createMagicLinkAuth(opts: MagicLinkOptions): AuthModule {
   const linkTtlMs = (opts.linkTtlSeconds ?? 900) * 1000;
   const sessionTtl = opts.sessionTtlSeconds ?? TOKEN_TTL_SECONDS;
   const defaultRoles = opts.defaultRoles ?? DEFAULT_ROLES;
@@ -688,7 +702,7 @@ export function createMagicLinkAuth(opts: MagicLinkOptions): { handlers: Handler
 //    @pramen/server so an app can revoke on its own compromise signals too.
 
 /** SQLite has no bool: `active` is stored 0/1 (NULL on a pre-column row = active). */
-function isActive(v: unknown): boolean {
+function isActive(v: CellValue): boolean {
   return v == null || Number(v) !== 0;
 }
 
@@ -702,10 +716,10 @@ function requireUserId(ctx: HandlerContext): string {
 // can't import — so address the users table through a minimal structural view of the
 // ACL'd Db. This is the same ctx.db at runtime: row-scope + field projection still apply.
 interface UsersDb {
-  update(table: string, id: string, patch: Record<string, unknown>): Promise<Record<string, unknown> | undefined>;
+  update(table: string, id: string, patch: Row): Promise<Row | undefined>;
   delete(table: string, id: string): Promise<boolean>;
 }
-const usersDb = (ctx: HandlerContext): UsersDb => ctx.db as unknown as UsersDb;
+const usersDb = (ctx: HandlerContext): UsersDb => ctx.db as UsersDb;
 
 // The users table must be a valid SQL identifier (it's interpolated into the raw exec
 // strings below). It's app config, never request input, but guard it anyway.
@@ -917,8 +931,8 @@ async function redeemEmailToken(ctx: HandlerContext, purpose: string, token: str
 }
 
 /** Parse `{ token, newPassword }` for `resetPassword`. */
-function parseResetInput(raw: unknown): { token: string; newPassword: string } {
-  const o = (raw ?? {}) as Record<string, unknown>;
+function parseResetInput(raw: JsonValue): { token: string; newPassword: string } {
+  const o = (raw ?? {}) as JsonObject;
   if (typeof o.token !== "string" || o.token.length === 0) throw new BadRequest("token is required");
   if (typeof o.newPassword !== "string" || o.newPassword.length < 8) throw new BadRequest("newPassword must be at least 8 characters");
   return { token: o.token, newPassword: o.newPassword };
@@ -942,7 +956,7 @@ export interface PasswordResetOptions {
  * when an active account matches the email); `resetPassword` redeems the single-use token
  * and sets the new password. Spread `emailTokenSchema` into your schema and `.tasks` into
  * your task map. */
-export function createPasswordReset(opts: PasswordResetOptions): { handlers: HandlerMap; tasks: AppTaskMap } {
+export function createPasswordReset(opts: PasswordResetOptions): AuthModule {
   const table = assertIdentifier(opts.table ?? "auth_users");
   const linkTtlMs = (opts.linkTtlSeconds ?? 3600) * 1000;
 
@@ -1008,7 +1022,7 @@ export interface EmailVerificationOptions {
  * `auth_users.emailVerified`. A token is bound to the address current at request time, so a
  * later `changeEmail` invalidates it (verifyEmail rejects a token whose address no longer
  * matches). Spread `emailTokenSchema` into your schema and `.tasks` into your task map. */
-export function createEmailVerification(opts: EmailVerificationOptions): { handlers: HandlerMap; tasks: AppTaskMap } {
+export function createEmailVerification(opts: EmailVerificationOptions): AuthModule {
   const table = assertIdentifier(opts.table ?? "auth_users");
   const linkTtlMs = (opts.linkTtlSeconds ?? 86_400) * 1000;
 

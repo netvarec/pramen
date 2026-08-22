@@ -3,6 +3,7 @@
 // bypassed). The backend a dashboard sits on. Non-admins are rejected; the
 // json/fileRef codec still applies.
 
+import type { JsonValue } from "@pramen/server";
 import { assert, token } from "../lib";
 
 export async function runAdmin(base: string): Promise<void> {
@@ -10,12 +11,13 @@ export async function runAdmin(base: string): Promise<void> {
   const admin = await token("admin", ["admin"]);
   const author = await token("alice", ["author"], { tenants: [TENANT] });
 
-  const data = (body: unknown, bearer = admin) =>
-    fetch(`${base}/admin/data`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...(bearer ? { authorization: `Bearer ${bearer}` } : {}) },
-      body: JSON.stringify(body),
-    }).then(async (r) => ({ status: r.status, body: (await r.json()) as any }));
+  const data = (body: JsonValue, bearer = admin) => {
+    const headers = new Headers({ "content-type": "application/json" });
+    if (bearer) headers.set("authorization", `Bearer ${bearer}`);
+    return fetch(`${base}/admin/data`, { method: "POST", headers, body: JSON.stringify(body) }).then(
+      async (r) => ({ status: r.status, body: (await r.json()) as any }),
+    );
+  };
 
   // --- gate: only admins ---
   const byAuthor = await data({ tenant: TENANT, table: "notes", op: "list" }, author);

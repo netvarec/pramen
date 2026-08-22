@@ -6,6 +6,8 @@
 // deactivation blocks login, and a password change rotates the credential.
 
 import { assert, http, token } from "../lib";
+import type { Row } from "@pramen/server";
+import type { JsonValue } from "@pramen/server";
 
 export async function runUserManagement(base: string): Promise<void> {
   const call = http(base, "main");
@@ -20,7 +22,7 @@ export async function runUserManagement(base: string): Promise<void> {
   // --- admin: listUsers projects out passwordHash ---------------------------
   const list = await call("listUsers", { limit: 200 }, admin);
   assert(list.body.ok && Array.isArray(list.body.result), "um: admin listUsers returns rows");
-  const rows = list.body.result as Record<string, unknown>[];
+  const rows = list.body.result as Row[];
   assert(rows.some((r) => r.username === "um_alice"), "um: a seeded user appears in the admin listing");
   assert(
     rows.every((r) => !("passwordHash" in r)),
@@ -42,7 +44,7 @@ export async function runUserManagement(base: string): Promise<void> {
   // --- self-service: listUsers as a user sees ONLY itself -------------------
   const selfList = await call("listUsers", {}, alice);
   assert(selfList.body.ok, "um: a user may call listUsers");
-  const selfRows = selfList.body.result as Record<string, unknown>[];
+  const selfRows = selfList.body.result as Row[];
   assert(
     selfRows.length >= 1 && selfRows.every((r) => r.username === "um_alice"),
     "um: the self policy scopes listUsers to the caller's own row",
@@ -113,7 +115,7 @@ export async function runUserManagement(base: string): Promise<void> {
   assert(goneLogin.status === 401, "um: a deleted user can no longer log in (401)");
   const goneList = await call("listUsers", { limit: 200 }, admin);
   assert(
-    !(goneList.body.result as Record<string, unknown>[]).some((r) => r.username === "um_bob"),
+    !(goneList.body.result as Row[]).some((r) => r.username === "um_bob"),
     "um: the deleted user is gone from the listing",
   );
 
@@ -125,7 +127,7 @@ export async function runUserManagement(base: string): Promise<void> {
   }).then(async (r) => ({ status: r.status, body: (await r.json()) as any }));
   assert(adminData.body.ok && Array.isArray(adminData.body.result), "um: /admin/data lists auth_users");
   assert(
-    (adminData.body.result as Record<string, unknown>[]).every((r) => !("passwordHash" in r)),
+    (adminData.body.result as Row[]).every((r) => !("passwordHash" in r)),
     "um: hidden() — /admin/data never returns passwordHash even under SYSTEM scope",
   );
 
@@ -133,7 +135,7 @@ export async function runUserManagement(base: string): Promise<void> {
   // createUserHandlers({ table: "org_accounts" }) + authPolicies({ table, prefix,
   // adminReadFields/adminWriteFields incl "tenants" }) manage a table the package
   // doesn't own, exposing + permitting an extra column.
-  const adminData2 = (body: unknown) =>
+  const adminData2 = (body: JsonValue) =>
     fetch(`${base}/admin/data`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${admin}` },
@@ -147,7 +149,7 @@ export async function runUserManagement(base: string): Promise<void> {
     values: { username: "acct1", passwordHash: "", roles: ["member"], tenants: ["t1"], createdAt: 1 },
   });
   const orgList = await call("listOrgAccounts", { limit: 50 }, admin);
-  const acct = (orgList.body.result as Record<string, unknown>[]).find((r) => r.username === "acct1");
+  const acct = (orgList.body.result as Row[]).find((r) => r.username === "acct1");
   assert(
     acct != null && JSON.stringify(acct.tenants) === JSON.stringify(["t1"]),
     "um(factory): listOrgAccounts over a custom table projects the extra `tenants` column",

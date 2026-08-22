@@ -21,7 +21,7 @@ import type { FieldDef, SchemaDef } from "../sdk/schema";
 import { partitionOf } from "../sdk/schema";
 
 /** The comparable fingerprint of a single column: type + migration-relevant modifiers. */
-export interface ColumnShape {
+export interface ColumnFingerprint {
   type: string;
   notNull?: boolean;
   unique?: boolean;
@@ -33,16 +33,16 @@ export interface ColumnShape {
 }
 
 /** The comparable fingerprint of a table: its partition + each column's shape. */
-export interface TableShape {
+export interface TableFingerprint {
   partition: string;
-  columns: Record<string, ColumnShape>;
+  columns: Record<string, ColumnFingerprint>;
 }
 
 /** table -> table shape. The comparable surface of a schema. */
-export type SchemaShape = Record<string, TableShape>;
+export type SchemaFingerprint = Record<string, TableFingerprint>;
 
-function columnShape(f: FieldDef): ColumnShape {
-  const c: ColumnShape = { type: f.type };
+function columnFingerprint(f: FieldDef): ColumnFingerprint {
+  const c: ColumnFingerprint = { type: f.type };
   if (f.notNull) c.notNull = true;
   if (f.unique) c.unique = true;
   if (f.primaryKey) c.primaryKey = true;
@@ -53,27 +53,27 @@ function columnShape(f: FieldDef): ColumnShape {
   return c;
 }
 
-export function schemaShape(schema: SchemaDef): SchemaShape {
-  const out: SchemaShape = {};
+export function schemaFingerprint(schema: SchemaDef): SchemaFingerprint {
+  const out: SchemaFingerprint = {};
   for (const [table, def] of Object.entries(schema)) {
-    const columns: Record<string, ColumnShape> = {};
-    for (const [col, f] of Object.entries(def.fields)) columns[col] = columnShape(f as FieldDef);
+    const columns: Record<string, ColumnFingerprint> = {};
+    for (const [col, f] of Object.entries(def.fields)) columns[col] = columnFingerprint(f as FieldDef);
     out[table] = { partition: partitionOf(schema, table), columns };
   }
   return out;
 }
 
 /** The modifier fields compared for a `change-column` (everything but `type`). */
-const MODIFIER_KEYS: (keyof ColumnShape)[] = ["notNull", "unique", "primaryKey", "generated", "hidden", "default"];
+const MODIFIER_KEYS: (keyof ColumnFingerprint)[] = ["notNull", "unique", "primaryKey", "generated", "hidden", "default"];
 
 /** Does `next` tighten a constraint `prev` lacked (add NOT NULL / UNIQUE / PRIMARY KEY)?
  * Such a change may require the destructive gate or be skipped when the live data
  * conflicts (NULL rows / duplicates) — so the diff flags it `destructive`. */
-function tightensConstraint(prev: ColumnShape, next: ColumnShape): boolean {
+function tightensConstraint(prev: ColumnFingerprint, next: ColumnFingerprint): boolean {
   return (!!next.notNull && !prev.notNull) || (!!next.unique && !prev.unique) || (!!next.primaryKey && !prev.primaryKey);
 }
 
-function modifierDiff(prev: ColumnShape, next: ColumnShape): string | null {
+function modifierDiff(prev: ColumnFingerprint, next: ColumnFingerprint): string | null {
   const parts: string[] = [];
   for (const k of MODIFIER_KEYS) {
     if (prev[k] !== next[k]) parts.push(`${k}: ${fmt(prev[k])} → ${fmt(next[k])}`);
@@ -102,7 +102,7 @@ export interface SchemaChange {
   appliesOnBoot: boolean;
 }
 
-export function diffSchemaShape(prev: SchemaShape, next: SchemaShape): SchemaChange[] {
+export function diffSchemaFingerprint(prev: SchemaFingerprint, next: SchemaFingerprint): SchemaChange[] {
   const changes: SchemaChange[] = [];
 
   for (const table of Object.keys(next)) {

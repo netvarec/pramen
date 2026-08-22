@@ -3,6 +3,7 @@
 // so ACL row-scope doesn't mask the operator behaviour.
 
 import { assert, http, token } from "../lib";
+import type { JsonValue } from "@pramen/server";
 
 export async function runQuery(base: string): Promise<void> {
   const TENANT = "query-demo";
@@ -14,7 +15,7 @@ export async function runQuery(base: string): Promise<void> {
   const a2 = await mk("alpha-2");
   const b1 = await mk("beta-1");
 
-  const titles = async (input: unknown): Promise<string[]> => {
+  const titles = async (input: JsonValue): Promise<string[]> => {
     const r = await post("queryNotes", input, admin);
     assert(r.status === 200, `queryNotes ok for ${JSON.stringify(input)}`);
     return r.body.result.map((n: any) => n.title);

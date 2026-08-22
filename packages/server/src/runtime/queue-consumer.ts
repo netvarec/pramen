@@ -12,6 +12,8 @@
 import type { Mail } from "./mail";
 import type { Queue } from "./queue";
 import type { Kv } from "./kv";
+import type { EnvBag } from "../sdk/handlers";
+import type { JsonValue } from "../sdk/infer";
 
 /** One received message (the Cloudflare Queues `Message` shape). */
 export interface QueueMessage<Body = unknown> {
@@ -40,7 +42,7 @@ export interface QueueBatch<Body = unknown> {
  * tenant data via `ctx.callPrivileged`. */
 export interface QueueContext {
   /** The Worker environment (bindings + vars + secrets). */
-  readonly env: Readonly<Record<string, unknown>>;
+  readonly env: EnvBag;
   /** Project KV (cross-tenant). */
   readonly kv: Kv;
   /** Send email (the notification path). */
@@ -49,7 +51,7 @@ export interface QueueContext {
   readonly queue: Queue;
   /** Apply a privileged mutation into a tenant's DO (the consumer has no direct db).
    * The message body should carry the `tenant`. */
-  callPrivileged(opts: { name: string; input?: unknown; tenant?: string; roles?: string[]; partition?: string }): Promise<Response>;
+  callPrivileged(opts: { name: string; input?: JsonValue; tenant?: string; roles?: string[]; partition?: string }): Promise<Response>;
 }
 
 /** A queue consumer handler — runs once per message. Resolving ACKs the message;

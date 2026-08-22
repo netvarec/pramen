@@ -43,6 +43,7 @@ import { digest } from "./digest";
 import { quoteIdent, type Driver } from "./driver";
 import { entitiesInPartition, partitionOf, validateSchema } from "../sdk/schema";
 import type { EntityFields, FieldDef, SchemaDef } from "../sdk/schema";
+import type { CellValue } from "../sdk/infer";
 
 export interface MigrationReport {
   changed: boolean;
@@ -306,7 +307,7 @@ async function rebuildTable(
   // rebuilt table whose FKs momentarily see stale rows), so run the whole sequence
   // ATOMICALLY: the D1 driver's batch() defers FK checks to the batch commit, and on the
   // DO the ambient boot transaction (+ defer set at migrate start) already covers it.
-  const stmts: { sql: string; params: unknown[] }[] = [];
+  const stmts: { sql: string; params: CellValue[] }[] = [];
   // Quarantine tables are bare column lists — untyped, no constraints, no FKs. Values
   // round-trip verbatim (they were already coerced by the original table's affinity).
   const bareCopy = (name: string, quotedCols: string[]): string => `CREATE TABLE ${quoteIdent(name)} (${quotedCols.join(", ")})`;

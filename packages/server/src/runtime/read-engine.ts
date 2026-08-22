@@ -6,11 +6,14 @@
 // AND/OR groups) and ACL row-level scopes be merged before compilation. Column
 // names come from developer code (schema keys); values are always parameterized.
 
+import type { WhereRule, WhereValue } from "../sdk/acl";
+import type { CellValue, Row } from "../sdk/infer";
+
 import type { Dialect } from "./driver";
 
 // In-process value coercion for evalExpr (SQLite-style booleans). SQL-side encoding
 // goes through the active Dialect; this mirrors it for the cell-ACL `when` evaluator.
-function bind(v: unknown): unknown {
+function bind(v: CellValue): CellValue {
   return typeof v === "boolean" ? (v ? 1 : 0) : v;
 }
 
@@ -23,8 +26,8 @@ export type StrMode = "contains" | "prefix" | "suffix";
 export type SqlExpr =
   | { t: "true" }
   | { t: "false" }
-  | { t: "cmp"; op: CmpOp; col: string; value: unknown }
-  | { t: "in"; col: string; values: unknown[]; negate: boolean }
+  | { t: "cmp"; op: CmpOp; col: string; value: CellValue }
+  | { t: "in"; col: string; values: CellValue[]; negate: boolean }
   | { t: "null"; col: string; negate: boolean }
   // Structured substring match — the needle is escaped and wrapped, so `%`/`_` in the
   // input match literally (unlike raw `like`, where the caller controls wildcards).
@@ -39,28 +42,28 @@ export type SqlExpr =
 
 export const TRUE: SqlExpr = { t: "true" };
 export const FALSE: SqlExpr = { t: "false" };
-export const cmp = (op: CmpOp, col: string, value: unknown): SqlExpr => ({ t: "cmp", op, col, value });
+export const cmp = (op: CmpOp, col: string, value: CellValue): SqlExpr => ({ t: "cmp", op, col, value });
 export const isNull = (col: string, negate = false): SqlExpr => ({ t: "null", col, negate });
-export const inList = (col: string, values: unknown[], negate = false): SqlExpr => ({ t: "in", col, values, negate });
+export const inList = (col: string, values: CellValue[], negate = false): SqlExpr => ({ t: "in", col, values, negate });
 export const strMatch = (col: string, needle: string, mode: StrMode): SqlExpr => ({ t: "strmatch", col, needle, mode });
 export const and = (...parts: SqlExpr[]): SqlExpr => ({ t: "and", parts });
 export const or = (...parts: SqlExpr[]): SqlExpr => ({ t: "or", parts });
 export const not = (expr: SqlExpr): SqlExpr => ({ t: "not", expr });
 
 /** Equality (null -> IS NULL). Used by ACL scope building and relation loads. */
-export const eq = (col: string, value: unknown): SqlExpr => (value === null ? isNull(col) : cmp("=", col, value));
+export const eq = (col: string, value: CellValue): SqlExpr => (value === null ? isNull(col) : cmp("=", col, value));
 
 /** Compile a structured user predicate into a SqlExpr.
  * Shapes: { col: value } (eq) | { col: { gt, lt, in, like, isNull, … } } | { AND: [...] } | { OR: [...] } */
-export function compileWhere(input: Record<string, unknown>): SqlExpr {
+export function compileWhere(input: WhereRule): SqlExpr {
   const parts: SqlExpr[] = [];
   for (const [k, v] of Object.entries(input)) {
     if (k === "AND") {
-      parts.push(and(...(v as Record<string, unknown>[]).map(compileWhere)));
+      parts.push(and(...(v as WhereRule[]).map(compileWhere)));
     } else if (k === "OR") {
-      parts.push(or(...(v as Record<string, unknown>[]).map(compileWhere)));
+      parts.push(or(...(v as WhereRule[]).map(compileWhere)));
     } else if (k === "NOT") {
-      parts.push(not(compileWhere(v as Record<string, unknown>)));
+      parts.push(not(compileWhere(v as WhereRule)));
     } else {
       parts.push(columnPredicate(k, v));
     }
@@ -68,10 +71,13 @@ export function compileWhere(input: Record<string, unknown>): SqlExpr {
   return parts.length ? and(...parts) : TRUE;
 }
 
-function columnPredicate(col: string, v: unknown): SqlExpr {
+function columnPredicate(col: string, v: WhereValue): SqlExpr {
   if (v !== null && typeof v === "object" && !Array.isArray(v)) {
     const ops: SqlExpr[] = [];
-    for (const [op, val] of Object.entries(v as Record<string, unknown>)) {
+    for (const [op, operand] of Object.entries(v as WhereRule)) {
+      // Markers are resolved upstream (runtime/acl.ts), so an operator's operand is a
+      // literal cell value by this point.
+      const val = operand as CellValue;
       switch (op) {
         case "eq": ops.push(eq(col, val)); break;
         case "ne": ops.push(val === null ? isNull(col, true) : cmp("!=", col, val)); break;
@@ -83,23 +89,23 @@ function columnPredicate(col: string, v: unknown): SqlExpr {
         case "contains": ops.push(strMatch(col, String(val), "contains")); break;
         case "startsWith": ops.push(strMatch(col, String(val), "prefix")); break;
         case "endsWith": ops.push(strMatch(col, String(val), "suffix")); break;
-        case "in": ops.push(inList(col, val as unknown[])); break;
-        case "notIn": ops.push(inList(col, val as unknown[], true)); break;
+        case "in": ops.push(inList(col, val as CellValue[])); break;
+        case "notIn": ops.push(inList(col, val as CellValue[], true)); break;
         case "isNull": ops.push(isNull(col, !val)); break; // isNull:true => IS NULL
         default: throw new Error(`unknown operator: ${op}`);
       }
     }
     return ops.length ? and(...ops) : TRUE;
   }
-  return eq(col, v);
+  return eq(col, v as CellValue);
 }
 
 export interface CompiledSql {
   readonly sql: string;
-  readonly params: unknown[];
+  readonly params: CellValue[];
 }
 
-export function compileExpr(expr: SqlExpr, dialect: Dialect, params: unknown[] = []): CompiledSql {
+export function compileExpr(expr: SqlExpr, dialect: Dialect, params: CellValue[] = []): CompiledSql {
   switch (expr.t) {
     case "true":
       return { sql: "1", params };
@@ -168,7 +174,7 @@ function likeToRegex(pattern: string): RegExp {
  * semantics (bound-boolean coercion, NULL compares false, empty-IN, LIKE) so the
  * declarative cell-ACL `when` path can decide per-row field visibility without a
  * round-trip to SQLite. */
-export function evalExpr(expr: SqlExpr, row: Record<string, unknown>): boolean {
+export function evalExpr(expr: SqlExpr, row: Row): boolean {
   switch (expr.t) {
     case "true":
       return true;
@@ -245,7 +251,7 @@ export type AggFn = "count" | "sum" | "avg" | "min" | "max";
 const AGG_SQL: Record<AggFn, string> = { count: "COUNT", sum: "SUM", avg: "AVG", min: "MIN", max: "MAX" };
 
 export function compileCount(from: string, dialect: Dialect, where?: SqlExpr): CompiledSql {
-  const params: unknown[] = [];
+  const params: CellValue[] = [];
   let sql = `SELECT COUNT(*) AS n FROM ${dialect.id(from)}`;
   if (where && where.t !== "true") sql += ` WHERE ${compileExpr(where, dialect, params).sql}`;
   return { sql, params };
@@ -265,7 +271,7 @@ export function compileAggregate(
   },
   dialect: Dialect,
 ): CompiledSql {
-  const params: unknown[] = [];
+  const params: CellValue[] = [];
   const cols: string[] = [];
   for (const g of spec.groupBy ?? []) cols.push(dialect.id(g));
   for (const [key, agg] of Object.entries(spec.aggregations)) {
@@ -279,7 +285,7 @@ export function compileAggregate(
 }
 
 export function compileSelect(spec: QuerySpec, dialect: Dialect): CompiledSql {
-  const params: unknown[] = [];
+  const params: CellValue[] = [];
   const cols = spec.columns && spec.columns.length > 0 ? spec.columns.map((c) => dialect.id(c)).join(", ") : "*";
   let sql = `SELECT ${cols} FROM ${dialect.id(spec.from)}`;
 

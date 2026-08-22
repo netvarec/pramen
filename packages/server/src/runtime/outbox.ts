@@ -19,6 +19,7 @@
 // task `id` as an idempotency key so they can dedupe across the rare retry.
 
 import type { Driver } from "./driver";
+import type { CellValue } from "../sdk/infer";
 
 export const OUTBOX_TABLE = "_pramen_outbox";
 
@@ -34,7 +35,7 @@ function backoffMs(attempts: number): number {
   return Math.min(2 ** attempts * 1000, 5 * 60_000); // 2s, 4s, 8s, … capped at 5min
 }
 
-const enc = (driver: Driver, params: unknown[]): unknown[] => params.map((p) => driver.dialect.encode(p));
+const enc = (driver: Driver, params: CellValue[]): CellValue[] => params.map((p) => driver.dialect.encode(p));
 
 /** Create the outbox table if absent. Idempotent — run on DO boot (and lazily on the
  * D1 path). Internal table (`_pramen_` prefix), never part of the user schema. */

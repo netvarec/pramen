@@ -2,6 +2,16 @@
 
 import { describe, expect, test } from "bun:test";
 import { Mail, MemoryMailAdapter, KvMailAdapter, createMail } from "../packages/server/src/runtime/mail";
+import type { Kv } from "../packages/server/src/runtime/kv";
+
+/** What the Cloudflare Email binding receives from the mail adapter. */
+type EmailMessageLike = {
+  to?: string | string[];
+  from?: { email: string; name?: string };
+  subject?: string;
+  text?: string;
+  html?: string;
+};
 
 describe("ctx.mail facade", () => {
   test("resolves the default sender and delegates to the adapter", async () => {
@@ -32,9 +42,9 @@ describe("ctx.mail facade", () => {
   });
 
   test("createMail uses Cloudflare Email Sending when EMAIL + MAIL_FROM are present", async () => {
-    const sent: unknown[] = [];
+    const sent: EmailMessageLike[] = [];
     const env = {
-      EMAIL: { send: async (m: unknown) => void sent.push(m) },
+      EMAIL: { send: async (m: EmailMessageLike) => void sent.push(m) },
       MAIL_FROM: "hi@acme.com",
       MAIL_FROM_NAME: "Acme",
     };
@@ -44,9 +54,7 @@ describe("ctx.mail facade", () => {
 
   test("createMail captures to KV only with the explicit MAIL_CAPTURE opt-in", async () => {
     const store = new Map<string, string>();
-    const kv = { put: async (k: string, v: string) => void store.set(k, v) } as unknown as ConstructorParameters<
-      typeof KvMailAdapter
-    >[0];
+    const kv = { put: async (k: string, v: string) => void store.set(k, v) } as Kv;
     await createMail({ MAIL_CAPTURE: "true" }, kv).send({ to: ["a@x.com", "b@x.com"], subject: "Hi", text: "yo" });
     expect(JSON.parse(store.get("mail:a@x.com")!)).toMatchObject({ subject: "Hi", text: "yo" });
     expect(store.has("mail:b@x.com")).toBe(true);
@@ -55,9 +63,7 @@ describe("ctx.mail facade", () => {
   test("createMail FAILS CLOSED when unconfigured (no MAIL_FROM, no MAIL_CAPTURE)", async () => {
     // A misconfigured prod must NOT silently capture security emails into KV.
     const store = new Map<string, string>();
-    const kv = { put: async (k: string, v: string) => void store.set(k, v) } as unknown as ConstructorParameters<
-      typeof KvMailAdapter
-    >[0];
+    const kv = { put: async (k: string, v: string) => void store.set(k, v) } as Kv;
     await expect(createMail({}, kv).send({ to: "a@x.com", subject: "Hi", text: "yo" })).rejects.toThrow(/no transport/);
     expect(store.size).toBe(0); // nothing stashed
   });

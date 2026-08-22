@@ -2,6 +2,7 @@
 // same transport shape as @pramen/admin's api.ts. Config is persisted in localStorage.
 
 import type { AssembledPage, AuditEntry, BlockType, ContentType, Media, Page } from "./types";
+import type { RpcInput } from "./types";
 
 export interface Config {
   baseUrl: string;
@@ -72,20 +73,21 @@ export class Api {
   }
 
   /** Call a CMS RPC handler. Throws ApiError on a non-`ok` envelope. */
-  async call<T = unknown>(name: string, input?: unknown): Promise<T> {
+  async call<T = unknown>(name: string, input?: RpcInput): Promise<T> {
     // Expired token: hand off to sign-in instead of firing a request that will 403 into an
     // error banner. The returned promise never settles — navigation is already underway.
     if (this.onExpired && this.cfg.token && isTokenExpired(this.cfg.token)) {
       this.onExpired();
       return new Promise<T>(() => {});
     }
+    const headers = new Headers({
+      "content-type": "application/json",
+      "x-pramen-tenant": this.cfg.tenant || "main",
+    });
+    if (this.cfg.token) headers.set("authorization", `Bearer ${this.cfg.token}`);
     const res = await fetch(`${this.base()}/rpc/${name}`, {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-pramen-tenant": this.cfg.tenant || "main",
-        ...(this.cfg.token ? { authorization: `Bearer ${this.cfg.token}` } : {}),
-      },
+      headers,
       body: JSON.stringify(input ?? {}),
     });
     let body: { ok?: boolean; result?: unknown; error?: string; code?: string };

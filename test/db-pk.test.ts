@@ -11,6 +11,7 @@ import { compileAcl, type AclContext } from "../packages/server/src/runtime/acl"
 import { Db } from "../packages/server/src/runtime/db";
 import { migrate } from "../packages/server/src/runtime/migrate";
 import { bunSqliteDriver } from "./sqlite-driver";
+import type { Row } from "@pramen/server";
 
 // orgs.slug is the PK (textId, not "id"); members.org is a belongsTo into orgs.
 const schema = defineSchema({
@@ -56,7 +57,7 @@ describe("Db: non-`id` primary keys + hidden columns", () => {
     expect(updated?.name).toBe("Acme Inc");
 
     // belongsTo eager-load resolves members.orgSlug -> orgs.slug (target PK = slug)
-    const withOrg = (await db.find({ from: "members", with: { org: true } })) as Array<Record<string, any>>;
+    const withOrg = (await db.find({ from: "members", with: { org: true } })) as Row[];
     expect(withOrg[0].org?.slug).toBe("acme");
     expect(withOrg[0].org?.name).toBe("Acme Inc");
 
@@ -69,16 +70,16 @@ describe("Db: non-`id` primary keys + hidden columns", () => {
     const { driver, db } = await freshDb();
     await db.insert("orgs", { slug: "acme", name: "Acme", secret: "s3cr3t" });
 
-    const rows = (await db.find({ from: "orgs" })) as Array<Record<string, unknown>>;
+    const rows = (await db.find({ from: "orgs" })) as Array<Row>;
     expect(rows[0].name).toBe("Acme");
     expect("secret" in rows[0]).toBe(false); // stripped despite admin's allow() (full read)
 
     const sysDb = new Db(driver, { acl: compileAcl(roles), identity: null, schema, system: true }, schema);
-    const sysRows = (await sysDb.find({ from: "orgs" })) as Array<Record<string, unknown>>;
+    const sysRows = (await sysDb.find({ from: "orgs" })) as Array<Row>;
     expect("secret" in sysRows[0]).toBe(false); // stripped even under SYSTEM scope
 
     // ...but a hidden column is still writable, and visible to raw exec (the escape hatch).
-    const raw = (await db.exec("SELECT secret FROM orgs WHERE slug = 'acme'")) as Array<Record<string, unknown>>;
+    const raw = (await db.exec("SELECT secret FROM orgs WHERE slug = 'acme'")) as Array<Row>;
     expect(raw[0].secret).toBe("s3cr3t");
   });
 });

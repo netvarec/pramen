@@ -21,7 +21,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { createTableSql } from "./runtime/ddl";
 import { schemaHash } from "./runtime/migrate";
-import { diffSchemaShape, schemaShape, type SchemaShape } from "./runtime/schema-diff";
+import { diffSchemaFingerprint, schemaFingerprint, type SchemaFingerprint } from "./runtime/schema-diff";
 import { entitiesInPartition, partitionsOf, type SchemaDef } from "./sdk/schema";
 
 /** Mint an HS256 JWT — mirrors what a real auth service would issue, for local
@@ -35,6 +35,9 @@ function bytesToB64url(bytes: Uint8Array): string {
   return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 const strToB64url = (s: string) => bytesToB64url(new TextEncoder().encode(s));
+
+/** The dev JWT claims `pramen token` mints. */
+type TokenClaims = { sub: string; roles: string[]; tenants?: string[] };
 
 async function sign(payload: Record<string, unknown>): Promise<string> {
   const secret = process.env.AUTH_SECRET || DEV_SECRET;
@@ -102,7 +105,7 @@ Usage: pramen <command>
   init [dir]                scaffold a new project (app.ts + worker.ts + oblaka.ts)
   schema sql                print CREATE TABLE statements for the schema
   schema hash               print the schema hash
-  schema snapshot           save the schema shape to .pramen/schema.json
+  schema snapshot           save the schema fingerprint to .pramen/schema.json
   schema diff               compare the schema to the snapshot (safe vs unsafe)
   schema status             compare a deployed tenant's schema to the local schema
                             [--tenant t] [--url u] [--token jwt]
@@ -126,20 +129,27 @@ async function schemaCmd(sub: string | undefined): Promise<void> {
   if (sub === "snapshot") {
     const { schema } = await loadApp();
     mkdirSync(dirname(snapshotPath), { recursive: true });
-    const snap = { hash: schemaHash(schema), shape: schemaShape(schema) };
+    const snap = { hash: schemaHash(schema), fingerprint: schemaFingerprint(schema) };
     writeFileSync(snapshotPath, JSON.stringify(snap, null, 2) + "\n");
-    console.log(`wrote ${snapshotPath} (${Object.keys(snap.shape).length} tables)`);
+    console.log(`wrote ${snapshotPath} (${Object.keys(snap.fingerprint).length} tables)`);
     return;
   }
   if (sub === "diff") {
     const { schema } = await loadApp();
-    const next = schemaShape(schema);
+    const next = schemaFingerprint(schema);
     if (!existsSync(snapshotPath)) {
       console.log("no snapshot — run `pramen schema snapshot` to set a baseline.");
       return;
     }
-    const prev = (JSON.parse(readFileSync(snapshotPath, "utf8")) as { shape: SchemaShape }).shape;
-    const changes = diffSchemaShape(prev, next);
+    // `fingerprint` was called `shape` before; keep reading an existing snapshot so an
+    // upgrade doesn't force a re-baseline.
+    const snap = JSON.parse(readFileSync(snapshotPath, "utf8")) as {
+      fingerprint?: SchemaFingerprint;
+      // the pre-rename key, quoted because it names a stored JSON field, not a symbol
+      "shape"?: SchemaFingerprint;
+    };
+    const prev = snap.fingerprint ?? snap["shape"] ?? {};
+    const changes = diffSchemaFingerprint(prev, next);
     if (changes.length === 0) {
       console.log("no changes since snapshot.");
       return;
@@ -203,7 +213,7 @@ async function schemaCmd(sub: string | undefined): Promise<void> {
       console.log(`live:    ${live.hash ?? "(none)"}`);
       console.log(`current: ${current}`);
       console.log(upToDate ? "✓ up to date" : "⚠ BEHIND — migrates on the tenant's next boot");
-      const want = schemaShape(subset);
+      const want = schemaFingerprint(subset);
       for (const table of Object.keys(want)) {
         const liveCols = new Set(live.tables[table] ?? []);
         const missing = Object.keys(want[table]!.columns).filter((col) => !liveCols.has(col));
@@ -222,7 +232,9 @@ async function tokenCmd(args: string[]): Promise<void> {
   if (!sub) fail("token: <sub> required");
   const roles = pos.slice(1);
   const tenants = flag("tenant")?.split(",");
-  console.log(await sign({ sub, roles: roles.length ? roles : ["admin"], ...(tenants ? { tenants } : {}) }));
+  const claims: TokenClaims = { sub, roles: roles.length ? roles : ["admin"] };
+  if (tenants) claims.tenants = tenants;
+  console.log(await sign(claims));
 }
 
 function initCmd(args: string[]): void {

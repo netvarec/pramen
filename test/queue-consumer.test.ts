@@ -6,7 +6,7 @@ import { describe, expect, test } from "bun:test";
 import { routeQueue, type AppQueueMap, type QueueHandler } from "../packages/server/src/runtime/queue-consumer";
 
 const h = (tag: string): QueueHandler => Object.assign(() => {}, { tag });
-const tagOf = (fn: QueueHandler | null) => (fn as unknown as { tag: string } | null)?.tag ?? null;
+const tagOf = (fn: QueueHandler | null) => (fn as (QueueHandler & { tag?: string }) | null)?.tag ?? null;
 
 describe("routeQueue", () => {
   test("exact match wins", () => {

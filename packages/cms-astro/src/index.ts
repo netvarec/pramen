@@ -78,13 +78,14 @@ export interface CmsClient {
 export function createCmsClient(opts: CmsClientOptions): CmsClient {
   const base = opts.baseUrl.replace(/\/+$/, "");
   const call = async <T>(name: string, input: unknown): Promise<T | null> => {
+    const headers = new Headers({
+      "content-type": "application/json",
+      "x-pramen-tenant": opts.tenant ?? "main",
+    });
+    if (opts.token) headers.set("authorization", `Bearer ${opts.token}`);
     const res = await fetch(`${base}/rpc/${name}`, {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-pramen-tenant": opts.tenant ?? "main",
-        ...(opts.token ? { authorization: `Bearer ${opts.token}` } : {}),
-      },
+      headers,
       body: JSON.stringify(input ?? {}),
     });
     const body = (await res.json().catch(() => ({}))) as { ok?: boolean; result?: unknown; code?: string };

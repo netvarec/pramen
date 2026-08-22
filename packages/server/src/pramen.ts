@@ -18,12 +18,14 @@ import { validateTriggerTasks, type SchemaDef } from "./sdk/schema";
 import type { AppTaskMap, HandlerMap, BootstrapFn } from "./sdk/handlers";
 import type { AppQueueMap, QueueBatch } from "./runtime/queue-consumer";
 import type { Role } from "./sdk/acl";
+import type { EnvBag } from "./sdk/handlers";
+import type { JsonValue } from "./sdk/infer";
 
 /** Injected into a public route's handler — forward a privileged mutation into the
  * tenant's DO without the handler importing any deploy-side code (so app.ts stays
  * authoring-only). The synthetic identity defaults to the admin role. */
 export interface RouteContext {
-  callPrivileged(opts: { name: string; input?: unknown; tenant?: string; roles?: string[] }): Promise<Response>;
+  callPrivileged(opts: { name: string; input?: JsonValue; tenant?: string; roles?: string[] }): Promise<Response>;
 }
 
 /** A public, pre-auth route — matched before identity resolution, so it can host a
@@ -36,7 +38,7 @@ export interface PublicRoute {
   method: string;
   /** Exact pathname to match (e.g. "/stripe/webhook"). */
   path: string;
-  handler: (request: Request, env: Readonly<Record<string, unknown>>, ctx: RouteContext) => Response | Promise<Response>;
+  handler: (request: Request, env: EnvBag, ctx: RouteContext) => Response | Promise<Response>;
 }
 
 /** The user-facing app: a schema, the handler map, ACL roles, and optional public

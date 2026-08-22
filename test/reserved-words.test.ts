@@ -11,6 +11,7 @@ import { compileAcl, type AclContext } from "../packages/server/src/runtime/acl"
 import { Db } from "../packages/server/src/runtime/db";
 import { migrate } from "../packages/server/src/runtime/migrate";
 import { bunSqliteDriver } from "./sqlite-driver";
+import type { Row } from "@pramen/server";
 
 const schema = defineSchema({
   items: Entity((t) => ({
@@ -47,16 +48,16 @@ describe("reserved-word identifiers are quoted end-to-end", () => {
     await db.insert("items", { id: 2, order: 1, group: "b", select: "y" });
 
     // where on a reserved column
-    const byOrder = (await db.find({ from: "items", where: { order: 1 } })) as Array<Record<string, unknown>>;
+    const byOrder = (await db.find({ from: "items", where: { order: 1 } })) as Array<Row>;
     expect(byOrder).toHaveLength(1);
     expect(byOrder[0].id).toBe(2);
 
     // orderBy a reserved column
-    const sorted = (await db.find({ from: "items", orderBy: { column: "order", dir: "asc" } })) as Array<Record<string, unknown>>;
+    const sorted = (await db.find({ from: "items", orderBy: { column: "order", dir: "asc" } })) as Array<Row>;
     expect(sorted.map((r) => r.order)).toEqual([1, 2]);
 
     // update a reserved column by PK
-    const updated = (await db.update("items", 2, { order: 9, select: "z" })) as Record<string, unknown>;
+    const updated = (await db.update("items", 2, { order: 9, select: "z" })) as Row;
     expect(updated.order).toBe(9);
 
     // the UNIQUE INDEX on `group` is real (duplicate rejected)
@@ -87,7 +88,7 @@ describe("reserved-word identifiers are quoted end-to-end", () => {
     const report = await migrate(driver, v2);
     expect(report.rebuilt).toContain("items");
 
-    const rows = (await adminDb(driver, v2).find({ from: "items" })) as Array<Record<string, unknown>>;
+    const rows = (await adminDb(driver, v2).find({ from: "items" })) as Array<Row>;
     expect(rows[0]).toMatchObject({ id: 1, order: 7, group: "g", select: "s" });
     expect(typeof rows[0].createdAt).toBe("string"); // backfilled by the DB default
   });

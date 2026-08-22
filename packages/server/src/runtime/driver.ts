@@ -11,7 +11,11 @@
 // in a Driver, rather than rewriting the engine. Live queries remain a DO-only
 // capability (they need a single writer + a stateful socket host).
 
-export type Row = Record<string, unknown>;
+/** A raw row exactly as the substrate returns it, before pramen's object↔JSON codec.
+ * Distinct from the decoded `Row` handlers see at the `Db` chokepoint. */
+export type DriverRow = Record<string, SqlValue>;
+
+import type { CellValue, SqlValue } from "../sdk/infer";
 
 export interface Dialect {
   /** Render an identifier (table/column), quoting as the backend requires. */
@@ -21,7 +25,7 @@ export interface Dialect {
   /** Whether INSERT/UPDATE/DELETE ... RETURNING is supported (SQLite/Postgres yes; MySQL no). */
   readonly returning: boolean;
   /** Coerce a JS value for binding (e.g. boolean → 0/1 on SQLite). */
-  encode(v: unknown): unknown;
+  encode(v: CellValue): CellValue;
 }
 
 const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -66,7 +70,7 @@ export interface Driver {
   readonly dialect: Dialect;
   /** Run a parameterized statement and return the result rows (empty for writes
    * without RETURNING). Params are already dialect-encoded by the caller. */
-  exec(sql: string, params: unknown[]): Promise<Row[]>;
+  exec(sql: string, params: CellValue[]): Promise<DriverRow[]>;
   /** Run `fn` inside a transaction: commit on resolve, roll back on throw. */
   transaction<T>(fn: () => Promise<T>): Promise<T>;
   /** Run a fixed sequence of write statements ATOMICALLY with FK checks deferred to the
@@ -83,8 +87,8 @@ export class DoSqliteDriver implements Driver {
   readonly dialect = sqliteDialect;
   constructor(private readonly storage: DurableObjectStorage) {}
 
-  async exec(sql: string, params: unknown[]): Promise<Row[]> {
-    return this.storage.sql.exec(sql, ...params).toArray() as Row[];
+  async exec(sql: string, params: CellValue[]): Promise<DriverRow[]> {
+    return this.storage.sql.exec(sql, ...params).toArray() as DriverRow[];
   }
 
   transaction<T>(fn: () => Promise<T>): Promise<T> {
@@ -124,9 +128,9 @@ export class D1Driver implements Driver {
     this.session = db.withSession(opts?.start ?? "first-unconstrained");
   }
 
-  async exec(sql: string, params: unknown[]): Promise<Row[]> {
+  async exec(sql: string, params: CellValue[]): Promise<DriverRow[]> {
     const stmt = params.length ? this.session.prepare(sql).bind(...params) : this.session.prepare(sql);
-    const { results } = await stmt.all<Row>();
+    const { results } = await stmt.all<DriverRow>();
     return results ?? [];
   }
 

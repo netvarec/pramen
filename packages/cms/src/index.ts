@@ -42,8 +42,9 @@ import {
   Forbidden,
   PramenError,
 } from "@pramen/server";
-import type { HandlerContext, Policy, FileRef, BootstrapFn } from "@pramen/server";
+import type { HandlerContext, Policy, FileRef, BootstrapFn, JsonValue } from "@pramen/server";
 import { filterXSS } from "xss";
+import type { EnvBag } from "@pramen/server";
 
 // --- field schema DSL (the block-editor field language) ---------------------
 
@@ -131,7 +132,7 @@ export interface RegionDefinition {
 export interface DefaultBlockDefinition {
   region: string;
   blockTypeSlug: string;
-  fields?: Record<string, unknown>;
+  fields?: FieldValues;
 }
 
 // --- hybrid typed blocks: compile-time inference over a const FieldDefinition[] --------
@@ -529,7 +530,7 @@ function isDateTimeString(v: string): boolean {
 export function validateFields(schema: FieldDefinition[] | undefined | null, values: unknown, path = "", opts: ValidateOpts = {}): void {
   const requireRequired = opts.requireRequired !== false;
   const defs = Array.isArray(schema) ? schema : [];
-  const obj = (values ?? {}) as Record<string, unknown>;
+  const obj = (values ?? {}) as FieldValues;
   if (typeof obj !== "object" || Array.isArray(obj)) throw new BadRequest(`${path || "fields"} must be an object`);
   for (const def of defs) {
     const at = path ? `${path}.${def.name}` : def.name;
@@ -616,15 +617,15 @@ function sanitizeRichText(html: string): string {
 
 /** Deep-sanitize the richtext fields in a values object against a field schema (recursing
  * into group/repeater). Returns a sanitized copy; non-richtext fields pass through. */
-export function sanitizeFields(schema: FieldDefinition[] | undefined | null, values: Record<string, unknown>): Record<string, unknown> {
+export function sanitizeFields(schema: FieldDefinition[] | undefined | null, values: FieldValues): FieldValues {
   const defs = Array.isArray(schema) ? schema : [];
-  const out: Record<string, unknown> = { ...values };
+  const out: FieldValues = { ...values };
   for (const def of defs) {
     const v = out[def.name];
     if (v == null) continue;
     if (def.type === "richtext" && typeof v === "string") out[def.name] = sanitizeRichText(v);
-    else if (def.type === "group" && typeof v === "object" && !Array.isArray(v)) out[def.name] = sanitizeFields(def.fields, v as Record<string, unknown>);
-    else if (def.type === "repeater" && Array.isArray(v)) out[def.name] = v.map((it) => (it && typeof it === "object" ? sanitizeFields(def.fields, it as Record<string, unknown>) : it));
+    else if (def.type === "group" && typeof v === "object" && !Array.isArray(v)) out[def.name] = sanitizeFields(def.fields, v as FieldValues);
+    else if (def.type === "repeater" && Array.isArray(v)) out[def.name] = v.map((it) => (it && typeof it === "object" ? sanitizeFields(def.fields, it as FieldValues) : it));
   }
   return out;
 }
@@ -638,7 +639,7 @@ export interface RenderedBlock {
   block_id: string;
   block_type: string;
   title: string | null;
-  fields: Record<string, unknown>;
+  fields: FieldValues;
   is_shared: boolean;
 }
 
@@ -671,7 +672,7 @@ export interface AssembledPage {
     translationGroupId: string | null;
     /** Published sibling locales of this page (for hreflang alternates). */
     translations: PageTranslation[];
-    fields: Record<string, unknown> | null;
+    fields: FieldValues | null;
     /** Back-compat: mirrors seo.metaTitle/metaDescription. */
     metaTitle: string | null;
     metaDescription: string | null;
@@ -685,6 +686,16 @@ export interface AssembledPage {
 /** A `"media"` block field, resolved from a stored media id to a servable shape at
  * assemble time. `url` is the raw (full-size) serving path; pass `key` to `imageUrl()`
  * for on-the-fly transforms. `null` when the referenced media was deleted. */
+/** One authored field value inside a block / collection / page `fields` bag. Stored
+ * as JSON; a `"media"` field is resolved from its stored id to a `ResolvedMedia` at
+ * assemble time, and `group`/`repeater` fields nest further bags. */
+export type FieldValue = JsonValue | ResolvedMedia | FieldValues | FieldValue[];
+
+/** A block / collection / page `fields` bag — field name -> authored value. */
+export interface FieldValues {
+  [field: string]: FieldValue;
+}
+
 export interface ResolvedMedia {
   id: string;
   key: string;
@@ -720,7 +731,7 @@ export function imageUrl(
 }
 
 /** Collect the media ids referenced by a fields payload, walking group/repeater nesting. */
-function collectMediaIds(fields: Record<string, unknown>, schema: FieldDefinition[] | undefined, acc: Set<string>): void {
+function collectMediaIds(fields: FieldValues, schema: FieldDefinition[] | undefined, acc: Set<string>): void {
   if (!Array.isArray(schema)) return;
   for (const def of schema) {
     const v = fields[def.name];
@@ -738,12 +749,12 @@ function collectMediaIds(fields: Record<string, unknown>, schema: FieldDefinitio
 /** Return a copy of `fields` with every `"media"` field resolved from its id to a
  * `ResolvedMedia` (or null), recursing into group/repeater nesting. */
 function resolveMediaFields(
-  fields: Record<string, unknown>,
+  fields: FieldValues,
   schema: FieldDefinition[] | undefined,
   mediaById: Map<string, ResolvedMedia>,
-): Record<string, unknown> {
+): FieldValues {
   if (!Array.isArray(schema)) return fields;
-  const out: Record<string, unknown> = { ...fields };
+  const out: FieldValues = { ...fields };
   for (const def of schema) {
     const v = out[def.name];
     if (v == null) continue;
@@ -782,7 +793,7 @@ interface CmsDb {
 const cdb = (ctx: HandlerContext): CmsDb => ctx.db as unknown as CmsDb;
 
 const notFound = (what: string) => new PramenError(`${what} not found`, 404, "not_found");
-const asObj = (v: unknown): Record<string, unknown> => (v && typeof v === "object" ? (v as Record<string, unknown>) : {});
+const asObj = (v: unknown): FieldValues => (v && typeof v === "object" ? (v as FieldValues) : {});
 // Timestamps in the SAME shape as the `expr.now()` column default (`datetime('now')`:
 // "YYYY-MM-DD HH:MM:SS", UTC, second precision) so a column's insert-default and its
 // handler-written updates stay lexically comparable (an ISO `T`/`Z` string sorts wrong).
@@ -816,7 +827,9 @@ async function assembleLive(db: CmsDb, page: Record<string, unknown>): Promise<A
   // fields (id → ResolvedMedia) in one batched lookup across the whole page.
   const merged = placements.map((p) => {
     const block = asObj(p.block);
-    const fields = { ...asObj(block.fields), ...(p.isShared ? asObj(p.overrides) : {}) };
+    const fields = p.isShared
+      ? { ...asObj(block.fields), ...asObj(p.overrides) }
+      : { ...asObj(block.fields) };
     return { p, block, fields, schema: typeById.get(String(block.typeId))?.fieldsSchema };
   });
   const mediaIds = new Set<string>();
@@ -908,7 +921,7 @@ function pageMeta(page: Record<string, unknown>, translations: PageTranslation[]
     contentType,
     translationGroupId: (page.translationGroupId as string | null) ?? null,
     translations,
-    fields: (page.fields as Record<string, unknown> | null) ?? null,
+    fields: (page.fields as FieldValues | null) ?? null,
     metaTitle,
     metaDescription,
     seo: {
@@ -1237,7 +1250,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
      * page record itself, which was previously only settable at createPage. A slug/locale
      * change re-checks (slug, locale) uniqueness (excluding this page); `fields` is validated
      * + sanitized against the content type's fieldsSchema, exactly like createPage. */
-    updatePage: mutation(async (ctx, input: { pageId: string; title?: string; slug?: string; locale?: string; fields?: Record<string, unknown> }) => {
+    updatePage: mutation(async (ctx, input: { pageId: string; title?: string; slug?: string; locale?: string; fields?: FieldValues }) => {
       const db = cdb(ctx);
       const rows = await db.find({ from: "cms_pages", where: { id: input.pageId }, limit: 1 });
       const page = rows[0];
@@ -1262,7 +1275,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       return { ok: true, page: updated };
     }, {
       ...editor,
-      input: (raw): { pageId: string; title?: string; slug?: string; locale?: string; fields?: Record<string, unknown> } => {
+      input: (raw): { pageId: string; title?: string; slug?: string; locale?: string; fields?: FieldValues } => {
         const o = asObj(raw);
         if (typeof o.pageId !== "string") throw new BadRequest("pageId is required");
         for (const k of ["title", "slug", "locale"] as const) {
@@ -1273,7 +1286,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     }),
 
     /** Create a page and auto-scaffold its content type's default blocks. */
-    createPage: mutation(async (ctx, input: { typeId: string; title: string; slug: string; locale?: string; fields?: Record<string, unknown> }) => {
+    createPage: mutation(async (ctx, input: { typeId: string; title: string; slug: string; locale?: string; fields?: FieldValues }) => {
       const db = cdb(ctx);
       const ctRows = await db.find({ from: "cms_content_types", where: { id: input.typeId }, limit: 1 });
       const ct = ctRows[0];
@@ -1314,7 +1327,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       return page;
     }, {
       ...editor,
-      input: (raw): { typeId: string; title: string; slug: string; locale?: string; fields?: Record<string, unknown> } => {
+      input: (raw): { typeId: string; title: string; slug: string; locale?: string; fields?: FieldValues } => {
         const o = asObj(raw);
         if (typeof o.typeId !== "string" || typeof o.title !== "string" || typeof o.slug !== "string") {
           throw new BadRequest("typeId, title and slug are required");
@@ -1393,7 +1406,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     /** Create a block instance and place it into a page region in one call (the common
      * editor action). Validates the fields against the block type's schema and the region
      * against the content type's allow-list. */
-    addBlock: mutation(async (ctx, input: { pageId: string; blockTypeSlug: string; region: string; fields?: Record<string, unknown>; title?: string; position?: number; isReusable?: boolean }) => {
+    addBlock: mutation(async (ctx, input: { pageId: string; blockTypeSlug: string; region: string; fields?: FieldValues; title?: string; position?: number; isReusable?: boolean }) => {
       const db = cdb(ctx);
       const pages = await db.find({ from: "cms_pages", where: { id: input.pageId }, limit: 1 });
       const page = pages[0];
@@ -1420,7 +1433,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       return { block, placement };
     }, {
       ...editor,
-      input: (raw): { pageId: string; blockTypeSlug: string; region: string; fields?: Record<string, unknown>; title?: string; position?: number; isReusable?: boolean } => {
+      input: (raw): { pageId: string; blockTypeSlug: string; region: string; fields?: FieldValues; title?: string; position?: number; isReusable?: boolean } => {
         const o = asObj(raw);
         if (typeof o.pageId !== "string" || typeof o.blockTypeSlug !== "string" || typeof o.region !== "string") {
           throw new BadRequest("pageId, blockTypeSlug and region are required");
@@ -1435,7 +1448,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
      * can be placed on several pages; editing it updates them all, while `overrides` let one
      * placement diverge. The merged (base + overrides) result is validated against the
      * block type's field schema. */
-    placeBlock: mutation(async (ctx, input: { pageId: string; blockId: string; region: string; position?: number; overrides?: Record<string, unknown> }) => {
+    placeBlock: mutation(async (ctx, input: { pageId: string; blockId: string; region: string; position?: number; overrides?: FieldValues }) => {
       const db = cdb(ctx);
       const pages = await db.find({ from: "cms_pages", where: { id: input.pageId }, limit: 1 });
       const page = pages[0];
@@ -1462,7 +1475,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       });
     }, {
       ...editor,
-      input: (raw): { pageId: string; blockId: string; region: string; position?: number; overrides?: Record<string, unknown> } => {
+      input: (raw): { pageId: string; blockId: string; region: string; position?: number; overrides?: FieldValues } => {
         const o = asObj(raw);
         if (typeof o.pageId !== "string" || typeof o.blockId !== "string" || typeof o.region !== "string") {
           throw new BadRequest("pageId, blockId and region are required");
@@ -1485,7 +1498,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     }),
 
     /** Update a block's content (re-validated against its type's field schema). */
-    updateBlock: mutation(async (ctx, input: { blockId: string; fields?: Record<string, unknown>; title?: string }) => {
+    updateBlock: mutation(async (ctx, input: { blockId: string; fields?: FieldValues; title?: string }) => {
       const db = cdb(ctx);
       const rows = await db.find({ from: "cms_blocks", where: { id: input.blockId }, limit: 1 });
       const block = rows[0];
@@ -1502,7 +1515,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       return db.update("cms_blocks", input.blockId, patch);
     }, {
       ...editor,
-      input: (raw): { blockId: string; fields?: Record<string, unknown>; title?: string } => {
+      input: (raw): { blockId: string; fields?: FieldValues; title?: string } => {
         const o = asObj(raw);
         if (typeof o.blockId !== "string") throw new BadRequest("blockId is required");
         return o as never;
@@ -2089,12 +2102,12 @@ export function robotsTxt(opts: { origin: string; disallow?: string[] }): string
 
 // Minimal shape of a pramen public route (see @pramen/server/worker app.routes).
 interface RouteCtx {
-  callPrivileged: (opts: { name: string; input?: unknown; tenant?: string; roles?: string[] }) => Promise<Response>;
+  callPrivileged: (opts: { name: string; input?: JsonValue; tenant?: string; roles?: string[] }) => Promise<Response>;
 }
 interface CmsRoute {
   method: string;
   path: string;
-  handler: (request: Request, env: Readonly<Record<string, unknown>>, ctx: RouteCtx) => Promise<Response>;
+  handler: (request: Request, env: EnvBag, ctx: RouteCtx) => Promise<Response>;
 }
 
 /** Turnkey public routes for `GET /sitemap.xml` and `GET /robots.txt`. Spread into
