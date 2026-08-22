@@ -26,6 +26,11 @@ type HandlerOutput<H> = H extends { run: (ctx: any, input: any) => infer O } ? A
 export type Input<Api, K extends keyof Api> = HandlerInput<Api[K]>;
 export type Output<Api, K extends keyof Api> = HandlerOutput<Api[K]>;
 
+/** Just the call signature the client uses. Narrower than `typeof fetch`, whose extra
+ * statics (`preconnect`) a caller supplying a mock or a polyfill has no reason to
+ * provide. */
+export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+
 export interface ClientOptions {
   /** Base URL of the deployed Worker, e.g. https://app.example.workers.dev */
   url: string;
@@ -33,7 +38,7 @@ export interface ClientOptions {
   tenant?: string;
   /** Override for non-browser environments (defaults to globals). */
   WebSocketImpl?: typeof WebSocket;
-  fetchImpl?: typeof fetch;
+  fetchImpl?: FetchLike;
   /** Give up reconnecting the live socket after this many consecutive failed
    * attempts and surface a connection error to every subscriber (default 8). */
   maxReconnectAttempts?: number;

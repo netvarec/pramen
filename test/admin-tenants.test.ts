@@ -13,7 +13,7 @@
 // admin again. The rest cover what a client pointed at an unknown deployment can meet.
 
 import { describe, expect, test } from "bun:test";
-import { tenantNames, type TenantsResult } from "../packages/admin/src/api";
+import { tenantNames } from "../packages/admin/src/api";
 import type { DoRef } from "../packages/server/src/runtime/registry";
 
 describe("tenantNames parses what GET /tenants returns", () => {
@@ -60,7 +60,7 @@ describe("tenantNames parses what GET /tenants returns", () => {
   // What actually broke: an object reaching React as a child. Whatever comes back, every
   // element handed to the picker must be a renderable string.
   test("every result is a string, whatever the input", () => {
-    const mixed: TenantsResult = [{ tenant: "main", partition: "default" }, "acme", null, 7];
+    const mixed: unknown = [{ tenant: "main", partition: "default" }, "acme", null, 7];
     for (const name of tenantNames(mixed)) expect(typeof name).toBe("string");
   });
 });

@@ -6,9 +6,6 @@
  * stays a standalone browser bundle with no server-package dependency. */
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
-/** Whatever `GET /tenants` answered with — trusted to be JSON and nothing more. */
-export type TenantsResult = JsonValue;
-
 /** One row of admin data, as the `/admin/data` endpoint returns it. */
 export type Row = Record<string, JsonValue>;
 
@@ -98,7 +95,7 @@ interface TenantRef {
  * deployments — a freshly built bundle against a long-running Worker, say — so the
  * server on the other end is not necessarily the version that produced this parser.
  */
-export function tenantNames(result: TenantsResult): string[] {
+export function tenantNames(result: unknown): string[] {
   if (!Array.isArray(result)) return [];
   const names = result
     .map((entry) => (typeof entry === "string" ? entry : (entry as Partial<TenantRef> | null)?.tenant))
@@ -107,7 +104,7 @@ export function tenantNames(result: TenantsResult): string[] {
 }
 
 export const api = {
-  tenants: async (cfg: Config): Promise<string[]> => tenantNames(await call<TenantsResult>(cfg, "/tenants")),
+  tenants: async (cfg: Config): Promise<string[]> => tenantNames(await call<unknown>(cfg, "/tenants")),
 
   schema: (cfg: Config, tenant: string) =>
     call<SchemaResult>(cfg, `/admin/schema?tenant=${encodeURIComponent(tenant)}`),

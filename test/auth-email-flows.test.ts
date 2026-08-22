@@ -41,7 +41,7 @@ async function harness() {
   // payload (so the test can read the token that would have been emailed), and an identity.
   const ctx = (identity: { userId: string; roles?: string[] } | null = null) =>
     ({ db, env: { AUTH_SECRET: SECRET }, identity, tasks: { enqueue: async (t: Enqueued) => void enqueued.push(t) } }) as never;
-  const run = (h: { run: (c: never, i: JsonValue) => unknown }, c: never, input?: JsonValue) => Promise.resolve().then(() => h.run(c, input));
+  const run = (h: { run: (c: never, i: never) => unknown }, c: never, input?: unknown) => Promise.resolve().then(() => h.run(c, input));
   const rawUser = async (username: string) => (await driver.exec("SELECT * FROM auth_users WHERE username = ?", [username]))[0];
   return { driver, db, enqueued, ctx, run, rawUser };
 }

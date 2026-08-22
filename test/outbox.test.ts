@@ -89,7 +89,7 @@ describe("outbox (substrate-agnostic deferred tasks)", () => {
     const seen: Array<{ id: string; attempts: number }> = [];
     let calls = 0;
     const tasks = {
-      k: (_p: JsonValue, meta: { id: string; attempts: number }) => {
+      k: (_p: unknown, meta: { id: string; attempts: number }) => {
         seen.push(meta);
         if (calls++ === 0) throw new Error("retry me");
       },

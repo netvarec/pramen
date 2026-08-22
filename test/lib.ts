@@ -4,6 +4,10 @@
 
 import type { JsonValue } from "@pramen/server";
 
+/** An RPC request body as the suites build it: JSON, but an optional field may be
+ * present-and-undefined (it simply doesn't survive JSON.stringify). */
+export type RequestBody = JsonValue | { [key: string]: JsonValue | undefined };
+
 export { sign, token } from "../scripts/jwt";
 
 export function assert(cond: boolean, msg: string): void {
@@ -18,7 +22,7 @@ export interface Res {
 
 /** An HTTP caller bound to a base URL + tenant. */
 export function http(base: string, tenant: string) {
-  return async (name: string, input: JsonValue, bearer?: string): Promise<Res> => {
+  return async (name: string, input: RequestBody, bearer?: string): Promise<Res> => {
     const headers = new Headers({ "content-type": "application/json", "x-pramen-tenant": tenant });
     if (bearer) headers.set("authorization", `Bearer ${bearer}`);
     const r = await fetch(`${base}/rpc/${name}`, { method: "POST", headers, body: JSON.stringify(input ?? {}) });

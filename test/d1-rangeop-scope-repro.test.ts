@@ -29,7 +29,8 @@ import { compileAcl } from "../packages/server/src/runtime/acl";
 import { Db } from "../packages/server/src/runtime/db";
 import { migrate } from "../packages/server/src/runtime/migrate";
 import { bunSqliteDriver } from "./sqlite-driver";
-import type { Driver, Row } from "../packages/server/src/runtime/driver";
+import type { Driver, DriverRow } from "../packages/server/src/runtime/driver";
+import type { CellValue } from "@pramen/server";
 import type { Row } from "@pramen/server";
 
 // Mirrors the issue's `lectures`: an UNINDEXED int timestamp, a bool the ACL scopes
@@ -61,7 +62,7 @@ function recording(inner: Driver): { driver: Driver; calls: { sql: string; param
     calls,
     driver: {
       ...inner,
-      async exec(sql: string, params: unknown[]): Promise<Row[]> {
+      async exec(sql: string, params: CellValue[]): Promise<DriverRow[]> {
         calls.push({ sql, params });
         return inner.exec(sql, params);
       },
@@ -136,7 +137,7 @@ describe("#22 — D1 range-op + ACL read scope: single statement, projected SELE
       where: { publishAt: { lte: BASE + 30 * 1000 }, public: true },
       orderBy: [{ column: "publishAt", dir: "desc" }],
       select: ["id", "publishAt"], // <-- fetch only these
-    })) as Row[];
+    })) as Record<string, unknown>[];
 
     expect(rec.calls.length).toBe(1);
     const sql = rec.calls[0]!.sql;
@@ -155,7 +156,7 @@ describe("#22 — D1 range-op + ACL read scope: single statement, projected SELE
     const rec = recording(driver);
     const reader = db(rec.driver, "reader"); // may read id, publishAt, public only
 
-    const rows = (await reader.find({ from: "lectures", where: { public: true } })) as Row[];
+    const rows = (await reader.find({ from: "lectures", where: { public: true } })) as Record<string, unknown>[];
 
     expect(rec.calls.length).toBe(1);
     const sql = rec.calls[0]!.sql;

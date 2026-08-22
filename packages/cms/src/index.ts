@@ -683,9 +683,6 @@ export interface AssembledPage {
 
 // --- media -------------------------------------------------------------------
 
-/** A `"media"` block field, resolved from a stored media id to a servable shape at
- * assemble time. `url` is the raw (full-size) serving path; pass `key` to `imageUrl()`
- * for on-the-fly transforms. `null` when the referenced media was deleted. */
 /** One authored field value inside a block / collection / page `fields` bag. Stored
  * as JSON; a `"media"` field is resolved from its stored id to a `ResolvedMedia` at
  * assemble time, and `group`/`repeater` fields nest further bags. */
@@ -696,6 +693,9 @@ export interface FieldValues {
   [field: string]: FieldValue;
 }
 
+/** A `"media"` block field, resolved from a stored media id to a servable shape at
+ * assemble time. `url` is the raw (full-size) serving path; pass `key` to `imageUrl()`
+ * for on-the-fly transforms. `null` when the referenced media was deleted. */
 export interface ResolvedMedia {
   id: string;
   key: string;

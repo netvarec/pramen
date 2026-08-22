@@ -606,8 +606,12 @@ export class PramenDOBase extends DurableObject<DoEnv> {
 
   // The DO env (bindings + vars + secrets) handed to handlers as ctx.env. Loosely
   // typed at the boundary so handlers can read any var/secret without a DoEnv cast.
+  private widenedEnv: EnvBag | null = null;
   private get envBag(): EnvBag {
-    return { ...this.env };
+    // `this.env` is fixed for the DO's lifetime, so widen it once. This getter is read
+    // inside the per-subscription live-query loop, where a copy per read would allocate
+    // one whole binding bag per subscription on every write.
+    return (this.widenedEnv ??= { ...this.env });
   }
 
   // One Files facade per DO (a DO serves one tenant). Backed by the R2 binding;

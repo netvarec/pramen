@@ -6,7 +6,7 @@
 //   C4 — live connection failures surface via onConnectionError instead of hanging.
 
 import { describe, expect, test } from "bun:test";
-import { createClient, PramenError } from "@pramen/client";
+import { createClient, PramenError, type FetchLike } from "@pramen/client";
 import type { JsonValue } from "@pramen/server";
 
 /** The event payload these WebSocket fakes hand to listeners. */
@@ -22,27 +22,27 @@ function jsonResponse(body: JsonValue, init?: { status?: number; headers?: Recor
 describe("call() success envelope (C1)", () => {
   test("a 2xx non-envelope response throws, never resolves undefined", async () => {
     // Simulate the Worker help page: 200 OK, plain text (JSON.parse fails → {}).
-    const fetchImpl: typeof fetch = async () => new Response("pramen help page", { status: 200 });
+    const fetchImpl: FetchLike = async () => new Response("pramen help page", { status: 200 });
     const client = createClient({ url: "https://x.example", fetchImpl });
     await expect(client.call("anything" as never)).rejects.toBeInstanceOf(PramenError);
   });
 
   test("ok:false envelope throws with its error/code/status", async () => {
-    const fetchImpl: typeof fetch = async () =>
+    const fetchImpl: FetchLike = async () =>
       jsonResponse({ ok: false, error: "nope", code: "denied" }, { status: 403 });
     const client = createClient({ url: "https://x.example", fetchImpl });
     await expect(client.call("x" as never)).rejects.toMatchObject({ code: "denied", status: 403 });
   });
 
   test("ok:true envelope resolves the result", async () => {
-    const fetchImpl: typeof fetch = async () => jsonResponse({ ok: true, result: { hi: 1 } });
+    const fetchImpl: FetchLike = async () => jsonResponse({ ok: true, result: { hi: 1 } });
     const client = createClient({ url: "https://x.example", fetchImpl });
     expect(await client.call("x" as never)).toEqual({ hi: 1 });
   });
 
   test("trailing slash in the base url is normalized (no //rpc)", async () => {
     let seen = "";
-    const fetchImpl: typeof fetch = async (url) => {
+    const fetchImpl: FetchLike = async (url) => {
       seen = String(url);
       return jsonResponse({ ok: true, result: 1 });
     };
@@ -57,7 +57,7 @@ describe("D1 bookmark replay keeps the max (C2)", () => {
     const sent: (string | null)[] = [];
     const responses = ["0000000005-abc", "0000000002-abc"]; // 2nd is lexicographically smaller
     let i = 0;
-    const fetchImpl: typeof fetch = async (_url, init) => {
+    const fetchImpl: FetchLike = async (_url, init) => {
       sent.push(new Headers(init?.headers).get("x-pramen-d1-bookmark"));
       const bm = responses[i++];
       return jsonResponse({ ok: true, result: 1 }, bm ? { headers: { "x-pramen-d1-bookmark": bm } } : undefined);
@@ -74,7 +74,7 @@ describe("D1 bookmark replay keeps the max (C2)", () => {
 
 describe("live connection error surfaces (C4)", () => {
   test("no WebSocket implementation fires onConnectionError instead of hanging", () => {
-    const fetchImpl: typeof fetch = async () => jsonResponse({ ok: true, result: 1 });
+    const fetchImpl: FetchLike = async () => jsonResponse({ ok: true, result: 1 });
     // Force the no-WS branch: no WebSocketImpl and no global WebSocket.
     const orig = (globalThis as { WebSocket?: unknown }).WebSocket;
     delete (globalThis as { WebSocket?: unknown }).WebSocket;
@@ -96,7 +96,7 @@ describe("live connection error surfaces (C4)", () => {
   });
 
   test("a socket that keeps closing exhausts reconnects and reports a connection error", async () => {
-    const fetchImpl: typeof fetch = async () => jsonResponse({ ok: true, result: 1 });
+    const fetchImpl: FetchLike = async () => jsonResponse({ ok: true, result: 1 });
 
     // A WS that never opens — it emits `close` right after construction (a rejected
     // upgrade, e.g. auth 403). Each reconnect gets the same treatment.

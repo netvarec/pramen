@@ -2,7 +2,7 @@
   "name": "pramen",
   "version": "0.0.0",
   "private": true,
-  "description": "Reactive backend runtime for TypeScript on Cloudflare \u2014 schema + handlers, deployed as Workers + Durable Objects.",
+  "description": "Reactive backend runtime for TypeScript on Cloudflare — schema + handlers, deployed as Workers + Durable Objects.",
   "type": "module",
   "workspaces": [
     "packages/*"
@@ -35,6 +35,7 @@
     "@pramen/server": "workspace:*",
     "@types/react": "^19.0.0",
     "bcryptjs": "2.4.3",
+    "bun-types": "^1.4.0",
     "lopata": "^0.19.2",
     "oblaka-iac": "^0.0.16",
     "oxlint": "1.79.0",

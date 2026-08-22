@@ -57,7 +57,7 @@ describe("Db: non-`id` primary keys + hidden columns", () => {
     expect(updated?.name).toBe("Acme Inc");
 
     // belongsTo eager-load resolves members.orgSlug -> orgs.slug (target PK = slug)
-    const withOrg = (await db.find({ from: "members", with: { org: true } })) as Row[];
+    const withOrg = (await db.find({ from: "members", with: { org: true } })) as Array<Record<string, any>>;
     expect(withOrg[0].org?.slug).toBe("acme");
     expect(withOrg[0].org?.name).toBe("Acme Inc");
 
