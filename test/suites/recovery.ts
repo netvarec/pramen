@@ -2,18 +2,18 @@
 // locally; the actual restore needs a deployed DO (PITR isn't available in
 // miniflare), so a valid admin call reports 501 "unavailable" in local dev.
 
+import type { JsonValue } from "@pramen/server";
 import { assert, token } from "../lib";
 
 export async function runRecovery(base: string): Promise<void> {
   const admin = await token("admin", ["admin"]);
   const reader = await token("reader-user", ["reader"], { tenants: ["recover-probe"] });
 
-  const recover = (body: unknown, bearer?: string) =>
-    fetch(`${base}/admin/recover`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...(bearer ? { authorization: `Bearer ${bearer}` } : {}) },
-      body: JSON.stringify(body),
-    });
+  const recover = (body: JsonValue, bearer?: string) => {
+    const headers = new Headers({ "content-type": "application/json" });
+    if (bearer) headers.set("authorization", `Bearer ${bearer}`);
+    return fetch(`${base}/admin/recover`, { method: "POST", headers, body: JSON.stringify(body) });
+  };
 
   const anon = await recover({ tenant: "recover-probe", timestamp: Date.now() });
   assert(anon.status === 403, "anonymous cannot trigger recovery");

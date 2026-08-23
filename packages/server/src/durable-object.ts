@@ -34,6 +34,8 @@ import type { Identity } from "./sdk/acl";
 import type { HandlerContext } from "./sdk/handlers";
 import type { PramenApp } from "./pramen";
 import type { ClientMsg, ServerMsg, Subscription } from "./runtime/protocol";
+import type { EnvBag } from "./sdk/handlers";
+import type { JsonValue } from "./sdk/infer";
 
 /** Durable per-socket state — kept SMALL and stable, since it rides the WebSocket
  * attachment which workerd caps at ~2 KB. Only auth/routing identity lives here so it
@@ -208,9 +210,10 @@ export class PramenDOBase extends DurableObject<DoEnv> {
     }
 
     const name = new URL(request.url).pathname.replace(/^\/rpc\//, "");
-    let input: unknown;
+    // The RPC body is JSON — parse it into the domain type once, here at the boundary.
+    let input: JsonValue = null;
     if (request.method === "POST") {
-      input = await request.json().catch(() => undefined);
+      input = ((await request.json().catch(() => null)) ?? null) as JsonValue;
     }
 
     try {
@@ -354,12 +357,12 @@ export class PramenDOBase extends DurableObject<DoEnv> {
 
     switch (msg.type) {
       case "subscribe":
-        return this.onSubscribe(ws, msg.id, msg.name, msg.input);
+        return this.onSubscribe(ws, msg.id, msg.name, msg.input ?? null);
       case "unsubscribe":
         this.setSubs(ws, this.getSubs(ws).filter((s) => s.id !== msg.id));
         return;
       case "call":
-        return this.onCall(ws, msg.id, msg.name, msg.input);
+        return this.onCall(ws, msg.id, msg.name, msg.input ?? null);
       default:
         return this.send(ws, { type: "error", id: "", error: "unknown message type" });
     }
@@ -381,7 +384,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
 
   // --- live-query internals ---
 
-  private async onSubscribe(ws: WebSocket, id: string, name: string, input: unknown): Promise<void> {
+  private async onSubscribe(ws: WebSocket, id: string, name: string, input: JsonValue): Promise<void> {
     const att = this.getAttachment(ws);
     const subs = this.getSubs(ws);
     try {
@@ -402,7 +405,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
     }
   }
 
-  private async onCall(ws: WebSocket, id: string, name: string, input: unknown): Promise<void> {
+  private async onCall(ws: WebSocket, id: string, name: string, input: JsonValue): Promise<void> {
     const att = this.getAttachment(ws);
     let outcome: Awaited<ReturnType<typeof dispatch>>;
     try {
@@ -603,8 +606,12 @@ export class PramenDOBase extends DurableObject<DoEnv> {
 
   // The DO env (bindings + vars + secrets) handed to handlers as ctx.env. Loosely
   // typed at the boundary so handlers can read any var/secret without a DoEnv cast.
-  private get envBag(): Readonly<Record<string, unknown>> {
-    return this.env as unknown as Record<string, unknown>;
+  private widenedEnv: EnvBag | null = null;
+  private get envBag(): EnvBag {
+    // `this.env` is fixed for the DO's lifetime, so widen it once. This getter is read
+    // inside the per-subscription live-query loop, where a copy per read would allocate
+    // one whole binding bag per subscription on every write.
+    return (this.widenedEnv ??= { ...this.env });
   }
 
   // One Files facade per DO (a DO serves one tenant). Backed by the R2 binding;

@@ -28,6 +28,7 @@ import {
   type QueueMessage,
   type FileRef,
   type JsonValue,
+  type EnvBag,
   type WhereClause,
 } from "@pramen/server";
 import {
@@ -47,6 +48,19 @@ import {
 } from "@pramen/auth";
 // @pramen/cms — the block/page builder, wired as an ordinary app fragment.
 import { cmsSchema, cmsHandlers, cmsPolicies, cmsTasks, cmsRoutes, defineBlockType, defineContentType, cmsBootstrap, collection, createCollectionHandlers, collectionPolicies } from "@pramen/cms";
+
+/** The columns `createNote` writes. `meta` is omitted (not null) when absent, so a
+ * role with a restricted create-field list isn't tripped by an always-present column. */
+type NoteInsert = {
+  title: string;
+  body: string;
+  ownerId: string | null;
+  createdAt: number;
+  meta?: JsonValue;
+};
+
+/** The columns `logEvent` writes — `id` is optional (generated when omitted). */
+type EventInsert = { kind: string; id?: string };
 
 // @pramen/auth: teach login one imported hash scheme. Unsalted `sha256` stands in for
 // whatever the system you are migrating FROM used — the real-world case is usually
@@ -416,16 +430,18 @@ const handlers = {
   // caller — so a forged ownerId in the request body is ignored. The `input`
   // validator rejects malformed bodies at the boundary (400).
   createNote: mutation(
-    (ctx, input: { title: string; body: string; ownerId?: string; meta?: JsonValue }) =>
-      ctx.db.insert("notes", {
+    (ctx, input: { title: string; body: string; ownerId?: string; meta?: JsonValue }) => {
+      const values: NoteInsert = {
         title: input.title,
         body: input.body,
         ownerId: input.ownerId ?? null,
         createdAt: Date.now(),
-        // Only write meta when provided, so roles with a restricted create-field
-        // list (e.g. teammate) aren't tripped by an always-present column.
-        ...(input.meta !== undefined ? { meta: input.meta } : {}),
-      }),
+      };
+      // Only write meta when provided, so roles with a restricted create-field
+      // list (e.g. teammate) aren't tripped by an always-present column.
+      if (input.meta !== undefined) values.meta = input.meta;
+      return ctx.db.insert("notes", values);
+    },
     {
       input: (raw): { title: string; body: string; ownerId?: string; meta?: JsonValue } => {
         const o = (raw ?? {}) as Record<string, unknown>;
@@ -512,8 +528,11 @@ const handlers = {
   // (the echoed row carries the generated uuids). Passing an `id` is allowed too, as
   // long as it's a valid uuid — otherwise the write is rejected (400).
   logEvent: mutation(
-    (ctx, input: { kind: string; id?: string }) =>
-      ctx.db.insert("events", { kind: input.kind, ...(input.id !== undefined ? { id: input.id } : {}) }),
+    (ctx, input: { kind: string; id?: string }) => {
+      const values: EventInsert = { kind: input.kind };
+      if (input.id !== undefined) values.id = input.id;
+      return ctx.db.insert("events", values);
+    },
     {
       input: (raw): { kind: string; id?: string } => {
         const o = (raw ?? {}) as Record<string, unknown>;
@@ -807,7 +826,7 @@ const routes = [
   {
     method: "POST",
     path: "/hooks/signup",
-    handler: async (request: Request, _env: Readonly<Record<string, unknown>>, ctx: { callPrivileged: (o: { name: string; input?: unknown; roles?: string[] }) => Promise<Response> }) => {
+    handler: async (request: Request, _env: EnvBag, ctx: { callPrivileged: (o: { name: string; input?: JsonValue; roles?: string[] }) => Promise<Response> }) => {
       const body = (await request.json().catch(() => ({}))) as { email?: string; code?: string };
       // (verify a signature header here in a real webhook)
       return ctx.callPrivileged({ name: "createSignup", input: { email: body.email ?? "", code: body.code ?? "" } });

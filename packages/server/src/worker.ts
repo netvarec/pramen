@@ -6,6 +6,8 @@
 
 import { authorizeTenant, HmacStrategy, isAdmin, JwksStrategy, resolveIdentity, type VerifyOptions, type VerifyStrategy } from "./auth";
 import { dispatch, tasksFacade, bindTasks } from "./runtime/dispatch";
+import type { EnvBag } from "./sdk/handlers";
+import type { JsonValue } from "./sdk/infer";
 import { ensureOutbox, drainOutbox, listTasks } from "./runtime/outbox";
 import { createMail } from "./runtime/mail";
 import { createQueue, type QueueProducerBinding } from "./runtime/queue";
@@ -22,6 +24,11 @@ import type { Identity } from "./sdk/acl";
 import type { HandlerContext } from "./sdk/handlers";
 import { DEFAULT_PARTITION, partitionsOf } from "./sdk/schema";
 import type { PramenApp } from "./pramen";
+
+/** Widen the closed `Env` interface to the open `EnvBag` handlers and services see.
+ * Spreading yields an anonymous object type, which TypeScript gives an implicit index
+ * signature — so this needs no type assertion. */
+const envBag = (env: Env): EnvBag => ({ ...env });
 
 export interface Env {
   PRAMEN: DurableObjectNamespace;
@@ -149,7 +156,7 @@ function partitionStubFor(env: Env, tenant: string, partition: string = DEFAULT_
  * DO's JSON response (`{ ok, result }` / `{ ok: false, … }`). */
 export async function callPrivileged(
   env: Env,
-  opts: { name: string; input?: unknown; tenant?: string; roles?: string[]; partition?: string },
+  opts: { name: string; input?: JsonValue; tenant?: string; roles?: string[]; partition?: string },
 ): Promise<Response> {
   const tenant = opts.tenant ?? "main";
   const partition = opts.partition ?? DEFAULT_PARTITION;
@@ -235,7 +242,8 @@ export function makeWorker(app: PramenApp) {
     const files = createFiles({ tenant: "main", secret: filesSecret(env), adapter: new R2Adapter(env.FILES) });
     const db = new Db(driver, { acl: d1Acl, identity, system: true, schema: app.schema, suppressTriggers: true }, app.schema);
     const kv = new Kv(env.KV);
-    return { db, kv, files, env: env as unknown as Record<string, unknown>, identity, tasks: tasksFacade(driver), mail: createMail(env as unknown as Record<string, unknown>, kv), queue: createQueue(env as unknown as Record<string, unknown>) };
+    const bag = envBag(env);
+    return { db, kv, files, env: bag, identity, tasks: tasksFacade(driver), mail: createMail(bag, kv), queue: createQueue(bag) };
   };
 
   /** Drain the D1 outbox in the Worker (no DO/alarm on this path) — called by the
@@ -281,7 +289,7 @@ export function makeWorker(app: PramenApp) {
     for (const r of app.routes ?? []) {
       if (request.method === r.method && url.pathname === r.path) {
         const routeCtx = { callPrivileged: (opts: Parameters<typeof callPrivileged>[1]) => callPrivileged(env, opts) };
-        return r.handler(request, env as unknown as Record<string, unknown>, routeCtx);
+        return r.handler(request, envBag(env), routeCtx);
       }
     }
 
@@ -473,8 +481,9 @@ export function makeWorker(app: PramenApp) {
       }
       // (isLive is excluded by useD1Store — live always routes to the DO below.)
       const name = url.pathname.replace(/^\/rpc\//, "");
-      let input: unknown;
-      if (request.method === "POST") input = await request.json().catch(() => undefined);
+      // The RPC body is JSON — parse it into the domain type once, here at the boundary.
+      let input: JsonValue = null;
+      if (request.method === "POST") input = ((await request.json().catch(() => null)) ?? null) as JsonValue;
 
       // Pick where the D1 session may start its first read. A mutation ALWAYS pins the
       // primary (`first-primary` is a superset of read-your-writes) so a read-modify-write
@@ -489,10 +498,10 @@ export function makeWorker(app: PramenApp) {
 
       const driver = new D1Driver(env.DB, { start });
       const files = createFiles({ tenant, secret: filesSecret(env), adapter: new R2Adapter(env.FILES) });
-      const envBag = env as unknown as Record<string, unknown>;
+      const bag = envBag(env);
       try {
         await ensureD1Migrated(driver, env.PRAMEN_ALLOW_DESTRUCTIVE === "true");
-        const { result, enqueued } = await dispatch(app.handlers, app.schema, driver, new Kv(env.KV), files, envBag, { acl: d1Acl, identity }, name, input);
+        const { result, enqueued } = await dispatch(app.handlers, app.schema, driver, new Kv(env.KV), files, bag, { acl: d1Acl, identity }, name, input);
         // Kick an immediate drain in the request tail when this handler enqueued tasks
         // (e.g. sendMagicLinkEmail). Without this, tasks wait for the next Cron trigger
         // — up to a full minute. `waitUntil` lets the response return now while the
@@ -567,13 +576,13 @@ export function makeWorker(app: PramenApp) {
     // handler (ACK on success / RETRY on throw, per message). A consumer is Worker-level
     // (no tenant DO): its ctx carries env/kv/mail/queue + callPrivileged to reach a DO.
     async queue(batch: QueueBatch, env: Env): Promise<void> {
-      const envBag = env as unknown as Record<string, unknown>;
+      const bag = envBag(env);
       const kv = new Kv(env.KV);
       const ctx: QueueContext = {
-        env: envBag,
+        env: bag,
         kv,
-        mail: createMail(envBag, kv),
-        queue: createQueue(envBag),
+        mail: createMail(bag, kv),
+        queue: createQueue(bag),
         callPrivileged: (opts) => callPrivileged(env, opts),
       };
       await dispatchQueueBatch(app.queues ?? {}, ctx, batch);

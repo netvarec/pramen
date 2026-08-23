@@ -19,6 +19,8 @@
 // that isn't bound FAILS CLOSED (throws) rather than silently dropping the message —
 // mirroring how ctx.mail fails closed without a transport.
 
+import type { EnvBag } from "../sdk/handlers";
+
 /** Cloudflare Queues content type for a sent message. Omitted ⇒ the platform default
  * (v8 structured clone). Use "json" for cross-runtime / external consumers. */
 export type QueueContentType = "text" | "bytes" | "json" | "v8";
@@ -131,7 +133,7 @@ export class MemoryQueueAdapter implements QueueAdapter {
 /** Discover the Cloudflare Queues producer bindings in an environment: any value that
  * exposes BOTH `send` and `sendBatch` functions (which excludes the email `send`-only
  * binding, KV, R2, D1, the DO namespace, …). Returns name → binding. */
-export function discoverQueueBindings(env: Readonly<Record<string, unknown>>): Record<string, QueueProducerBinding> {
+export function discoverQueueBindings(env: EnvBag): Record<string, QueueProducerBinding> {
   const out: Record<string, QueueProducerBinding> = {};
   for (const [name, value] of Object.entries(env)) {
     if (
@@ -150,6 +152,6 @@ export function discoverQueueBindings(env: Readonly<Record<string, unknown>>): R
  * producer bindings. Sending to an undeclared queue fails closed (the adapter throws).
  * There is no silent capture fallback — declare the `Queue` binding and it exists in
  * dev (lopata) and miniflare too. */
-export function createQueue(env: Readonly<Record<string, unknown>>): Queue {
+export function createQueue(env: EnvBag): Queue {
   return new Queue(new CloudflareQueueAdapter(discoverQueueBindings(env)));
 }

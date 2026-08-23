@@ -15,6 +15,8 @@ import {
   type ResolverDb,
   type Role,
   type Validator,
+  type WhereRule,
+  type WhereValue,
   deny,
   isAllow,
   isDeny,
@@ -25,7 +27,8 @@ import {
 } from "../sdk/acl";
 import { and, compileWhere, evalExpr, FALSE, not, or, TRUE, type SqlExpr } from "./read-engine";
 import { BadRequest, PramenError } from "./errors";
-import type { FieldDef, RelationDef, SchemaDef } from "../sdk/schema";
+import type { CellValue, Row } from "../sdk/infer";
+import type { FieldDef, RelationDef, RelationDefs, SchemaDef } from "../sdk/schema";
 
 export class AclDenied extends PramenError {
   constructor(
@@ -150,7 +153,7 @@ function grantOf(rule: PolicyRules | RelationAclRule, where: SqlExpr | null, ent
     conditional: (rule.conditionalFields ?? []).map((cf) => ({
       // Cell-level `when` is evaluated per-row in memory (evalExpr), so it must stay
       // single-table — `allowRelations: false` rejects a relation key up front.
-      when: compileScopedWhere(cf.when as Record<string, unknown>, entity, ctx, depth, false),
+      when: compileScopedWhere(cf.when as WhereRule, entity, ctx, depth, false),
       fields: cf.fields,
     })),
     fieldsFns: rule.fieldsFn ? [rule.fieldsFn] : [],
@@ -168,7 +171,7 @@ function rolesOf(identity: Identity | null): string[] {
 }
 
 function getPath(obj: unknown, path: string): unknown {
-  return path.split(".").reduce<unknown>((acc, seg) => (acc == null ? undefined : (acc as Record<string, unknown>)[seg]), obj ?? undefined);
+  return path.split(".").reduce<unknown>((acc, seg) => (acc == null ? undefined : (acc as WhereRule)[seg]), obj ?? undefined);
 }
 
 const UNRESOLVED = Symbol("unresolved");
@@ -177,15 +180,18 @@ const UNRESOLVED = Symbol("unresolved");
 // $input marker (against the request input — a capability/by-key grant), or a
 // $now marker (the evaluation instant). An unresolvable marker yields UNRESOLVED,
 // which makes its rule match nothing. $now always resolves.
-function resolveValue(v: unknown, identity: Identity | null, input: unknown): unknown {
+/** A resolved where value, or the sentinel meaning "this marker could not resolve". */
+type ResolvedWhereValue = WhereValue | typeof UNRESOLVED;
+
+function resolveValue(v: WhereValue, identity: Identity | null, input: unknown): ResolvedWhereValue {
   if (isNowMarker(v)) return new Date().toISOString();
   if (isIdentityMarker(v)) {
     const value = getPath(identity, v.path);
-    return value === undefined ? UNRESOLVED : value;
+    return value === undefined ? UNRESOLVED : (value as WhereValue);
   }
   if (isInputMarker(v)) {
     const value = getPath(input, v.path);
-    return value === undefined ? UNRESOLVED : value;
+    return value === undefined ? UNRESOLVED : (value as WhereValue);
   }
   return v;
 }
@@ -199,22 +205,22 @@ function resolveValue(v: unknown, identity: Identity | null, input: unknown): un
 // whole rule — so `OR: [{ x: $identity(...) }, { public: true }]` still matches
 // the `public` branch for a caller whose marker can't resolve. (See the comment
 // on `compileScopedWhere`.)
-function resolveMarkers(rule: Record<string, unknown>, identity: Identity | null, input: unknown): Record<string, unknown> | null {
-  const out: Record<string, unknown> = {};
+function resolveMarkers(rule: WhereRule, identity: Identity | null, input: unknown): WhereRule | null {
+  const out: WhereRule = {};
   for (const [key, v] of Object.entries(rule)) {
     const isMarker = isIdentityMarker(v) || isInputMarker(v) || isNowMarker(v);
     if (v !== null && typeof v === "object" && !isMarker && !Array.isArray(v)) {
-      const ops: Record<string, unknown> = {};
-      for (const [op, val] of Object.entries(v as Record<string, unknown>)) {
+      const ops: WhereRule = {};
+      for (const [op, val] of Object.entries(v as WhereRule)) {
         if (op === "in" || op === "notIn") {
-          let arr: unknown;
+          let arr: ResolvedWhereValue;
           if (isIdentityMarker(val) || isInputMarker(val)) {
             arr = resolveValue(val, identity, input);
             if (arr === UNRESOLVED) return null;
           } else {
-            const mapped = (val as unknown[]).map((x) => resolveValue(x, identity, input));
+            const mapped = (val as WhereValue[]).map((x) => resolveValue(x, identity, input));
             if (mapped.some((x) => x === UNRESOLVED)) return null;
-            arr = mapped;
+            arr = mapped as WhereValue[];
           }
           if (!Array.isArray(arr)) return null; // marker must resolve to a list
           ops[op] = arr;
@@ -258,13 +264,13 @@ function pkOf(schema: SchemaDef | undefined, entity: string): string {
  * unreadable column is LIKE-oracle'able through the subquery). Nested relation keys
  * are skipped: they're re-scoped against THEIR own target's read scope downstream.
  * Mirrors Db.assertReadableWhere's recursion for the top-level user `where`. */
-function assertReadableRelationWhere(where: Record<string, unknown>, target: string, fields: string[], ctx: AclContext): void {
-  const targetRels = (ctx.schema?.[target]?.relations ?? {}) as Record<string, unknown>;
+function assertReadableRelationWhere(where: WhereRule, target: string, fields: string[], ctx: AclContext): void {
+  const targetRels: RelationDefs = ctx.schema?.[target]?.relations ?? {};
   for (const [k, v] of Object.entries(where)) {
     if (k === "AND" || k === "OR") {
-      for (const g of v as Record<string, unknown>[]) assertReadableRelationWhere(g, target, fields, ctx);
+      for (const g of v as WhereRule[]) assertReadableRelationWhere(g, target, fields, ctx);
     } else if (k === "NOT") {
-      assertReadableRelationWhere(v as Record<string, unknown>, target, fields, ctx);
+      assertReadableRelationWhere(v as WhereRule, target, fields, ctx);
     } else if (targetRels[k]) {
       continue;
     } else if (!fields.includes(k)) {
@@ -281,7 +287,7 @@ function relationPredicate(rel: RelationDef, nested: unknown, parentEntity: stri
   if (nested === null || typeof nested !== "object" || Array.isArray(nested)) {
     throw new BadRequest(`relation filter for '${rel.target}' must be an object`);
   }
-  let inner = compileScopedWhere(nested as Record<string, unknown>, rel.target, ctx, depth + 1);
+  let inner = compileScopedWhere(nested as WhereRule, rel.target, ctx, depth + 1);
 
   // Security: a relation filter must respect the target's read ACL (else it leaks).
   // Two distinct "no" outcomes, matching how the rest of the read path behaves:
@@ -297,7 +303,7 @@ function relationPredicate(rel: RelationDef, nested: unknown, parentEntity: stri
       inner = FALSE; // can't filter through a relation you can't read
     } else {
       if (tScope.fields !== null) {
-        assertReadableRelationWhere(nested as Record<string, unknown>, rel.target, tScope.fields, ctx);
+        assertReadableRelationWhere(nested as WhereRule, rel.target, tScope.fields, ctx);
       }
       if (tScope.where) inner = and(inner, tScope.where);
     }
@@ -336,7 +342,7 @@ function relationPredicate(rel: RelationDef, nested: unknown, parentEntity: stri
  * evaluated in memory and cannot do a SQL round-trip): a relation key then raises a
  * clear authoring error instead of emitting a `sub` node that throws at read time. */
 export function compileScopedWhere(
-  rule: Record<string, unknown>,
+  rule: WhereRule,
   entity: string,
   ctx: AclContext,
   depth = 0,
@@ -344,13 +350,13 @@ export function compileScopedWhere(
 ): SqlExpr {
   const relations = (ctx.schema?.[entity]?.relations ?? {}) as Record<string, RelationDef>;
   const parts: SqlExpr[] = [];
-  const plain: Record<string, unknown> = {};
+  const plain: WhereRule = {};
   for (const [k, v] of Object.entries(rule)) {
     if (k === "AND" || k === "OR") {
-      const groups = (v as Record<string, unknown>[]).map((g) => compileScopedWhere(g, entity, ctx, depth, allowRelations));
+      const groups = (v as WhereRule[]).map((g) => compileScopedWhere(g, entity, ctx, depth, allowRelations));
       parts.push(k === "AND" ? and(...groups) : or(...groups));
     } else if (k === "NOT") {
-      parts.push(not(compileScopedWhere(v as Record<string, unknown>, entity, ctx, depth, allowRelations)));
+      parts.push(not(compileScopedWhere(v as WhereRule, entity, ctx, depth, allowRelations)));
     } else if (relations[k]) {
       if (!allowRelations) {
         throw new BadRequest(`cell-level \`when\` cannot traverse relations: '${k}' (relations need a SQL round-trip)`);
@@ -420,7 +426,7 @@ export function resolveScope(ctx: AclContext, entity: string, action: Action, de
     if (isDeny(rule)) continue;
     if (isAllow(rule)) grants.push(ALLOW_GRANT);
     else {
-      const where = compileScopedWhere((rule.where ?? {}) as Record<string, unknown>, entity, ctx, depth);
+      const where = compileScopedWhere((rule.where ?? {}) as WhereRule, entity, ctx, depth);
       grants.push(grantOf(rule, where, entity, ctx, depth));
     }
   }
@@ -431,7 +437,7 @@ export function resolveScope(ctx: AclContext, entity: string, action: Action, de
  * Returns null (all fields) when the base is null or a resolver grants everything. */
 export function effectiveFields(
   scope: Scope,
-  row: Record<string, unknown>,
+  row: Row,
   identity: Identity | null,
 ): string[] | null {
   if (scope.fields === null) return null;
@@ -448,18 +454,18 @@ export function effectiveFields(
 /** Forced values + validators for a write, gathered from matched write policies.
  * `set` values are resolved against the identity; later policies override earlier. */
 export interface WriteRules {
-  set: Record<string, unknown>;
+  set: Row;
   validators: Validator[];
 }
 
 export function resolveWriteRules(ctx: AclContext, entity: string, action: Action): WriteRules {
-  const set: Record<string, unknown> = {};
+  const set: Row = {};
   const validators: Validator[] = [];
   for (const rule of matchedRules(ctx, entity, action)) {
     if (isAllow(rule) || isDeny(rule)) continue;
     if (rule.set) {
       for (const [col, v] of Object.entries(rule.set)) {
-        set[col] = typeof v === "function" ? (v as (i: Identity | null) => unknown)(ctx.identity) : v;
+        set[col] = typeof v === "function" ? (v as (i: Identity | null) => CellValue)(ctx.identity) : v;
       }
     }
     if (rule.validate) validators.push(rule.validate);
@@ -487,7 +493,7 @@ export function resolveRelationScope(
     if (isAllow(rule) || isDeny(rule)) continue;
     const rel = rule.relations?.[relName];
     if (rel?.directAccess) {
-      const relWhere = rel.where ? compileScopedWhere(rel.where as Record<string, unknown>, target, ctx, 0) : null;
+      const relWhere = rel.where ? compileScopedWhere(rel.where as WhereRule, target, ctx, 0) : null;
       grants.push(grantOf(rel, relWhere, target, ctx, 0));
     }
   }
@@ -496,9 +502,9 @@ export function resolveRelationScope(
 }
 
 /** Project a row to the permitted fields. null = all. */
-export function projectRow(row: Record<string, unknown>, fields: string[] | null): Record<string, unknown> {
+export function projectRow(row: Row, fields: string[] | null): Row {
   if (!fields) return row;
-  const out: Record<string, unknown> = {};
+  const out: Row = {};
   for (const f of fields) if (f in row) out[f] = row[f];
   return out;
 }

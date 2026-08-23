@@ -11,6 +11,7 @@
 // in-memory — so handlers work unchanged off-platform.
 
 import type { Kv } from "./kv";
+import type { EnvBag } from "../sdk/handlers";
 
 export interface MailAddress {
   email: string;
@@ -120,7 +121,7 @@ export class UnconfiguredMailAdapter implements MailAdapter {
  *    a synthetic dev sender — an EXPLICIT dev opt-in, never the production default.
  *  - else → fail closed: a `send` throws (so a missing-MAIL_FROM prod doesn't silently
  *    stash security emails in KV). */
-export function createMail(env: Readonly<Record<string, unknown>>, kv?: Kv): Mail {
+export function createMail(env: EnvBag, kv?: Kv): Mail {
   const binding = env.EMAIL as SendEmailBinding | undefined;
   const fromAddr = typeof env.MAIL_FROM === "string" && env.MAIL_FROM ? env.MAIL_FROM : undefined;
   if (binding && fromAddr) {

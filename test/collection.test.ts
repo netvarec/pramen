@@ -14,6 +14,7 @@ import { Db } from "../packages/server/src/runtime/db";
 import { migrate } from "../packages/server/src/runtime/migrate";
 import { bunSqliteDriver } from "./sqlite-driver";
 import { collection, createCollectionHandlers, collectionPolicies } from "../packages/cms/src/index";
+import type { HandlerContext, JsonValue, Row } from "@pramen/server";
 
 // A user-defined entity edited as a collection. `secret` is hidden() and NOT in the
 // collection's fields — the write whitelist must never let a caller set it.
@@ -49,7 +50,7 @@ const H = createCollectionHandlers([lectures]);
 // lookup, field validation) surfaces as a rejection just like an async one, and both are
 // assertable with `.rejects`. (Calling `.run` bare would let a sync throw escape .rejects.)
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const run = (h: { run: (c: any, i: any) => unknown }, ctx: unknown, input: unknown) => Promise.resolve().then(() => h.run(ctx, input));
+const run = (h: { run: (c: any, i: any) => unknown }, ctx: HandlerContext | null, input: JsonValue) => Promise.resolve().then(() => h.run(ctx, input));
 
 // An editor identity granted CRUD over `lectures` via collectionPolicies.
 const editorRoles = [role("editor", collectionPolicies([lectures]))];
@@ -72,7 +73,7 @@ async function fresh() {
 
 describe("collections — registry + whitelist", () => {
   test("listCollections returns the meta with defaults filled (no server-only fields)", () => {
-    const metas = (H.listCollections.run as (c: unknown, i: unknown) => never)(null, {}) as unknown as Array<Record<string, unknown>>;
+    const metas = (H.listCollections.run as (c: HandlerContext | null, i: JsonValue) => Row[])(null, {});
     expect(metas).toHaveLength(1);
     const m = metas[0];
     expect(m.slug).toBe("lectures");
@@ -97,7 +98,7 @@ describe("collections — registry + whitelist", () => {
     const row = (await H.collectionCreate.run(ctx, {
       collection: "lectures",
       values: { title: "Intro", speaker: "Ada", secret: "leaked", bogus: "x" },
-    })) as Record<string, unknown>;
+    })) as Row;
     const id = row.id as string;
     // Read the raw column (hidden() is stripped from ORM reads) to prove it stayed at its default.
     const [raw] = await driver.exec("SELECT secret FROM lectures WHERE id = ?", [id]);
@@ -124,11 +125,11 @@ describe("collections — CRUD round-trip", () => {
     const created = (await H.collectionCreate.run(ctx, {
       collection: "lectures",
       values: { title: "One", speaker: "Ada", date: "2026-01-02", slides: [{ url: "https://x/1" }] },
-    })) as Record<string, unknown>;
+    })) as Row;
     const id = created.id as string;
     expect(typeof id).toBe("string");
 
-    const got = (await H.collectionGet.run(ctx, { collection: "lectures", id })) as Record<string, unknown>;
+    const got = (await H.collectionGet.run(ctx, { collection: "lectures", id })) as Row;
     expect(got.title).toBe("One");
     expect(got.slides).toEqual([{ url: "https://x/1" }]); // json column round-trips as a value
 
@@ -136,7 +137,7 @@ describe("collections — CRUD round-trip", () => {
       collection: "lectures",
       id,
       values: { title: "One (edited)", speaker: "Grace" },
-    })) as Record<string, unknown>;
+    })) as Row;
     expect(updated.title).toBe("One (edited)");
 
     const missing = await H.collectionGet.run(ctx, { collection: "lectures", id: "does-not-exist" });
@@ -156,7 +157,7 @@ describe("collections — CRUD round-trip", () => {
     for (const [t, d] of [["A", "2026-01-01"], ["B", "2026-03-01"], ["C", "2026-02-01"]] as const) {
       await H.collectionCreate.run(ctx, { collection: "lectures", values: { title: t, date: d } });
     }
-    const rows = (await H.collectionList.run(ctx, { collection: "lectures" })) as Record<string, unknown>[];
+    const rows = (await H.collectionList.run(ctx, { collection: "lectures" })) as Row[];
     expect(rows.map((r) => r.title)).toEqual(["B", "C", "A"]); // date desc
   });
 });
@@ -165,9 +166,9 @@ describe("collections — the row ACL still applies (handlers go through ctx.db)
   test("an editor granted the entity can CRUD; the collection handler respects the ACL", async () => {
     const driver = await fresh();
     const ctx = editorCtx(driver);
-    const row = (await H.collectionCreate.run(ctx, { collection: "lectures", values: { title: "Ed made this" } })) as Record<string, unknown>;
+    const row = (await H.collectionCreate.run(ctx, { collection: "lectures", values: { title: "Ed made this" } })) as Row;
     expect(row.title).toBe("Ed made this");
-    const got = (await H.collectionGet.run(ctx, { collection: "lectures", id: row.id as string })) as Record<string, unknown>;
+    const got = (await H.collectionGet.run(ctx, { collection: "lectures", id: row.id as string })) as Row;
     expect(got.title).toBe("Ed made this");
   });
 

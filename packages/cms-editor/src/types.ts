@@ -2,6 +2,24 @@
 // @pramen/cms) so the editor stays a self-contained browser app with no server-package
 // dependency — it speaks to the CMS purely over HTTP.
 
+/** Any JSON value — the wire form of everything the CMS stores. */
+export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+
+/** One authored field value. Mirrors `FieldValue` in @pramen/cms: a `"media"` field
+ * arrives resolved to a `Media`, and `group`/`repeater` fields nest further bags. */
+export type FieldValue = JsonValue | Media | FieldValues | FieldValue[];
+
+/** A block / collection / page `fields` bag — field name -> authored value. */
+export interface FieldValues {
+  [field: string]: FieldValue;
+}
+
+/** The JSON body of an editor RPC call: an object of values, any of which may be
+ * omitted (an absent key is simply not sent). */
+export interface RpcInput {
+  [key: string]: FieldValue | undefined;
+}
+
 export type FieldType =
   | "text"
   | "textarea"
@@ -25,7 +43,7 @@ export interface FieldDefinition {
   label?: string;
   type: FieldType;
   required?: boolean;
-  default?: unknown;
+  default?: FieldValue;
   fields?: FieldDefinition[];
   min?: number;
   max?: number;
@@ -47,7 +65,7 @@ export interface RegionDefinition {
 export interface DefaultBlockDefinition {
   region: string;
   blockTypeSlug: string;
-  fields?: Record<string, unknown>;
+  fields?: FieldValues;
 }
 
 export interface BlockType {
@@ -94,7 +112,7 @@ export interface Page {
   slug: string;
   status: string;
   locale: string;
-  fields?: Record<string, unknown> | null; // content-type-level structured data (fieldsSchema)
+  fields?: FieldValues | null; // content-type-level structured data (fieldsSchema)
   translationGroupId?: string | null;
   metaTitle?: string | null;
   metaDescription?: string | null;
@@ -122,13 +140,13 @@ export interface RenderedBlock {
   block_id: string; // block instance id (edit)
   block_type: string;
   title: string | null;
-  fields: Record<string, unknown>;
+  fields: FieldValues;
   is_shared: boolean;
   pending?: boolean; // optimistic placeholder — not yet persisted (temp ids, no getBlock)
 }
 
 export interface AssembledPage {
-  page: Page & { translations?: { locale: string; slug: string }[]; seo?: Record<string, unknown> };
+  page: Page & { translations?: { locale: string; slug: string }[]; seo?: FieldValues };
   regions: Record<string, RenderedBlock[]>;
 }
 

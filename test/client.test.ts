@@ -6,9 +6,13 @@
 //   C4 — live connection failures surface via onConnectionError instead of hanging.
 
 import { describe, expect, test } from "bun:test";
-import { createClient, PramenError } from "@pramen/client";
+import { createClient, PramenError, type FetchLike } from "@pramen/client";
+import type { JsonValue } from "@pramen/server";
 
-function jsonResponse(body: unknown, init?: { status?: number; headers?: Record<string, string> }): Response {
+/** The event payload these WebSocket fakes hand to listeners. */
+type WsEventLike = { data?: string; code?: number; reason?: string };
+
+function jsonResponse(body: JsonValue, init?: { status?: number; headers?: Record<string, string> }): Response {
   return new Response(JSON.stringify(body), {
     status: init?.status ?? 200,
     headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
@@ -18,30 +22,30 @@ function jsonResponse(body: unknown, init?: { status?: number; headers?: Record<
 describe("call() success envelope (C1)", () => {
   test("a 2xx non-envelope response throws, never resolves undefined", async () => {
     // Simulate the Worker help page: 200 OK, plain text (JSON.parse fails → {}).
-    const fetchImpl = (async () => new Response("pramen help page", { status: 200 })) as unknown as typeof fetch;
+    const fetchImpl: FetchLike = async () => new Response("pramen help page", { status: 200 });
     const client = createClient({ url: "https://x.example", fetchImpl });
     await expect(client.call("anything" as never)).rejects.toBeInstanceOf(PramenError);
   });
 
   test("ok:false envelope throws with its error/code/status", async () => {
-    const fetchImpl = (async () =>
-      jsonResponse({ ok: false, error: "nope", code: "denied" }, { status: 403 })) as unknown as typeof fetch;
+    const fetchImpl: FetchLike = async () =>
+      jsonResponse({ ok: false, error: "nope", code: "denied" }, { status: 403 });
     const client = createClient({ url: "https://x.example", fetchImpl });
     await expect(client.call("x" as never)).rejects.toMatchObject({ code: "denied", status: 403 });
   });
 
   test("ok:true envelope resolves the result", async () => {
-    const fetchImpl = (async () => jsonResponse({ ok: true, result: { hi: 1 } })) as unknown as typeof fetch;
+    const fetchImpl: FetchLike = async () => jsonResponse({ ok: true, result: { hi: 1 } });
     const client = createClient({ url: "https://x.example", fetchImpl });
     expect(await client.call("x" as never)).toEqual({ hi: 1 });
   });
 
   test("trailing slash in the base url is normalized (no //rpc)", async () => {
     let seen = "";
-    const fetchImpl = (async (url: string) => {
-      seen = url;
+    const fetchImpl: FetchLike = async (url) => {
+      seen = String(url);
       return jsonResponse({ ok: true, result: 1 });
-    }) as unknown as typeof fetch;
+    };
     const client = createClient({ url: "https://x.example/", fetchImpl });
     await client.call("ping" as never);
     expect(seen).toBe("https://x.example/rpc/ping");
@@ -53,11 +57,11 @@ describe("D1 bookmark replay keeps the max (C2)", () => {
     const sent: (string | null)[] = [];
     const responses = ["0000000005-abc", "0000000002-abc"]; // 2nd is lexicographically smaller
     let i = 0;
-    const fetchImpl = (async (_url: string, init: RequestInit) => {
-      sent.push((init.headers as Record<string, string>)["x-pramen-d1-bookmark"] ?? null);
+    const fetchImpl: FetchLike = async (_url, init) => {
+      sent.push(new Headers(init?.headers).get("x-pramen-d1-bookmark"));
       const bm = responses[i++];
       return jsonResponse({ ok: true, result: 1 }, bm ? { headers: { "x-pramen-d1-bookmark": bm } } : undefined);
-    }) as unknown as typeof fetch;
+    };
     const client = createClient({ url: "https://x.example", fetchImpl });
     await client.call("a" as never); // stores ...5
     await client.call("b" as never); // response ...2 must NOT clobber ...5
@@ -70,7 +74,7 @@ describe("D1 bookmark replay keeps the max (C2)", () => {
 
 describe("live connection error surfaces (C4)", () => {
   test("no WebSocket implementation fires onConnectionError instead of hanging", () => {
-    const fetchImpl = (async () => jsonResponse({ ok: true, result: 1 })) as unknown as typeof fetch;
+    const fetchImpl: FetchLike = async () => jsonResponse({ ok: true, result: 1 });
     // Force the no-WS branch: no WebSocketImpl and no global WebSocket.
     const orig = (globalThis as { WebSocket?: unknown }).WebSocket;
     delete (globalThis as { WebSocket?: unknown }).WebSocket;
@@ -92,21 +96,21 @@ describe("live connection error surfaces (C4)", () => {
   });
 
   test("a socket that keeps closing exhausts reconnects and reports a connection error", async () => {
-    const fetchImpl = (async () => jsonResponse({ ok: true, result: 1 })) as unknown as typeof fetch;
+    const fetchImpl: FetchLike = async () => jsonResponse({ ok: true, result: 1 });
 
     // A WS that never opens — it emits `close` right after construction (a rejected
     // upgrade, e.g. auth 403). Each reconnect gets the same treatment.
     class ClosingWS {
       static OPEN = 1;
       readyState = 0;
-      private handlers: Record<string, ((e: unknown) => void)[]> = {};
+      private handlers: Record<string, ((e: WsEventLike) => void)[]> = {};
       constructor() {
         queueMicrotask(() => this.emit("close", {}));
       }
-      addEventListener(type: string, fn: (e: unknown) => void) {
+      addEventListener(type: string, fn: (e: WsEventLike) => void) {
         (this.handlers[type] ??= []).push(fn);
       }
-      private emit(type: string, e: unknown) {
+      private emit(type: string, e: WsEventLike) {
         for (const fn of this.handlers[type] ?? []) fn(e);
       }
       send() {}

@@ -6,7 +6,7 @@
 import { Button, Input } from "@podoba/react";
 import { createContext, use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Api, clearConfig, isTokenExpired, loadConfig, saveConfig, type Config } from "./api";
-import type { CollectionMeta } from "./types";
+import type { CollectionMeta, JsonValue } from "./types";
 
 declare global {
   interface Window {
@@ -42,7 +42,7 @@ function redirectToSignIn(): void {
 export interface Me {
   userId?: string;
   roles?: string[];
-  [k: string]: unknown;
+  [k: string]: JsonValue | undefined;
 }
 
 interface AppContextValue {

@@ -7,6 +7,7 @@ import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { ensureOutbox, enqueueTask, drainOutbox, listTasks } from "../packages/server/src/runtime/outbox";
 import { bunSqliteDriver } from "./sqlite-driver";
+import type { JsonValue, Row } from "@pramen/server";
 
 async function freshDriver() {
   const driver = bunSqliteDriver(new Database(":memory:"));
@@ -54,7 +55,7 @@ describe("outbox (substrate-agnostic deferred tasks)", () => {
     }
     expect(failures).toBe(5); // MAX_ATTEMPTS
 
-    const row = (await driver.exec("SELECT status, attempts, lastError FROM _pramen_outbox", []))[0] as Record<string, unknown>;
+    const row = (await driver.exec("SELECT status, attempts, lastError FROM _pramen_outbox", []))[0] as Row;
     expect(row.status).toBe("failed");
     expect(Number(row.attempts)).toBe(5);
     expect(String(row.lastError)).toContain("nope");
@@ -171,7 +172,7 @@ describe("outbox (substrate-agnostic deferred tasks)", () => {
       {
         k: async () => {
           const rows = await driver.exec("SELECT claimedAt FROM _pramen_outbox", []);
-          seenClaimedAt = Number((rows[0] as Record<string, unknown>).claimedAt);
+          seenClaimedAt = Number((rows[0] as Row).claimedAt);
         },
       },
       1000 + 61_000,

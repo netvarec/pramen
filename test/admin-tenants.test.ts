@@ -60,7 +60,7 @@ describe("tenantNames parses what GET /tenants returns", () => {
   // What actually broke: an object reaching React as a child. Whatever comes back, every
   // element handed to the picker must be a renderable string.
   test("every result is a string, whatever the input", () => {
-    const mixed = [{ tenant: "main", partition: "default" }, "acme", null, 7] as unknown;
+    const mixed: unknown = [{ tenant: "main", partition: "default" }, "acme", null, 7];
     for (const name of tenantNames(mixed)) expect(typeof name).toBe("string");
   });
 });

@@ -31,7 +31,7 @@ export type {
 // --- app + handlers ---
 export { createApp } from "./sdk/app";
 export { query, mutation, authorizeHandler } from "./sdk/handlers";
-export type { Handler, HandlerContext, HandlerKind, HandlerMap, HandlerOpts, HandlerAuth, Tasks, TaskHandler, AppTaskMap, BootstrapContext, BootstrapFn } from "./sdk/handlers";
+export type { EnvBag, Handler, HandlerContext, HandlerKind, HandlerMap, HandlerOpts, HandlerAuth, Tasks, TaskHandler, AppTaskMap, BootstrapContext, BootstrapFn } from "./sdk/handlers";
 
 // --- ACL ---
 export { $identity, $input, $now, allow, deny, policy, resolve, role, isAllow, isDeny, isResolver, isIdentityMarker, isInputMarker, isNowMarker } from "./sdk/acl";
@@ -64,6 +64,10 @@ export type {
   InferRow,
   InferUpdate,
   JsonValue,
+  JsonObject,
+  SqlValue,
+  CellValue,
+  Row,
   ProjectedRow,
   RelationsOf,
   RelationsResult,
@@ -95,4 +99,4 @@ export { PramenError, BadRequest, Unauthorized, Forbidden } from "./runtime/erro
 
 // --- substrate seam (advanced: bring your own SQL backend) ---
 export { sqliteDialect, postgresDialect, DoSqliteDriver, D1Driver } from "./runtime/driver";
-export type { Driver, Dialect, Row } from "./runtime/driver";
+export type { Driver, Dialect, DriverRow } from "./runtime/driver";

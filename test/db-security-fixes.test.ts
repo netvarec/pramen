@@ -13,6 +13,7 @@ import { compileAcl } from "../packages/server/src/runtime/acl";
 import { Db } from "../packages/server/src/runtime/db";
 import { migrate } from "../packages/server/src/runtime/migrate";
 import { bunSqliteDriver } from "./sqlite-driver";
+import type { JsonValue } from "@pramen/server";
 
 // --- C1: an $input/$identity marker in a bare-value position must only ever be an
 // equality; a caller-supplied operator object must NOT become an operator predicate. ---
@@ -23,7 +24,7 @@ describe("C1: capability read can't be enumerated via operator injection", () =>
   // anonymous may read a signup ONLY by presenting the exact code (a capability read).
   const roles = [role("anonymous", [policy("cap", "signups", "read", { where: { code: $input("code") } })])];
 
-  async function seed(input: unknown) {
+  async function seed(input: JsonValue) {
     const sqlite = new Database(":memory:");
     const driver = bunSqliteDriver(sqlite);
     await migrate(driver, schema);

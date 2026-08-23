@@ -10,11 +10,13 @@
 //   { type: "result", id, result }   // reply to a one-shot call
 //   { type: "error",  id, error }
 
+import type { JsonValue } from "../sdk/infer";
+
 export interface SubscribeMsg {
   type: "subscribe";
   id: string;
   name: string;
-  input?: unknown;
+  input?: JsonValue;
 }
 export interface UnsubscribeMsg {
   type: "unsubscribe";
@@ -24,7 +26,7 @@ export interface CallMsg {
   type: "call";
   id: string;
   name: string;
-  input?: unknown;
+  input?: JsonValue;
 }
 
 export type ClientMsg = SubscribeMsg | UnsubscribeMsg | CallMsg;
@@ -38,7 +40,7 @@ export type ServerMsg =
 export interface Subscription {
   id: string;
   name: string;
-  input: unknown;
+  input: JsonValue;
   /** Tables the query read — the coarse prefilter for which writes might matter. */
   tables: string[];
   /** Digest of the last result pushed — used to suppress no-op (row-level) pushes. */

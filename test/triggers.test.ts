@@ -10,6 +10,7 @@ import { Db } from "../packages/server/src/runtime/db";
 import { migrate } from "../packages/server/src/runtime/migrate";
 import { ensureOutbox } from "../packages/server/src/runtime/outbox";
 import { bunSqliteDriver } from "./sqlite-driver";
+import type { Row } from "@pramen/server";
 
 const schema = defineSchema({
   items: Entity((t) => ({ id: t.textId(), name: t.text(), status: t.text() }), undefined, {
@@ -102,7 +103,7 @@ describe("declarative write-triggers", () => {
     const ctx: AclContext = { acl: compileAcl(roles), identity: admin, schema: secretSchema, partition: undefined, system: true };
     const db = new Db(driver, ctx, secretSchema);
     await db.insert("users", { id: "u", name: "Zoe", passwordHash: "pbkdf2$secret" });
-    const payload = (await outbox(driver))[0].payload as { row: Record<string, unknown> };
+    const payload = (await outbox(driver))[0].payload as { row: Row };
     expect(payload.row).toMatchObject({ id: "u", name: "Zoe" });
     expect("passwordHash" in payload.row).toBe(false); // the secret never leaves the ORM
   });

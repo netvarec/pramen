@@ -10,6 +10,7 @@ import {
   discoverQueueBindings,
   type QueueProducerBinding,
 } from "../packages/server/src/runtime/queue";
+import type { JsonValue } from "@pramen/server";
 import {
   routeQueue,
   dispatchQueueBatch,
@@ -68,7 +69,7 @@ describe("ctx.queue producer facade", () => {
 
   test("createQueue resolves discovered bindings by name", async () => {
     const sent: unknown[] = [];
-    const env = { JOBS: { send: async (b: unknown) => void sent.push(b), sendBatch: async () => {} } };
+    const env = { JOBS: { send: async (b: JsonValue) => void sent.push(b), sendBatch: async () => {} } };
     await createQueue(env).send("JOBS", { ok: true });
     expect(sent).toEqual([{ ok: true }]);
   });
@@ -88,7 +89,14 @@ describe("queue consumer dispatch", () => {
 
   const ctx = {} as QueueContext; // handlers under test don't touch ctx
 
-  function makeBatch(queue: string, bodies: unknown[]): { batch: QueueBatch; acked: string[]; retried: string[] } {
+  /** A queue batch fixture plus the ack/retry ledgers the assertions read. */
+  interface BatchFixture {
+    batch: QueueBatch;
+    acked: string[];
+    retried: string[];
+  }
+
+  function makeBatch(queue: string, bodies: JsonValue[]): BatchFixture {
     const acked: string[] = [];
     const retried: string[] = [];
     const messages: QueueMessage[] = bodies.map((body, i) => ({

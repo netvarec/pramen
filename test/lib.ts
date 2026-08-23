@@ -2,6 +2,12 @@
 // on the first failed assertion; test/e2e.test.ts boots one wrangler-dev server
 // and runs them all against distinct tenants.
 
+import type { JsonValue } from "@pramen/server";
+
+/** An RPC request body as the suites build it: JSON, but an optional field may be
+ * present-and-undefined (it simply doesn't survive JSON.stringify). */
+export type RequestBody = JsonValue | { [key: string]: JsonValue | undefined };
+
 export { sign, token } from "../scripts/jwt";
 
 export function assert(cond: boolean, msg: string): void {
@@ -16,9 +22,9 @@ export interface Res {
 
 /** An HTTP caller bound to a base URL + tenant. */
 export function http(base: string, tenant: string) {
-  return async (name: string, input: unknown, bearer?: string): Promise<Res> => {
-    const headers: Record<string, string> = { "content-type": "application/json", "x-pramen-tenant": tenant };
-    if (bearer) headers.authorization = `Bearer ${bearer}`;
+  return async (name: string, input: RequestBody, bearer?: string): Promise<Res> => {
+    const headers = new Headers({ "content-type": "application/json", "x-pramen-tenant": tenant });
+    if (bearer) headers.set("authorization", `Bearer ${bearer}`);
     const r = await fetch(`${base}/rpc/${name}`, { method: "POST", headers, body: JSON.stringify(input ?? {}) });
     return { status: r.status, body: await r.json() };
   };
@@ -54,7 +60,7 @@ export function wsClient(url: string, headers: Record<string, string>) {
 
   return {
     ready,
-    send: (m: unknown) => ws.send(JSON.stringify(m)),
+    send: (m: JsonValue) => ws.send(JSON.stringify(m)),
     next,
     drain: () => {
       inbox.length = 0;

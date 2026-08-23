@@ -11,6 +11,7 @@
 // non-standard claims pass through.
 
 import type { Identity } from "./sdk/acl";
+import type { JsonObject } from "./sdk/infer";
 
 const STANDARD_CLAIMS = new Set(["exp", "iat", "nbf", "iss", "aud", "jti", "sub", "role", "roles", "userId"]);
 
@@ -34,7 +35,7 @@ interface JwtHeader {
 /** Verifies a JWT and returns its claims, or null if invalid. Implementations
  * differ only in how they verify the signature. */
 export interface VerifyStrategy {
-  verify(token: string): Promise<Record<string, unknown> | null>;
+  verify(token: string): Promise<JsonObject | null>;
 }
 
 /** Verify a signature over `${header}.${payload}` for the parsed header. */
@@ -69,7 +70,7 @@ async function verifyJwt(
   token: string,
   verifySignature: SignatureVerifier,
   opts: VerifyOptions = {},
-): Promise<Record<string, unknown> | null> {
+): Promise<JsonObject | null> {
   const parts = token.split(".");
   if (parts.length !== 3) return null;
   const [h, p, sig] = parts;
@@ -89,7 +90,7 @@ async function verifyJwt(
   }
   if (!valid) return null;
 
-  let payload: Record<string, unknown>;
+  let payload: JsonObject;
   try {
     payload = JSON.parse(b64urlToString(p!));
   } catch {
@@ -113,7 +114,7 @@ export class HmacStrategy implements VerifyStrategy {
     private readonly opts: VerifyOptions = {},
   ) {}
 
-  verify(token: string): Promise<Record<string, unknown> | null> {
+  verify(token: string): Promise<JsonObject | null> {
     return verifyJwt(
       token,
       async (input, signature, header) => {
@@ -152,7 +153,7 @@ export class JwksStrategy implements VerifyStrategy {
     private readonly opts: VerifyOptions = {},
   ) {}
 
-  verify(token: string): Promise<Record<string, unknown> | null> {
+  verify(token: string): Promise<JsonObject | null> {
     return verifyJwt(
       token,
       async (input, signature, header) => {
@@ -219,7 +220,7 @@ export class JwksStrategy implements VerifyStrategy {
   }
 }
 
-function toIdentity(claims: Record<string, unknown>): Identity {
+function toIdentity(claims: JsonObject): Identity {
   const roles = Array.isArray(claims.roles)
     ? (claims.roles as string[])
     : typeof claims.role === "string"

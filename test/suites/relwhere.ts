@@ -4,6 +4,7 @@
 // policy `where` that itself traverses a relation.
 
 import { assert, http, token } from "../lib";
+import type { JsonValue } from "@pramen/server";
 
 export async function runRelWhere(base: string): Promise<void> {
   const TENANT = "relwhere";
@@ -13,7 +14,7 @@ export async function runRelWhere(base: string): Promise<void> {
 
   // Seed via the admin data API (SYSTEM scope bypasses the ownedByCaller set rule,
   // so we can create notes with explicit owners).
-  const data = (body: unknown) =>
+  const data = (body: JsonValue) =>
     fetch(`${base}/admin/data`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${admin}` },

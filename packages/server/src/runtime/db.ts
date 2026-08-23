@@ -24,6 +24,8 @@ import {
   type Scope,
 } from "./acl";
 import type { Validator } from "../sdk/acl";
+import type { CellValue, Row as SharedRow } from "../sdk/infer";
+import type { WhereRule } from "../sdk/acl";
 import {
   and,
   cmp,
@@ -48,7 +50,7 @@ import { partitionOf, triggersOf, triggerFires, type EntityFields, type FieldDef
 import { isValidUuid } from "../sdk/uuid";
 import type { Cell, FieldsOf, InferInsert, InferRow, InferUpdate, RelationsOf, RelationsResult, WhereClause } from "../sdk/infer";
 
-type Row = Record<string, unknown>;
+type Row = SharedRow;
 type Action = "read" | "create" | "update" | "delete";
 type Id = string | number | bigint;
 type Selected = Partial<Record<string, true>> | undefined;
@@ -174,7 +176,7 @@ function encodeCursor(order: OrderBy[], row: Row): string {
   return btoa(JSON.stringify(vals)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-function decodeCursor(s: string): unknown[] {
+function decodeCursor(s: string): CellValue[] {
   try {
     const arr = JSON.parse(atob(s.replace(/-/g, "+").replace(/_/g, "/")));
     if (!Array.isArray(arr)) throw new Error("not an array");
@@ -191,7 +193,7 @@ function decodeCursor(s: string): unknown[] {
 //         v non-null-> col > v (NULL cols excluded, they sort before)
 //   DESC: v null    -> nothing is strictly after a null    (FALSE; PK tiebreak advances)
 //         v non-null-> col < v OR col IS NULL (nulls sort after all non-nulls)
-function keysetCmp(o: OrderBy, value: unknown): SqlExpr {
+function keysetCmp(o: OrderBy, value: CellValue): SqlExpr {
   const desc = o.dir === "desc";
   if (value === null) return desc ? FALSE : isNull(o.column, true);
   return desc ? or(cmp("<", o.column, value), isNull(o.column)) : cmp(">", o.column, value);
@@ -200,7 +202,7 @@ function keysetCmp(o: OrderBy, value: unknown): SqlExpr {
 // Strictly-after predicate for a composite key: lexicographic comparison,
 // e.g. (a,b) after (a0,b0) => a>a0 OR (a=a0 AND b>b0); DESC columns flip to <. Each
 // column's comparison and the eq-tiebreaker are NULL-aware (eq() maps null→IS NULL).
-function keysetAfter(order: OrderBy[], values: unknown[]): SqlExpr {
+function keysetAfter(order: OrderBy[], values: CellValue[]): SqlExpr {
   const ors: SqlExpr[] = [];
   for (let i = 0; i < order.length; i++) {
     const parts: SqlExpr[] = [];
@@ -433,7 +435,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
     // Compiles the user's where relation-aware (relation keys → security-scoped
     // subqueries), then AND-merges the entity's own ACL row scope.
     if (userWhere) this.assertReadableWhere(from, scope, userWhere);
-    const userExpr: SqlExpr = userWhere ? compileScopedWhere(userWhere as Record<string, unknown>, from, this.acl) : TRUE;
+    const userExpr: SqlExpr = userWhere ? compileScopedWhere(userWhere as WhereRule, from, this.acl) : TRUE;
     const where = scope.where ? and(userExpr, scope.where) : userExpr;
     // A relation-traversal `where` (or a relation-traversing ACL scope) compiles to a
     // `sub` node over another table. Record those tables in `touched` so the live-query
@@ -473,7 +475,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
     const relations = this.schema[from]?.relations ?? {};
     for (const [k, v] of Object.entries(where as Record<string, unknown>)) {
       if (k === "AND" || k === "OR") {
-        for (const g of v as unknown[]) this.assertReadableWhere(from, scope, g);
+        for (const g of v as WhereRule[]) this.assertReadableWhere(from, scope, g);
       } else if (k === "NOT") {
         this.assertReadableWhere(from, scope, v);
       } else if (relations[k]) {
@@ -706,7 +708,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
   }
 
   /** Encode one write cell: JSON-stringify a json/fileRef value, then dialect-encode. */
-  private encodeCell(jsonCols: Set<string>, col: string, v: unknown): unknown {
+  private encodeCell(jsonCols: Set<string>, col: string, v: CellValue): CellValue {
     if (v != null && jsonCols.has(col)) return this.dialect.encode(JSON.stringify(v));
     return this.dialect.encode(v);
   }
@@ -767,7 +769,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
     const project = (row: Row): Row => this.stripHidden(rel.target, projectRow(row, effectiveFields(scope, row, this.acl.identity)));
     // One IN query per relation (no N+1). Match column before projecting (which
     // may drop the join column).
-    const fetchBy = async (col: string, values: unknown[]): Promise<Array<{ key: unknown; row: Row }>> => {
+    const fetchBy = async (col: string, values: CellValue[]): Promise<Array<{ key: CellValue; row: Row }>> => {
       if (values.length === 0) return [];
       const where = scope.where ? and(inList(col, values), scope.where) : inList(col, values);
       // Project the target to its readable columns (+ the join `col`, matched before
@@ -920,7 +922,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
     this.runValidators(validators, p);
     this.assertValidUuids(table, p);
 
-    const params: unknown[] = [];
+    const params: CellValue[] = [];
     const jsonCols = new Set(this.jsonColsOf(table));
     const assignments = cols
       .map((c) => {
@@ -943,7 +945,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
     this.assertInPartition(table);
     const scope = this.scopeFor(table, "delete");
     if (!scope.allowed) throw new AclDenied(table, "delete");
-    const params: unknown[] = [this.dialect.encode(id)];
+    const params: CellValue[] = [this.dialect.encode(id)];
     let sql = `DELETE FROM ${this.dialect.id(table)} WHERE ${this.dialect.id(this.pkOf(table))} = ${this.dialect.placeholder(1)}`;
     sql += this.scopeClause(scope.where, params);
     sql += this.returningClause("*");
@@ -953,7 +955,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
   }
 
   /** Escape hatch — raw SQL, NOT ACL-checked. For system/internal use only. */
-  async exec(sql: string, ...params: unknown[]): Promise<Row[]> {
+  async exec(sql: string, ...params: CellValue[]): Promise<Row[]> {
     return this.driver.exec(sql, params.map((p) => this.dialect.encode(p)));
   }
 
@@ -963,7 +965,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
     return this.dialect.returning ? ` RETURNING ${cols}` : "";
   }
 
-  private scopeClause(where: SqlExpr | null, params: unknown[]): string {
+  private scopeClause(where: SqlExpr | null, params: CellValue[]): string {
     if (!where) return "";
     const compiled = compileExpr(where, this.dialect, params);
     return compiled.sql === "1" ? "" : ` AND (${compiled.sql})`;

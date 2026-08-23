@@ -8,7 +8,7 @@ import { Api, ApiError } from "./api";
 import { FieldForm, slugify } from "./fields";
 import type { Config } from "./api";
 import type { Me } from "./app-context";
-import type { AssembledPage, AuditEntry, BlockType, CollectionMeta, ContentType, FieldDefinition, Media, Page, RegionDefinition, RenderedBlock } from "./types";
+import type { AssembledPage, AuditEntry, BlockType, CollectionMeta, ContentType, FieldDefinition, FieldValues, Media, Page, RegionDefinition, RenderedBlock } from "./types";
 
 export type InspectorTab = "settings" | "seo" | "workflow" | "i18n" | "audit";
 export const INSPECTOR_TABS: InspectorTab[] = ["settings", "seo", "workflow", "i18n", "audit"];
@@ -201,7 +201,7 @@ function cellText(v: unknown): string {
 const COLLECTION_PAGE_SIZE = 50;
 
 export function CollectionList({ api, def, onOpen, onNew, onError }: { api: Api; def: CollectionMeta; onOpen: (id: string) => void; onNew: () => void; onError: (s: string) => void }) {
-  const [rows, setRows] = useState<Record<string, unknown>[]>([]);
+  const [rows, setRows] = useState<FieldValues[]>([]);
   const [offset, setOffset] = useState(0);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -210,7 +210,7 @@ export function CollectionList({ api, def, onOpen, onNew, onError }: { api: Api;
     (off: number) => {
       setLoading(true);
       return api
-        .call<Record<string, unknown>[]>("collectionList", { collection: def.slug, limit: COLLECTION_PAGE_SIZE, offset: off })
+        .call<FieldValues[]>("collectionList", { collection: def.slug, limit: COLLECTION_PAGE_SIZE, offset: off })
         .then((r) => {
           setRows((prev) => (off === 0 ? r : [...prev, ...r]));
           // A full page means there is probably more; a short one is definitely the end.
@@ -267,7 +267,7 @@ export function CollectionList({ api, def, onOpen, onNew, onError }: { api: Api;
 
 export function CollectionEditor({ api, def, id, onSaved, onDeleted, onBack, onError }: { api: Api; def: CollectionMeta; id: string | null; onSaved: () => void; onDeleted: () => void; onBack: () => void; onError: (s: string) => void }) {
   const isNew = id === null;
-  const [values, setValues] = useState<Record<string, unknown>>({});
+  const [values, setValues] = useState<FieldValues>({});
   const [loading, setLoading] = useState(!isNew);
   const [missing, setMissing] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -278,7 +278,7 @@ export function CollectionEditor({ api, def, id, onSaved, onDeleted, onBack, onE
     let live = true;
     setLoading(true);
     setMissing(false);
-    api.call<Record<string, unknown> | null>("collectionGet", { collection: def.slug, id })
+    api.call<FieldValues | null>("collectionGet", { collection: def.slug, id })
       .then((row) => { if (!live) return; if (row) setValues(row); else setMissing(true); })
       .catch((e) => onError(errMsg(e)))
       .finally(() => { if (live) setLoading(false); });
@@ -296,7 +296,7 @@ export function CollectionEditor({ api, def, id, onSaved, onDeleted, onBack, onE
       } else {
         // Editing: stay on the form. Reflect the persisted row the update echoes back (server
         // defaults / normalization applied) and flash a confirmation instead of navigating.
-        const updated = await api.call<Record<string, unknown>>("collectionUpdate", { collection: def.slug, id, values });
+        const updated = await api.call<FieldValues>("collectionUpdate", { collection: def.slug, id, values });
         if (updated) setValues(updated);
         setOk(true);
         setTimeout(() => setOk(false), 1200);
@@ -427,7 +427,7 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
     });
     try {
       const { block, placement } = await api.call<{
-        block: { id: string; title?: string | null; fields?: Record<string, unknown> | null };
+        block: { id: string; title?: string | null; fields?: FieldValues | null };
         placement: { id: string; isShared?: boolean | number };
       }>("addBlock", { pageId: page.id, blockTypeSlug: slug, region, fields: {} });
       const rb: RenderedBlock = {
@@ -470,7 +470,7 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
 
   // Patch a block's raw fields into local state after an inline save — keeps the collapsed
   // preview fresh without a full reload (which would remount every editor + lose caret/focus).
-  const patchBlockFields = useCallback((placementId: string, fields: Record<string, unknown>) => {
+  const patchBlockFields = useCallback((placementId: string, fields: FieldValues) => {
     setAssembled((prev) => {
       if (!prev) return prev;
       const next: Record<string, RenderedBlock[]> = {};
@@ -539,7 +539,7 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
             not in the inspector. For a content type with no regions (a fixed layout, all
             of it page fields) this is the entire editor; the canvas is never empty. */}
         {pageSchema.length ? (
-          <PageFields api={api} page={page} schema={pageSchema} initialFields={(assembled?.page.fields as Record<string, unknown>) ?? {}} onDirtyChange={reportDirty} onError={setErr} />
+          <PageFields api={api} page={page} schema={pageSchema} initialFields={(assembled?.page.fields as FieldValues) ?? {}} onDirtyChange={reportDirty} onError={setErr} />
         ) : null}
         {regions.map((r) => {
           const blocks = assembled?.regions[r.name] ?? [];
@@ -611,7 +611,7 @@ function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, o
   isLast: boolean;
   onMove: (dir: number) => void;
   onRemove: () => void;
-  onPatch: (placementId: string, fields: Record<string, unknown>) => void;
+  onPatch: (placementId: string, fields: FieldValues) => void;
   onDirtyChange: (placementId: string, dirty: boolean) => void;
   onError: (s: string) => void;
   dragging: boolean;
@@ -621,7 +621,7 @@ function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, o
   onDropBlock: () => void;
   onDragEndBlock: () => void;
 }) {
-  const [fields, setFields] = useState<Record<string, unknown> | null>(null);
+  const [fields, setFields] = useState<FieldValues | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
   const saved = useRef<string>(""); // JSON of the last-persisted fields — the dirty baseline
@@ -635,7 +635,7 @@ function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, o
   useEffect(() => {
     if (block.pending) { setFields({}); saved.current = "{}"; return; }
     let alive = true;
-    api.call<{ fields?: Record<string, unknown> }>("getBlock", { blockId }).then((b) => {
+    api.call<{ fields?: FieldValues }>("getBlock", { blockId }).then((b) => {
       if (!alive) return;
       const f = b?.fields ?? {};
       setFields(f);
@@ -680,7 +680,7 @@ function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, o
     return () => clearTimeout(t);
   }, [fields, block.pending]);
 
-  const change = (next: Record<string, unknown>) => setFields(next);
+  const change = (next: FieldValues) => setFields(next);
 
   // Report dirty state up (for the editor's leave/unload guard); clear it on unmount so a
   // removed block never leaves a stale "unsaved" flag behind.
@@ -891,8 +891,8 @@ function PageMeta({ api, page, onSaved, onError }: { api: Api; page: Page; onSav
 }
 
 /** The page's own FIELDS — its content. Rendered in the canvas, at full width. */
-function PageFields({ api, page, schema, initialFields, onDirtyChange, onError }: { api: Api; page: Page; schema: FieldDefinition[]; initialFields: Record<string, unknown>; onDirtyChange: (id: string, dirty: boolean) => void; onError: (s: string) => void }) {
-  const [fields, setFields] = useState<Record<string, unknown>>(initialFields);
+function PageFields({ api, page, schema, initialFields, onDirtyChange, onError }: { api: Api; page: Page; schema: FieldDefinition[]; initialFields: FieldValues; onDirtyChange: (id: string, dirty: boolean) => void; onError: (s: string) => void }) {
+  const [fields, setFields] = useState<FieldValues>(initialFields);
   const [ok, setOk] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -1480,7 +1480,7 @@ function plainText(html: string): string {
     .trim();
 }
 /** One-line preview for a collapsed block: the first non-empty string field, tags stripped. */
-function blockPreview(fields: Record<string, unknown>): string {
+function blockPreview(fields: FieldValues): string {
   const first = Object.values(fields).find((v) => typeof v === "string" && v.trim());
   if (typeof first !== "string") return "";
   const text = plainText(first);

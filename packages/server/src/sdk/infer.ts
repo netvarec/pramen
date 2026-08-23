@@ -11,6 +11,27 @@ export type { FileRef } from "./files";
 /** Any JSON-serializable value — the type of a `t.json()` column. */
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
+/** A JSON object — the object arm of `JsonValue`, named so it can be referenced
+ * directly (e.g. an identity's claims, a `t.json()` column's object form). */
+export interface JsonObject {
+  [key: string]: JsonValue;
+}
+
+/** A raw value as the substrate stores/returns it, before pramen's object↔JSON codec.
+ * DO SQLite and D1 hand back exactly these; BLOB columns arrive as an ArrayBuffer. */
+export type SqlValue = string | number | bigint | boolean | null | ArrayBuffer;
+
+/** A decoded column value as handlers see it at the `Db` chokepoint: any JSON value,
+ * a `fileRef` column's metadata, or — for an eager-loaded relation — the related
+ * row(s) grafted onto the parent under the relation name. */
+export type CellValue = SqlValue | JsonValue | FileRef | Row | Row[];
+
+/** A decoded database row — column name -> decoded value. An interface (not a
+ * `Record` alias) so it can recur through `CellValue` for eager-loaded relations. */
+export interface Row {
+  [column: string]: CellValue;
+}
+
 /** SQL field type -> TypeScript value type. */
 export type FieldTsType<D extends FieldDef> = D["type"] extends "text"
   ? string

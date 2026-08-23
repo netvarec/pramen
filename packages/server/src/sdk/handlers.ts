@@ -10,6 +10,13 @@ import type { Queue } from "../runtime/queue";
 import type { Identity } from "./acl";
 import type { Files } from "./files";
 import type { SchemaDef } from "./schema";
+import type { JsonValue } from "./infer";
+
+/** The Worker/DO environment as an open, read-only bag: Cloudflare bindings (KV, R2,
+ * D1, Queues, …) alongside vars and secrets. Deliberately open and opaque — an app
+ * declares its own bindings, so the value type cannot be enumerated here; read a value
+ * and narrow it at the use site (`ctx.env.STRIPE_SECRET_KEY as string`). */
+export type EnvBag = Readonly<Record<string, unknown>>;
 
 export interface HandlerContext<S extends SchemaDef = SchemaDef> {
   /** Schema-typed repository: find/insert/update/delete inferred from S. */
@@ -30,7 +37,7 @@ export interface HandlerContext<S extends SchemaDef = SchemaDef> {
    * Use it to call external services from handlers — Cloudflare bindings (e.g. the
    * `send_email` binding for Cloudflare Email Sending) or third-party APIs (Stripe, …). Loosely typed;
    * cast a value at the use site, e.g. `ctx.env.STRIPE_SECRET_KEY as string`. */
-  readonly env: Readonly<Record<string, unknown>>;
+  readonly env: EnvBag;
   /** Resolved identity for this request (null = anonymous). */
   readonly identity: Identity | null;
   /** Deferred side-effects (a transactional outbox). `tasks.enqueue` persists a task
@@ -119,7 +126,7 @@ export interface Handler<I = unknown, O = unknown> {
   readonly run: (ctx: HandlerContext<any>, input: I) => O | Promise<O>;
   /** Optional boundary validator: parse/validate the raw request input, throwing
    * to reject (surfaced as a 400). Its return type fixes the handler's input. */
-  readonly input?: (raw: unknown) => unknown;
+  readonly input?: (raw: JsonValue) => unknown;
   /** Optional DO partition this handler runs in (static, server-side). The Worker
    * routes the request to the matching partition-DO before dispatch. Absent ⇒ the
    * default partition (routed to the bare tenant key). */
@@ -129,7 +136,7 @@ export interface Handler<I = unknown, O = unknown> {
 }
 
 export interface HandlerOpts<I> {
-  input?: (raw: unknown) => I;
+  input?: (raw: JsonValue) => I;
   /** DO partition this handler runs in. Absent ⇒ the default partition. */
   partition?: string;
   /** Authorization to CALL this handler (see HandlerAuth) — gate non-`ctx.db` handlers. */

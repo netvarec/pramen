@@ -18,13 +18,14 @@
 //     the audit DO; without it (or partition:"default") the default DO.
 
 import { assert, http, sleep, token, wsClient } from "../lib";
+import type { JsonValue } from "@pramen/server";
 
 export async function runPartitions(base: string, wsUrl: string): Promise<void> {
   const TENANT = "partitions";
   const call = http(base, TENANT);
   const admin = await token("admin", ["admin"]);
 
-  const data = (body: unknown, bearer = admin) =>
+  const data = (body: JsonValue, bearer = admin) =>
     fetch(`${base}/admin/data`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${bearer}` },

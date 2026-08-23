@@ -6,6 +6,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { HmacStrategy, JwksStrategy } from "../packages/server/src/auth";
 import { DEV_SECRET, sign } from "../scripts/jwt";
+import type { Row } from "@pramen/server";
 
 function b64url(bytes: Uint8Array): string {
   let bin = "";
@@ -16,9 +17,14 @@ const strB64 = (s: string) => b64url(new TextEncoder().encode(s));
 
 const RSA = { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" } as const;
 
-async function signRs256(payload: Record<string, unknown>, key: CryptoKey, kid?: string): Promise<string> {
+/** The JOSE header of a test-signed token. */
+type JoseHeader = { alg: string; typ: string; kid?: string };
+
+async function signRs256(payload: Row, key: CryptoKey, kid?: string): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
-  const header = strB64(JSON.stringify({ alg: "RS256", typ: "JWT", ...(kid ? { kid } : {}) }));
+  const jose: JoseHeader = { alg: "RS256", typ: "JWT" };
+  if (kid) jose.kid = kid;
+  const header = strB64(JSON.stringify(jose));
   const body = strB64(JSON.stringify({ iat: now, exp: now + 3600, ...payload }));
   const data = `${header}.${body}`;
   const sig = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, new TextEncoder().encode(data));
@@ -48,7 +54,7 @@ describe("HmacStrategy (HS256)", () => {
 describe("HmacStrategy — opt-in claim validation", () => {
   const now = () => Math.floor(Date.now() / 1000);
 
-  async function signHs(payload: Record<string, unknown>): Promise<string> {
+  async function signHs(payload: Row): Promise<string> {
     const header = strB64(JSON.stringify({ alg: "HS256", typ: "JWT" }));
     const body = strB64(JSON.stringify(payload));
     const data = `${header}.${body}`;

@@ -1,0 +1,19 @@
+{
+  // Typechecks test/ + scripts/, which `bun run typecheck` does NOT cover (the root
+  // tsconfig includes only `example`, and each package typechecks itself). Bun strips
+  // types to run the suites, so a broken type-only import passes `bun test` and is
+  // invisible until something compiles this tree.
+  //
+  // NOT wired into `bun run typecheck` yet: this tree has ~130 pre-existing errors, so
+  // it cannot gate until those are cleared. Run it directly to check for regressions:
+  //   bunx tsc -p tsconfig.test.json
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // bun:test / bun:sqlite come from bun-types; the suites also drive Workers APIs.
+    "types": ["@cloudflare/workers-types", "bun-types"],
+    // Suites deliberately keep unused fixtures and ignored callback params around.
+    "noUnusedLocals": false,
+    "noUnusedParameters": false
+  },
+  "include": ["test", "scripts"]
+}

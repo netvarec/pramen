@@ -21,10 +21,12 @@
     "bump": "bun scripts/bump.ts",
     "release": "bun run build && bun scripts/publish.ts",
     "typecheck": "tsc --noEmit && tsc -p packages/server/tsconfig.json && tsc -p packages/auth/tsconfig.json && tsc -p packages/cms/tsconfig.json && tsc -p packages/cms-editor/tsconfig.json && tsc -p packages/client/tsconfig.json && tsc -p packages/react/tsconfig.json && tsc -p packages/admin/tsconfig.json",
+    "lint": "oxlint",
     "test": "bun test"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250101.0",
+    "@oxlint/plugins": "1.79.0",
     "@pramen/admin": "workspace:*",
     "@pramen/auth": "workspace:*",
     "@pramen/client": "workspace:*",
@@ -33,8 +35,10 @@
     "@pramen/server": "workspace:*",
     "@types/react": "^19.0.0",
     "bcryptjs": "2.4.3",
+    "bun-types": "^1.4.0",
     "lopata": "^0.19.2",
     "oblaka-iac": "^0.0.16",
+    "oxlint": "1.79.0",
     "react": "^19.0.0",
     "typescript": "^5.7.0",
     "wrangler": "^4.101.0"

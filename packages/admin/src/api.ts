@@ -2,7 +2,12 @@
 // bearer token; failures surface as an ApiError that the UI renders verbatim
 // (error + code), with a friendlier hint for a 403 (not an admin token).
 
-export type Row = Record<string, unknown>;
+/** Any JSON value. Declared locally (not imported from @pramen/server) so the admin
+ * stays a standalone browser bundle with no server-package dependency. */
+export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+
+/** One row of admin data, as the `/admin/data` endpoint returns it. */
+export type Row = Record<string, JsonValue>;
 
 export interface SchemaResult {
   hash: string | null;
@@ -34,16 +39,14 @@ interface Envelope<T> {
 
 async function call<T>(cfg: Config, path: string, init?: RequestInit): Promise<T> {
   const base = cfg.baseUrl.replace(/\/+$/, "");
+  const headers = new Headers();
+  if (init?.body) headers.set("content-type", "application/json");
+  headers.set("authorization", `Bearer ${cfg.token}`);
+  // caller-supplied headers win, matching the previous spread order
+  for (const [key, value] of new Headers(init?.headers)) headers.set(key, value);
   let res: Response;
   try {
-    res = await fetch(`${base}${path}`, {
-      ...init,
-      headers: {
-        ...(init?.body ? { "content-type": "application/json" } : {}),
-        authorization: `Bearer ${cfg.token}`,
-        ...(init?.headers ?? {}),
-      },
-    });
+    res = await fetch(`${base}${path}`, { ...init, headers });
   } catch (e) {
     throw new ApiError(
       `network error reaching ${base} — is pramen running and is CORS_ORIGINS set?`,

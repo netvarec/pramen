@@ -4,17 +4,17 @@
 // db.batch(). Foreign keys are enabled to mirror DO/D1's default enforcement.
 
 import type { Database } from "bun:sqlite";
-import { sqliteDialect, type Driver, type Row } from "../packages/server/src/runtime/driver";
+import { sqliteDialect, type Driver, type DriverRow } from "../packages/server/src/runtime/driver";
 
 export function bunSqliteDriver(db: Database): Driver {
   db.run("PRAGMA foreign_keys = ON"); // DO + D1 enforce FKs by default; match them here
   return {
     dialect: sqliteDialect,
-    async exec(sql: string, params: unknown[]): Promise<Row[]> {
+    async exec(sql: string, params: unknown[]): Promise<DriverRow[]> {
       // SELECT/PRAGMA and any ...RETURNING write produce rows; everything else (DDL,
       // plain writes) goes through run().
       if (/^\s*(select|pragma)/i.test(sql) || /\breturning\b/i.test(sql)) {
-        return db.query(sql).all(...(params as never[])) as Row[];
+        return db.query(sql).all(...(params as never[])) as DriverRow[];
       }
       db.run(sql, ...(params as never[]));
       return [];

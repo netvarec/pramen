@@ -4,7 +4,7 @@
 // hard backward-compat requirement — existing single-partition data depends on it.
 
 import { describe, expect, test } from "bun:test";
-import { listDOs, parseRegistryKey, partitionDoName, registryKey } from "../packages/server/src/runtime/registry";
+import { listDOs, parseRegistryKey, partitionDoName, registryKey, type KvLister } from "../packages/server/src/runtime/registry";
 
 describe("registryKey / parseRegistryKey", () => {
   test("default partition → bare key", () => {
@@ -59,7 +59,10 @@ describe("partitionDoName", () => {
 describe("listDOs", () => {
   // A fake paginated KVNamespace: serves `keys` in fixed-size pages so the test
   // exercises cursor / list_complete handling past a single page.
-  function fakeKv(names: string[], pageSize: number): KVNamespace {
+  /** One page of a KV `list()` result. */
+  type KvListPage = { keys: { name: string }[]; list_complete: boolean; cursor?: string };
+
+  function fakeKv(names: string[], pageSize: number): KvLister {
     return {
       list: async (opts?: { prefix?: string; cursor?: string }) => {
         const matched = names.filter((n) => n.startsWith(opts?.prefix ?? ""));
@@ -67,13 +70,14 @@ describe("listDOs", () => {
         const page = matched.slice(start, start + pageSize);
         const next = start + pageSize;
         const complete = next >= matched.length;
-        return {
+        const listed: KvListPage = {
           keys: page.map((name) => ({ name })),
           list_complete: complete,
-          ...(complete ? {} : { cursor: String(next) }),
         };
+        if (!complete) listed.cursor = String(next);
+        return listed;
       },
-    } as unknown as KVNamespace;
+    } as KvLister;
   }
 
   test("returns the (tenant, partition) pair for a touched tenant + partition", async () => {
