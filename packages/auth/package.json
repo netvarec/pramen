@@ -1,6 +1,6 @@
 {
   "name": "@pramen/auth",
-  "version": "0.0.48",
+  "version": "0.0.49",
   "description": "Optional credential→JWT login for pramen — signup/login/me + PBKDF2 hashing, issuing HS256 tokens the pramen verifier accepts.",
   "license": "MIT",
   "repository": {
