@@ -170,6 +170,15 @@ export async function runCms(base: string): Promise<void> {
   const editorRedeem = await fetch(`${base}${editorMint.body.result.url}`);
   assert(editorRedeem.status === 200, "cms: a link minted by a plain editor redeems (the route presents viewer roles, not admin)");
 
+  // Minting on the D1 store must REFUSE: redemption always reaches the Durable Object, so
+  // a link minted there could never be redeemed while the editor reported success.
+  const d1Mint = await fetch(`${base}/rpc/signPagePreview`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-pramen-tenant": TENANT, "x-pramen-store": "d1", authorization: `Bearer ${admin}` },
+    body: JSON.stringify({ pageId: pageRow.id }),
+  });
+  assert(d1Mint.status === 503, `cms: signPagePreview refuses on the D1 store (got ${d1Mint.status})`);
+
   // Bad input is a 400, not a 500 or a link that can never be redeemed.
   assert((await call("signPagePreview", { pageId: pageRow.id, expiresIn: "3600" }, admin)).status === 400, "cms: a non-numeric expiresIn is rejected");
   assert((await call("signPagePreview", {}, admin)).status === 400, "cms: a missing pageId is rejected");

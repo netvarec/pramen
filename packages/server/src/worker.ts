@@ -245,7 +245,7 @@ export function makeWorker(app: PramenApp) {
     const bag = envBag(env);
     // The D1 store is not per-tenant addressed (one shared database, no DO), so the
     // task context runs as the default tenant — matching the `files` scope just above.
-    return { db, kv, files, env: bag, identity, tenant: "main", tasks: tasksFacade(driver), mail: createMail(bag, kv), queue: createQueue(bag) };
+    return { db, kv, files, env: bag, identity, tenant: "main", store: "d1", tasks: tasksFacade(driver), mail: createMail(bag, kv), queue: createQueue(bag) };
   };
 
   /** Drain the D1 outbox in the Worker (no DO/alarm on this path) — called by the
@@ -505,7 +505,7 @@ export function makeWorker(app: PramenApp) {
         await ensureD1Migrated(driver, env.PRAMEN_ALLOW_DESTRUCTIVE === "true");
         // `tenant` matters here: a handler minting a tenant-scoped capability (a signed
         // preview link) would otherwise stamp it "main" while reading acme's rows.
-        const { result, enqueued } = await dispatch(app.handlers, app.schema, driver, new Kv(env.KV), files, bag, { acl: d1Acl, identity, tenant }, name, input);
+        const { result, enqueued } = await dispatch(app.handlers, app.schema, driver, new Kv(env.KV), files, bag, { acl: d1Acl, identity, tenant, store: "d1" }, name, input);
         // Kick an immediate drain in the request tail when this handler enqueued tasks
         // (e.g. sendMagicLinkEmail). Without this, tasks wait for the next Cron trigger
         // — up to a full minute. `waitUntil` lets the response return now while the

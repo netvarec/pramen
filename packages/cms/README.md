@@ -140,16 +140,18 @@ authorization. Spread `cmsRoutes()` into `app.routes` to serve `GET /cms/preview
 verifies the token in the Worker before any read and returns the live draft with
 `isPreview: true` and `Cache-Control: private, no-store`.
 
-If you pass custom roles to `createCmsHandlers`, pass the same ones to `cmsRoutes`:
+If you pass custom roles to `createCmsHandlers`, hand `cmsRoutes` the **same options
+object** — it derives the route's identity from them, so the two cannot drift:
 
 ```ts
-const roles = { editorRoles: ["editor"], reviewerRoles: ["reviewer"] };
-const handlers = { ...createCmsHandlers(roles) };
-const routes = [...cmsRoutes({ viewerRoles: ["editor", "reviewer"] })];
+const cms = { editorRoles: ["editor"], reviewerRoles: ["reviewer"] };
+const handlers = { ...createCmsHandlers(cms) };
+const routes = [...cmsRoutes({ handlers: cms })];
 ```
 
-The route presents that identity to the Durable Object, and it must satisfy both the
-handler gate and your ACL — otherwise every link resolves to "not found".
+That identity must also be granted by your ACL. Preview is **DO-only**: redemption reaches
+the Durable Object, so `signPagePreview` refuses on the D1 store rather than mint a link
+that could never be redeemed.
 
 The grant is scoped to **one page** and carries its own expiry (default 1 hour, clamped to
 30 days), so a leaked link is not "see all drafts" and stops working on its own. Signing

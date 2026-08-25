@@ -264,6 +264,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
       env: this.envBag,
       identity,
       tenant: this.tenant,
+      store: "do",
       tasks: tasksFacade(this.driver),
       mail: createMail(this.envBag, this.kv),
       queue: createQueue(this.envBag),

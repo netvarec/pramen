@@ -1003,9 +1003,20 @@ export function previewSecret(env: EnvBag): string | undefined {
 const previewUnconfigured = () =>
   new PramenError("page preview is not configured (set a strong PREVIEW_SECRET, FILES_SECRET or AUTH_SECRET)", 503, "unavailable");
 
-/** The default viewer roles — `createCmsHandlers`' editorRoles ∪ reviewerRoles defaults.
- * Shared so `cmsRoutes()`'s preview route presents an identity the handler gate accepts. */
-export const DEFAULT_VIEWER_ROLES = ["editor", "admin", "reviewer"] as const;
+/** The viewer roles for a given handler config — `editorRoles ∪ reviewerRoles`, computed
+ * exactly as `createCmsHandlers` computes them.
+ *
+ * Exported so `cmsRoutes()` cannot drift from `createCmsHandlers()`: pass the SAME options
+ * object to both. Configuring the two independently was how the preview route ended up
+ * presenting an identity neither the handler gate nor the ACL accepted — and a partial
+ * customization still worked, so the failure appeared only for the app that had most
+ * carefully renamed its roles. */
+export function viewerRolesOf(opts: CmsHandlerOpts = {}): string[] {
+  return [...new Set([...(opts.editorRoles ?? ["editor", "admin"]), ...(opts.reviewerRoles ?? ["reviewer", "admin"])])];
+}
+
+/** The viewer roles for the DEFAULT handler config. */
+export const DEFAULT_VIEWER_ROLES = viewerRolesOf();
 
 /** Where a preview link is redeemed. Spread `cmsRoutes()` into `app.routes` to serve it. */
 export const PREVIEW_PATH = "/cms/preview";
@@ -1789,6 +1800,11 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     signPagePreview: query(async (ctx, input: { pageId: string; expiresIn?: number }) => {
       const secret = previewSecret(ctx.env);
       if (!secret) throw previewUnconfigured(); // fail closed — never mint a forgeable link
+      // The redeem route always reaches a Durable Object (callPrivileged -> PRAMEN.get); it
+      // has no notion of `x-pramen-store`. Minting on the D1 store therefore produces a
+      // link that 404s forever while the editor reports success — refuse instead of
+      // handing out a token that cannot work.
+      if (ctx.store === "d1") throw new PramenError("page preview is not available on the D1 store (redemption requires the Durable Object)", 503, "unavailable");
       const db = cdb(ctx);
       // Read the page through the ACL first: minting a link is granting access to it, so a
       // caller who cannot read the page must not be able to mint a link that can.
@@ -2242,14 +2258,16 @@ export function cmsRoutes(
     tenant?: string;
     pageUrl?: SitemapOpts["pageUrl"];
     disallow?: string[];
-    /** Roles the preview route presents to the DO. MUST match `createCmsHandlers`'
-     * viewer roles (editorRoles ∪ reviewerRoles) and be granted by your ACL, or every
-     * preview link 404s. Defaults to the same defaults `createCmsHandlers` uses. */
+    /** The SAME options you passed to `createCmsHandlers`. The route derives its identity
+     * from them with `viewerRolesOf`, so the two cannot drift. (`viewerRoles` overrides it
+     * outright if you need to.) */
+    handlers?: CmsHandlerOpts;
+    /** Explicit override for the roles the preview route presents to the DO. */
     viewerRoles?: readonly string[];
   } = {},
 ): CmsRoute[] {
   const tenant = opts.tenant ?? "main";
-  const previewRoles = opts.viewerRoles ?? DEFAULT_VIEWER_ROLES;
+  const previewRoles = opts.viewerRoles ?? viewerRolesOf(opts.handlers);
   return [
     {
       method: "GET",
@@ -2291,8 +2309,14 @@ export function cmsRoutes(
           tenant: payload.t, // from the SIGNED payload, never from the query string
           roles: [...previewRoles],
         });
-        const body = (await res.json().catch(() => ({}))) as { ok?: boolean; result?: JsonValue };
-        if (body.ok !== true) return previewDenied(404, "page not found");
+        const body = (await res.json().catch(() => ({}))) as { ok?: boolean; result?: JsonValue; error?: string; code?: string };
+        if (body.ok !== true) {
+          // The client-visible response stays uniform (probe resistance), but LOG the real
+          // reason: a role misconfiguration previously surfaced as an indistinguishable
+          // "page not found" that could only be diagnosed by reading source.
+          console.error(`pramen/cms: preview redemption failed (${res.status} ${body.code ?? "?"}: ${body.error ?? "no detail"})`);
+          return previewDenied(404, "page not found");
+        }
         // Never cache a draft, anywhere.
         return new Response(JSON.stringify(body.result), {
           headers: { "content-type": "application/json; charset=utf-8", "cache-control": "private, no-store" },

@@ -43,6 +43,10 @@ export interface HandlerContext<S extends SchemaDef = SchemaDef> {
   /** The tenant this request is for (the `x-pramen-tenant` value; `"main"` by default).
    * Server-resolved, never caller-supplied — safe to embed in a signed capability. */
   readonly tenant: string;
+  /** Which substrate is serving this request: `"do"` (a Durable Object) or `"d1"`. Only
+   * the DO path has a stub the Worker can call back into, so a handler minting a
+   * capability redeemed through `callPrivileged` must refuse on `"d1"`. */
+  readonly store: "do" | "d1";
   /** Deferred side-effects (a transactional outbox). `tasks.enqueue` persists a task
    * row in the SAME transaction as a mutation (atomic with the data write); a drainer
    * runs the matching `app.tasks` handler after commit, off the write path, with
