@@ -497,6 +497,11 @@ export const cmsSchema = {
       // (not "latest by timestamp") so selection is deterministic even when two publishes
       // land in the same second (expr.now() is second-precision).
       currentRevisionId: t.uuid(),
+      // Soft delete: the epoch-ISO instant the page was trashed, NULL while it is live.
+      // Every read scope AND-merges `deletedAt IS NULL` (see cmsPolicies), so a trashed
+      // page disappears from the public API and the editor alike without a single handler
+      // remembering to filter. `restorePage` clears it; `purgePage` removes the row.
+      deletedAt: indexed(t.text()),
       // SEO
       metaTitle: t.text(),
       metaDescription: t.text(),
@@ -568,6 +573,9 @@ export const cmsSchema = {
     id: primaryKey(generated(t.uuid())),
     file: t.fileRef(),
     alt: t.text(),
+    // Soft delete, as on cms_pages. The R2 OBJECT is deliberately kept while a media row
+    // is trashed — deleting the bytes would make restore a lie. `purgeMedia` drops both.
+    deletedAt: indexed(t.text()),
     createdAt: defaultTo(t.text(), expr.now()),
   })),
 };
@@ -1353,14 +1361,50 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
   const writeAudit = (db: CmsDb, e: { pageId: string; action: string; from?: string; to?: string; actor: string | null; note?: string }) =>
     db.insert("cms_audit", { pageId: e.pageId, action: e.action, fromStatus: e.from ?? null, toStatus: e.to ?? null, actor: e.actor, note: e.note ?? null });
 
+  const mediaIdInput = {
+    input: (raw: unknown): { id: string } => {
+      const o = asObj(raw);
+      if (typeof o.id !== "string" || o.id === "") throw new BadRequest("id is required");
+      return { id: o.id };
+    },
+  };
+
+  /** Mark a table changed after a RAW `exec` write.
+   *
+   * `Db.exec` is the one write path that does not record `touched`, so the DO never
+   * broadcasts and every live subscriber keeps showing the pre-write state — a restored
+   * page stays missing from an open page list, a purged one stays present. `deletePage`
+   * goes through the ORM and DOES broadcast, so the staleness was asymmetric and read
+   * like a lost write. */
+  const markChanged = (db: CmsDb, ...tables: string[]): void => {
+    const touched = (db as unknown as { touched?: Set<string> }).touched;
+    if (touched) for (const t of tables) touched.add(t);
+  };
+
+  const pageIdInput = {
+    input: (raw: unknown): { pageId: string } => {
+      const o = asObj(raw);
+      if (typeof o.pageId !== "string" || o.pageId === "") throw new BadRequest("pageId is required");
+      return { pageId: o.pageId };
+    },
+  };
+
   // (slug, locale) uniqueness is enforced here because pramen's unique() is single-column.
   const assertSlugFree = async (db: CmsDb, slug: string, locale: string, exceptId?: string): Promise<void> => {
     const rows = await db.exec(
-      "SELECT id FROM cms_pages WHERE slug = ? AND locale = ? LIMIT 1",
+      "SELECT id, deletedAt FROM cms_pages WHERE slug = ? AND locale = ? LIMIT 1",
       slug,
       locale,
     );
-    if (rows[0] && String(rows[0].id) !== exceptId) throw new BadRequest(`slug '${slug}' already exists for locale '${locale}'`);
+    if (rows[0] && String(rows[0].id) !== exceptId) {
+      // A trashed page keeps its slug until purged (the (slug, locale) unique index is a
+      // DB constraint, not advisory). Say so, rather than leave the caller hunting for a
+      // page they cannot see.
+      if (rows[0].deletedAt != null) {
+        throw new BadRequest(`slug '${slug}' is held by a page in the trash for locale '${locale}' — restore or purge it first`);
+      }
+      throw new BadRequest(`slug '${slug}' already exists for locale '${locale}'`);
+    }
   };
 
   const TASK_PUBLISH = "cms:publish";
@@ -1528,16 +1572,19 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       },
     }),
 
-    /** Delete a media row AND its R2 blob. (Automatic orphan sweeping — media no longer
-     * referenced by any block — is future work; refs live inside opaque block JSON.) */
+    /** Trash a media row. The R2 OBJECT IS KEPT — deleting the bytes here would make
+     * `restoreMedia` a lie, and a block still referencing the id would render a dead url
+     * with no way back. `purgeMedia` is what drops both — and `listTrash` is how you find
+     * the id again, since every ACL-scoped read hides it from here on.
+     *
+     * (Automatic orphan sweeping — media no longer referenced by any block — is still
+     * future work; refs live inside opaque block JSON.) */
     deleteMedia: mutation(async (ctx, input: { id: string }) => {
       const db = cdb(ctx);
       const rows = await db.find({ from: "cms_media", where: { id: input.id }, limit: 1 });
       const media = rows[0];
       if (!media) throw notFound("media");
-      const key = String(asObj(media.file).key ?? "");
-      await db.delete("cms_media", input.id);
-      if (key) await ctx.files.delete(key).catch(() => {});
+      await db.update("cms_media", input.id, { deletedAt: new Date().toISOString() });
       return { ok: true };
     }, {
       ...editor,
@@ -1547,6 +1594,32 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
         return o as never;
       },
     }),
+
+    restoreMedia: mutation(async (ctx, input: { id: string }) => {
+      const db = cdb(ctx);
+      const rows = await db.exec("SELECT id FROM cms_media WHERE id = ? AND deletedAt IS NOT NULL LIMIT 1", input.id);
+      if (!rows[0]) throw notFound("trashed media");
+      await db.exec("UPDATE cms_media SET deletedAt = NULL WHERE id = ?", input.id);
+      markChanged(db, "cms_media");
+      return { ok: true as const };
+    }, { ...editor, ...mediaIdInput }),
+
+    /** Permanently remove trashed media — the row AND the R2 object. Reviewer-gated and
+     * irreversible; the blob is gone. */
+    purgeMedia: mutation(async (ctx, input: { id: string }) => {
+      const db = cdb(ctx);
+      const rows = await db.exec("SELECT id, file FROM cms_media WHERE id = ? AND deletedAt IS NOT NULL LIMIT 1", input.id);
+      const media = rows[0];
+      if (!media) throw notFound("trashed media"); // purging live media is refused — trash it first
+      // `file` comes back raw from exec (the object↔JSON codec sits on the ORM path, not
+      // this one), so parse it before reaching for the key.
+      const file = typeof media.file === "string" ? (JSON.parse(media.file) as { key?: string }) : asObj(media.file);
+      const key = String(file.key ?? "");
+      await db.exec("DELETE FROM cms_media WHERE id = ?", input.id);
+      markChanged(db, "cms_media");
+      if (key) await ctx.files.delete(key).catch(() => {});
+      return { ok: true as const };
+    }, { ...reviewer, ...mediaIdInput }),
 
     listContentTypes: query((ctx) => cdb(ctx).find({ from: "cms_content_types", orderBy: { column: "name" } }), viewer),
 
@@ -1709,8 +1782,22 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
         group = crypto.randomUUID();
         await db.update("cms_pages", String(src.id), { translationGroupId: group });
       }
-      const existing = await db.find({ from: "cms_pages", where: { translationGroupId: group, locale: input.locale }, limit: 1 });
-      if (existing[0]) throw new BadRequest(`a '${input.locale}' translation already exists`);
+      // Raw exec, like assertSlugFree: a check-then-act uniqueness guard must see TRASHED
+      // rows too. Through ctx.db the read scope hides them, so trashing a `cs` translation
+      // let a second one be created, and restoring the first left two live `cs` pages in
+      // one group — two <link rel="alternate" hreflang="cs"> on every sibling.
+      const existing = await db.exec(
+        "SELECT id, deletedAt FROM cms_pages WHERE translationGroupId = ? AND locale = ? LIMIT 1",
+        group,
+        input.locale,
+      );
+      if (existing[0]) {
+        throw new BadRequest(
+          existing[0].deletedAt != null
+            ? `a '${input.locale}' translation exists in the trash — restore or purge it first`
+            : `a '${input.locale}' translation already exists`,
+        );
+      }
       const slug = input.slug ?? String(src.slug);
       await assertSlugFree(db, slug, input.locale);
       return db.insert("cms_pages", {
@@ -1753,7 +1840,9 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
 
     /** Distinct locales present across all pages. */
     listLocales: query(async (ctx) => {
-      const rows = await cdb(ctx).exec("SELECT DISTINCT locale FROM cms_pages ORDER BY locale");
+      // Raw exec bypasses the ACL, so the trash filter has to be written out by hand —
+      // otherwise the editor's locale switcher offers a locale with zero live pages.
+      const rows = await cdb(ctx).exec("SELECT DISTINCT locale FROM cms_pages WHERE deletedAt IS NULL ORDER BY locale");
       return rows.map((r) => String(r.locale ?? "en"));
     }, viewer),
 
@@ -2159,6 +2248,111 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
      * snapshot (the ACL scopes `cms_pages` reads to `status = published`). Editors may pass
      * `preview: true` to assemble the current DRAFT live from the tables. `locale` defaults
      * to the configured default locale; a slug is unique per locale. */
+    // --- trash: soft delete, restore, purge ---------------------------------
+    //
+    // A page had NO delete handler at all before this: once created it could only be
+    // unpublished, never removed. Delete is therefore introduced already soft — the row
+    // stays, `deletedAt` is stamped, and the ACL's read scope hides it everywhere.
+    //
+    // A trashed page KEEPS ITS SLUG. `(slug, locale)` is a DB unique constraint, so the
+    // alternatives were mangling the stored slug on delete or dropping the constraint —
+    // both worse than telling the caller plainly that the slug is in the trash. Purging
+    // frees it.
+
+    deletePage: mutation(async (ctx, input: { pageId: string }) => {
+      const db = cdb(ctx);
+      const rows = await db.find({ from: "cms_pages", where: { id: input.pageId }, limit: 1 });
+      if (!rows[0]) throw notFound("page"); // already trashed reads as absent — the scope hides it
+      const now = new Date().toISOString();
+      // Clear the schedule. The publish/unpublish tasks run on the SYSTEM task context,
+      // where the ACL is bypassed entirely — so the `deletedAt IS NULL` read scope does
+      // NOT protect them, and a page trashed before its scheduled time was republished,
+      // publicly live, with a fresh revision and nobody pressing publish. Clearing the
+      // timestamps makes the tasks' existing intent-token check reject both for free.
+      await db.update("cms_pages", input.pageId, { deletedAt: now, updatedAt: now, scheduledAt: null, unpublishAt: null });
+      await writeAudit(db, { pageId: input.pageId, action: "delete", from: String(rows[0].status ?? ""), to: "trashed", actor: actorOf(ctx) });
+      return { ok: true as const, deletedAt: now };
+    }, { ...editor, ...pageIdInput }),
+
+    /** What is currently in the trash — pages AND media. Read with `ctx.db.exec` because
+     * the ACL read scope hides exactly these rows: that is the scope doing its job, not a
+     * hole to patch.
+     *
+     * Media has to be listed here or it becomes UNREACHABLE the moment it is trashed —
+     * `listMedia`/`getMedia` are ACL-scoped, so neither `restoreMedia` nor `purgeMedia`
+     * could ever be called with its id again, while `/media/<key>` kept serving the bytes
+     * (that route streams from R2 with no DB lookup at all). */
+    listTrash: query(async (ctx, input: { limit?: number }) => {
+      // Truncate like listMedia/listPageAudit — a fractional LIMIT reaches SQLite and 500s,
+      // and any client computing `total / pages` sends one.
+      const limit = Math.min(Math.max(Math.trunc(Number(input.limit)) || 50, 1), 200);
+      const db = cdb(ctx);
+      const pages = await db.exec(
+        "SELECT id, title, slug, locale, status, deletedAt FROM cms_pages WHERE deletedAt IS NOT NULL ORDER BY deletedAt DESC LIMIT ?",
+        limit,
+      );
+      const rawMedia = await db.exec(
+        "SELECT id, alt, file, deletedAt FROM cms_media WHERE deletedAt IS NOT NULL ORDER BY deletedAt DESC LIMIT ?",
+        limit,
+      );
+      // The fileRef object<->JSON codec sits on the ORM path, not raw exec — parse here or
+      // a trash UI reusing the media card renders `/media/undefined`.
+      const media = rawMedia.map((m) => ({ ...m, file: typeof m.file === "string" ? (JSON.parse(m.file) as JsonValue) : m.file }));
+      return { pages, media };
+    }, { ...viewer, input: (raw): { limit?: number } => {
+      const o = asObj(raw);
+      if (o.limit !== undefined && typeof o.limit !== "number") throw new BadRequest("limit must be a number");
+      return o as never;
+    } }),
+
+    restorePage: mutation(async (ctx, input: { pageId: string }) => {
+      const db = cdb(ctx);
+      const rows = await db.exec("SELECT id, slug, locale, status, scheduledAt, unpublishAt FROM cms_pages WHERE id = ? AND deletedAt IS NOT NULL LIMIT 1", input.pageId);
+      const page = rows[0];
+      if (!page) throw notFound("trashed page");
+      // Defensive: the trashed row still occupies the (slug, locale) unique index, so in
+      // practice nothing can have taken the slug. Kept so a future change that DOES free
+      // the slug on delete surfaces as a clean 400 rather than a constraint violation.
+      await assertSlugFree(db, String(page.slug), String(page.locale), String(page.id));
+      await db.exec("UPDATE cms_pages SET deletedAt = NULL, updatedAt = ? WHERE id = ?", new Date().toISOString(), input.pageId);
+      markChanged(db, "cms_pages");
+      await writeAudit(db, { pageId: input.pageId, action: "restore", from: "trashed", to: String(page.status ?? ""), actor: actorOf(ctx) });
+      // deletePage had to clear any schedule (the publish task runs SYSTEM-scoped, outside
+      // the read scope). Restore cannot know what it was, so SAY so — otherwise a promo
+      // page due to auto-unpublish comes back live forever with nothing in the audit trail.
+      return { ok: true as const, scheduleCleared: page.scheduledAt != null || page.unpublishAt != null };
+    }, { ...editor, ...pageIdInput }),
+
+    /** Permanently remove a trashed page and everything hanging off it. Reviewer-gated:
+     * this is the only irreversible operation in the CMS. */
+    purgePage: mutation(async (ctx, input: { pageId: string }) => {
+      const db = cdb(ctx);
+      const rows = await db.exec("SELECT id FROM cms_pages WHERE id = ? AND deletedAt IS NOT NULL LIMIT 1", input.pageId);
+      if (!rows[0]) throw notFound("trashed page"); // purging a LIVE page is refused — trash it first
+      // Placements, revisions and audit rows are logical relations (no FK cascade), so
+      // clear them explicitly or they outlive the page as orphans.
+      //
+      // The BLOCKS themselves need the same treatment, and it has to happen before the
+      // placements go: a non-reusable block used only by this page becomes unreachable
+      // once its last placement is deleted (there is no listBlocks, and removeBlock needs
+      // a pageBlockId that no longer exists). Mirrors removeBlock's own GC.
+      const doomed = await db.exec(
+        `SELECT b.id AS id FROM cms_blocks b
+           JOIN cms_page_blocks pb ON pb.blockId = b.id
+          WHERE pb.pageId = ? AND b.isReusable = 0
+            AND NOT EXISTS (SELECT 1 FROM cms_page_blocks o WHERE o.blockId = b.id AND o.pageId <> ?)`,
+        input.pageId,
+        input.pageId,
+      );
+      await db.exec("DELETE FROM cms_page_blocks WHERE pageId = ?", input.pageId);
+      for (const row of doomed) await db.exec("DELETE FROM cms_blocks WHERE id = ?", String(row.id));
+      await db.exec("DELETE FROM cms_page_revisions WHERE pageId = ?", input.pageId);
+      await db.exec("DELETE FROM cms_audit WHERE pageId = ?", input.pageId);
+      await db.exec("DELETE FROM cms_pages WHERE id = ?", input.pageId);
+      markChanged(db, "cms_pages", "cms_page_blocks", "cms_blocks", "cms_page_revisions", "cms_audit");
+      return { ok: true as const };
+    }, { ...reviewer, ...pageIdInput }),
+
     getPage: query(async (ctx, input: { slug: string; locale?: string; preview?: boolean }) => {
       const db = cdb(ctx);
       // Preview is an editor capability — gate it before the lookup so a non-editor gets a
@@ -2230,10 +2424,24 @@ export interface CmsPolicyOpts {
 export function cmsPolicies(opts: CmsPolicyOpts = {}): { public: Policy[]; editor: Policy[] } {
   const p = opts.prefix ?? "cms";
   const tables = ["cms_content_types", "cms_block_types", "cms_blocks", "cms_pages", "cms_page_blocks", "cms_page_revisions", "cms_media", "cms_audit"] as const;
+  // Soft-deleted rows are filtered in the ACL, not in each handler. A read scope is
+  // AND-merged into every `ctx.db` read, so one policy hides a trashed row from the public
+  // API, the editor, relation traversals and eager-loads at once — where a per-handler
+  // `where` would have to be remembered at ~40 call sites and would be wrong the first
+  // time someone forgot. The trash itself is read with `ctx.db.exec` (below), which is the
+  // documented raw escape hatch and deliberately outside this scope.
+  const notTrashed = { where: { deletedAt: { isNull: true } } };
+  const softDeleted: Record<string, true> = { cms_pages: true, cms_media: true };
   const editorPolicies: Policy[] = [];
   for (const table of tables) {
     for (const action of ["read", "create", "update", "delete"] as const) {
-      editorPolicies.push(policy(`${p}:editor:${table}:${action}`, table, action, allow()));
+      // UPDATE is scoped as well as READ. Handlers that read the row first already 404 on
+      // a trashed page, but `updatePageSeo`/`updateMedia` patched blind — so an editor with
+      // a stale tab could mutate a page a colleague had just trashed, and the write echo
+      // handed back the whole hidden row. Scoping the grant covers every future write
+      // handler too, rather than relying on each one remembering to read first.
+      const scoped = (action === "read" || action === "update") && softDeleted[table];
+      editorPolicies.push(policy(`${p}:editor:${table}:${action}`, table, action, scoped ? notTrashed : allow()));
     }
   }
   return {
@@ -2243,14 +2451,18 @@ export function cmsPolicies(opts: CmsPolicyOpts = {}): { public: Policy[]; edito
       // can route/render by type. Slugs/names are structural, not sensitive.
       policy(`${p}:public:content-types:read`, "cms_content_types", "read", allow()),
       // Only published pages are readable; the snapshot carries the content.
-      policy(`${p}:public:pages:read`, "cms_pages", "read", { where: { status: "published" } }),
+      policy(`${p}:public:pages:read`, "cms_pages", "read", { where: { status: "published", deletedAt: { isNull: true } } }),
       // getPage reads the latest revision snapshot. Scope the grant by the revision's
       // PAGE being currently published (a relation-traversal where, compiled to a
       // subquery), so a revision of a later-unpublished/archived page is never publicly
       // readable — least-privilege even for a future revision-listing handler.
-      policy(`${p}:public:revisions:read`, "cms_page_revisions", "read", { where: { page: { status: "published" } } }),
+      // `deletedAt` as well as `status`: getPage 404s on the page lookup first today, so
+      // this is defense in depth — but a revision snapshot is a BAKED copy of the page's
+      // content, and a future revision-listing handler reading it directly would otherwise
+      // serve a trashed page's body.
+      policy(`${p}:public:revisions:read`, "cms_page_revisions", "read", { where: { page: { status: "published", deletedAt: { isNull: true } } } }),
       // Media metadata is public (the bytes are separately gated by signed urls).
-      policy(`${p}:public:media:read`, "cms_media", "read", allow()),
+      policy(`${p}:public:media:read`, "cms_media", "read", { where: { deletedAt: { isNull: true } } }),
     ],
     editor: editorPolicies,
   };
