@@ -147,6 +147,70 @@ export async function runCms(base: string): Promise<void> {
   const anonPreview = await call("getPage", { slug, preview: true });
   assert(anonPreview.status === 403, "cms: anonymous preview is forbidden (403)");
 
+  // --- signed preview links: a capability, not a role ---
+  // The point of preview is the stakeholder WITHOUT an account. An editor mints a signed,
+  // self-expiring link naming one page; redeeming it needs no session at all.
+  const pageRow = (await call("listPages", {}, admin)).body.result.find((p: { slug: string }) => p.slug === slug) as { id: string };
+  const minted = await call("signPagePreview", { pageId: pageRow.id }, admin);
+  assert(minted.body.ok && typeof minted.body.result.token === "string", "cms: signPagePreview mints a token for an editor");
+  assert(String(minted.body.result.url).startsWith("/cms/preview?token="), "cms: the minted preview url is relative, like a signed file url");
+  const previewToken = minted.body.result.token as string;
+
+  // minting is editor-gated even though redeeming is not
+  const anonMint = await call("signPagePreview", { pageId: pageRow.id });
+  assert(anonMint.status === 403, "cms: minting a preview link is editor-gated (403)");
+
+  // redeem with NO auth header at all
+  const redeemed = await fetch(`${base}${minted.body.result.url}`);
+  const redeemedBody = await redeemed.json() as { regions?: Record<string, unknown[]>; isPreview?: boolean };
+  assert(redeemed.status === 200, "cms: a signed preview link is redeemable with no session");
+  assert(redeemedBody.isPreview === true, "cms: a redeemed preview is flagged isPreview");
+  assert((redeemedBody.regions?.content ?? []).length === 2, "cms: the redeemed preview carries the LIVE draft blocks");
+  assert(redeemed.headers.get("cache-control") === "private, no-store", "cms: a preview response is never cached");
+
+  // The route must work under the roles an app ACTUALLY configures. The e2e app defines
+  // an `admin` role, which masked a bug where the route hardcoded roles:["admin"] — under
+  // the README's own wiring (anonymous + editor, no admin) every link 404'd. Redeeming as
+  // a plain editor exercises the configured-viewer-roles path.
+  const plainEditor = await token("cms-editor-only", ["editor"]);
+  const editorMint = await call("signPagePreview", { pageId: pageRow.id }, plainEditor);
+  assert(editorMint.body.ok, "cms: a plain editor (no admin role) can mint a preview link");
+  const editorRedeem = await fetch(`${base}${editorMint.body.result.url}`);
+  assert(editorRedeem.status === 200, "cms: a link minted by a plain editor redeems (the route presents viewer roles, not admin)");
+
+  // Minting on the D1 store must REFUSE: redemption always reaches the Durable Object, so
+  // a link minted there could never be redeemed while the editor reported success.
+  const d1Mint = await fetch(`${base}/rpc/signPagePreview`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-pramen-tenant": TENANT, "x-pramen-store": "d1", authorization: `Bearer ${admin}` },
+    body: JSON.stringify({ pageId: pageRow.id }),
+  });
+  assert(d1Mint.status === 503, `cms: signPagePreview refuses on the D1 store (got ${d1Mint.status})`);
+
+  // Bad input is a 400, not a 500 or a link that can never be redeemed.
+  assert((await call("signPagePreview", { pageId: pageRow.id, expiresIn: "3600" }, admin)).status === 400, "cms: a non-numeric expiresIn is rejected");
+  assert((await call("signPagePreview", {}, admin)).status === 400, "cms: a missing pageId is rejected");
+
+  // Errors use pramen's standard { ok, error, code } shape.
+  const denied = await (await fetch(`${base}/cms/preview?token=nonsense`)).json() as { error?: string; code?: string };
+  assert(typeof denied.error === "string" && denied.code === "forbidden", "cms: a preview denial uses the standard error body shape");
+
+  // An editor's own preview is flagged the same way a token redemption is.
+  const editorPreview = await call("getPage", { slug, preview: true }, admin);
+  assert(editorPreview.body.result.isPreview === true, "cms: getPage(preview) sets isPreview like the token route does");
+
+  // a tampered token is refused — the signature covers the page id
+  const [tokData, tokSig] = previewToken.split(".");
+  const tampered = await fetch(`${base}/cms/preview?token=${encodeURIComponent(`${tokData}x.${tokSig}`)}`);
+  assert(tampered.status === 403, "cms: a tampered preview token is refused (403)");
+  const noToken = await fetch(`${base}/cms/preview`);
+  assert(noToken.status === 403, "cms: a preview request with no token is refused (403)");
+
+  // the /rpc back door stays shut: getPagePreview is role-gated, so knowing a page id
+  // is not enough — only the signed route can reach a draft anonymously.
+  const anonDirect = await call("getPagePreview", { pageId: pageRow.id });
+  assert(anonDirect.status === 403, "cms: getPagePreview over /rpc is role-gated (403)");
+
   // --- publish: snapshots the assembled page; the public API now serves it ---
   const published = await call("publishPage", { pageId }, admin);
   assert(published.body.ok && published.body.result.page.status === "published", "cms: publishPage flips status to published");

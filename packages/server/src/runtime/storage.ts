@@ -17,6 +17,7 @@
 
 import { BadRequest, PramenError } from "./errors";
 import type { Files, FileRef, HeadResult } from "../sdk/files";
+import { signToken, verifyToken, isUsableSecret, MIN_TOKEN_SECRET_LEN, type ExpiringToken } from "./token";
 
 // The portable type surface (FileRef, Files, sign opts) lives in sdk/files.ts;
 // re-export it here so runtime callers have one import site.
@@ -118,72 +119,25 @@ function bytesToStream(bytes: Uint8Array): ReadableStream {
   });
 }
 
-// --- base64url (shared shape with auth.ts/jwt.ts) ---
+// --- signed file tokens ---
+//
+// The HMAC/base64url machinery is shared with page-preview links and anything else that
+// needs a signed capability url; it lives in runtime/token.ts. This file only declares
+// what a FILE token carries.
 
-function bytesToB64url(bytes: Uint8Array): string {
-  let bin = "";
-  for (const b of bytes) bin += String.fromCharCode(b);
-  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-function b64urlToBytes(s: string): Uint8Array {
-  const b64 = s.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (s.length % 4)) % 4);
-  const bin = atob(b64);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-}
-const strToB64url = (s: string) => bytesToB64url(new TextEncoder().encode(s));
-const b64urlToStr = (s: string) => new TextDecoder().decode(b64urlToBytes(s));
-
-// --- signed file tokens (HMAC-SHA256) ---
-
-interface FileToken {
+interface FileToken extends ExpiringToken {
   /** tenant */ t: string;
   /** key */ k: string;
   /** op */ op: "get" | "put";
-  /** expiry (epoch seconds) */ exp: number;
   /** content-type (put: enforced; get: disposition hint) */ ct?: string;
   /** max size in bytes (put only) */ max?: number;
   /** filename (download disposition) */ fn?: string;
 }
 
-async function hmacKey(secret: string): Promise<CryptoKey> {
-  return crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, [
-    "sign",
-    "verify",
-  ]);
-}
-
-async function signToken(token: FileToken, secret: string): Promise<string> {
-  const data = strToB64url(JSON.stringify(token));
-  const key = await hmacKey(secret);
-  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(data));
-  return `${data}.${bytesToB64url(new Uint8Array(sig))}`;
-}
+const signFileToken = (token: FileToken, secret: string): Promise<string> => signToken(token, secret);
 
 /** Verify a file token's signature + expiry; returns the payload or null. */
-export async function verifyToken(raw: string, secret: string): Promise<FileToken | null> {
-  const dot = raw.indexOf(".");
-  if (dot < 0) return null;
-  const data = raw.slice(0, dot);
-  const sig = raw.slice(dot + 1);
-  let ok: boolean;
-  try {
-    const key = await hmacKey(secret);
-    ok = await crypto.subtle.verify("HMAC", key, b64urlToBytes(sig), new TextEncoder().encode(data));
-  } catch {
-    return null;
-  }
-  if (!ok) return null;
-  let payload: FileToken;
-  try {
-    payload = JSON.parse(b64urlToStr(data));
-  } catch {
-    return null;
-  }
-  if (typeof payload.exp !== "number" || Math.floor(Date.now() / 1000) >= payload.exp) return null;
-  return payload;
-}
+export const verifyFileToken = (raw: string, secret: string): Promise<FileToken | null> => verifyToken<FileToken>(raw, secret);
 
 // --- key generation ---
 
@@ -247,10 +201,8 @@ export interface FilesConfig {
  * would be forgeable (HMAC over an empty/weak key). Below this, file storage is
  * treated as unconfigured — fail closed rather than mint forgeable urls. The dev
  * defaults satisfy it; production should set a strong, random FILES_SECRET. */
-export const MIN_FILES_SECRET_LEN = 16;
-export function isUsableFilesSecret(secret: string | undefined | null): secret is string {
-  return typeof secret === "string" && secret.length >= MIN_FILES_SECRET_LEN;
-}
+export const MIN_FILES_SECRET_LEN = MIN_TOKEN_SECRET_LEN;
+export const isUsableFilesSecret = isUsableSecret;
 const filesUnconfigured = () =>
   new PramenError("file storage is not configured (set a strong FILES_SECRET)", 503, "unavailable");
 
@@ -271,7 +223,7 @@ export function createFiles(cfg: FilesConfig): Files {
       const seg = opts.prefix ? `${safePrefix(opts.prefix)}/` : "";
       const key = `${prefix}${seg}${randomKeySuffix()}`;
       const exp = Math.floor(Date.now() / 1000) + (opts.expiresIn ?? 900);
-      const token = await signToken({ t: cfg.tenant, k: key, op: "put", exp, ct, max: opts.maxSize, fn: opts.filename }, cfg.secret);
+      const token = await signFileToken({ t: cfg.tenant, k: key, op: "put", exp, ct, max: opts.maxSize, fn: opts.filename }, cfg.secret);
       const ref: FileRef = { key, size: 0, contentType: ct, filename: opts.filename, uploadedAt: Date.now() };
       return { url: `${base}/upload?token=${encodeURIComponent(token)}`, ref };
     },
@@ -282,7 +234,7 @@ export function createFiles(cfg: FilesConfig): Files {
       const key = ensureOwnKey(r.key);
       const exp = Math.floor(Date.now() / 1000) + (opts?.expiresIn ?? 3600);
       const fn = opts?.download ? (typeof ref === "string" ? undefined : ref.filename) : undefined;
-      const token = await signToken({ t: cfg.tenant, k: key, op: "get", exp, fn }, cfg.secret);
+      const token = await signFileToken({ t: cfg.tenant, k: key, op: "get", exp, fn }, cfg.secret);
       return { url: `${base}/download?token=${encodeURIComponent(token)}`, expiresAt: exp * 1000 };
     },
 
@@ -327,7 +279,7 @@ export async function handleFileRequest(
 
   const raw = url.searchParams.get("token");
   if (!raw) return fileError(401, "unauthorized", "missing token");
-  const token = await verifyToken(raw, opts.secret);
+  const token = await verifyFileToken(raw, opts.secret);
   if (!token) return fileError(403, "forbidden", "invalid or expired token");
 
   try {

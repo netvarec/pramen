@@ -124,6 +124,43 @@ Editor flow: `createBlockType` → `createContentType` → `createPage` → `add
 `publishPage`. Public: `getPage({ slug })` returns the published snapshot; editors pass
 `{ slug, preview: true }` to assemble the live draft.
 
+### Preview links
+
+`{ preview: true }` is a **role** check, so it only serves people who have an editor
+account. The person preview actually exists for — the stakeholder reviewing copy before it
+ships — usually has no account at all. For them, mint a signed link:
+
+```ts
+const { url, expiresAt } = await client.call("signPagePreview", { pageId, expiresIn: 3600 });
+// -> { url: "/cms/preview?token=…", expiresAt }
+```
+
+Minting is editor-gated; **redeeming needs no session** — the signature is the
+authorization. Spread `cmsRoutes()` into `app.routes` to serve `GET /cms/preview`, which
+verifies the token in the Worker before any read and returns the live draft with
+`isPreview: true` and `Cache-Control: private, no-store`.
+
+If you pass custom roles to `createCmsHandlers`, hand `cmsRoutes` the **same options
+object** — it derives the route's identity from them, so the two cannot drift:
+
+```ts
+const cms = { editorRoles: ["editor"], reviewerRoles: ["reviewer"] };
+const handlers = { ...createCmsHandlers(cms) };
+const routes = [...cmsRoutes({ handlers: cms })];
+```
+
+That identity must also be granted by your ACL. Preview is **DO-only**: redemption reaches
+the Durable Object, so `signPagePreview` refuses on the D1 store rather than mint a link
+that could never be redeemed.
+
+The grant is scoped to **one page** and carries its own expiry (default 1 hour, clamped to
+30 days), so a leaked link is not "see all drafts" and stops working on its own. Signing
+uses `PREVIEW_SECRET`, falling back to `FILES_SECRET` then `AUTH_SECRET` — the same
+machinery as signed file urls. With no usable secret (≥16 chars) minting and verification
+both **fail closed** rather than hand out forgeable links.
+
+From an Astro site, `createCmsClient(...).getPreview(token)` redeems one.
+
 ### Typed block fields
 
 A developer-authored block type gets compile-time typing with no build step —

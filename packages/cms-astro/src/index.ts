@@ -93,6 +93,9 @@ export interface AssembledPage {
     seo?: Record<string, unknown>;
   };
   regions: Record<string, RenderedBlock[]>;
+  /** True when this is a live draft fetched through a preview link, not the published
+   * snapshot — render a "viewing a draft" banner off it. */
+  isPreview?: boolean;
 }
 
 export interface PublishedPageRef {
@@ -114,6 +117,9 @@ export interface CmsClientOptions {
 
 export interface CmsClient {
   getPage(slug: string, locale?: string): Promise<AssembledPage | null>;
+  /** Redeem a signed preview link. The token names one page and carries its own expiry,
+   * so this needs no session — pass through whatever arrived in the request's query. */
+  getPreview(token: string): Promise<AssembledPage | null>;
   listPublishedPages(): Promise<PublishedPageRef[]>;
   /** Absolute URL for a relative CMS path (e.g. a media `/media/...` url). */
   resolve(path: string): string;
@@ -144,6 +150,18 @@ export function createCmsClient(opts: CmsClientOptions): CmsClient {
   return {
     baseUrl: base,
     getPage: (slug, locale) => call<AssembledPage>("getPage", { slug, locale }),
+    getPreview: async (token) => {
+      // Not an /rpc call: the preview route is public and pre-auth, and the signature IS
+      // the authorization, so there is no bearer token to send.
+      const res = await fetch(`${base}/cms/preview?token=${encodeURIComponent(token)}`);
+      if (res.ok) return (await res.json().catch(() => null)) as AssembledPage | null;
+      // 403/404 mean "this link is not valid" — an ordinary not-found for the caller.
+      // Anything else (notably 503, "preview is not configured") is an operator problem
+      // and must not masquerade as a missing page.
+      if (res.status === 403 || res.status === 404) return null;
+      const body = (await res.json().catch(() => ({}))) as { error?: string; code?: string };
+      throw new Error(`@pramen/cms-astro: preview failed (HTTP ${res.status}${body.code ? `, ${body.code}` : ""}${body.error ? `: ${body.error}` : ""})`);
+    },
     listPublishedPages: async () => (await call<PublishedPageRef[]>("listPublishedPages", {})) ?? [],
     resolve: (path) => (path.startsWith("http") ? path : `${base}${path}`),
   };
