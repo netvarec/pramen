@@ -1,33 +1,15 @@
-// Mint HS256 JWTs for the smoke tests, signed with the dev secret in
-// wrangler.jsonc. Mirrors what a real auth service would issue.
+// Mint HS256 JWTs for the smoke tests. Delegates to @pramen/server's signer so the repo
+// has ONE implementation — the tests, the `pramen` bin and the `pramen-cms` bin all share
+// it. The explicit DEV_SECRET argument preserves this helper's deliberate behaviour of
+// always using the wrangler dev secret, ignoring any AUTH_SECRET in the environment.
 
-export const DEV_SECRET = "dev-secret-change-me";
+import { signDevToken, DEV_SECRET } from "@pramen/server/dev";
 
-function bytesToB64url(bytes: Uint8Array): string {
-  let bin = "";
-  for (const b of bytes) bin += String.fromCharCode(b);
-  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
+export { DEV_SECRET };
 
-const strToB64url = (s: string) => bytesToB64url(new TextEncoder().encode(s));
-
-export async function sign(payload: Record<string, unknown>, secret = DEV_SECRET): Promise<string> {
-  const now = Math.floor(Date.now() / 1000);
-  const header = strToB64url(JSON.stringify({ alg: "HS256", typ: "JWT" }));
-  const body = strToB64url(JSON.stringify({ iat: now, exp: now + 3600, ...payload }));
-  const data = `${header}.${body}`;
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(data));
-  return `${data}.${bytesToB64url(new Uint8Array(sig))}`;
-}
+export const sign = (payload: Record<string, unknown>, secret = DEV_SECRET): Promise<string> => signDevToken(payload, secret);
 
 /** A signed token for the given subject and roles, plus any extra claims
  * (e.g. `{ tenants: ["acme"] }` for tenant authorization). */
-export const token = (sub: string, roles: string[], extra: Record<string, unknown> = {}) =>
+export const token = (sub: string, roles: string[], extra: Record<string, unknown> = {}): Promise<string> =>
   sign({ sub, roles, ...extra });
