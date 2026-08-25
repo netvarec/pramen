@@ -41,10 +41,13 @@ import {
   BadRequest,
   Forbidden,
   PramenError,
+  signToken,
+  verifyToken,
+  resolveSecret,
 } from "@pramen/server";
 import type { HandlerContext, Policy, FileRef, BootstrapFn, JsonValue } from "@pramen/server";
-import { filterXSS } from "xss";
 import type { EnvBag } from "@pramen/server";
+import { isSafeHref, normalizeHref } from "./href";
 
 // --- field schema DSL (the block-editor field language) ---------------------
 
@@ -143,8 +146,38 @@ export interface DefaultBlockDefinition {
 // the schema, exactly like `typeof app.handlers` types the RPC client. (A `pramen cms codegen`
 // command that emits these types from DB-stored schemas is future work.)
 
-/** A rich-text value — a serialized editor document (or a plain string). */
-export type RichText = string | { type: string; content?: unknown[] };
+/**
+ * A rich-text document — the editor's structured JSON (a ProseMirror/TipTap doc tree).
+ *
+ * **Not an HTML string.** HTML never enters storage: the write path validates this tree
+ * against a node/mark allow-list (`normalizeRichText`) and the render side maps node types
+ * to components, so there is no `set:html` / `dangerouslySetInnerHTML` anywhere in the
+ * chain and nothing to scrub. The one attribute that can still carry script is a `link`
+ * mark's `href`, so that one IS checked — see `isSafeHref`.
+ */
+export interface RichTextDoc {
+  type: "doc";
+  content?: RichTextNode[];
+}
+
+/** One node in a {@link RichTextDoc}. A leaf carries `text` (plus optional inline `marks`);
+ * a container carries `content`. */
+export interface RichTextNode {
+  type: string;
+  content?: RichTextNode[];
+  text?: string;
+  marks?: RichTextMark[];
+  attrs?: Record<string, JsonValue>;
+}
+
+/** An inline mark on a text node — bold, link, highlight, … */
+export interface RichTextMark {
+  type: string;
+  attrs?: Record<string, JsonValue>;
+}
+
+/** The value of a `richtext` field. */
+export type RichText = RichTextDoc;
 
 /** Map one FieldDefinition (as a const literal) to the TS type of its RENDERED value.
  * Media resolves to `ResolvedMedia` (the assemble-time shape a component receives). */
@@ -342,12 +375,45 @@ function tsTypeOf(f: FieldDefinition): string {
       return "unknown";
   }
 }
+/** Which imported helper types a field schema actually needs, found by walking the tree
+ * (group/repeater nest, so a `richtext` three levels down still counts). Order is stable
+ * so the emitted import line does not churn between runs. */
+function referencedHelperTypes(fields: readonly FieldDefinition[]): string[] {
+  const found = new Set<string>();
+  const walk = (defs: readonly FieldDefinition[]): void => {
+    for (const f of defs) {
+      if (f.type === "richtext") found.add("RichText");
+      else if (f.type === "media") found.add("ResolvedMedia");
+      else if (f.fields) walk(f.fields);
+    }
+  };
+  walk(fields);
+  return ["ResolvedMedia", "RichText"].filter((t) => found.has(t));
+}
+
 const tsFieldLine = (f: FieldDefinition): string => `${JSON.stringify(f.name)}${f.required ? "" : "?"}: ${tsTypeOf(f)};`;
 
 /** Emit a `.ts` module of per-slug field interfaces + a `BlockFieldsBySlug` registry from
  * DB-stored block types (`{ slug, fieldsSchema }` rows). The runtime counterpart to the
  * compile-time `InferBlockFields`, for webmaster-authored (data-driven) block types. */
 export function generateBlockTypes(blockTypes: Array<{ slug: string; fieldsSchema?: FieldDefinition[] | null }>): string {
+  // Slugs are webmaster-authored with no deploy, so they are not guaranteed to map to a
+  // valid or DISTINCT TypeScript identifier: "2-col" -> `interface 2ColFields` is a syntax
+  // error, and "rich-text"/"rich_text" both -> `RichTextFields`. Fail with the offending
+  // slugs rather than emit a file that does not parse.
+  const seen = new Map<string, string>();
+  const bad: string[] = [];
+  for (const bt of blockTypes) {
+    const name = pascal(bt.slug);
+    // Unicode-aware: `úvodní-blok` -> `úvodníBlok` IS a legal TypeScript identifier, and an
+    // ASCII-only test rejected it — aborting codegen for the WHOLE tenant over a slug that
+    // works, with no fix short of renaming production data.
+    if (!/^[\p{ID_Start}$_][\p{ID_Continue}$]*$/u.test(name)) bad.push(`${bt.slug} (-> '${name}', not an identifier)`);
+    else if (seen.has(name)) bad.push(`${bt.slug} (-> '${name}', collides with '${seen.get(name)}')`);
+    else seen.set(name, bt.slug);
+  }
+  if (bad.length) throw new BadRequest(`cannot generate types for block type slug(s): ${bad.join("; ")}`);
+
   const interfaces = blockTypes
     .map((bt) => {
       const fields = Array.isArray(bt.fieldsSchema) ? bt.fieldsSchema : [];
@@ -356,11 +422,16 @@ export function generateBlockTypes(blockTypes: Array<{ slug: string; fieldsSchem
     })
     .join("\n\n");
   const registry = blockTypes.map((bt) => `  ${JSON.stringify(bt.slug)}: ${pascal(bt.slug)}Fields;`).join("\n");
-  return (
-    `// AUTO-GENERATED by @pramen/cms — do not edit.\n` +
-    `import type { ResolvedMedia, RichText } from "@pramen/cms";\n\n` +
-    `${interfaces}\n\nexport interface BlockFieldsBySlug {\n${registry}\n}\n`
-  );
+  // Import ONLY what the emitted interfaces reference: every tsconfig in this repo sets
+  // `noUnusedLocals`, so an unconditional import is a guaranteed TS6192 build break in the
+  // consumer's own project — for a file they are told not to edit.
+  //
+  // Walk the SCHEMA rather than regexing the rendered text: field names are printed into
+  // the output, so a field literally named `RichText` matched a `\bRichText\b` scan and
+  // produced the unused import this exists to avoid.
+  const used = referencedHelperTypes(blockTypes.flatMap((bt) => (Array.isArray(bt.fieldsSchema) ? bt.fieldsSchema : [])));
+  const importLine = used.length ? `import type { ${used.join(", ")} } from "@pramen/cms";\n\n` : "";
+  return `// AUTO-GENERATED by @pramen/cms — do not edit.\n${importLine}${interfaces}\n\nexport interface BlockFieldsBySlug {\n${registry}\n}\n`;
 }
 
 // --- schema fragment: spread into your defineSchema so the tables migrate --------
@@ -516,6 +587,16 @@ export interface ValidateOpts {
    * writes (addBlock/updateBlock/createPage) pass `false` — a DRAFT block may be incomplete;
    * required is only mandatory when publishing. Type checks always run. */
   requireRequired?: boolean;
+  /** The row's CURRENTLY STORED field values. A legacy HTML-string `richtext` value is
+   * tolerated only when it is byte-identical to the stored one — i.e. the caller echoed
+   * back a pre-Portable-Text value it never authored (the editor autosaves the whole bag).
+   * Anything else is rejected.
+   *
+   * This must NOT be a plain boolean. The `xss` sanitizer is gone, and `normalizeFields`
+   * passes a tolerated string through untouched, so a blanket "allow strings" would let
+   * any caller store arbitrary unsanitized HTML — which every consumer still on the
+   * pre-migration `set:html` contract would then execute. */
+  legacyBaseline?: FieldValues;
 }
 
 /** Validate a block/page's `fields` payload against a field schema, throwing a 400 on
@@ -564,7 +645,18 @@ export function validateFields(schema: FieldDefinition[] | undefined | null, val
         if (!isSlugString(v)) throw new BadRequest(`field '${at}' must be a slug (lowercase letters, digits and single hyphens)`);
         break;
       case "richtext":
-        if (typeof v !== "string" && typeof v !== "object") throw new BadRequest(`field '${at}' must be rich text`);
+        // A document tree, never a string. A legacy HTML value is REJECTED rather than
+        // silently normalized to an empty doc — a 400 names the migration; a blank field
+        // would look like the content simply vanished. Except where the bag carries stored
+        // data the caller never sent (see `legacyBaseline`).
+        if (typeof v === "string") {
+          // Tolerated only if it is exactly what is already stored for this field.
+          if (opts.legacyBaseline && opts.legacyBaseline[def.name] === v) break;
+          throw new BadRequest(`field '${at}' must be a rich-text document, not an HTML string`);
+        }
+        if (typeof v !== "object" || Array.isArray(v) || (v as unknown as RichTextDoc).type !== "doc") {
+          throw new BadRequest(`field '${at}' must be a rich-text document ({ type: "doc", content: [...] })`);
+        }
         break;
       case "number":
         if (typeof v !== "number") throw new BadRequest(`field '${at}' must be a number`);
@@ -585,14 +677,35 @@ export function validateFields(schema: FieldDefinition[] | undefined | null, val
         // (collectMediaIds/resolveMediaFields only handle string ids).
         if (typeof v !== "string") throw new BadRequest(`field '${at}' must be a media id (string)`);
         break;
-      case "group":
-        validateFields(def.fields, v, at, opts);
+      case "group": {
+        // The baseline MUST descend. Stopping at the top level meant a pre-migration
+        // richtext value nested in a group was rejected on every write that echoed the
+        // stored bag back — and placeBlock, which merges the block's OWN stored fields,
+        // could not place such a block at all. No editor can fix that: none ever mounted it.
+        const nested = opts.legacyBaseline?.[def.name];
+        validateFields(def.fields, v, at, {
+          requireRequired: opts.requireRequired,
+          legacyBaseline: nested && typeof nested === "object" && !Array.isArray(nested) ? (nested as FieldValues) : undefined,
+        });
         break;
+      }
       case "repeater": {
         if (!Array.isArray(v)) throw new BadRequest(`field '${at}' must be a list`);
         if (def.min != null && v.length < def.min) throw new BadRequest(`field '${at}' needs at least ${def.min} item(s)`);
         if (def.max != null && v.length > def.max) throw new BadRequest(`field '${at}' allows at most ${def.max} item(s)`);
-        v.forEach((item, i) => validateFields(def.fields, item, `${at}[${i}]`, opts));
+        {
+          // Per-item baseline, positionally — a repeater item that kept its slot keeps its
+          // stored value, so an untouched legacy value inside one still validates.
+          const base = opts.legacyBaseline?.[def.name];
+          const baseItems = Array.isArray(base) ? base : [];
+          v.forEach((item, i) => {
+            const bi = baseItems[i];
+            validateFields(def.fields, item, `${at}[${i}]`, {
+              requireRequired: opts.requireRequired,
+              legacyBaseline: bi && typeof bi === "object" && !Array.isArray(bi) ? (bi as FieldValues) : undefined,
+            });
+          });
+        }
         break;
       }
       default:
@@ -601,39 +714,216 @@ export function validateFields(schema: FieldDefinition[] | undefined | null, val
   }
 }
 
-// --- rich-text sanitization (server-side — the real XSS boundary) -------------
+// --- rich text: the structural allow-list (server-side — the real XSS boundary) ---
 //
-// richtext fields are HTML the site renders with set:html, so they MUST be sanitized
-// before persistence. Client-side scrubbing is not a boundary — a caller can POST any
-// value straight to these handlers. We sanitize on write against a strict tag/attribute
-// allow-list with js-xss (`xss`), which is SYNCHRONOUS and pure-JS — this matters because
-// sanitize runs inside the DO's storage.transaction(), where async stream I/O (e.g.
-// HTMLRewriter) deadlocks. js-xss drops disallowed tags/attributes and blanks
-// javascript:/data: URLs in href/src by default.
+// A `richtext` value is a document TREE, so there is no HTML to scrub — the boundary is
+// STRUCTURAL: an unknown node or mark type is dropped, only the attributes declared for a
+// type survive, an attribute value must be a JSON primitive, and a `link` href must pass a
+// scheme allow-list. Client-side checks are not a boundary — a caller can POST any value
+// straight to these handlers — so this runs on write, like the HTML sanitizer it replaces.
+//
+// Everything here is SYNCHRONOUS and pure. That still matters: normalization runs inside
+// the DO's storage.transaction(), where async stream I/O (e.g. HTMLRewriter) deadlocks —
+// the same constraint that once ruled out a DOM-based sanitizer.
 
-const RT_WHITELIST: Record<string, string[]> = {
-  p: [], br: [], hr: [], blockquote: [], pre: [], code: [],
-  strong: [], b: [], em: [], i: [], u: [], s: [], strike: [], del: [], ins: [], mark: [], sub: [], sup: [],
-  h2: [], h3: [], h4: [], ul: [], ol: [], li: [], a: ["href", "title"],
-};
-const RT_XSS_OPTS = { whiteList: RT_WHITELIST, stripIgnoreTag: true, stripIgnoreTagBody: ["script", "style"] as string[] };
-
-/** Sanitize one richtext HTML string to the allow-list. Synchronous by design. */
-function sanitizeRichText(html: string): string {
-  return html ? filterXSS(html, RT_XSS_OPTS) : html;
+/** The node/mark vocabulary a `richtext` value may use. A node entry maps a node type to
+ * the attribute names kept on it; a mark entry does the same for a mark type. */
+export interface RichTextSchema {
+  nodes: Record<string, readonly string[]>;
+  marks: Record<string, readonly string[]>;
+  /** Highest heading level accepted; anything above is CLAMPED to it, not dropped.
+   * Defaults to `MAX_HEADING_LEVEL` (3, the shipped editor's StarterKit config). Raise it
+   * if your editor is configured for more — this is the widening the docs promise. */
+  maxHeadingLevel?: number;
 }
 
-/** Deep-sanitize the richtext fields in a values object against a field schema (recursing
- * into group/repeater). Returns a sanitized copy; non-richtext fields pass through. */
-export function sanitizeFields(schema: FieldDefinition[] | undefined | null, values: FieldValues): FieldValues {
+/** What the shipped editor can actually produce (TipTap StarterKit + Highlight + TaskList,
+ * as configured by @podoba/react's BlockEditor). Pass your own to `normalizeFields` if your
+ * editor adds extensions — a node type absent from the schema is dropped on write. */
+/** Highest heading level the shipped editor is configured for (StarterKit levels [1,2,3]). */
+export const MAX_HEADING_LEVEL = 3;
+
+export const DEFAULT_RICH_TEXT_SCHEMA: RichTextSchema = {
+  nodes: {
+    // NOTE: no `doc`. normalizeRichText builds the root itself and never looks it up, so
+    // an entry here would only ever authorize a NESTED doc — which TipTap cannot render
+    // (Document declares no renderHTML), blanking the field in the editor while the site
+    // renderers still showed the subtree. The first keystroke then saved the blank over it.
+    paragraph: [],
+    text: [],
+    hardBreak: [],
+    horizontalRule: [],
+    heading: ["level"],
+    blockquote: [],
+    codeBlock: ["language"],
+    bulletList: [],
+    orderedList: ["start"],
+    listItem: [],
+    taskList: [],
+    taskItem: ["checked"],
+  },
+  marks: {
+    bold: [],
+    italic: [],
+    underline: [],
+    strike: [],
+    code: [],
+    highlight: ["color"],
+    link: ["href", "title", "target"],
+  },
+};
+
+// Re-exported from the leaf module `./href` so `@pramen/cms/react` can import them at
+// runtime without dragging this file (and the whole server SDK) into a browser bundle.
+export { isSafeHref, normalizeHref } from "./href";
+
+/** Keep only the declared attributes, and only those holding a JSON primitive — an object
+ * or array in an attr is never something the editor emits, so it is smuggled payload. */
+/** Look a type up in an allow-list WITHOUT walking the prototype chain. A plain-object
+ * index resolves `constructor` / `toString` / `valueOf` to inherited members, which are
+ * truthy — so `{ type: "constructor" }` passed the gate and was stored, and its "allowed
+ * attributes" became the `Object` function (length 1, not iterable), throwing a TypeError
+ * inside the DO's storage.transaction(). Both renderers and TipTap then choke on the
+ * stored node, which bricks the row. */
+function allowedAttrsFor(table: Record<string, readonly string[]>, type: unknown): readonly string[] | undefined {
+  if (typeof type !== "string" || !Object.hasOwn(table, type)) return undefined;
+  return table[type];
+}
+
+function normalizeAttrs(attrs: unknown, allowed: readonly string[], maxHeading: number = MAX_HEADING_LEVEL): Record<string, JsonValue> | undefined {
+  if (!allowed.length || !attrs || typeof attrs !== "object" || Array.isArray(attrs)) return undefined;
+  const out: Record<string, JsonValue> = {};
+  for (const name of allowed) {
+    const v = (attrs as Record<string, unknown>)[name];
+    if (v === undefined) continue;
+    if (v !== null && typeof v !== "string" && typeof v !== "number" && typeof v !== "boolean") continue;
+    // CLAMP, don't drop. Dropping `level` left the node level-less, and TipTap's Heading
+    // declares `level: { default: 1 }` — so an imported h4 still opened as h1 and the next
+    // autosave still persisted h1, while the renderers fell back to h2. Same silent
+    // mutation the narrowing was meant to stop, plus an editor/site mismatch.
+    if (name === "level") {
+      if (typeof v !== "number" || !Number.isInteger(v)) continue;
+      out[name] = Math.min(Math.max(v, 1), maxHeading);
+      continue;
+    }
+    out[name] = v;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+/** Drop unknown marks and any `link` whose href fails the scheme allow-list (dropping the
+ * whole mark, not just the href — an anchor with no destination is worse than plain text). */
+function normalizeMarks(marks: unknown, schema: RichTextSchema): RichTextMark[] | undefined {
+  if (!Array.isArray(marks)) return undefined;
+  const out: RichTextMark[] = [];
+  for (const raw of marks) {
+    if (!raw || typeof raw !== "object") continue;
+    const mark = raw as RichTextMark;
+    const allowed = allowedAttrsFor(schema.marks, mark.type);
+    if (!allowed) continue;
+    const attrs = normalizeAttrs(mark.attrs, allowed, schema.maxHeadingLevel);
+    if (mark.type === "link") {
+      if (!isSafeHref(attrs?.href)) continue;
+      // Persist the parser-normalized form, so what was validated is what resolves.
+      if (attrs && typeof attrs.href === "string") attrs.href = normalizeHref(attrs.href);
+    }
+    out.push(attrs ? { type: mark.type, attrs } : { type: mark.type });
+  }
+  return out.length ? out : undefined;
+}
+
+/** How deep a document may nest before the normalizer stops descending. Real editor output
+ * is a handful of levels (list > item > paragraph > text); a hand-crafted doc nested tens
+ * of thousands deep would otherwise blow the stack INSIDE the DO's storage.transaction().
+ * JSON.parse is iterative in V8, so such a payload reaches the normalizer intact. */
+export const MAX_RICH_TEXT_DEPTH = 100;
+
+/** Normalize one node, or `null` if its type is not in the schema. */
+function normalizeNode(raw: unknown, schema: RichTextSchema, depth = 0): RichTextNode | null {
+  if (depth > MAX_RICH_TEXT_DEPTH) return null;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const node = raw as RichTextNode;
+  const allowed = allowedAttrsFor(schema.nodes, node.type);
+  if (!allowed) return null;
+
+  const out: RichTextNode = { type: node.type };
+  if (node.type === "text") {
+    // A text node with no string — or an EMPTY one — is not text. ProseMirror forbids an
+    // empty text node outright (`schema.text("")` throws "Empty text nodes are not
+    // allowed"), and the editor builds its document inside a useState initializer, so a
+    // stored `{type:"text",text:""}` would throw during render and take the edit UI down
+    // for that row permanently.
+    if (typeof node.text !== "string" || node.text === "") return null;
+    out.text = node.text;
+    const marks = normalizeMarks(node.marks, schema);
+    if (marks) out.marks = marks;
+  }
+  const attrs = normalizeAttrs(node.attrs, allowed, schema.maxHeadingLevel);
+  if (attrs) out.attrs = attrs;
+  if (Array.isArray(node.content)) {
+    const content = normalizeNodes(node.content, schema, depth + 1);
+    if (content.length) out.content = content;
+  }
+  return out;
+}
+
+function normalizeNodes(nodes: readonly unknown[], schema: RichTextSchema, depth = 0): RichTextNode[] {
+  const out: RichTextNode[] = [];
+  for (const n of nodes) {
+    const node = normalizeNode(n, schema, depth);
+    if (node) out.push(node);
+  }
+  return out;
+}
+
+/** Normalize a rich-text value to a document the renderers can trust. A value that is not
+ * a doc at all yields an empty doc — `validateFields` rejects those first, so in handler
+ * flow this only ever sees a doc; the fallback is for direct callers. */
+export function normalizeRichText(value: unknown, schema: RichTextSchema = DEFAULT_RICH_TEXT_SCHEMA): RichTextDoc {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { type: "doc", content: [] };
+  const content = Array.isArray((value as RichTextDoc).content) ? normalizeNodes((value as RichTextDoc).content ?? [], schema) : [];
+  return { type: "doc", content };
+}
+
+/** The block-level node types that end a line when flattening to plain text. */
+const RT_BLOCK_TYPES = new Set(["paragraph", "heading", "listItem", "taskItem", "blockquote", "codeBlock", "horizontalRule"]);
+
+/** Flatten a rich-text document to plain text — for excerpts, meta descriptions, and search
+ * indexing, which want the words without the structure. */
+export function richTextToPlainText(value: RichTextDoc | null | undefined): string {
+  const parts: string[] = [];
+  const walk = (nodes: readonly RichTextNode[]): void => {
+    for (const node of nodes) {
+      if (node.type === "text") parts.push(node.text ?? "");
+      else if (node.type === "hardBreak") parts.push("\n");
+      if (node.content) walk(node.content);
+      if (RT_BLOCK_TYPES.has(node.type)) parts.push("\n");
+    }
+  };
+  walk(value?.content ?? []);
+  // A block inside a block (a paragraph in a list item) closes both, so collapse the run:
+  // every boundary is worth exactly one line break in a flattened excerpt.
+  return parts.join("").replace(/\n{2,}/g, "\n").trim();
+}
+
+/** Deep-normalize the richtext fields in a values object against a field schema (recursing
+ * into group/repeater). Returns a normalized copy; other field types pass through. */
+export function normalizeFields(
+  schema: FieldDefinition[] | undefined | null,
+  values: FieldValues,
+  richTextSchema: RichTextSchema = DEFAULT_RICH_TEXT_SCHEMA,
+): FieldValues {
   const defs = Array.isArray(schema) ? schema : [];
   const out: FieldValues = { ...values };
   for (const def of defs) {
     const v = out[def.name];
     if (v == null) continue;
-    if (def.type === "richtext" && typeof v === "string") out[def.name] = sanitizeRichText(v);
-    else if (def.type === "group" && typeof v === "object" && !Array.isArray(v)) out[def.name] = sanitizeFields(def.fields, v as FieldValues);
-    else if (def.type === "repeater" && Array.isArray(v)) out[def.name] = v.map((it) => (it && typeof it === "object" ? sanitizeFields(def.fields, it as FieldValues) : it));
+    // A legacy HTML string survives normalization untouched: normalizeRichText would turn
+    // it into an EMPTY doc, i.e. silently delete the content. It only reaches here on the
+    // `legacyBaseline` paths, where it is the stored value being echoed back.
+    if (def.type === "richtext") out[def.name] = typeof v === "string" ? v : normalizeRichText(v, richTextSchema);
+    else if (def.type === "group" && typeof v === "object" && !Array.isArray(v)) out[def.name] = normalizeFields(def.fields, v as FieldValues, richTextSchema);
+    else if (def.type === "repeater" && Array.isArray(v)) out[def.name] = v.map((it) => (it && typeof it === "object" ? normalizeFields(def.fields, it as FieldValues, richTextSchema) : it));
   }
   return out;
 }
@@ -687,6 +977,9 @@ export interface AssembledPage {
     seo: PageSeo;
   };
   regions: Record<string, RenderedBlock[]>;
+  /** True when this is a live draft assembled behind a preview grant, rather than the
+   * published snapshot — so a frontend can render a "you are viewing a draft" banner. */
+  isPreview?: boolean;
 }
 
 // --- media -------------------------------------------------------------------
@@ -694,7 +987,7 @@ export interface AssembledPage {
 /** One authored field value inside a block / collection / page `fields` bag. Stored
  * as JSON; a `"media"` field is resolved from its stored id to a `ResolvedMedia` at
  * assemble time, and `group`/`repeater` fields nest further bags. */
-export type FieldValue = JsonValue | ResolvedMedia | FieldValues | FieldValue[];
+export type FieldValue = JsonValue | ResolvedMedia | RichTextDoc | FieldValues | FieldValue[];
 
 /** A block / collection / page `fields` bag — field name -> authored value. */
 export interface FieldValues {
@@ -974,6 +1267,59 @@ async function assertRegionAllows(db: CmsDb, page: Record<string, unknown>, regi
 
 // --- handlers ----------------------------------------------------------------
 
+// --- page preview links (signed capability urls) -----------------------------
+//
+// Preview used to be a ROLE check, so previewing a draft required an editor account —
+// which excludes the person preview actually exists for: the stakeholder reviewing copy
+// before it ships. A preview link is instead a signed, self-expiring CAPABILITY: it names
+// ONE page, carries its own expiry, and is verified in the Worker before any read happens.
+// Minting stays editor-gated; redeeming needs no account at all.
+//
+// Same machinery as signed file urls (`signToken`/`verifyToken` from @pramen/server), and
+// the same fail-closed rule: without a usable secret we refuse to mint rather than hand out
+// forgeable links.
+
+/** What a preview link authorizes: one page, in one tenant, until `exp`. */
+export interface PreviewToken {
+  /** tenant */ t: string;
+  /** page id — the grant is scoped to this ONE page, never "all drafts" */ p: string;
+  /** expiry (epoch seconds) */ exp: number;
+}
+
+/** Secret preference order. `PREVIEW_SECRET` lets an operator rotate preview links without
+ * invalidating every signed file url, but falling back keeps the common case zero-config. */
+export const PREVIEW_SECRET_NAMES = ["PREVIEW_SECRET", "FILES_SECRET", "AUTH_SECRET"] as const;
+
+/** Resolve the preview signing secret, or `undefined` when nothing usable is configured. */
+export function previewSecret(env: EnvBag): string | undefined {
+  return resolveSecret(env, PREVIEW_SECRET_NAMES);
+}
+
+const previewUnconfigured = () =>
+  new PramenError("page preview is not configured (set a strong PREVIEW_SECRET, FILES_SECRET or AUTH_SECRET)", 503, "unavailable");
+
+/** The viewer roles for a given handler config — `editorRoles ∪ reviewerRoles`, computed
+ * exactly as `createCmsHandlers` computes them.
+ *
+ * Exported so `cmsRoutes()` cannot drift from `createCmsHandlers()`: pass the SAME options
+ * object to both. Configuring the two independently was how the preview route ended up
+ * presenting an identity neither the handler gate nor the ACL accepted — and a partial
+ * customization still worked, so the failure appeared only for the app that had most
+ * carefully renamed its roles. */
+export function viewerRolesOf(opts: CmsHandlerOpts = {}): string[] {
+  return [...new Set([...(opts.editorRoles ?? ["editor", "admin"]), ...(opts.reviewerRoles ?? ["reviewer", "admin"])])];
+}
+
+/** The viewer roles for the DEFAULT handler config. */
+export const DEFAULT_VIEWER_ROLES = viewerRolesOf();
+
+/** Where a preview link is redeemed. Spread `cmsRoutes()` into `app.routes` to serve it. */
+export const PREVIEW_PATH = "/cms/preview";
+
+/** Default preview-link lifetime: 1 hour. Long enough to share and open, short enough that
+ * a link pasted into a public channel stops working the same afternoon. */
+export const DEFAULT_PREVIEW_TTL_SECONDS = 3600;
+
 export interface CmsHandlerOpts {
   /** Roles permitted to call the editor mutations (also enforced by the ACL). Default
    * `["editor", "admin"]`. */
@@ -985,6 +1331,12 @@ export interface CmsHandlerOpts {
   /** Roles permitted to approve/reject a page in review and publish (the editorial gate).
    * Default `["reviewer", "admin"]`. */
   reviewerRoles?: readonly string[];
+  /** Preview-link lifetime in seconds. Default 3600 (1 hour). */
+  previewTtlSeconds?: number;
+  /** The node/mark vocabulary accepted on write. Defaults to `DEFAULT_RICH_TEXT_SCHEMA`
+   * (what the shipped editor produces). Widen it if your editor adds TipTap extensions —
+   * a node type absent from the schema is DROPPED on write, not rejected. */
+  richTextSchema?: RichTextSchema;
 }
 
 /** Build the CMS handler map. Spread into your app's handlers. Editor mutations are
@@ -996,6 +1348,8 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
   const defaultLocale = opts.defaultLocale ?? "en";
   const reviewerRoles = opts.reviewerRoles ?? ["reviewer", "admin"];
   const reviewer = { auth: reviewerRoles };
+  const previewTtl = opts.previewTtlSeconds ?? DEFAULT_PREVIEW_TTL_SECONDS;
+  const rtSchema = opts.richTextSchema ?? DEFAULT_RICH_TEXT_SCHEMA;
   // Anyone who edits OR reviews may VIEW content (a reviewer must preview a page + load its
   // content type/blocks before approving). Read/preview handlers use this; writes stay editor.
   const viewerRoles = [...new Set([...editorRoles, ...reviewerRoles])];
@@ -1322,7 +1676,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
      * Blocks are edited via addBlock/updateBlock; SEO via updatePageSeo; this covers the
      * page record itself, which was previously only settable at createPage. A slug/locale
      * change re-checks (slug, locale) uniqueness (excluding this page); `fields` is validated
-     * + sanitized against the content type's fieldsSchema, exactly like createPage. */
+     * + normalized against the content type's fieldsSchema, exactly like createPage. */
     updatePage: mutation(async (ctx, input: { pageId: string; title?: string; slug?: string; locale?: string; fields?: FieldValues }) => {
       const db = cdb(ctx);
       const rows = await db.find({ from: "cms_pages", where: { id: input.pageId }, limit: 1 });
@@ -1340,8 +1694,9 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       if (input.fields !== undefined) {
         const ctRows = await db.find({ from: "cms_content_types", where: { id: page.typeId }, limit: 1 });
         const schema = ctRows[0]?.fieldsSchema as FieldDefinition[] | undefined;
-        validateFields(schema, input.fields, "page.fields", { requireRequired: false });
-        patch.fields = await sanitizeFields(schema, input.fields);
+        // Same whole-bag autosave as updateBlock — tolerate a stored legacy value.
+        validateFields(schema, input.fields, "page.fields", { requireRequired: false, legacyBaseline: asObj(page.fields) as FieldValues });
+        patch.fields = normalizeFields(schema, input.fields, rtSchema);
       }
       const updated = await db.update("cms_pages", input.pageId, patch);
       if (!updated) throw notFound("page");
@@ -1365,7 +1720,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       const ct = ctRows[0];
       if (!ct) throw new BadRequest("unknown content type");
       validateFields(ct.fieldsSchema as FieldDefinition[] | undefined, input.fields ?? {}, "page.fields", { requireRequired: false });
-      const cleanPageFields = await sanitizeFields(ct.fieldsSchema as FieldDefinition[] | undefined, input.fields ?? {});
+      const cleanPageFields = normalizeFields(ct.fieldsSchema as FieldDefinition[] | undefined, input.fields ?? {}, rtSchema);
       const locale = input.locale ?? defaultLocale;
       await assertSlugFree(db, input.slug, locale);
 
@@ -1389,7 +1744,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
           if (!bts[0]) throw new BadRequest(`unknown block type '${d.blockTypeSlug}'`);
           await assertRegionAllows(db, page, d.region, d.blockTypeSlug);
           validateFields(bts[0].fieldsSchema as FieldDefinition[] | undefined, d.fields ?? {}, "", { requireRequired: false });
-          const cleanDefault = await sanitizeFields(bts[0].fieldsSchema as FieldDefinition[] | undefined, d.fields ?? {});
+          const cleanDefault = normalizeFields(bts[0].fieldsSchema as FieldDefinition[] | undefined, d.fields ?? {}, rtSchema);
           const block = await db.insert("cms_blocks", { typeId: bts[0].id, fields: cleanDefault });
           const position = await nextPosition(db, String(page.id), d.region);
           await db.insert("cms_page_blocks", { pageId: page.id, blockId: block.id, region: d.region, position });
@@ -1503,7 +1858,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       const bt = await loadBlockTypeBySlug(db, input.blockTypeSlug);
       await assertRegionAllows(db, page, input.region, input.blockTypeSlug);
       validateFields(bt.fieldsSchema as FieldDefinition[] | undefined, input.fields ?? {}, "", { requireRequired: false });
-      const cleanFields = await sanitizeFields(bt.fieldsSchema as FieldDefinition[] | undefined, input.fields ?? {});
+      const cleanFields = normalizeFields(bt.fieldsSchema as FieldDefinition[] | undefined, input.fields ?? {}, rtSchema);
 
       const block = await db.insert("cms_blocks", {
         typeId: bt.id,
@@ -1550,8 +1905,12 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       await assertRegionAllows(db, page, input.region, slug);
       let cleanOverrides: Record<string, unknown> | null = input.overrides ?? null;
       if (input.overrides !== undefined) {
-        validateFields(bts[0]?.fieldsSchema as FieldDefinition[] | undefined, { ...asObj(block.fields), ...input.overrides }, "", { requireRequired: false });
-        cleanOverrides = await sanitizeFields(bts[0]?.fieldsSchema as FieldDefinition[] | undefined, input.overrides);
+        // The merged bag includes the block's OWN stored fields, which may predate Portable
+        // Text. Tolerate a legacy string there so an untouched legacy block can still be
+        // placed; the overrides themselves are new input and stay strict below.
+        validateFields(bts[0]?.fieldsSchema as FieldDefinition[] | undefined, { ...asObj(block.fields), ...input.overrides }, "", { requireRequired: false, legacyBaseline: asObj(block.fields) as FieldValues });
+        validateFields(bts[0]?.fieldsSchema as FieldDefinition[] | undefined, input.overrides, "", { requireRequired: false });
+        cleanOverrides = normalizeFields(bts[0]?.fieldsSchema as FieldDefinition[] | undefined, input.overrides, rtSchema);
       }
       const position = input.position ?? (await nextPosition(db, input.pageId, input.region));
       return db.insert("cms_page_blocks", {
@@ -1595,8 +1954,11 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       let cleanFields = input.fields;
       if (input.fields !== undefined) {
         const bt = await db.find({ from: "cms_block_types", where: { id: block.typeId }, limit: 1 });
-        validateFields(bt[0]?.fieldsSchema as FieldDefinition[] | undefined, input.fields, "", { requireRequired: false });
-        cleanFields = await sanitizeFields(bt[0]?.fieldsSchema as FieldDefinition[] | undefined, input.fields);
+        // The editor autosaves the WHOLE fields bag ~800ms after any edit, so a legacy
+        // richtext value the author never touched rides along with an unrelated change.
+        // Rejecting it would 400 on every keystroke and make the block unsaveable.
+        validateFields(bt[0]?.fieldsSchema as FieldDefinition[] | undefined, input.fields, "", { requireRequired: false, legacyBaseline: asObj(block.fields) as FieldValues });
+        cleanFields = normalizeFields(bt[0]?.fieldsSchema as FieldDefinition[] | undefined, input.fields, rtSchema);
       }
       const patch: Record<string, unknown> = { updatedAt: nowStamp() };
       if (cleanFields !== undefined) patch.fields = cleanFields;
@@ -1822,6 +2184,66 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     }),
 
     // ---- public content API ----
+    /** Mint a signed, self-expiring preview link for one page. Editor-gated to MINT —
+     * anyone holding the resulting link can redeem it, which is the point. */
+    signPagePreview: query(async (ctx, input: { pageId: string; expiresIn?: number }) => {
+      const secret = previewSecret(ctx.env);
+      if (!secret) throw previewUnconfigured(); // fail closed — never mint a forgeable link
+      // The redeem route always reaches a Durable Object (callPrivileged -> PRAMEN.get); it
+      // has no notion of `x-pramen-store`. Minting on the D1 store therefore produces a
+      // link that 404s forever while the editor reports success — refuse instead of
+      // handing out a token that cannot work.
+      if (ctx.store === "d1") throw new PramenError("page preview is not available on the D1 store (redemption requires the Durable Object)", 503, "unavailable");
+      const db = cdb(ctx);
+      // Read the page through the ACL first: minting a link is granting access to it, so a
+      // caller who cannot read the page must not be able to mint a link that can.
+      const rows = await db.find({ from: "cms_pages", where: { id: input.pageId }, limit: 1 });
+      const page = rows[0];
+      if (!page) throw notFound("page");
+
+      const ttl = Math.max(60, Math.min(input.expiresIn ?? previewTtl, 30 * 24 * 3600));
+      const exp = Math.floor(Date.now() / 1000) + ttl;
+      // Server-resolved, never caller-supplied — so the tenant inside the signature
+      // cannot be steered by whoever asks for the link.
+      const tenant = ctx.tenant;
+      const token = await signToken<PreviewToken>({ t: tenant, p: String(page.id), exp }, secret);
+      // RELATIVE, like signed file urls — the client resolves it against the CMS origin.
+      return { url: `${PREVIEW_PATH}?token=${encodeURIComponent(token)}`, token, expiresAt: exp * 1000 };
+    }, {
+      ...editor,
+      input: (raw): { pageId: string; expiresIn?: number } => {
+        const o = asObj(raw);
+        // Unvalidated, a non-string pageId reached the query compiler and surfaced as a
+        // 500, and a string expiresIn made exp NaN — minting a link that always 403s,
+        // with nothing anywhere to explain why.
+        if (typeof o.pageId !== "string" || o.pageId === "") throw new BadRequest("pageId is required");
+        if (o.expiresIn !== undefined && (typeof o.expiresIn !== "number" || !Number.isFinite(o.expiresIn))) {
+          throw new BadRequest("expiresIn must be a number of seconds");
+        }
+        return o as never;
+      },
+    }),
+
+    /** Assemble a page's LIVE draft by id. Not the redemption endpoint — that is the public
+     * `GET /cms/preview` route, which verifies the token and then calls this privileged.
+     * Role-gated so it is not an anonymous back door on the /rpc surface. */
+    getPagePreview: query(async (ctx, input: { pageId: string }) => {
+      const db = cdb(ctx);
+      const rows = await db.find({ from: "cms_pages", where: { id: input.pageId }, limit: 1 });
+      const page = rows[0];
+      if (!page) throw notFound("page");
+      const assembled = await assembleLive(db, page);
+      assembled.isPreview = true;
+      return assembled;
+    }, {
+      ...viewer,
+      input: (raw): { pageId: string } => {
+        const o = asObj(raw);
+        if (typeof o.pageId !== "string" || o.pageId === "") throw new BadRequest("pageId is required");
+        return { pageId: o.pageId };
+      },
+    }),
+
     /** Fetch an assembled page by slug (+ locale). Anonymous callers get the published
      * snapshot (the ACL scopes `cms_pages` reads to `status = published`). Editors may pass
      * `preview: true` to assemble the current DRAFT live from the tables. `locale` defaults
@@ -1941,7 +2363,11 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       const page = rows[0];
       if (!page) throw notFound("page"); // also the anonymous-vs-draft case: ACL yields no row
 
-      if (input.preview) return assembleLive(db, page);
+      if (input.preview) {
+        const live = await assembleLive(db, page);
+        live.isPreview = true; // same flag the token route sets, so a banner works either way
+        return live;
+      }
       // Public path: serve the page's current published revision snapshot (selected by the
       // page's `currentRevisionId` pointer — deterministic, unlike ordering by a
       // second-precision timestamp). We do NOT assemble live here: anonymous has no read
@@ -2052,8 +2478,9 @@ export function cmsPolicies(opts: CmsPolicyOpts = {}): { public: Policy[]; edito
 // list + form UI, without being bent into a cms_pages row.
 //
 // Column-mapped: each scalar FieldDefinition.name is a real column on the entity; a
-// repeater/group field maps to a t.json() column (the object↔JSON codec at the Db
-// chokepoint stores it transparently). The generic handlers dispatch through a registry
+// repeater/group/richtext field maps to a t.json() column (the object↔JSON codec at the
+// Db chokepoint stores it transparently). `richtext` belongs with the latter group — its
+// value is a document tree, and a TEXT column would bind the object raw and be rejected. The generic handlers dispatch through a registry
 // keyed by `slug`, so `collection`/`entity` can never be spoofed to reach an arbitrary
 // table, and writes are whitelisted to declared fields — the client can't set columns the
 // collection didn't declare (e.g. a `roles` or `passwordHash` column on the entity).
@@ -2148,6 +2575,7 @@ function collectionMeta(c: CollectionDef): CollectionMeta {
  * `collectionPolicies` scopes them too). The `collection` param is resolved through the
  * registry — an unknown slug is a 400, never a raw table reference. */
 export function createCollectionHandlers(collections: readonly CollectionDef[], opts: CmsHandlerOpts = {}) {
+  const collectionRtSchema = opts.richTextSchema ?? DEFAULT_RICH_TEXT_SCHEMA;
   const editor = { auth: opts.editorRoles ?? ["editor", "admin"] };
   const bySlug = new Map(collections.map((c) => [c.slug, c] as const));
   const metas = collections.map(collectionMeta);
@@ -2160,12 +2588,12 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
   // Validate against the field schema, sanitize richtext, then PROJECT to declared field
   // names only — the write whitelist. `requireRequired` is off for updates (partial patch);
   // on for create. Nothing outside `c.fields` can reach the entity.
-  const toColumns = (c: CollectionDef, values: unknown, requireRequired: boolean): Record<string, unknown> => {
+  const toColumns = (c: CollectionDef, values: unknown, requireRequired: boolean, legacyBaseline?: FieldValues): Record<string, unknown> => {
     const obj = asObj(values);
-    validateFields([...c.fields], obj, "", { requireRequired });
-    const sanitized = sanitizeFields([...c.fields], obj);
+    validateFields([...c.fields], obj, "", { requireRequired, legacyBaseline });
+    const normalized = normalizeFields([...c.fields], obj, collectionRtSchema);
     const out: Record<string, unknown> = {};
-    for (const f of c.fields) if (f.name in sanitized) out[f.name] = sanitized[f.name];
+    for (const f of c.fields) if (f.name in normalized) out[f.name] = normalized[f.name];
     return out;
   };
   const idInput = (raw: unknown): string => {
@@ -2199,7 +2627,20 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
 
     collectionUpdate: mutation(async (ctx, input: { collection: string; id: string; values: Record<string, unknown> }) => {
       const c = def(input.collection);
-      const updated = await cdb(ctx).update(c.entity, input.id, toColumns(c, input.values, false));
+      const db = cdb(ctx);
+      // Read the current row first: the editor autosaves the WHOLE values bag, so a
+      // pre-Portable-Text richtext value rides along with an unrelated edit. It is
+      // tolerated only when byte-identical to what is stored (see `legacyBaseline`).
+      // A policy may grant `update` without `read` on the entity — that worked before this
+      // pre-read existed, so it must not start 403ing. No baseline simply means a legacy
+      // string is rejected, which is the strict default.
+      let current: FieldValues | undefined;
+      try {
+        current = (await db.find({ from: c.entity, where: { [idOf(c)]: input.id }, limit: 1 }))[0] as FieldValues | undefined;
+      } catch {
+        current = undefined;
+      }
+      const updated = await db.update(c.entity, input.id, toColumns(c, input.values, false, current));
       if (updated === undefined) throw notFound(c.label);
       return updated;
     }, editor),
@@ -2322,11 +2763,38 @@ interface CmsRoute {
   handler: (request: Request, env: EnvBag, ctx: RouteCtx) => Promise<Response>;
 }
 
-/** Turnkey public routes for `GET /sitemap.xml` and `GET /robots.txt`. Spread into
+const previewJson = (status: number, code: string, message: string): Response =>
+  // `{ ok, error, code }` — the shape every other pramen error uses (runtime/errors.ts).
+  new Response(JSON.stringify({ ok: false, error: message, code }), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "private, no-store" },
+  });
+/** One response for a missing, malformed, forged, or expired token — and for a page that
+ * is not there. Distinguishing them would let a caller probe for valid page ids. */
+const previewDenied = (status = 403, message = "invalid or expired preview link"): Response =>
+  previewJson(status, status === 404 ? "not_found" : "forbidden", message);
+const preview503 = (): Response =>
+  previewJson(503, "unavailable", "page preview is not configured (set a strong PREVIEW_SECRET, FILES_SECRET or AUTH_SECRET)");
+
+/** Turnkey public routes for `GET /sitemap.xml`, `GET /cms/preview` and `GET /robots.txt`. Spread into
  * `app.routes`. The sitemap pulls published pages via `callPrivileged(listPublishedPages)`.
  * `origin` defaults to the request's origin; `pageUrl` customizes the URL shape. */
-export function cmsRoutes(opts: { origin?: string; tenant?: string; pageUrl?: SitemapOpts["pageUrl"]; disallow?: string[] } = {}): CmsRoute[] {
+export function cmsRoutes(
+  opts: {
+    origin?: string;
+    tenant?: string;
+    pageUrl?: SitemapOpts["pageUrl"];
+    disallow?: string[];
+    /** The SAME options you passed to `createCmsHandlers`. The route derives its identity
+     * from them with `viewerRolesOf`, so the two cannot drift. (`viewerRoles` overrides it
+     * outright if you need to.) */
+    handlers?: CmsHandlerOpts;
+    /** Explicit override for the roles the preview route presents to the DO. */
+    viewerRoles?: readonly string[];
+  } = {},
+): CmsRoute[] {
   const tenant = opts.tenant ?? "main";
+  const previewRoles = opts.viewerRoles ?? viewerRolesOf(opts.handlers);
   return [
     {
       method: "GET",
@@ -2337,6 +2805,49 @@ export function cmsRoutes(opts: { origin?: string; tenant?: string; pageUrl?: Si
         const body = (await res.json().catch(() => ({}))) as { result?: SitemapEntry[] };
         const xml = sitemapXml(body.result ?? [], { origin, pageUrl: opts.pageUrl });
         return new Response(xml, { headers: { "content-type": "application/xml; charset=utf-8" } });
+      },
+    },
+    {
+      // Redeem a preview link. PUBLIC and pre-auth by design — the signature IS the
+      // authorization, so a reviewer with no account can open it. The token is verified
+      // BEFORE any read, and it names one page, so a valid signature never widens into
+      // "see all drafts". Only then do we reach the DO, privileged.
+      method: "GET",
+      path: PREVIEW_PATH,
+      handler: async (request, env, ctx) => {
+        const secret = previewSecret(env);
+        // Fail closed: with no usable secret every signature would verify against a weak
+        // key, so refuse to verify at all rather than accept forged links.
+        if (!secret) return preview503();
+        const raw = new URL(request.url).searchParams.get("token");
+        if (!raw) return previewDenied();
+        const payload = await verifyToken<PreviewToken>(raw, secret);
+        if (!payload || typeof payload.p !== "string" || typeof payload.t !== "string") return previewDenied();
+
+        // The synthetic identity has to satisfy BOTH gates the DO applies: the handler's
+        // `auth` (viewerRoles) and the row ACL (whatever role the app granted cmsPolicies
+        // to). Hardcoding ["admin"] satisfied neither under the wiring this package's own
+        // README documents — `role("anonymous", …)` + `role("editor", …)`, no admin role
+        // at all — so every preview link 404'd. The e2e only passed because example/app.ts
+        // happens to define an admin role. Send the configured viewer roles instead.
+        const res = await ctx.callPrivileged({
+          name: "getPagePreview",
+          input: { pageId: payload.p },
+          tenant: payload.t, // from the SIGNED payload, never from the query string
+          roles: [...previewRoles],
+        });
+        const body = (await res.json().catch(() => ({}))) as { ok?: boolean; result?: JsonValue; error?: string; code?: string };
+        if (body.ok !== true) {
+          // The client-visible response stays uniform (probe resistance), but LOG the real
+          // reason: a role misconfiguration previously surfaced as an indistinguishable
+          // "page not found" that could only be diagnosed by reading source.
+          console.error(`pramen/cms: preview redemption failed (${res.status} ${body.code ?? "?"}: ${body.error ?? "no detail"})`);
+          return previewDenied(404, "page not found");
+        }
+        // Never cache a draft, anywhere.
+        return new Response(JSON.stringify(body.result), {
+          headers: { "content-type": "application/json; charset=utf-8", "cache-control": "private, no-store" },
+        });
       },
     },
     {

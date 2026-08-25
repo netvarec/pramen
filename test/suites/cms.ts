@@ -4,7 +4,15 @@
 // the public content API (anonymous sees only the published snapshot), preview gating,
 // reusable-block overrides, and scheduled publish (an outbox task).
 
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { assert, http, token } from "../lib";
+
+/** A minimal rich-text document. `richtext` is a document TREE, not an HTML string — the
+ * server rejects a string outright, so every fixture below builds one of these. */
+const rt = (text: string) => ({ type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text }] }] });
 
 /** Drain the tenant's outbox now (the DO also self-drains via an alarm; this makes the
  * scheduled-publish assertions deterministic). */
@@ -115,7 +123,7 @@ export async function runCms(base: string): Promise<void> {
   await call("removeBlock", { pageBlockId: draftBlock.body.result.placement.id }, admin);
 
   // --- region allow-list: the hero region only permits `hero`, so a rich_text is rejected ---
-  const wrongRegion = await call("addBlock", { pageId, blockTypeSlug: "rich_text", region: "hero", fields: { body: "x" } }, admin);
+  const wrongRegion = await call("addBlock", { pageId, blockTypeSlug: "rich_text", region: "hero", fields: { body: rt("x") } }, admin);
   assert(wrongRegion.status === 400 && wrongRegion.body.ok === false, "cms: a block type not allowed in a region is rejected (400)");
 
   // --- an EMPTY allowedTypes region means "any type" (matches the editor), not "none" ---
@@ -127,8 +135,8 @@ export async function runCms(base: string): Promise<void> {
   // --- place typed blocks in regions ---
   const heroBlock = await call("addBlock", { pageId, blockTypeSlug: "hero", region: "hero", fields: { heading: "About Us", subtitle: "Who we are" } }, admin);
   assert(heroBlock.body.ok, "cms: addBlock(hero) ok");
-  const rich1 = await call("addBlock", { pageId, blockTypeSlug: "rich_text", region: "content", fields: { body: "<p>Our story.</p>" } }, admin);
-  const rich2 = await call("addBlock", { pageId, blockTypeSlug: "rich_text", region: "content", fields: { body: "<p>Our mission.</p>" } }, admin);
+  const rich1 = await call("addBlock", { pageId, blockTypeSlug: "rich_text", region: "content", fields: { body: rt("Our story.") } }, admin);
+  const rich2 = await call("addBlock", { pageId, blockTypeSlug: "rich_text", region: "content", fields: { body: rt("Our mission.") } }, admin);
   assert(rich1.body.ok && rich2.body.ok, "cms: two rich_text blocks placed in content");
 
   // --- preview: an editor assembles the current draft live ---
@@ -138,6 +146,70 @@ export async function runCms(base: string): Promise<void> {
   // preview is editor-only
   const anonPreview = await call("getPage", { slug, preview: true });
   assert(anonPreview.status === 403, "cms: anonymous preview is forbidden (403)");
+
+  // --- signed preview links: a capability, not a role ---
+  // The point of preview is the stakeholder WITHOUT an account. An editor mints a signed,
+  // self-expiring link naming one page; redeeming it needs no session at all.
+  const pageRow = (await call("listPages", {}, admin)).body.result.find((p: { slug: string }) => p.slug === slug) as { id: string };
+  const minted = await call("signPagePreview", { pageId: pageRow.id }, admin);
+  assert(minted.body.ok && typeof minted.body.result.token === "string", "cms: signPagePreview mints a token for an editor");
+  assert(String(minted.body.result.url).startsWith("/cms/preview?token="), "cms: the minted preview url is relative, like a signed file url");
+  const previewToken = minted.body.result.token as string;
+
+  // minting is editor-gated even though redeeming is not
+  const anonMint = await call("signPagePreview", { pageId: pageRow.id });
+  assert(anonMint.status === 403, "cms: minting a preview link is editor-gated (403)");
+
+  // redeem with NO auth header at all
+  const redeemed = await fetch(`${base}${minted.body.result.url}`);
+  const redeemedBody = await redeemed.json() as { regions?: Record<string, unknown[]>; isPreview?: boolean };
+  assert(redeemed.status === 200, "cms: a signed preview link is redeemable with no session");
+  assert(redeemedBody.isPreview === true, "cms: a redeemed preview is flagged isPreview");
+  assert((redeemedBody.regions?.content ?? []).length === 2, "cms: the redeemed preview carries the LIVE draft blocks");
+  assert(redeemed.headers.get("cache-control") === "private, no-store", "cms: a preview response is never cached");
+
+  // The route must work under the roles an app ACTUALLY configures. The e2e app defines
+  // an `admin` role, which masked a bug where the route hardcoded roles:["admin"] — under
+  // the README's own wiring (anonymous + editor, no admin) every link 404'd. Redeeming as
+  // a plain editor exercises the configured-viewer-roles path.
+  const plainEditor = await token("cms-editor-only", ["editor"]);
+  const editorMint = await call("signPagePreview", { pageId: pageRow.id }, plainEditor);
+  assert(editorMint.body.ok, "cms: a plain editor (no admin role) can mint a preview link");
+  const editorRedeem = await fetch(`${base}${editorMint.body.result.url}`);
+  assert(editorRedeem.status === 200, "cms: a link minted by a plain editor redeems (the route presents viewer roles, not admin)");
+
+  // Minting on the D1 store must REFUSE: redemption always reaches the Durable Object, so
+  // a link minted there could never be redeemed while the editor reported success.
+  const d1Mint = await fetch(`${base}/rpc/signPagePreview`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-pramen-tenant": TENANT, "x-pramen-store": "d1", authorization: `Bearer ${admin}` },
+    body: JSON.stringify({ pageId: pageRow.id }),
+  });
+  assert(d1Mint.status === 503, `cms: signPagePreview refuses on the D1 store (got ${d1Mint.status})`);
+
+  // Bad input is a 400, not a 500 or a link that can never be redeemed.
+  assert((await call("signPagePreview", { pageId: pageRow.id, expiresIn: "3600" }, admin)).status === 400, "cms: a non-numeric expiresIn is rejected");
+  assert((await call("signPagePreview", {}, admin)).status === 400, "cms: a missing pageId is rejected");
+
+  // Errors use pramen's standard { ok, error, code } shape.
+  const denied = await (await fetch(`${base}/cms/preview?token=nonsense`)).json() as { error?: string; code?: string };
+  assert(typeof denied.error === "string" && denied.code === "forbidden", "cms: a preview denial uses the standard error body shape");
+
+  // An editor's own preview is flagged the same way a token redemption is.
+  const editorPreview = await call("getPage", { slug, preview: true }, admin);
+  assert(editorPreview.body.result.isPreview === true, "cms: getPage(preview) sets isPreview like the token route does");
+
+  // a tampered token is refused — the signature covers the page id
+  const [tokData, tokSig] = previewToken.split(".");
+  const tampered = await fetch(`${base}/cms/preview?token=${encodeURIComponent(`${tokData}x.${tokSig}`)}`);
+  assert(tampered.status === 403, "cms: a tampered preview token is refused (403)");
+  const noToken = await fetch(`${base}/cms/preview`);
+  assert(noToken.status === 403, "cms: a preview request with no token is refused (403)");
+
+  // the /rpc back door stays shut: getPagePreview is role-gated, so knowing a page id
+  // is not enough — only the signed route can reach a draft anonymously.
+  const anonDirect = await call("getPagePreview", { pageId: pageRow.id });
+  assert(anonDirect.status === 403, "cms: getPagePreview over /rpc is role-gated (403)");
 
   // --- publish: snapshots the assembled page; the public API now serves it ---
   const published = await call("publishPage", { pageId }, admin);
@@ -162,19 +234,20 @@ export async function runCms(base: string): Promise<void> {
   assert(reordered.body.ok && reordered.body.result.count === 2, "cms: reorderRegion updates positions");
 
   // --- reusable block + per-placement override ---
-  const shared = await call("addBlock", { pageId, blockTypeSlug: "rich_text", region: "content", fields: { body: "<p>Shared CTA</p>" }, isReusable: true }, admin);
+  const shared = await call("addBlock", { pageId, blockTypeSlug: "rich_text", region: "content", fields: { body: rt("Shared CTA") }, isReusable: true }, admin);
   assert(shared.body.ok && shared.body.result.block.isReusable === true, "cms: a reusable block is created and placed");
 
   // Place the SAME block again with a per-placement override, then republish and confirm
   // the override merges over the block's base fields in the served snapshot.
   const reuseId = shared.body.result.block.id as string;
-  const placed = await call("placeBlock", { pageId, blockId: reuseId, region: "content", overrides: { body: "<p>Overridden CTA</p>" } }, admin);
+  const placed = await call("placeBlock", { pageId, blockId: reuseId, region: "content", overrides: { body: rt("Overridden CTA") } }, admin);
   assert(placed.body.ok, "cms: placeBlock reuses an existing block as a shared placement");
   await call("publishPage", { pageId }, admin);
   const pub2 = await call("getPage", { slug });
-  const content2 = pub2.body.result.regions.content as Array<{ is_shared: boolean; fields: { body: string } }>;
-  assert(content2.some((b) => b.fields.body === "<p>Shared CTA</p>"), "cms: the base reusable placement shows the block's own fields");
-  assert(content2.some((b) => b.is_shared && b.fields.body === "<p>Overridden CTA</p>"), "cms: a shared placement's overrides merge over the block's fields");
+  const content2 = pub2.body.result.regions.content as Array<{ is_shared: boolean; fields: { body: unknown } }>;
+  const bodyText = (b: { fields: { body: unknown } }) => JSON.stringify(b.fields.body ?? null);
+  assert(content2.some((b) => bodyText(b).includes("Shared CTA")), "cms: the base reusable placement shows the block's own fields");
+  assert(content2.some((b) => b.is_shared && bodyText(b).includes("Overridden CTA")), "cms: a shared placement's overrides merge over the block's fields");
 
   // --- media library: upload → attach to a block → resolved URL in the content API ---
   const imgType = await call("createBlockType", {
@@ -224,17 +297,53 @@ export async function runCms(base: string): Promise<void> {
   const evBlock = (gala.body.result.regions.content as Array<{ block_type: string; fields: { day?: string; startsAt?: string } }>).find((b) => b.block_type === "event");
   assert(evBlock?.fields.day === "2026-09-01" && evBlock?.fields.startsAt === "2026-09-01T19:30", "cms: date/datetime values round-trip through the content API");
 
-  // --- server-side richtext sanitization (the XSS boundary — a caller can bypass the editor) ---
+  // --- richtext is a structural allow-list on write (a caller can bypass the editor) ---
   const xssPage = await call("createPage", { typeId: ct.body.result.id, title: "XSS", slug: "xss" }, admin);
-  const dirty = '<p onclick="alert(1)">hi <strong>there</strong></p><script>alert(2)</script><a href="javascript:alert(3)">x</a><img src=x onerror="alert(4)">';
+
+  // A legacy HTML string is no longer a rich-text value at all — rejected, not scrubbed.
+  const asHtml = await call("addBlock", { pageId: xssPage.body.result.id, blockTypeSlug: "rich_text", region: "content", fields: { body: "<p>hi</p>" } }, admin);
+  assert(asHtml.status === 400 && asHtml.body.ok === false, "cms: an HTML string in a richtext field is rejected (400)");
+
+  // A hostile DOCUMENT is accepted and normalized: unknown node types and marks are
+  // dropped, a javascript: link loses its mark, and the legitimate markup survives.
+  const dirty = {
+    type: "doc",
+    content: [
+      { type: "paragraph", content: [
+        { type: "text", text: "hi " },
+        { type: "text", text: "there", marks: [{ type: "bold" }, { type: "onclick", attrs: { handler: "alert(1)" } }] },
+        { type: "text", text: "x", marks: [{ type: "link", attrs: { href: "javascript:alert(2)" } }] },
+      ] },
+      { type: "script", content: [{ type: "text", text: "alert(3)" }] },
+      { type: "image", attrs: { src: "x", onerror: "alert(4)" } },
+    ],
+  };
   const addDirty = await call("addBlock", { pageId: xssPage.body.result.id, blockTypeSlug: "rich_text", region: "content", fields: { body: dirty } }, admin);
-  assert(addDirty.body.ok, "cms: addBlock with a hostile richtext payload is accepted (then sanitized)");
+  assert(addDirty.body.ok, "cms: addBlock with a hostile richtext document is accepted (then normalized)");
   await call("publishPage", { pageId: xssPage.body.result.id }, admin);
   const xssGot = await call("getPage", { slug: "xss" });
-  const rtBody = (xssGot.body.result.regions.content as Array<{ block_type: string; fields: { body?: string } }>).find((b) => b.block_type === "rich_text")?.fields.body ?? "";
-  assert(!/<script/i.test(rtBody) && !/onerror\s*=/i.test(rtBody) && !/onclick\s*=/i.test(rtBody), "cms: richtext sanitized on write — <script> + inline event handlers stripped");
-  assert(!/javascript:/i.test(rtBody), "cms: richtext sanitized on write — javascript: hrefs stripped");
-  assert(/<strong>there<\/strong>/i.test(rtBody), "cms: richtext sanitization preserves allow-listed markup");
+  const rtBody = (xssGot.body.result.regions.content as Array<{ block_type: string; fields: { body?: unknown } }>).find((b) => b.block_type === "rich_text")?.fields.body;
+  const rtJson = JSON.stringify(rtBody ?? {});
+  assert(!/"script"|"image"/.test(rtJson), "cms: richtext normalized on write — unknown node types dropped");
+  assert(!/onclick|onerror|alert\(/.test(rtJson), "cms: richtext normalized on write — unknown marks + smuggled attrs dropped");
+  assert(!/javascript:/i.test(rtJson), "cms: richtext normalized on write — javascript: link mark dropped");
+  assert(/"bold"/.test(rtJson) && /"there"/.test(rtJson), "cms: richtext normalization preserves allow-listed marks and text");
+
+  // --- `pramen cms types`: codegen from the LIVE tenant's block types ---
+  // Block types are data (rows a webmaster adds with no deploy), so the only way to type
+  // them is to read them back out of a running instance. Run the real CLI against this one.
+  const genDir = mkdtempSync(join(tmpdir(), "pramen-cms-types-"));
+  const genPath = join(genDir, "cms.gen.ts");
+  const cli = Bun.spawnSync(
+    ["bun", "packages/cms/src/cli.ts", "types", "--url", base, "--tenant", TENANT, "--token", admin, "--out", genPath],
+    { cwd: join(import.meta.dir, "..", "..") },
+  );
+  assert(cli.exitCode === 0, `cms: \`pramen-cms types\` exits 0 (${cli.stderr.toString()})`);
+  const generated = readFileSync(genPath, "utf8");
+  assert(generated.includes("export interface RichTextFields"), "cms: codegen emits an interface per block-type slug");
+  assert(/"body"\??: RichText;/.test(generated), "cms: codegen maps a richtext field to the RichText type");
+  assert(generated.includes('"rich_text": RichTextFields;'), "cms: codegen emits the BlockFieldsBySlug registry");
+  rmSync(genDir, { recursive: true, force: true });
 
   // --- trash: soft delete hides a page everywhere, restore brings it back ---
   const trashPage = await call("createPage", { typeId: ct.body.result.id, title: "Doomed", slug: "doomed" }, admin);
@@ -341,7 +450,7 @@ export async function runCms(base: string): Promise<void> {
   const seoMedia = await call("createMedia", { ref: seoUp.body.result.ref }, admin);
   const seoPage = await call("createPage", { typeId: ct.body.result.id, title: "SEO Page", slug: "seo-page" }, admin);
   const seoId = seoPage.body.result.id as string;
-  await call("addBlock", { pageId: seoId, blockTypeSlug: "rich_text", region: "content", fields: { body: "<p>x</p>" } }, admin);
+  await call("addBlock", { pageId: seoId, blockTypeSlug: "rich_text", region: "content", fields: { body: rt("x") } }, admin);
   const seoSet = await call("updatePageSeo", { pageId: seoId, metaTitle: "My Meta Title", canonicalUrl: "https://example.com/seo", robots: "noindex", ogImage: seoMedia.body.result.id, structuredData: { "@type": "WebPage" } }, admin);
   assert(seoSet.body.ok, "cms: updatePageSeo sets SEO fields");
   await call("publishPage", { pageId: seoId }, admin);
@@ -362,7 +471,7 @@ export async function runCms(base: string): Promise<void> {
   const editorTok = await token("cms-editor", ["editor"]);
   const wfPage = await call("createPage", { typeId: ct.body.result.id, title: "Policy", slug: "policy" }, admin);
   const wfId = wfPage.body.result.id as string;
-  await call("addBlock", { pageId: wfId, blockTypeSlug: "rich_text", region: "content", fields: { body: "<p>Draft</p>" } }, admin);
+  await call("addBlock", { pageId: wfId, blockTypeSlug: "rich_text", region: "content", fields: { body: rt("Draft") } }, admin);
   // an editor can submit for review
   const submit = await call("submitForReview", { pageId: wfId, note: "please review" }, editorTok);
   assert(submit.body.ok && submit.body.result.page.status === "review", "cms: submitForReview moves a draft to review");
@@ -397,12 +506,12 @@ export async function runCms(base: string): Promise<void> {
   const reviewerTok = await token("cms-reviewer", ["reviewer"]);
   const revPage = await call("createPage", { typeId: ct.body.result.id, title: "Review Me", slug: "review-me" }, admin);
   const revPageId = revPage.body.result.id as string;
-  await call("addBlock", { pageId: revPageId, blockTypeSlug: "rich_text", region: "content", fields: { body: "<p>r</p>" } }, admin);
+  await call("addBlock", { pageId: revPageId, blockTypeSlug: "rich_text", region: "content", fields: { body: rt("r") } }, admin);
   await call("submitForReview", { pageId: revPageId }, admin);
   const revPreview = await call("getPage", { slug: "review-me", preview: true }, reviewerTok);
   assert(revPreview.body.ok && (revPreview.body.result.regions.content as unknown[]).length === 1, "cms: a reviewer can preview a draft page before approving");
   assert((await call("getContentType", { id: ct.body.result.id }, reviewerTok)).body.ok, "cms: a reviewer can load the content type");
-  const revEdit = await call("addBlock", { pageId: revPageId, blockTypeSlug: "rich_text", region: "content", fields: { body: "<p>no</p>" } }, reviewerTok);
+  const revEdit = await call("addBlock", { pageId: revPageId, blockTypeSlug: "rich_text", region: "content", fields: { body: rt("no") } }, reviewerTok);
   assert(revEdit.status === 403, "cms: a reviewer cannot edit (writes stay editor-gated, 403)");
   const revApprove = await call("approve", { pageId: revPageId }, reviewerTok);
   assert(revApprove.body.ok && revApprove.body.result.page.status === "published", "cms: a reviewer can approve");
@@ -418,14 +527,14 @@ export async function runCms(base: string): Promise<void> {
   assert(dupe.status === 400 && dupe.body.ok === false, "cms: a duplicate (slug, locale) is rejected (400)");
   const trans = await call("listTranslations", { pageId: enId }, admin);
   assert(Array.isArray(trans.body.result) && trans.body.result.length === 2, "cms: listTranslations returns all locales of the group");
-  await call("addBlock", { pageId: enId, blockTypeSlug: "rich_text", region: "content", fields: { body: "<p>EN</p>" } }, admin);
-  await call("addBlock", { pageId: cs.body.result.id, blockTypeSlug: "rich_text", region: "content", fields: { body: "<p>CS</p>" } }, admin);
+  await call("addBlock", { pageId: enId, blockTypeSlug: "rich_text", region: "content", fields: { body: rt("EN") } }, admin);
+  await call("addBlock", { pageId: cs.body.result.id, blockTypeSlug: "rich_text", region: "content", fields: { body: rt("CS") } }, admin);
   await call("publishPage", { pageId: enId }, admin);
   await call("publishPage", { pageId: cs.body.result.id }, admin);
   const getEn = await call("getPage", { slug: "contact", locale: "en" });
-  assert((getEn.body.result.regions.content as Array<{ fields: { body: string } }>)[0].fields.body === "<p>EN</p>", "cms: getPage(locale=en) returns the English page");
+  assert(JSON.stringify((getEn.body.result.regions.content as Array<{ fields: { body: unknown } }>)[0].fields.body).includes("EN"), "cms: getPage(locale=en) returns the English page");
   const getCs = await call("getPage", { slug: "contact", locale: "cs" });
-  assert((getCs.body.result.regions.content as Array<{ fields: { body: string } }>)[0].fields.body === "<p>CS</p>", "cms: getPage(locale=cs) returns the Czech page");
+  assert(JSON.stringify((getCs.body.result.regions.content as Array<{ fields: { body: unknown } }>)[0].fields.body).includes("CS"), "cms: getPage(locale=cs) returns the Czech page");
   assert((getEn.body.result.page.translations as Array<{ locale: string; slug: string }>).some((t) => t.locale === "cs" && t.slug === "contact"), "cms: the content API lists sibling translations (hreflang), computed live");
   const locales = await call("listLocales", {}, admin);
   assert((locales.body.result as string[]).includes("en") && (locales.body.result as string[]).includes("cs"), "cms: listLocales returns the distinct locales");
@@ -448,7 +557,7 @@ export async function runCms(base: string): Promise<void> {
     slug: "showcase",
     regions: [{ name: "hero", allowedTypes: ["hero"] }],
     // rich_text isn't allowed in the hero region → must be skipped, not scaffolded.
-    defaultBlocks: [{ region: "hero", blockTypeSlug: "rich_text", fields: { body: "x" } }],
+    defaultBlocks: [{ region: "hero", blockTypeSlug: "rich_text", fields: { body: rt("x") } }],
   }, admin);
   const showcasePage = await call("createPage", { typeId: showcaseCt.body.result.id, title: "Showcase", slug: "showcase-1" }, admin);
   assert(showcasePage.body.ok, "cms: createPage succeeds despite an invalid default block");
@@ -462,7 +571,7 @@ export async function runCms(base: string): Promise<void> {
   // --- scheduled publish, end-to-end via a drain (intent-validated outbox task) ---
   const launch = await call("createPage", { typeId: ct.body.result.id, title: "Launch", slug: "launch" }, admin);
   const launchId = launch.body.result.id as string;
-  await call("addBlock", { pageId: launchId, blockTypeSlug: "rich_text", region: "content", fields: { body: "<p>Launch!</p>" } }, admin);
+  await call("addBlock", { pageId: launchId, blockTypeSlug: "rich_text", region: "content", fields: { body: rt("Launch!") } }, admin);
   await call("schedulePage", { pageId: launchId, publishAt: Date.now() }, admin);
   const beforeDrain = await call("getPage", { slug: "launch" });
   assert(beforeDrain.status === 404, "cms: a scheduled page is not public until the task drains");
@@ -522,6 +631,17 @@ export async function runCms(base: string): Promise<void> {
 
   const gotLecture = await call("collectionGet", { collection: "lectures", id: lecRowId }, admin);
   assert(gotLecture.body.ok && gotLecture.body.result.title === "Reactive Backends", "cms: collectionGet returns the row by id");
+
+  // A `richtext` collection field maps to a t.json() column. Writing a document into a
+  // TEXT column bound the object raw and DO SQLite rejected the parameter — the whole
+  // path was untested because every fixture set only scalar fields.
+  const richLecture = await call("collectionCreate", {
+    collection: "lectures",
+    values: { title: "With prose", speaker: "S", date: "2026-01-01", abstract: rt("An abstract with real prose.") },
+  }, admin);
+  assert(richLecture.body.ok, `cms: a collection row with a richtext field saves (${richLecture.body.error ?? ""})`);
+  const richBack = await call("collectionGet", { collection: "lectures", id: richLecture.body.result.id }, admin);
+  assert(JSON.stringify(richBack.body.result?.abstract ?? {}).includes("real prose"), "cms: the richtext document round-trips through the collection column");
 
   const listed = await call("collectionList", { collection: "lectures" }, admin);
   assert(listed.body.ok && Array.isArray(listed.body.result) && listed.body.result.length >= 2, "cms: collectionList returns the rows");

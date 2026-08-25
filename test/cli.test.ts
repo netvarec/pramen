@@ -36,6 +36,12 @@ describe("pramen cli", () => {
     expect(tok.split(".").length).toBe(3);
   });
 
+  test("the runtime CLI carries no CMS command", () => {
+    // @pramen/cms is optional, so its codegen lives in its own `pramen-cms` bin.
+    const { out } = run("help");
+    expect(out).not.toContain("cms");
+  });
+
   test("unknown command exits non-zero", () => {
     const { code } = run("frobnicate");
     expect(code).not.toBe(0);
@@ -74,5 +80,49 @@ describe("pramen cli", () => {
       } catch {}
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("pramen-cms cli", () => {
+  const runCms = (...args: string[]) => {
+    const p = Bun.spawnSync(["bun", "packages/cms/src/cli.ts", ...args], { cwd: ROOT });
+    return { out: p.stdout.toString(), err: p.stderr.toString(), code: p.exitCode };
+  };
+
+  test("help describes the types command", () => {
+    const { out } = runCms("help");
+    expect(out).toContain("Usage: pramen-cms <command>");
+    expect(out).toContain("types");
+  });
+
+  test("types fails clearly when it cannot reach an instance", () => {
+    // Port 1 is never a pramen instance — the point is a CLI error naming the bin,
+    // not an unhandled fetch rejection with a stack trace.
+    const { err, code } = runCms("types", "--url", "http://127.0.0.1:1");
+    expect(code).not.toBe(0);
+    expect(err).toContain("pramen-cms: types");
+  });
+
+  test("unknown command exits non-zero", () => {
+    expect(runCms("frobnicate").code).not.toBe(0);
+  });
+
+  test("--flag=value is accepted, and an unknown flag is rejected", () => {
+    // `--out=path` matched nothing, so the module printed to stdout and exited 0 — a green
+    // regenerate-and-diff CI with no file written. A misspelled flag did the same.
+    const eq = runCms("types", "--url=http://127.0.0.1:1");
+    expect(eq.code).not.toBe(0);
+    expect(eq.err).toContain("cannot reach http://127.0.0.1:1"); // the =value form was read
+    const unknown = runCms("types", "--outt", "/tmp/x");
+    expect(unknown.code).not.toBe(0);
+    expect(unknown.err).toContain("unknown flag --outt");
+  });
+
+  test("a flag with no value is an error, not a silent default", () => {
+    // `--out` with an empty $OUT used to print to stdout and exit 0; `--tenant --out x`
+    // used to set tenant to "--out".
+    const { err, code } = runCms("types", "--out");
+    expect(code).not.toBe(0);
+    expect(err).toContain("--out needs a value");
   });
 });
