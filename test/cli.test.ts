@@ -106,4 +106,12 @@ describe("pramen-cms cli", () => {
   test("unknown command exits non-zero", () => {
     expect(runCms("frobnicate").code).not.toBe(0);
   });
+
+  test("a flag with no value is an error, not a silent default", () => {
+    // `--out` with an empty $OUT used to print to stdout and exit 0; `--tenant --out x`
+    // used to set tenant to "--out".
+    const { err, code } = runCms("types", "--out");
+    expect(code).not.toBe(0);
+    expect(err).toContain("--out needs a value");
+  });
 });

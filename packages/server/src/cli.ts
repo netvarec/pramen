@@ -25,10 +25,7 @@ import { diffSchemaFingerprint, schemaFingerprint, type SchemaFingerprint } from
 import { entitiesInPartition, partitionsOf, type SchemaDef } from "./sdk/schema";
 import { signDevToken } from "./runtime/dev-token";
 
-/** Mint an HS256 JWT — mirrors what a real auth service would issue, for local
- * dev/testing (`pramen token`, and the default token for `schema status`). Signs
- * with AUTH_SECRET when set, else the dev secret from the scaffolded oblaka.ts. */
-/** The dev JWT claims `pramen token` mints. */
+/** The dev JWT claims `pramen token` mints. See `runtime/dev-token.ts` for the signer. */
 type TokenClaims = { sub: string; roles: string[]; tenants?: string[] };
 
 const sign = (payload: Record<string, unknown>): Promise<string> => signDevToken(payload);

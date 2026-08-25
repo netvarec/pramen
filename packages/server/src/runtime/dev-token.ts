@@ -21,7 +21,11 @@ const strToB64url = (s: string): string => bytesToB64url(new TextEncoder().encod
 
 /** Sign a dev JWT (1h). Secret: the `secret` argument, else `AUTH_SECRET`, else DEV_SECRET. */
 export async function signDevToken(payload: Record<string, unknown>, secret?: string): Promise<string> {
-  const key = secret ?? (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.AUTH_SECRET ?? DEV_SECRET;
+  // `||`, not `??`: an AUTH_SECRET set to the empty string previously fell through to
+  // DEV_SECRET, and signing with an empty HMAC key instead would produce tokens the server
+  // rejects with no useful message.
+  const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env;
+  const key = secret || env?.AUTH_SECRET || DEV_SECRET;
   const now = Math.floor(Date.now() / 1000);
   const header = strToB64url(JSON.stringify({ alg: "HS256", typ: "JWT" }));
   const body = strToB64url(JSON.stringify({ iat: now, exp: now + 3600, ...payload }));

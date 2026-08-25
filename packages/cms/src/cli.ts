@@ -20,7 +20,12 @@ const argv = process.argv.slice(2);
 
 function flag(name: string): string | undefined {
   const i = argv.indexOf(`--${name}`);
-  return i >= 0 ? argv[i + 1] : undefined;
+  if (i < 0) return undefined;
+  const v = argv[i + 1];
+  // `--out` with an empty $OUT silently printed to stdout instead of erroring, and
+  // `--tenant --out x` set tenant to "--out".
+  if (v === undefined || v.startsWith("--")) fail(`--${name} needs a value`);
+  return v;
 }
 function fail(msg: string): never {
   console.error(`pramen-cms: ${msg}`);
@@ -47,8 +52,11 @@ interface BlockTypeRow {
 }
 
 async function typesCmd(): Promise<void> {
+  // Read every flag BEFORE the network call, so a malformed invocation fails on the
+  // invocation rather than on whatever the fetch happens to do first.
   const url = flag("url") ?? "http://localhost:8787";
   const tenant = flag("tenant") ?? "main";
+  const dest = flag("out");
   const token = flag("token") ?? (await signDevToken({ sub: "cli", roles: ["admin"] }));
 
   let res: Response;
@@ -67,17 +75,26 @@ async function typesCmd(): Promise<void> {
     fail(`types: listBlockTypes failed (${body.error ?? res!.status})`);
   }
   const rows = body.result!;
-  if (rows.length === 0) console.error(`pramen-cms: tenant '${tenant}' has no block types yet — nothing to generate.`);
+  // Refuse rather than write an empty module. A --tenant typo routes to a fresh Durable
+  // Object whose cms_block_types is legitimately empty, so this is the likely cause — and
+  // exiting 0 after clobbering src/cms.gen.ts would sail through a regenerate-and-diff CI.
+  if (rows.length === 0) {
+    fail(`types: tenant '${tenant}' has no block types — refusing to write an empty module (check --tenant/--url)`);
+  }
 
   const out = generateBlockTypes(rows);
-  const dest = flag("out");
   if (!dest) {
     process.stdout.write(out); // composes with a pipe, like `pramen schema sql`
     return;
   }
   const path = resolve(process.cwd(), dest);
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, out);
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, out);
+  } catch (e) {
+    // Same treatment as the fetch above — an unwritable --out is a CLI error, not a stack.
+    fail(`types: cannot write ${dest} (${e instanceof Error ? e.message : String(e)})`);
+  }
   console.log(`  + ${dest}  (${rows.length} block type${rows.length === 1 ? "" : "s"} from tenant '${tenant}')`);
 }
 
