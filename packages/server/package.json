@@ -1,7 +1,7 @@
 {
   "name": "@pramen/server",
   "version": "0.0.49",
-  "description": "pramen server runtime — schema, ACL, ORM, live queries, files, and the createPramen(app) factory for Cloudflare Workers + Durable Objects.",
+  "description": "pramen server runtime \u2014 schema, ACL, ORM, live queries, files, and the createPramen(app) factory for Cloudflare Workers + Durable Objects.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -26,6 +26,13 @@
       "workerd": "./src/worker-entry.ts",
       "types": "./dist/worker-entry.d.ts",
       "default": "./dist/worker-entry.js"
+    },
+    "./dev": {
+      "development": "./src/dev.ts",
+      "bun": "./src/dev.ts",
+      "workerd": "./src/dev.ts",
+      "types": "./dist/dev.d.ts",
+      "default": "./dist/dev.js"
     }
   },
   "main": "./dist/index.js",
@@ -33,7 +40,10 @@
   "bin": {
     "pramen": "./dist/cli.js"
   },
-  "files": ["dist", "src"],
+  "files": [
+    "dist",
+    "src"
+  ],
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json"
   },

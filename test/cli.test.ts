@@ -107,6 +107,17 @@ describe("pramen-cms cli", () => {
     expect(runCms("frobnicate").code).not.toBe(0);
   });
 
+  test("--flag=value is accepted, and an unknown flag is rejected", () => {
+    // `--out=path` matched nothing, so the module printed to stdout and exited 0 — a green
+    // regenerate-and-diff CI with no file written. A misspelled flag did the same.
+    const eq = runCms("types", "--url=http://127.0.0.1:1");
+    expect(eq.code).not.toBe(0);
+    expect(eq.err).toContain("cannot reach http://127.0.0.1:1"); // the =value form was read
+    const unknown = runCms("types", "--outt", "/tmp/x");
+    expect(unknown.code).not.toBe(0);
+    expect(unknown.err).toContain("unknown flag --outt");
+  });
+
   test("a flag with no value is an error, not a silent default", () => {
     // `--out` with an empty $OUT used to print to stdout and exit 0; `--tenant --out x`
     // used to set tenant to "--out".

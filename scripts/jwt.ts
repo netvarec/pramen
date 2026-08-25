@@ -3,7 +3,7 @@
 // it. The explicit DEV_SECRET argument preserves this helper's deliberate behaviour of
 // always using the wrangler dev secret, ignoring any AUTH_SECRET in the environment.
 
-import { signDevToken, DEV_SECRET } from "@pramen/server";
+import { signDevToken, DEV_SECRET } from "@pramen/server/dev";
 
 export { DEV_SECRET };
 

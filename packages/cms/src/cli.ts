@@ -13,19 +13,41 @@
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { signDevToken } from "@pramen/server";
+import { signDevToken } from "@pramen/server/dev";
 import { generateBlockTypes, type FieldDefinition } from "./index";
 
 const argv = process.argv.slice(2);
 
+const KNOWN_FLAGS = ["url", "tenant", "token", "out"] as const;
+
+/** Read `--name value` or `--name=value`.
+ *
+ * Both forms, because `--out=path` silently printed to stdout and exited 0 — a green
+ * regenerate-and-diff CI with no file written. And a value is required, because `--out`
+ * with an empty $OUT did the same, while `--tenant --out x` set the tenant to "--out". */
 function flag(name: string): string | undefined {
+  const eq = argv.find((a) => a.startsWith(`--${name}=`));
+  if (eq !== undefined) {
+    const v = eq.slice(name.length + 3);
+    if (v === "") fail(`--${name} needs a value`);
+    return v;
+  }
   const i = argv.indexOf(`--${name}`);
   if (i < 0) return undefined;
   const v = argv[i + 1];
-  // `--out` with an empty $OUT silently printed to stdout instead of erroring, and
-  // `--tenant --out x` set tenant to "--out".
   if (v === undefined || v.startsWith("--")) fail(`--${name} needs a value`);
   return v;
+}
+
+/** Reject a misspelled flag rather than silently ignoring it and using the default. */
+function assertKnownFlags(): void {
+  for (const a of argv) {
+    if (!a.startsWith("--")) continue;
+    const name = a.slice(2).split("=")[0]!;
+    if (!KNOWN_FLAGS.includes(name as (typeof KNOWN_FLAGS)[number])) {
+      fail(`unknown flag --${name} (expected ${KNOWN_FLAGS.map((f) => `--${f}`).join(", ")})`);
+    }
+  }
 }
 function fail(msg: string): never {
   console.error(`pramen-cms: ${msg}`);
@@ -52,6 +74,7 @@ interface BlockTypeRow {
 }
 
 async function typesCmd(): Promise<void> {
+  assertKnownFlags();
   // Read every flag BEFORE the network call, so a malformed invocation fails on the
   // invocation rather than on whatever the fetch happens to do first.
   const url = flag("url") ?? "http://localhost:8787";
@@ -82,15 +105,22 @@ async function typesCmd(): Promise<void> {
     fail(`types: tenant '${tenant}' has no block types — refusing to write an empty module (check --tenant/--url)`);
   }
 
-  const out = generateBlockTypes(rows);
+  let out: string;
+  try {
+    out = generateBlockTypes(rows);
+  } catch (e) {
+    // It throws for a slug that is not a distinct valid identifier — a data problem the
+    // user must fix in the CMS, so name it rather than print a stack trace.
+    fail(`types: ${e instanceof Error ? e.message : String(e)}`);
+  }
   if (!dest) {
-    process.stdout.write(out); // composes with a pipe, like `pramen schema sql`
+    process.stdout.write(out!); // composes with a pipe, like `pramen schema sql`
     return;
   }
   const path = resolve(process.cwd(), dest);
   try {
     mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, out);
+    writeFileSync(path, out!);
   } catch (e) {
     // Same treatment as the fetch above — an unwritable --out is a CLI error, not a stack.
     fail(`types: cannot write ${dest} (${e instanceof Error ? e.message : String(e)})`);

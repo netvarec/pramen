@@ -52,3 +52,22 @@ test("generateBlockTypes refuses slugs that are not distinct TS identifiers", ()
     ]),
   ).toThrow(/collides/);
 });
+
+test("generateBlockTypes accepts a non-ASCII slug that yields a legal identifier", () => {
+  // `úvodní-blok` -> `úvodníBlok` IS a valid TypeScript identifier. An ASCII-only check
+  // aborted codegen for the whole tenant over a slug that works.
+  const out = generateBlockTypes([{ slug: "úvodní-blok", fieldsSchema: [{ name: "title", type: "text" }] }]);
+  expect(out).toContain("export interface úvodníBlokFields");
+});
+
+test("the used-import scan is driven by the schema, not the rendered text", () => {
+  // A field literally NAMED RichText matched a \bRichText\b scan of the output and
+  // produced the unused import the scan exists to avoid.
+  const out = generateBlockTypes([{ slug: "hero", fieldsSchema: [{ name: "RichText", type: "text" }] }]);
+  expect(out).not.toContain("import type");
+  // ...and a richtext nested in a repeater still counts.
+  const nested = generateBlockTypes([
+    { slug: "faq", fieldsSchema: [{ name: "items", type: "repeater", fields: [{ name: "answer", type: "richtext" }] }] },
+  ]);
+  expect(nested).toContain('import type { RichText } from "@pramen/cms";');
+});

@@ -97,11 +97,6 @@ export type { QueueContext, QueueHandler, QueueMessage, QueueBatch, AppQueueMap 
 // --- errors ---
 export { PramenError, BadRequest, Unauthorized, Forbidden } from "./runtime/errors";
 
-// Dev-only: mint an HS256 JWT for local tooling (the `pramen` and `pramen-cms` bins both
-// use it). Signed with AUTH_SECRET when set, else a public dev secret — worthless against
-// any deployment that sets a real one.
-export { signDevToken, DEV_SECRET } from "./runtime/dev-token";
-
 // --- substrate seam (advanced: bring your own SQL backend) ---
 export { sqliteDialect, postgresDialect, DoSqliteDriver, D1Driver } from "./runtime/driver";
 export type { Driver, Dialect, DriverRow } from "./runtime/driver";
