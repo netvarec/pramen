@@ -134,9 +134,19 @@ Filtering lives in the ACL, not in each handler — a read scope is AND-merged i
 | Handler | Role | Effect |
 | --- | --- | --- |
 | `deletePage` / `deleteMedia` | editor | stamp `deletedAt` — reversible |
-| `listTrash` | editor / reviewer | what is currently trashed |
+| `listTrash` | editor / reviewer | what is currently trashed — `{ pages, media }` |
 | `restorePage` / `restoreMedia` | editor | clear `deletedAt` |
 | `purgePage` / `purgeMedia` | reviewer | permanent — row, placements, revisions, audit, R2 object |
+
+Two caveats about doing it in the ACL:
+
+- **Policies are OR-unioned.** If your app adds its own `allow()` policy on `cms_pages` or
+  `cms_media` alongside `cmsPolicies().editor`, that grant unions the trash filter away and
+  trashed rows become visible again. Scope your own grants with `deletedAt: { isNull: true }`.
+- **The task context bypasses the ACL entirely** (it runs SYSTEM-scoped), so scheduled
+  publish/unpublish are not protected by the read scope. `deletePage` clears `scheduledAt`
+  and `unpublishAt` for exactly this reason — without that, a page trashed before its
+  scheduled time came back publicly live.
 
 Two things worth knowing:
 

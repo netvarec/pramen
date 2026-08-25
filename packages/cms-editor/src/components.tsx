@@ -1185,7 +1185,7 @@ function MediaDetail({ api, media, onClose, onSaved, onDeleted, onError }: { api
     }
   };
   const del = async () => {
-    if (!confirm("Delete this file permanently? If a block or page still references it, that image will break — this cannot be undone.")) return;
+    if (!confirm("Move this file to the trash? Blocks still referencing it will show a broken image until it is restored.")) return;
     setBusy(true);
     try {
       await api.deleteMedia(media.id);

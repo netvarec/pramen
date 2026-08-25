@@ -253,8 +253,8 @@ export async function runCms(base: string): Promise<void> {
   const afterTrashPublished = (await call("listPublishedPages", {})).body.result as Array<{ slug: string }>;
   assert(!afterTrashPublished.some((p) => p.slug === "doomed"), "cms: a trashed page drops out of listPublishedPages (and the sitemap)");
 
-  const trash = (await call("listTrash", {}, admin)).body.result as Array<{ id: string }>;
-  assert(trash.some((p) => p.id === trashId), "cms: listTrash shows the trashed page");
+  const trash = (await call("listTrash", {}, admin)).body.result as { pages: Array<{ id: string }>; media: Array<{ id: string }> };
+  assert(trash.pages.some((p) => p.id === trashId), "cms: listTrash shows the trashed page");
 
   // The slug is still held while trashed — a DB unique constraint, so say so plainly.
   const slugClash = await call("createPage", { typeId: ct.body.result.id, title: "Reuse", slug: "doomed" }, admin);
@@ -264,11 +264,34 @@ export async function runCms(base: string): Promise<void> {
   assert(restored.body.ok, "cms: restorePage brings it back");
   assert((await call("getPage", { slug: "doomed" })).body.ok, "cms: a restored page is publicly readable again");
 
+  // A scheduled publish must NOT resurrect a trashed page. The publish task runs on the
+  // SYSTEM context, where the ACL is bypassed — so the read scope does not protect it and
+  // deletePage has to clear the schedule itself.
+  const schedPage = await call("createPage", { typeId: ct.body.result.id, title: "Scheduled", slug: "sched-doomed" }, admin);
+  const schedId = schedPage.body.result.id as string;
+  await call("schedulePage", { pageId: schedId, publishAt: Date.now() + 800 }, admin);
+  await call("deletePage", { pageId: schedId }, admin);
+  await new Promise((r) => setTimeout(r, 1200));
+  await drain(base, admin);
+  assert((await call("getPage", { slug: "sched-doomed" })).status === 404, "cms: a scheduled publish does not resurrect a trashed page");
+  const stillTrashed = (await call("listTrash", {}, admin)).body.result as { pages: Array<{ id: string }> };
+  assert(stillTrashed.pages.some((p) => p.id === schedId), "cms: the trashed page stays trashed through its scheduled time");
+
+  // A trashed translation still blocks its locale — the guard reads raw, not through the
+  // ACL, or restoring the first would leave two live pages for one locale in a group.
+  const trGroup = await call("createPage", { typeId: ct.body.result.id, title: "TrSrc", slug: "tr-src" }, admin);
+  await call("createTranslation", { pageId: trGroup.body.result.id, locale: "de", slug: "tr-de" }, admin);
+  const trList = (await call("listTranslations", { pageId: trGroup.body.result.id }, admin)).body.result as Array<{ id: string; locale: string }>;
+  const deId = trList.find((t) => t.locale === "de")!.id;
+  await call("deletePage", { pageId: deId }, admin);
+  const dupTr = await call("createTranslation", { pageId: trGroup.body.result.id, locale: "de", slug: "tr-de-2" }, admin);
+  assert(dupTr.status === 400 && /trash/i.test(String(dupTr.body.error ?? "")), "cms: a trashed translation still holds its locale");
+
   // Purge is irreversible and refuses a LIVE page — trash it first.
   assert((await call("purgePage", { pageId: trashId }, admin)).status === 404, "cms: purging a live page is refused");
   await call("deletePage", { pageId: trashId }, admin);
   assert((await call("purgePage", { pageId: trashId }, admin)).body.ok, "cms: purgePage removes a trashed page for good");
-  assert((await call("listTrash", {}, admin)).body.result.every((p: { id: string }) => p.id !== trashId), "cms: a purged page leaves the trash");
+  assert((await call("listTrash", {}, admin)).body.result.pages.every((p: { id: string }) => p.id !== trashId), "cms: a purged page leaves the trash");
   // Its slug is free again now that the row is gone.
   const reuse = await call("createPage", { typeId: ct.body.result.id, title: "Reuse", slug: "doomed" }, admin);
   assert(reuse.body.ok, "cms: purging frees the slug");
@@ -292,6 +315,11 @@ export async function runCms(base: string): Promise<void> {
   // The BLOB survives a soft delete on purpose — dropping the bytes here would make
   // restoreMedia a lie, and a block still holding the id would render a dead url.
   assert((await fetch(`${base}/media/${mediaKey}`)).status === 200, "cms: the R2 object survives deleteMedia");
+
+  // Trashed media MUST be discoverable, or restore/purge can never be called again —
+  // every other read of it is ACL-scoped, while /media/<key> keeps serving the bytes.
+  const mediaTrash = (await call("listTrash", {}, admin)).body.result as { media: Array<{ id: string }> };
+  assert(mediaTrash.media.some((m) => m.id === mediaId), "cms: listTrash surfaces trashed media, so purge/restore stay reachable");
 
   assert((await call("restoreMedia", { id: mediaId }, admin)).body.ok, "cms: restoreMedia brings the row back");
   assert((await call("getMedia", { id: mediaId }, admin)).body.result !== null, "cms: restored media is readable again");
