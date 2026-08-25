@@ -95,7 +95,10 @@ const schema = defineSchema({
     title: t.text(),
     speaker: defaultTo(t.text(), ""),
     date: defaultTo(t.text(), ""),
-    abstract: defaultTo(t.text(), ""),
+    // A `richtext` collection field is a DOCUMENT, not a scalar — it maps to t.json()
+    // exactly like a group/repeater field. In a TEXT column the Db chokepoint would bind
+    // the object raw and DO SQLite would reject the parameter.
+    abstract: t.json(),
     createdAt: defaultTo(t.text(), expr.now()),
   })),
   // A custom, authSchema-shaped users table with an EXTRA `tenants` column — the

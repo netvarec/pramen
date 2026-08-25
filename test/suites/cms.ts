@@ -465,6 +465,17 @@ export async function runCms(base: string): Promise<void> {
   const gotLecture = await call("collectionGet", { collection: "lectures", id: lecRowId }, admin);
   assert(gotLecture.body.ok && gotLecture.body.result.title === "Reactive Backends", "cms: collectionGet returns the row by id");
 
+  // A `richtext` collection field maps to a t.json() column. Writing a document into a
+  // TEXT column bound the object raw and DO SQLite rejected the parameter — the whole
+  // path was untested because every fixture set only scalar fields.
+  const richLecture = await call("collectionCreate", {
+    collection: "lectures",
+    values: { title: "With prose", speaker: "S", date: "2026-01-01", abstract: rt("An abstract with real prose.") },
+  }, admin);
+  assert(richLecture.body.ok, `cms: a collection row with a richtext field saves (${richLecture.body.error ?? ""})`);
+  const richBack = await call("collectionGet", { collection: "lectures", id: richLecture.body.result.id }, admin);
+  assert(JSON.stringify(richBack.body.result?.abstract ?? {}).includes("real prose"), "cms: the richtext document round-trips through the collection column");
+
   const listed = await call("collectionList", { collection: "lectures" }, admin);
   assert(listed.body.ok && Array.isArray(listed.body.result) && listed.body.result.length >= 2, "cms: collectionList returns the rows");
 

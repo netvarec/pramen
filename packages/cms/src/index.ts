@@ -537,6 +537,12 @@ export interface ValidateOpts {
    * writes (addBlock/updateBlock/createPage) pass `false` — a DRAFT block may be incomplete;
    * required is only mandatory when publishing. Type checks always run. */
   requireRequired?: boolean;
+  /** Tolerate a legacy HTML-string `richtext` value instead of rejecting it. Set ONLY where
+   * the bag being validated contains ALREADY-STORED data the caller did not supply — e.g.
+   * `placeBlock`, which validates the block's own fields merged with new overrides. A
+   * pre-Portable-Text row is not the caller's mistake, and refusing it would make an
+   * untouched legacy block impossible to place. New input stays strict. */
+  allowLegacyRichText?: boolean;
 }
 
 /** Validate a block/page's `fields` payload against a field schema, throwing a 400 on
@@ -587,8 +593,12 @@ export function validateFields(schema: FieldDefinition[] | undefined | null, val
       case "richtext":
         // A document tree, never a string. A legacy HTML value is REJECTED rather than
         // silently normalized to an empty doc — a 400 names the migration; a blank field
-        // would look like the content simply vanished.
-        if (typeof v === "string") throw new BadRequest(`field '${at}' must be a rich-text document, not an HTML string`);
+        // would look like the content simply vanished. Except where the bag carries stored
+        // data the caller never sent (see `allowLegacyRichText`).
+        if (typeof v === "string") {
+          if (opts.allowLegacyRichText) break;
+          throw new BadRequest(`field '${at}' must be a rich-text document, not an HTML string`);
+        }
         if (typeof v !== "object" || Array.isArray(v) || (v as unknown as RichTextDoc).type !== "doc") {
           throw new BadRequest(`field '${at}' must be a rich-text document ({ type: "doc", content: [...] })`);
         }
@@ -680,10 +690,12 @@ export const DEFAULT_RICH_TEXT_SCHEMA: RichTextSchema = {
 /** Allow-list for a link href: http(s), mailto, tel, or a relative/anchor path. The prefix
  * allow-list inherently rejects `javascript:`, `data:` and `vbscript:`.
  *
- * Deliberately the same rule as the editor's own link panel (@podoba/react's `safeLinkUrl`)
- * so the UI guard and this boundary can't drift — but THIS is the one that counts. */
+ * A single leading `/` only — `//evil.example/x` is PROTOCOL-RELATIVE, which a browser
+ * resolves as an absolute cross-origin URL rather than a site-relative path. Not an XSS
+ * vector, but this is the security boundary now (not the UI hint that @podoba/react's
+ * `safeLinkUrl` is), so it should not quietly permit off-site links that look local. */
 export function isSafeHref(raw: unknown): boolean {
-  return typeof raw === "string" && /^(https?:\/\/|mailto:|tel:|\/|#)/i.test(raw.trim());
+  return typeof raw === "string" && /^(https?:\/\/|mailto:|tel:|\/(?!\/)|#)/i.test(raw.trim());
 }
 
 /** Keep only the declared attributes, and only those holding a JSON primitive — an object
@@ -718,8 +730,15 @@ function normalizeMarks(marks: unknown, schema: RichTextSchema): RichTextMark[] 
   return out.length ? out : undefined;
 }
 
+/** How deep a document may nest before the normalizer stops descending. Real editor output
+ * is a handful of levels (list > item > paragraph > text); a hand-crafted doc nested tens
+ * of thousands deep would otherwise blow the stack INSIDE the DO's storage.transaction().
+ * JSON.parse is iterative in V8, so such a payload reaches the normalizer intact. */
+export const MAX_RICH_TEXT_DEPTH = 100;
+
 /** Normalize one node, or `null` if its type is not in the schema. */
-function normalizeNode(raw: unknown, schema: RichTextSchema): RichTextNode | null {
+function normalizeNode(raw: unknown, schema: RichTextSchema, depth = 0): RichTextNode | null {
+  if (depth > MAX_RICH_TEXT_DEPTH) return null;
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const node = raw as RichTextNode;
   const allowed = schema.nodes[node.type];
@@ -736,16 +755,16 @@ function normalizeNode(raw: unknown, schema: RichTextSchema): RichTextNode | nul
   const attrs = normalizeAttrs(node.attrs, allowed);
   if (attrs) out.attrs = attrs;
   if (Array.isArray(node.content)) {
-    const content = normalizeNodes(node.content, schema);
+    const content = normalizeNodes(node.content, schema, depth + 1);
     if (content.length) out.content = content;
   }
   return out;
 }
 
-function normalizeNodes(nodes: readonly unknown[], schema: RichTextSchema): RichTextNode[] {
+function normalizeNodes(nodes: readonly unknown[], schema: RichTextSchema, depth = 0): RichTextNode[] {
   const out: RichTextNode[] = [];
   for (const n of nodes) {
-    const node = normalizeNode(n, schema);
+    const node = normalizeNode(n, schema, depth);
     if (node) out.push(node);
   }
   return out;
@@ -793,7 +812,10 @@ export function normalizeFields(
   for (const def of defs) {
     const v = out[def.name];
     if (v == null) continue;
-    if (def.type === "richtext") out[def.name] = normalizeRichText(v, richTextSchema);
+    // A legacy HTML string survives normalization untouched: normalizeRichText would turn
+    // it into an EMPTY doc, i.e. silently delete the content. It only reaches here on the
+    // `allowLegacyRichText` paths, where it is stored data being re-validated.
+    if (def.type === "richtext") out[def.name] = typeof v === "string" ? v : normalizeRichText(v, richTextSchema);
     else if (def.type === "group" && typeof v === "object" && !Array.isArray(v)) out[def.name] = normalizeFields(def.fields, v as FieldValues, richTextSchema);
     else if (def.type === "repeater" && Array.isArray(v)) out[def.name] = v.map((it) => (it && typeof it === "object" ? normalizeFields(def.fields, it as FieldValues, richTextSchema) : it));
   }
@@ -1631,7 +1653,11 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       await assertRegionAllows(db, page, input.region, slug);
       let cleanOverrides: Record<string, unknown> | null = input.overrides ?? null;
       if (input.overrides !== undefined) {
-        validateFields(bts[0]?.fieldsSchema as FieldDefinition[] | undefined, { ...asObj(block.fields), ...input.overrides }, "", { requireRequired: false });
+        // The merged bag includes the block's OWN stored fields, which may predate Portable
+        // Text. Tolerate a legacy string there so an untouched legacy block can still be
+        // placed; the overrides themselves are new input and stay strict below.
+        validateFields(bts[0]?.fieldsSchema as FieldDefinition[] | undefined, { ...asObj(block.fields), ...input.overrides }, "", { requireRequired: false, allowLegacyRichText: true });
+        validateFields(bts[0]?.fieldsSchema as FieldDefinition[] | undefined, input.overrides, "", { requireRequired: false });
         cleanOverrides = normalizeFields(bts[0]?.fieldsSchema as FieldDefinition[] | undefined, input.overrides);
       }
       const position = input.position ?? (await nextPosition(db, input.pageId, input.region));
@@ -2010,8 +2036,9 @@ export function cmsPolicies(opts: CmsPolicyOpts = {}): { public: Policy[]; edito
 // list + form UI, without being bent into a cms_pages row.
 //
 // Column-mapped: each scalar FieldDefinition.name is a real column on the entity; a
-// repeater/group field maps to a t.json() column (the object↔JSON codec at the Db
-// chokepoint stores it transparently). The generic handlers dispatch through a registry
+// repeater/group/richtext field maps to a t.json() column (the object↔JSON codec at the
+// Db chokepoint stores it transparently). `richtext` belongs with the latter group — its
+// value is a document tree, and a TEXT column would bind the object raw and be rejected. The generic handlers dispatch through a registry
 // keyed by `slug`, so `collection`/`entity` can never be spoofed to reach an arbitrary
 // table, and writes are whitelisted to declared fields — the client can't set columns the
 // collection didn't declare (e.g. a `roles` or `passwordHash` column on the entity).

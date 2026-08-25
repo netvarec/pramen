@@ -137,7 +137,11 @@ function renderRichTextNode(node: RichTextNode, key: number, components?: RichTe
     case "paragraph":
       return createElement("p", { key }, children);
     case "heading": {
-      const level = typeof attrs.level === "number" ? attrs.level : 2;
+      // Range-checked, matching RichText.astro. Both renderers declare themselves a rescue
+      // for hand-written content that never passed through normalizeRichText, so neither
+      // may trust the attribute — an out-of-range level would emit <h0>/<h99>.
+      const raw = attrs.level;
+      const level = typeof raw === "number" && raw >= 1 && raw <= 6 ? raw : 2;
       return createElement(`h${level}`, { key }, children);
     }
     case "blockquote":

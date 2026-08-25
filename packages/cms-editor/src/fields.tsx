@@ -10,6 +10,7 @@ import TaskList from "@tiptap/extension-task-list";
 import StarterKit from "@tiptap/starter-kit";
 import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import type { Api } from "./api";
+import { isRichTextDoc, richTextToPlainText } from "./rich-text";
 import type { FieldDefinition, FieldValue, FieldValues, Media, RichTextDoc } from "./types";
 
 // Tokenized bare control (podoba's filled-field skin) for the native inputs that
@@ -292,8 +293,6 @@ const RT_EXTENSIONS = [
   TaskItem.configure({ nested: true }),
 ];
 
-const isRichTextDoc = (v: unknown): v is RichTextDoc => typeof v === "object" && v !== null && !Array.isArray(v) && (v as RichTextDoc).type === "doc";
-
 /** Seed HTML for the editor. A legacy HTML string passes through untouched — that is the
  * migration ramp: an old value still opens, and the first save writes it back as a doc. */
 function docToEditorHtml(value: RichTextDoc | string | null | undefined): string {
@@ -375,7 +374,11 @@ function Repeater({ def, value, onChange, api, label }: { def: FieldDefinition; 
     for (const f of fields) {
       if (!readable.includes(f.type)) continue;
       const v = it[f.name];
-      if (typeof v === "string" && v.trim()) return v.replace(/<[^>]+>/g, " ").trim().slice(0, 80);
+      // A `richtext` value is a document tree, so a string check alone would skip the one
+      // prose field an item has — exactly the row this summary exists to distinguish.
+      const text = isRichTextDoc(v) ? richTextToPlainText(v) : typeof v === "string" ? v.replace(/<[^>]+>/g, " ") : "";
+      const trimmed = text.replace(/\s+/g, " ").trim();
+      if (trimmed) return trimmed.slice(0, 80);
     }
     return "";
   };

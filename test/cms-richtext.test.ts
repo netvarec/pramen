@@ -7,6 +7,7 @@
 import { expect, test } from "bun:test";
 import {
   DEFAULT_RICH_TEXT_SCHEMA,
+  MAX_RICH_TEXT_DEPTH,
   isSafeHref,
   normalizeFields,
   normalizeRichText,
@@ -121,4 +122,47 @@ test("richTextToPlainText flattens to words with block boundaries", () => {
 
 test("richTextToPlainText turns a hard break into a newline", () => {
   expect(richTextToPlainText(doc(para(text("a"), { type: "hardBreak" }, text("b"))))).toBe("a\nb");
+});
+
+// --- regression gates from the #36 review ------------------------------------
+
+test("isSafeHref rejects a protocol-relative url", () => {
+  // `//evil.example/x` looks site-relative but a browser resolves it as absolute
+  // cross-origin. Not XSS, but this function is the boundary, not a UI hint.
+  expect(isSafeHref("//evil.example/x")).toBe(false);
+  expect(isSafeHref("/still-relative")).toBe(true);
+  expect(isSafeHref("https://example.com//path")).toBe(true);
+});
+
+test("normalizeRichText caps recursion instead of blowing the stack", () => {
+  // JSON.parse is iterative in V8, so a deeply nested payload reaches the normalizer
+  // intact — and this runs inside the DO's storage.transaction().
+  let node: Record<string, unknown> = { type: "text", text: "deep" };
+  for (let i = 0; i < MAX_RICH_TEXT_DEPTH + 50; i++) node = { type: "blockquote", content: [node] };
+  const out = normalizeRichText({ type: "doc", content: [node] });
+  let depth = 0;
+  let cursor = out.content?.[0];
+  while (cursor?.content?.[0]) {
+    cursor = cursor.content[0];
+    depth++;
+  }
+  expect(depth).toBeLessThanOrEqual(MAX_RICH_TEXT_DEPTH + 1);
+});
+
+test("a legacy HTML string is tolerated — and kept — only where the bag holds stored data", () => {
+  const schema: FieldDefinition[] = [{ name: "body", type: "richtext" }];
+  const legacy = { body: "<p>stored before the migration</p>" };
+  // Default: strict, because the value is new input.
+  expect(() => validateFields(schema, legacy)).toThrow(/not an HTML string/);
+  // allowLegacyRichText: the bag carries a row we already stored (placeBlock's merge).
+  expect(() => validateFields(schema, legacy, "", { allowLegacyRichText: true })).not.toThrow();
+  // And normalization must NOT turn it into an empty doc — that would delete the content.
+  expect(normalizeFields(schema, legacy).body).toBe("<p>stored before the migration</p>");
+});
+
+test("richTextToPlainText gives a collapsed block something to show", () => {
+  // The editor's block preview used to pick the first non-empty STRING field; a richtext
+  // field is an object, so a prose-only block read "empty".
+  const body = doc(para(text("Wide-ranging notes on the topic")));
+  expect(richTextToPlainText(body)).toBe("Wide-ranging notes on the topic");
 });
