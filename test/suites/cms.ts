@@ -4,6 +4,10 @@
 // the public content API (anonymous sees only the published snapshot), preview gating,
 // reusable-block overrides, and scheduled publish (an outbox task).
 
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { assert, http, token } from "../lib";
 
 /** A minimal rich-text document. `richtext` is a document TREE, not an HTML string — the
@@ -260,6 +264,22 @@ export async function runCms(base: string): Promise<void> {
   assert(!/onclick|onerror|alert\(/.test(rtJson), "cms: richtext normalized on write — unknown marks + smuggled attrs dropped");
   assert(!/javascript:/i.test(rtJson), "cms: richtext normalized on write — javascript: link mark dropped");
   assert(/"bold"/.test(rtJson) && /"there"/.test(rtJson), "cms: richtext normalization preserves allow-listed marks and text");
+
+  // --- `pramen cms types`: codegen from the LIVE tenant's block types ---
+  // Block types are data (rows a webmaster adds with no deploy), so the only way to type
+  // them is to read them back out of a running instance. Run the real CLI against this one.
+  const genDir = mkdtempSync(join(tmpdir(), "pramen-cms-types-"));
+  const genPath = join(genDir, "cms.gen.ts");
+  const cli = Bun.spawnSync(
+    ["bun", "packages/cms/src/cli.ts", "types", "--url", base, "--tenant", TENANT, "--token", admin, "--out", genPath],
+    { cwd: join(import.meta.dir, "..", "..") },
+  );
+  assert(cli.exitCode === 0, `cms: \`pramen-cms types\` exits 0 (${cli.stderr.toString()})`);
+  const generated = readFileSync(genPath, "utf8");
+  assert(generated.includes("export interface RichTextFields"), "cms: codegen emits an interface per block-type slug");
+  assert(/"body"\??: RichText;/.test(generated), "cms: codegen maps a richtext field to the RichText type");
+  assert(generated.includes('"rich_text": RichTextFields;'), "cms: codegen emits the BlockFieldsBySlug registry");
+  rmSync(genDir, { recursive: true, force: true });
 
   const served = await fetch(`${base}/media/${mediaKey}`);
   assert(served.status === 200 && served.headers.get("content-type") === "image/png", "cms: the public /media route serves the blob (no auth)");

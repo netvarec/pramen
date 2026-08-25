@@ -56,8 +56,14 @@
     "packages/cms": {
       "name": "@pramen/cms",
       "version": "0.0.49",
+      "bin": {
+        "pramen-cms": "./dist/cli.js",
+      },
       "dependencies": {
         "@pramen/server": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/node": "^22.0.0",
       },
       "peerDependencies": {
         "react": ">=18",
