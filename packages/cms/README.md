@@ -161,6 +161,26 @@ both **fail closed** rather than hand out forgeable links.
 
 From an Astro site, `createCmsClient(...).getPreview(token)` redeems one.
 
+### Typed block fields
+
+A developer-authored block type gets compile-time typing with no build step —
+`defineBlockType(slug, fields as const)` plus `BlockFieldsOf<typeof def>`.
+
+Webmaster-authored types are **data** (rows in `cms_block_types`, added with no deploy), so
+they can't be typed at compile time. Read them back out of a running instance instead:
+
+```bash
+bunx pramen-cms types --url https://cms.example.workers.dev --tenant acme --out src/cms.gen.ts
+```
+
+Run it with **bun** (`bunx`), like the `pramen` bin — both ship extensionless ESM imports
+that plain Node won't resolve. Its own bin rather than a `pramen` subcommand, because
+`@pramen/cms` is optional and the runtime CLI shouldn't carry a command named after it.
+
+That writes an interface per block-type slug plus a `BlockFieldsBySlug` registry. With no
+`--out` it prints, so it composes with a pipe. Re-run it after a webmaster adds or changes
+a block type.
+
 ### Rendering (headless)
 
 The backend never dictates markup. `@pramen/cms/react` maps a block's `block_type` slug to
@@ -170,13 +190,49 @@ a component you provide:
 import { RegionRenderer } from "@pramen/cms/react";
 import { useLiveQuery } from "@pramen/react";
 
-const components = { hero: Hero, rich_text: RichText };
+const components = { hero: Hero, rich_text: RichTextBlock };
 function Page({ slug }: { slug: string }) {
   const { data } = useLiveQuery(client, "getPage", { slug });
   if (!data) return null;
   return <RegionRenderer regions={data.regions} name="content" components={components} />;
 }
 ```
+
+A `richtext` field is a **document tree**, not an HTML string — render it with
+`RichTextRenderer`, which walks the tree into real elements (no `dangerouslySetInnerHTML`,
+nothing to sanitize at render time):
+
+```tsx
+import { RichTextRenderer } from "@pramen/cms/react";
+
+const RichTextBlock = ({ fields }) => <RichTextRenderer value={fields.body} />;
+```
+
+Pass `components` to override any node type (`paragraph`, `heading`, `link`, …) with your
+own element. `richTextToPlainText(doc)` flattens a document for excerpts and meta
+descriptions.
+
+Writes are checked against a structural allow-list (`normalizeRichText`): an unknown node
+or mark type is dropped, only declared attributes survive, and a `link` href must pass a
+scheme check — so a hand-crafted payload can't smuggle markup past the editor. Widen or
+narrow the vocabulary with `createCmsHandlers({ richTextSchema })` (also accepted by
+`createCollectionHandlers`) when your editor adds TipTap extensions.
+
+Opening a page in the editor **migrates** any legacy HTML rich text on it: each field
+converts to a document on mount and the ordinary autosave persists it. That conversion is
+lossy for anything the editor's extension set doesn't model (an `h4` clamps to `h3`;
+`sub`/`sup`/`ins` flatten), so convert deliberately if that matters.
+
+Heading levels are 1–3 by default, matching the shipped editor's StarterKit config — raise
+`richTextSchema.maxHeadingLevel` if your editor is configured for more. Out-of-range levels
+are **clamped**, not dropped: a level-less heading would render as `h1` in the editor and
+`h2` on the site — TipTap silently
+demotes an unknown level on parse, so permitting more meant an imported `h4` opened as `h1`
+and the next autosave persisted that.
+
+Both renderers re-check a link's href rather than trusting the stored document: the write
+path normalizes, but a row written by your own mutation, a bootstrap seed or an import
+script never passed through it, and the renderer is what puts it on a page.
 
 ## Limitations
 

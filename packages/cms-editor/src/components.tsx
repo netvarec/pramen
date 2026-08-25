@@ -8,7 +8,8 @@ import { Api, ApiError } from "./api";
 import { FieldForm, slugify } from "./fields";
 import type { Config } from "./api";
 import type { Me } from "./app-context";
-import type { AssembledPage, AuditEntry, BlockType, CollectionMeta, ContentType, FieldDefinition, FieldValues, Media, Page, RegionDefinition, RenderedBlock } from "./types";
+import { isRichTextDoc, richTextToPlainText } from "./rich-text";
+import type { AssembledPage, AuditEntry, BlockType, CollectionMeta, ContentType, FieldDefinition, FieldValue, FieldValues, Media, Page, RegionDefinition, RenderedBlock } from "./types";
 
 export type InspectorTab = "settings" | "seo" | "workflow" | "i18n" | "audit";
 export const INSPECTOR_TABS: InspectorTab[] = ["settings", "seo", "workflow", "i18n", "audit"];
@@ -186,11 +187,16 @@ function CreatePage({ api, onClose, onCreated, onError }: { api: Api; onClose: (
 // collections, zero per-collection code. Rows are addressed by `def.idField` (the entity's
 // PK column, defaults "id"); the server resolves the real PK from the value.
 
-/** Render a list-cell value as a short string (objects/arrays are summarized, not dumped). */
+/** Render a list-cell value as a short string (objects/arrays are summarized, not dumped).
+ * A `richtext` column is a document tree, so flatten it to words rather than showing "—". */
 function cellText(v: unknown): string {
   if (v == null) return "";
   if (typeof v === "boolean") return v ? "yes" : "no";
   if (Array.isArray(v)) return v.length === 1 ? "1 item" : `${v.length} items`;
+  if (isRichTextDoc(v)) {
+    const text = richTextToPlainText(v).replace(/\s+/g, " ").trim();
+    return text.length > 80 ? text.slice(0, 80) + "…" : text;
+  }
   if (typeof v === "object") return "—";
   return String(v);
 }
@@ -629,7 +635,7 @@ function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, o
   const blockId = block.block_id;
   const placementId = block.id;
 
-  // Load RAW fields (media as ids, richtext as HTML) so the value round-trips on save.
+  // Load RAW fields (media as ids, richtext as a document tree) so the value round-trips on save.
   // A pending optimistic block has no persisted row yet — start empty and skip the fetch
   // (its temp id would 404); when it reconciles to real ids the card remounts and fetches.
   useEffect(() => {
@@ -1479,11 +1485,22 @@ function plainText(html: string): string {
     .replace(/\s+/g, " ")
     .trim();
 }
-/** One-line preview for a collapsed block: the first non-empty string field, tags stripped. */
+/** Readable text for one field value, whatever shape it is. A `richtext` field is a
+ * document tree, so the first non-empty STRING is no longer enough — a block whose only
+ * field is prose would read "empty". Legacy HTML strings still pass through `plainText`. */
+function fieldText(v: FieldValue): string {
+  if (typeof v === "string") return plainText(v);
+  if (isRichTextDoc(v)) return richTextToPlainText(v).replace(/\s+/g, " ").trim();
+  return "";
+}
+/** One-line preview for a collapsed block: the first field with readable text in it. */
 function blockPreview(fields: FieldValues): string {
-  const first = Object.values(fields).find((v) => typeof v === "string" && v.trim());
-  if (typeof first !== "string") return "";
-  const text = plainText(first);
+  let text = "";
+  for (const v of Object.values(fields)) {
+    text = fieldText(v);
+    if (text) break;
+  }
+  if (!text) return "";
   return text.length > 90 ? text.slice(0, 90) + "…" : text;
 }
 function reorderMove(blocks: RenderedBlock[], region: string, i: number, d: number, reorder: (region: string, order: string[]) => void) {

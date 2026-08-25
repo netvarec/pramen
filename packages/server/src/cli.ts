@@ -23,38 +23,12 @@ import { createTableSql } from "./runtime/ddl";
 import { schemaHash } from "./runtime/migrate";
 import { diffSchemaFingerprint, schemaFingerprint, type SchemaFingerprint } from "./runtime/schema-diff";
 import { entitiesInPartition, partitionsOf, type SchemaDef } from "./sdk/schema";
+import { signDevToken } from "./runtime/dev-token";
 
-/** Mint an HS256 JWT — mirrors what a real auth service would issue, for local
- * dev/testing (`pramen token`, and the default token for `schema status`). Signs
- * with AUTH_SECRET when set, else the dev secret from the scaffolded oblaka.ts. */
-const DEV_SECRET = "dev-secret-change-me";
-
-function bytesToB64url(bytes: Uint8Array): string {
-  let bin = "";
-  for (const b of bytes) bin += String.fromCharCode(b);
-  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-const strToB64url = (s: string) => bytesToB64url(new TextEncoder().encode(s));
-
-/** The dev JWT claims `pramen token` mints. */
+/** The dev JWT claims `pramen token` mints. See `runtime/dev-token.ts` for the signer. */
 type TokenClaims = { sub: string; roles: string[]; tenants?: string[] };
 
-async function sign(payload: Record<string, unknown>): Promise<string> {
-  const secret = process.env.AUTH_SECRET || DEV_SECRET;
-  const now = Math.floor(Date.now() / 1000);
-  const header = strToB64url(JSON.stringify({ alg: "HS256", typ: "JWT" }));
-  const body = strToB64url(JSON.stringify({ iat: now, exp: now + 3600, ...payload }));
-  const data = `${header}.${body}`;
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(data));
-  return `${data}.${bytesToB64url(new Uint8Array(sig))}`;
-}
+const sign = (payload: Record<string, unknown>): Promise<string> => signDevToken(payload);
 
 /** The sub-schema of a single partition (used to mirror the DO's per-partition hash,
  * which migrate() computes over exactly this subset). For a single-partition app the

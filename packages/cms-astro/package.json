@@ -1,7 +1,7 @@
 {
   "name": "@pramen/cms-astro",
   "version": "0.0.49",
-  "description": "Astro integration for @pramen/cms — a build-time content-collection loader + a BlockRenderer for rendering CMS blocks in .astro pages.",
+  "description": "Astro integration for @pramen/cms \u2014 a build-time content-collection loader + a BlockRenderer for rendering CMS blocks in .astro pages.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -14,9 +14,13 @@
   "sideEffects": false,
   "exports": {
     ".": "./src/index.ts",
-    "./BlockRenderer.astro": "./src/BlockRenderer.astro"
+    "./BlockRenderer.astro": "./src/BlockRenderer.astro",
+    "./RichText.astro": "./src/RichText.astro",
+    "./RichTextMarks.astro": "./src/RichTextMarks.astro"
   },
-  "files": ["src"],
+  "files": [
+    "src"
+  ],
   "peerDependencies": {
     "astro": ">=4"
   },
