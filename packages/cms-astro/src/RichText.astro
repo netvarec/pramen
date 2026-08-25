@@ -39,7 +39,9 @@ const list = nodes ?? value?.content ?? [];
           </p>
         );
       case "heading": {
-        const level = typeof attrs.level === "number" && attrs.level >= 1 && attrs.level <= 6 ? attrs.level : 2;
+        // Integer too — `h2.5` is an invalid element name.
+        const level =
+          typeof attrs.level === "number" && Number.isInteger(attrs.level) && attrs.level >= 1 && attrs.level <= 6 ? attrs.level : 2;
         const Tag = `h${level}`;
         return (
           <Tag>

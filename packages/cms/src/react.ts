@@ -14,6 +14,7 @@
 
 import { createElement, Fragment } from "react";
 import type { ComponentType, ReactElement, ReactNode } from "react";
+import { isSafeHref } from "./index";
 import type { RenderedBlock, BlockTypeDef, BlockFieldsOf, RichTextDoc, RichTextNode, RichTextMark } from "./index";
 
 /** Props a component for a specific typed block type receives — `fields` is inferred from
@@ -107,6 +108,11 @@ function renderMarks(text: string, marks: RichTextMark[] | undefined): ReactNode
   for (const mark of marks ?? []) {
     if (mark.type === "link") {
       const attrs = mark.attrs ?? {};
+      // The href is the one attribute that can execute script, and this renderer declares
+      // itself a rescue for content that never passed through normalizeRichText (an app
+      // writing rows via its own mutation, a bootstrap seed, an import). So check it here
+      // too: an unsafe href drops the anchor and renders the text, never a live link.
+      if (!isSafeHref(attrs.href)) continue;
       const target = typeof attrs.target === "string" ? attrs.target : undefined;
       out = createElement(
         "a",
@@ -140,8 +146,9 @@ function renderRichTextNode(node: RichTextNode, key: number, components?: RichTe
       // Range-checked, matching RichText.astro. Both renderers declare themselves a rescue
       // for hand-written content that never passed through normalizeRichText, so neither
       // may trust the attribute — an out-of-range level would emit <h0>/<h99>.
+      // Integer too: `h2.5` throws InvalidCharacterError in document.createElement.
       const raw = attrs.level;
-      const level = typeof raw === "number" && raw >= 1 && raw <= 6 ? raw : 2;
+      const level = typeof raw === "number" && Number.isInteger(raw) && raw >= 1 && raw <= 6 ? raw : 2;
       return createElement(`h${level}`, { key }, children);
     }
     case "blockquote":

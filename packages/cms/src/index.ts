@@ -690,12 +690,15 @@ export const DEFAULT_RICH_TEXT_SCHEMA: RichTextSchema = {
 /** Allow-list for a link href: http(s), mailto, tel, or a relative/anchor path. The prefix
  * allow-list inherently rejects `javascript:`, `data:` and `vbscript:`.
  *
- * A single leading `/` only — `//evil.example/x` is PROTOCOL-RELATIVE, which a browser
- * resolves as an absolute cross-origin URL rather than a site-relative path. Not an XSS
- * vector, but this is the security boundary now (not the UI hint that @podoba/react's
- * `safeLinkUrl` is), so it should not quietly permit off-site links that look local. */
+ * A single leading slash only, and the next character may be neither `/` NOR `\`.
+ * `//evil.example/x` is protocol-relative; `/\evil.example/x` is the same attack wearing a
+ * backslash, because the WHATWG URL parser folds `\` to `/` at path-start for special
+ * schemes — `new URL("/\\evil.example/x", "https://site.test/a")` is `https://evil.example/x`.
+ * Both resolve off-site while looking local. Not an XSS vector, but this is the security
+ * boundary now (not the UI hint @podoba/react's `safeLinkUrl` is), so it must not quietly
+ * permit an off-site link dressed as a relative one. */
 export function isSafeHref(raw: unknown): boolean {
-  return typeof raw === "string" && /^(https?:\/\/|mailto:|tel:|\/(?!\/)|#)/i.test(raw.trim());
+  return typeof raw === "string" && /^(https?:\/\/|mailto:|tel:|\/(?![/\\])|#)/i.test(raw.trim());
 }
 
 /** Keep only the declared attributes, and only those holding a JSON primitive — an object
@@ -746,8 +749,12 @@ function normalizeNode(raw: unknown, schema: RichTextSchema, depth = 0): RichTex
 
   const out: RichTextNode = { type: node.type };
   if (node.type === "text") {
-    // A text node with no string is not text; drop it rather than emit an empty leaf.
-    if (typeof node.text !== "string") return null;
+    // A text node with no string — or an EMPTY one — is not text. ProseMirror forbids an
+    // empty text node outright (`schema.text("")` throws "Empty text nodes are not
+    // allowed"), and the editor builds its document inside a useState initializer, so a
+    // stored `{type:"text",text:""}` would throw during render and take the edit UI down
+    // for that row permanently.
+    if (typeof node.text !== "string" || node.text === "") return null;
     out.text = node.text;
     const marks = normalizeMarks(node.marks, schema);
     if (marks) out.marks = marks;
@@ -1169,6 +1176,10 @@ export interface CmsHandlerOpts {
   /** Roles permitted to approve/reject a page in review and publish (the editorial gate).
    * Default `["reviewer", "admin"]`. */
   reviewerRoles?: readonly string[];
+  /** The node/mark vocabulary accepted on write. Defaults to `DEFAULT_RICH_TEXT_SCHEMA`
+   * (what the shipped editor produces). Widen it if your editor adds TipTap extensions —
+   * a node type absent from the schema is DROPPED on write, not rejected. */
+  richTextSchema?: RichTextSchema;
 }
 
 /** Build the CMS handler map. Spread into your app's handlers. Editor mutations are
@@ -1180,6 +1191,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
   const defaultLocale = opts.defaultLocale ?? "en";
   const reviewerRoles = opts.reviewerRoles ?? ["reviewer", "admin"];
   const reviewer = { auth: reviewerRoles };
+  const rtSchema = opts.richTextSchema ?? DEFAULT_RICH_TEXT_SCHEMA;
   // Anyone who edits OR reviews may VIEW content (a reviewer must preview a page + load its
   // content type/blocks before approving). Read/preview handlers use this; writes stay editor.
   const viewerRoles = [...new Set([...editorRoles, ...reviewerRoles])];
@@ -1459,8 +1471,9 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       if (input.fields !== undefined) {
         const ctRows = await db.find({ from: "cms_content_types", where: { id: page.typeId }, limit: 1 });
         const schema = ctRows[0]?.fieldsSchema as FieldDefinition[] | undefined;
-        validateFields(schema, input.fields, "page.fields", { requireRequired: false });
-        patch.fields = normalizeFields(schema, input.fields);
+        // Same whole-bag autosave as updateBlock — tolerate a stored legacy value.
+        validateFields(schema, input.fields, "page.fields", { requireRequired: false, allowLegacyRichText: true });
+        patch.fields = normalizeFields(schema, input.fields, rtSchema);
       }
       const updated = await db.update("cms_pages", input.pageId, patch);
       if (!updated) throw notFound("page");
@@ -1484,7 +1497,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       const ct = ctRows[0];
       if (!ct) throw new BadRequest("unknown content type");
       validateFields(ct.fieldsSchema as FieldDefinition[] | undefined, input.fields ?? {}, "page.fields", { requireRequired: false });
-      const cleanPageFields = normalizeFields(ct.fieldsSchema as FieldDefinition[] | undefined, input.fields ?? {});
+      const cleanPageFields = normalizeFields(ct.fieldsSchema as FieldDefinition[] | undefined, input.fields ?? {}, rtSchema);
       const locale = input.locale ?? defaultLocale;
       await assertSlugFree(db, input.slug, locale);
 
@@ -1508,7 +1521,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
           if (!bts[0]) throw new BadRequest(`unknown block type '${d.blockTypeSlug}'`);
           await assertRegionAllows(db, page, d.region, d.blockTypeSlug);
           validateFields(bts[0].fieldsSchema as FieldDefinition[] | undefined, d.fields ?? {}, "", { requireRequired: false });
-          const cleanDefault = normalizeFields(bts[0].fieldsSchema as FieldDefinition[] | undefined, d.fields ?? {});
+          const cleanDefault = normalizeFields(bts[0].fieldsSchema as FieldDefinition[] | undefined, d.fields ?? {}, rtSchema);
           const block = await db.insert("cms_blocks", { typeId: bts[0].id, fields: cleanDefault });
           const position = await nextPosition(db, String(page.id), d.region);
           await db.insert("cms_page_blocks", { pageId: page.id, blockId: block.id, region: d.region, position });
@@ -1606,7 +1619,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       const bt = await loadBlockTypeBySlug(db, input.blockTypeSlug);
       await assertRegionAllows(db, page, input.region, input.blockTypeSlug);
       validateFields(bt.fieldsSchema as FieldDefinition[] | undefined, input.fields ?? {}, "", { requireRequired: false });
-      const cleanFields = normalizeFields(bt.fieldsSchema as FieldDefinition[] | undefined, input.fields ?? {});
+      const cleanFields = normalizeFields(bt.fieldsSchema as FieldDefinition[] | undefined, input.fields ?? {}, rtSchema);
 
       const block = await db.insert("cms_blocks", {
         typeId: bt.id,
@@ -1658,7 +1671,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
         // placed; the overrides themselves are new input and stay strict below.
         validateFields(bts[0]?.fieldsSchema as FieldDefinition[] | undefined, { ...asObj(block.fields), ...input.overrides }, "", { requireRequired: false, allowLegacyRichText: true });
         validateFields(bts[0]?.fieldsSchema as FieldDefinition[] | undefined, input.overrides, "", { requireRequired: false });
-        cleanOverrides = normalizeFields(bts[0]?.fieldsSchema as FieldDefinition[] | undefined, input.overrides);
+        cleanOverrides = normalizeFields(bts[0]?.fieldsSchema as FieldDefinition[] | undefined, input.overrides, rtSchema);
       }
       const position = input.position ?? (await nextPosition(db, input.pageId, input.region));
       return db.insert("cms_page_blocks", {
@@ -1702,8 +1715,11 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       let cleanFields = input.fields;
       if (input.fields !== undefined) {
         const bt = await db.find({ from: "cms_block_types", where: { id: block.typeId }, limit: 1 });
-        validateFields(bt[0]?.fieldsSchema as FieldDefinition[] | undefined, input.fields, "", { requireRequired: false });
-        cleanFields = normalizeFields(bt[0]?.fieldsSchema as FieldDefinition[] | undefined, input.fields);
+        // The editor autosaves the WHOLE fields bag ~800ms after any edit, so a legacy
+        // richtext value the author never touched rides along with an unrelated change.
+        // Rejecting it would 400 on every keystroke and make the block unsaveable.
+        validateFields(bt[0]?.fieldsSchema as FieldDefinition[] | undefined, input.fields, "", { requireRequired: false, allowLegacyRichText: true });
+        cleanFields = normalizeFields(bt[0]?.fieldsSchema as FieldDefinition[] | undefined, input.fields, rtSchema);
       }
       const patch: Record<string, unknown> = { updatedAt: nowStamp() };
       if (cleanFields !== undefined) patch.fields = cleanFields;
@@ -2133,6 +2149,7 @@ function collectionMeta(c: CollectionDef): CollectionMeta {
  * `collectionPolicies` scopes them too). The `collection` param is resolved through the
  * registry — an unknown slug is a 400, never a raw table reference. */
 export function createCollectionHandlers(collections: readonly CollectionDef[], opts: CmsHandlerOpts = {}) {
+  const collectionRtSchema = opts.richTextSchema ?? DEFAULT_RICH_TEXT_SCHEMA;
   const editor = { auth: opts.editorRoles ?? ["editor", "admin"] };
   const bySlug = new Map(collections.map((c) => [c.slug, c] as const));
   const metas = collections.map(collectionMeta);
@@ -2145,10 +2162,10 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
   // Validate against the field schema, sanitize richtext, then PROJECT to declared field
   // names only — the write whitelist. `requireRequired` is off for updates (partial patch);
   // on for create. Nothing outside `c.fields` can reach the entity.
-  const toColumns = (c: CollectionDef, values: unknown, requireRequired: boolean): Record<string, unknown> => {
+  const toColumns = (c: CollectionDef, values: unknown, requireRequired: boolean, allowLegacyRichText = false): Record<string, unknown> => {
     const obj = asObj(values);
-    validateFields([...c.fields], obj, "", { requireRequired });
-    const normalized = normalizeFields([...c.fields], obj);
+    validateFields([...c.fields], obj, "", { requireRequired, allowLegacyRichText });
+    const normalized = normalizeFields([...c.fields], obj, collectionRtSchema);
     const out: Record<string, unknown> = {};
     for (const f of c.fields) if (f.name in normalized) out[f.name] = normalized[f.name];
     return out;
@@ -2184,7 +2201,7 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
 
     collectionUpdate: mutation(async (ctx, input: { collection: string; id: string; values: Record<string, unknown> }) => {
       const c = def(input.collection);
-      const updated = await cdb(ctx).update(c.entity, input.id, toColumns(c, input.values, false));
+      const updated = await cdb(ctx).update(c.entity, input.id, toColumns(c, input.values, false, true));
       if (updated === undefined) throw notFound(c.label);
       return updated;
     }, editor),

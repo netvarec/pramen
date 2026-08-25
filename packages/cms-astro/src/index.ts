@@ -47,6 +47,18 @@ export interface RichTextMark {
   attrs?: Record<string, JsonValue>;
 }
 
+/** Allow-list for a link href: http(s), mailto, tel, or a relative/anchor path — a single
+ * leading slash, and the next character neither `/` nor `\` (both resolve off-site while
+ * looking local; the URL parser folds `\` to `/` at path-start).
+ *
+ * A local mirror of `isSafeHref` in @pramen/cms, because this package deliberately has no
+ * dependency on it. `RichText.astro` checks every link with it: the write path normalizes,
+ * but a row written by an app's own mutation, a bootstrap seed or an import script never
+ * passed through that, and this renderer is what puts it on a page. */
+export function isSafeHref(raw: unknown): boolean {
+  return typeof raw === "string" && /^(https?:\/\/|mailto:|tel:|\/(?![/\\])|#)/i.test(raw.trim());
+}
+
 export interface RenderedBlock {
   id: string;
   block_id: string;

@@ -158,7 +158,12 @@ descriptions.
 Writes are checked against a structural allow-list (`normalizeRichText`): an unknown node
 or mark type is dropped, only declared attributes survive, and a `link` href must pass a
 scheme check — so a hand-crafted payload can't smuggle markup past the editor. Widen or
-narrow the vocabulary with a custom `RichTextSchema`.
+narrow the vocabulary with `createCmsHandlers({ richTextSchema })` (also accepted by
+`createCollectionHandlers`) when your editor adds TipTap extensions.
+
+Both renderers re-check a link's href rather than trusting the stored document: the write
+path normalizes, but a row written by your own mutation, a bootstrap seed or an import
+script never passed through it, and the renderer is what puts it on a page.
 
 ## Limitations
 

@@ -126,12 +126,31 @@ test("richTextToPlainText turns a hard break into a newline", () => {
 
 // --- regression gates from the #36 review ------------------------------------
 
-test("isSafeHref rejects a protocol-relative url", () => {
-  // `//evil.example/x` looks site-relative but a browser resolves it as absolute
-  // cross-origin. Not XSS, but this function is the boundary, not a UI hint.
+test("isSafeHref rejects protocol-relative urls, backslash variant included", () => {
+  // Both resolve off-site while looking local. The backslash form works because the URL
+  // parser folds `\` to `/` at path-start:
+  //   new URL("/\\evil.example/x", "https://site.test/a") -> https://evil.example/x
   expect(isSafeHref("//evil.example/x")).toBe(false);
+  expect(isSafeHref("/\\evil.example/x")).toBe(false);
+  expect(new URL("/\\evil.example/x", "https://site.test/a").host).toBe("evil.example");
   expect(isSafeHref("/still-relative")).toBe(true);
   expect(isSafeHref("https://example.com//path")).toBe(true);
+});
+
+test("an empty text node is dropped, not stored", () => {
+  // ProseMirror forbids one outright (`schema.text("")` throws), and the editor builds its
+  // document in a useState initializer — so storing one bricks that row's edit UI.
+  const out = normalizeRichText(doc(para(text(""), text("kept"))));
+  expect(out.content).toEqual([para(text("kept"))] as RichTextDoc["content"]);
+});
+
+test("a custom richTextSchema reaches the shipped handlers", async () => {
+  const { createCmsHandlers } = await import("@pramen/cms");
+  // The option exists and is accepted — previously normalizeFields took a schema parameter
+  // that no call site inside createCmsHandlers ever passed, so the documented
+  // customization point was unreachable.
+  const handlers = createCmsHandlers({ richTextSchema: { nodes: { doc: [], paragraph: [], text: [] }, marks: {} } });
+  expect(typeof handlers.updateBlock).toBe("object");
 });
 
 test("normalizeRichText caps recursion instead of blowing the stack", () => {
