@@ -124,6 +124,27 @@ Editor flow: `createBlockType` → `createContentType` → `createPage` → `add
 `publishPage`. Public: `getPage({ slug })` returns the published snapshot; editors pass
 `{ slug, preview: true }` to assemble the live draft.
 
+### Concurrent edits
+
+`cms_pages` and `cms_blocks` carry a `version` that bumps on every edit. Pass the version
+you read back as `expectedVersion` and a stale write is refused with **409 conflict**
+instead of silently overwriting whoever saved first:
+
+```ts
+const { page } = await client.call("updatePage", { pageId, title, expectedVersion: page.version });
+// 409: "this page was changed by someone else (you have version 3, current is 4)"
+```
+
+The DO is a single writer, so writes already serialize — but *editors* don't. Without this,
+two people on the same page meant last-save-wins with no signal to the loser.
+
+`expectedVersion` is **optional**: omit it and you get the previous last-write-wins
+behaviour. `updatePage` and `updatePageSeo` share the page's version line, so a body edit
+and an SEO edit conflict with each other; blocks version independently.
+
+Structural operations (`addBlock`, `removeBlock`, `reorderRegion`) are not guarded — they
+are additive and already ordered by the single writer.
+
 ### Rendering (headless)
 
 The backend never dictates markup. `@pramen/cms/react` maps a block's `block_type` slug to

@@ -41,6 +41,7 @@ import {
   BadRequest,
   Forbidden,
   PramenError,
+  Conflict,
 } from "@pramen/server";
 import type { HandlerContext, Policy, FileRef, BootstrapFn, JsonValue } from "@pramen/server";
 import { filterXSS } from "xss";
@@ -397,6 +398,9 @@ export const cmsSchema = {
       title: t.text(),
       fields: t.json(), // content matching the block type's fieldsSchema
       isReusable: defaultTo(t.bool(), false),
+      // Optimistic concurrency: bumped on every edit. A caller may pass the version it
+      // read as `expectedVersion` and get a 409 instead of silently clobbering.
+      version: defaultTo(t.int(), 1),
       createdAt: defaultTo(t.text(), expr.now()),
       updatedAt: defaultTo(t.text(), expr.now()),
     }),
@@ -435,6 +439,8 @@ export const cmsSchema = {
       ogDescription: t.text(),
       ogImage: t.uuid(), // a cms_media id, resolved to a URL at assemble time
       structuredData: t.json(), // JSON-LD, emitted as-is into <head>
+      // Optimistic concurrency — see cms_blocks.version.
+      version: defaultTo(t.int(), 1),
       createdAt: defaultTo(t.text(), expr.now()),
       updatedAt: defaultTo(t.text(), expr.now()),
     }),
@@ -999,6 +1005,29 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
   const writeAudit = (db: CmsDb, e: { pageId: string; action: string; from?: string; to?: string; actor: string | null; note?: string }) =>
     db.insert("cms_audit", { pageId: e.pageId, action: e.action, fromStatus: e.from ?? null, toStatus: e.to ?? null, actor: e.actor, note: e.note ?? null });
 
+  // --- optimistic concurrency ------------------------------------------------
+  //
+  // The DO is a single writer, so a read-then-write inside one mutation is already
+  // atomic — but the EDITORS are not serialized. Two people on the same page today:
+  // last save wins, silently, and the loser gets no signal at all. A caller that passes
+  // back the `version` it read gets a 409 instead of clobbering.
+  //
+  // Optional by design: omitting `expectedVersion` keeps the previous last-write-wins
+  // behaviour, so no existing client breaks.
+  const nextVersion = (row: Record<string, unknown>, expected: number | undefined, label: string): number => {
+    const current = typeof row.version === "number" ? row.version : 1;
+    if (expected !== undefined && expected !== current) {
+      throw new Conflict(`${label} was changed by someone else (you have version ${expected}, current is ${current}) — reload and reapply your edit`);
+    }
+    return current + 1;
+  };
+  const versionInput = (o: Record<string, unknown>): void => {
+    if (o.expectedVersion === undefined) return;
+    if (typeof o.expectedVersion !== "number" || !Number.isInteger(o.expectedVersion)) {
+      throw new BadRequest("expectedVersion must be an integer");
+    }
+  };
+
   // (slug, locale) uniqueness is enforced here because pramen's unique() is single-column.
   const assertSlugFree = async (db: CmsDb, slug: string, locale: string, exceptId?: string): Promise<void> => {
     const rows = await db.exec(
@@ -1225,9 +1254,13 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     }),
 
     /** Update a page's SEO fields (meta/canonical/robots/OpenGraph/JSON-LD). Editor-gated. */
-    updatePageSeo: mutation(async (ctx, input: { pageId: string; metaTitle?: string | null; metaDescription?: string | null; canonicalUrl?: string | null; robots?: string | null; ogTitle?: string | null; ogDescription?: string | null; ogImage?: string | null; structuredData?: unknown }) => {
+    updatePageSeo: mutation(async (ctx, input: { pageId: string; metaTitle?: string | null; metaDescription?: string | null; canonicalUrl?: string | null; robots?: string | null; ogTitle?: string | null; ogDescription?: string | null; ogImage?: string | null; structuredData?: unknown; expectedVersion?: number }) => {
       const db = cdb(ctx);
-      const patch: Record<string, unknown> = { updatedAt: nowStamp() };
+      // Read first so the version can be compared. Previously this patched blind; the row
+      // still has to exist, and `db.update` returning nothing below keeps that check.
+      const seoRows = await db.find({ from: "cms_pages", where: { id: input.pageId }, limit: 1 });
+      if (!seoRows[0]) throw notFound("page");
+      const patch: Record<string, unknown> = { updatedAt: nowStamp(), version: nextVersion(seoRows[0], input.expectedVersion, "this page") };
       for (const k of ["metaTitle", "metaDescription", "canonicalUrl", "robots", "ogTitle", "ogDescription", "ogImage"] as const) {
         if (k in input) patch[k] = (input as Record<string, unknown>)[k];
       }
@@ -1240,6 +1273,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       input: (raw): { pageId: string } => {
         const o = asObj(raw);
         if (typeof o.pageId !== "string") throw new BadRequest("pageId is required");
+        versionInput(o);
         return o as never;
       },
     }),
@@ -1250,12 +1284,12 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
      * page record itself, which was previously only settable at createPage. A slug/locale
      * change re-checks (slug, locale) uniqueness (excluding this page); `fields` is validated
      * + sanitized against the content type's fieldsSchema, exactly like createPage. */
-    updatePage: mutation(async (ctx, input: { pageId: string; title?: string; slug?: string; locale?: string; fields?: FieldValues }) => {
+    updatePage: mutation(async (ctx, input: { pageId: string; title?: string; slug?: string; locale?: string; fields?: FieldValues; expectedVersion?: number }) => {
       const db = cdb(ctx);
       const rows = await db.find({ from: "cms_pages", where: { id: input.pageId }, limit: 1 });
       const page = rows[0];
       if (!page) throw notFound("page");
-      const patch: Record<string, unknown> = { updatedAt: nowStamp() };
+      const patch: Record<string, unknown> = { updatedAt: nowStamp(), version: nextVersion(page, input.expectedVersion, "this page") };
       if (input.title !== undefined) patch.title = input.title;
       if (input.slug !== undefined || input.locale !== undefined) {
         const nextSlug = input.slug ?? String(page.slug);
@@ -1275,12 +1309,13 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       return { ok: true, page: updated };
     }, {
       ...editor,
-      input: (raw): { pageId: string; title?: string; slug?: string; locale?: string; fields?: FieldValues } => {
+      input: (raw): { pageId: string; title?: string; slug?: string; locale?: string; fields?: FieldValues; expectedVersion?: number } => {
         const o = asObj(raw);
         if (typeof o.pageId !== "string") throw new BadRequest("pageId is required");
         for (const k of ["title", "slug", "locale"] as const) {
           if (o[k] !== undefined && typeof o[k] !== "string") throw new BadRequest(`${k} must be a string`);
         }
+        versionInput(o);
         return o as never;
       },
     }),
@@ -1498,7 +1533,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     }),
 
     /** Update a block's content (re-validated against its type's field schema). */
-    updateBlock: mutation(async (ctx, input: { blockId: string; fields?: FieldValues; title?: string }) => {
+    updateBlock: mutation(async (ctx, input: { blockId: string; fields?: FieldValues; title?: string; expectedVersion?: number }) => {
       const db = cdb(ctx);
       const rows = await db.find({ from: "cms_blocks", where: { id: input.blockId }, limit: 1 });
       const block = rows[0];
@@ -1509,15 +1544,16 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
         validateFields(bt[0]?.fieldsSchema as FieldDefinition[] | undefined, input.fields, "", { requireRequired: false });
         cleanFields = await sanitizeFields(bt[0]?.fieldsSchema as FieldDefinition[] | undefined, input.fields);
       }
-      const patch: Record<string, unknown> = { updatedAt: nowStamp() };
+      const patch: Record<string, unknown> = { updatedAt: nowStamp(), version: nextVersion(block, input.expectedVersion, "this block") };
       if (cleanFields !== undefined) patch.fields = cleanFields;
       if (input.title !== undefined) patch.title = input.title;
       return db.update("cms_blocks", input.blockId, patch);
     }, {
       ...editor,
-      input: (raw): { blockId: string; fields?: FieldValues; title?: string } => {
+      input: (raw): { blockId: string; fields?: FieldValues; title?: string; expectedVersion?: number } => {
         const o = asObj(raw);
         if (typeof o.blockId !== "string") throw new BadRequest("blockId is required");
+        versionInput(o);
         return o as never;
       },
     }),
