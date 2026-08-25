@@ -7,7 +7,7 @@
 // forced: this component owns the markup, and a bare `_blank` hands the opened page a
 // live `window.opener` handle back to yours.
 
-import { isSafeHref, type RichTextMark } from "./index";
+import { isSafeHref, normalizeHref, type RichTextMark } from "./index";
 import Self from "./RichTextMarks.astro";
 
 interface Props {
@@ -31,18 +31,20 @@ const attrs = mark?.attrs ?? {};
 // Astro does not sanitize attribute values, so an unchecked href here would render a
 // working `javascript:` anchor for any document that skipped the write-path normalizer.
 // An unsafe link degrades to its text rather than becoming a live one.
-const href = isSafeHref(attrs.href) ? String(attrs.href) : "";
+const href = isSafeHref(attrs.href) ? normalizeHref(String(attrs.href)) : "";
 const isLink = mark?.type === "link" && href !== "";
 const title = typeof attrs.title === "string" ? attrs.title : undefined;
 const target = typeof attrs.target === "string" ? attrs.target : undefined;
-const Tag = MARK_TAGS[mark?.type ?? ""] ?? "span";
+// hasOwn: a plain index would resolve `constructor`/`toString` off the prototype.
+const markType = mark?.type ?? "";
+const Tag = Object.hasOwn(MARK_TAGS, markType) ? MARK_TAGS[markType] : "span";
 ---
 
 {
   !mark ? (
     text
   ) : isLink ? (
-    <a href={href} title={title} target={target} rel={target === "_blank" ? "noopener noreferrer" : undefined}>
+    <a href={href} title={title} target={target} rel={target ? "noopener noreferrer" : undefined}>
       <Self text={text} marks={rest} />
     </a>
   ) : (

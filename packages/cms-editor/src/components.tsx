@@ -635,7 +635,7 @@ function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, o
   const blockId = block.block_id;
   const placementId = block.id;
 
-  // Load RAW fields (media as ids, richtext as HTML) so the value round-trips on save.
+  // Load RAW fields (media as ids, richtext as a document tree) so the value round-trips on save.
   // A pending optimistic block has no persisted row yet — start empty and skip the fetch
   // (its temp id would 404); when it reconciles to real ids the card remounts and fetches.
   useEffect(() => {

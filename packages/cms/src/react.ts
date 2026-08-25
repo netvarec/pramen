@@ -14,7 +14,7 @@
 
 import { createElement, Fragment } from "react";
 import type { ComponentType, ReactElement, ReactNode } from "react";
-import { isSafeHref } from "./index";
+import { isSafeHref, normalizeHref } from "./index";
 import type { RenderedBlock, BlockTypeDef, BlockFieldsOf, RichTextDoc, RichTextNode, RichTextMark } from "./index";
 
 /** Props a component for a specific typed block type receives — `fields` is inferred from
@@ -105,7 +105,12 @@ const MARK_TAGS: Record<string, string> = {
  * the markup and a bare `_blank` hands the opened page a `window.opener` handle. */
 function renderMarks(text: string, marks: RichTextMark[] | undefined): ReactNode {
   let out: ReactNode = text;
-  for (const mark of marks ?? []) {
+  // Innermost-first, so `marks[0]` ends up OUTERMOST — matching ProseMirror's own
+  // serializer and RichTextMarks.astro. Folding forwards put marks[0] innermost, so the
+  // same document rendered `<code><a>x</a></code>` here and `<a><code>x</code></a>` in
+  // Astro: different clickable area, different CSS selectors, same content.
+  for (let i = (marks?.length ?? 0) - 1; i >= 0; i--) {
+    const mark = marks![i]!;
     if (mark.type === "link") {
       const attrs = mark.attrs ?? {};
       // The href is the one attribute that can execute script, and this renderer declares
@@ -117,15 +122,18 @@ function renderMarks(text: string, marks: RichTextMark[] | undefined): ReactNode
       out = createElement(
         "a",
         {
-          href: String(attrs.href ?? ""),
+          href: normalizeHref(String(attrs.href ?? "")),
           title: typeof attrs.title === "string" ? attrs.title : undefined,
           target,
-          rel: target === "_blank" ? "noopener noreferrer" : undefined,
+          // Any named target opens a window holding a live `window.opener`, not just
+          // `_blank` — browsers imply noopener for `_blank` alone.
+          rel: target ? "noopener noreferrer" : undefined,
         },
         out,
       );
     } else {
-      out = createElement(MARK_TAGS[mark.type] ?? "span", null, out);
+      // hasOwn: a plain index would resolve `constructor`/`toString` off the prototype.
+      out = createElement(Object.hasOwn(MARK_TAGS, mark.type) ? MARK_TAGS[mark.type]! : "span", null, out);
     }
   }
   return out;
@@ -135,7 +143,7 @@ function renderRichTextNode(node: RichTextNode, key: number, components?: RichTe
   if (node.type === "text") return createElement(Fragment, { key }, renderMarks(node.text ?? "", node.marks));
 
   const children = (node.content ?? []).map((child, i) => renderRichTextNode(child, i, components));
-  const Override = components?.[node.type];
+  const Override = components && Object.hasOwn(components, node.type) ? components[node.type] : undefined;
   if (Override) return createElement(Override, { key, node, children });
 
   const attrs = node.attrs ?? {};

@@ -161,6 +161,10 @@ scheme check — so a hand-crafted payload can't smuggle markup past the editor.
 narrow the vocabulary with `createCmsHandlers({ richTextSchema })` (also accepted by
 `createCollectionHandlers`) when your editor adds TipTap extensions.
 
+Heading levels are 1–3, matching the shipped editor's StarterKit config — TipTap silently
+demotes an unknown level on parse, so permitting more meant an imported `h4` opened as `h1`
+and the next autosave persisted that.
+
 Both renderers re-check a link's href rather than trusting the stored document: the write
 path normalizes, but a row written by your own mutation, a bootstrap seed or an import
 script never passed through it, and the renderer is what puts it on a page.

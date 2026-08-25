@@ -56,7 +56,15 @@ export interface RichTextMark {
  * but a row written by an app's own mutation, a bootstrap seed or an import script never
  * passed through that, and this renderer is what puts it on a page. */
 export function isSafeHref(raw: unknown): boolean {
-  return typeof raw === "string" && /^(https?:\/\/|mailto:|tel:|\/(?![/\\])|#)/i.test(raw.trim());
+  return typeof raw === "string" && /^(https?:\/\/|mailto:|tel:|\/(?![/\\])|#)/i.test(normalizeHref(raw));
+}
+
+/** Strip the characters the WHATWG URL parser ignores before parsing (ASCII tab/CR/LF),
+ * then trim. Without this, `/\r\n/evil.example/x` passes a naive prefix test and still
+ * resolves to `https://evil.example/x`. Render THIS form, so what was checked is what
+ * the browser resolves. */
+export function normalizeHref(raw: string): string {
+  return raw.replace(/[\t\n\r]/g, "").trim();
 }
 
 export interface RenderedBlock {

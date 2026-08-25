@@ -293,12 +293,34 @@ const RT_EXTENSIONS = [
   TaskItem.configure({ nested: true }),
 ];
 
+/** Parse editor HTML into a document. Never throws: a parse failure yields an empty
+ * document rather than taking the render down (this runs on every keystroke). */
+function htmlToDoc(html: string): RichTextDoc {
+  try {
+    return generateJSON(html, RT_EXTENSIONS) as RichTextDoc;
+  } catch (e) {
+    console.error("pramen/cms-editor: could not parse editor HTML", e);
+    return { type: "doc", content: [] };
+  }
+}
+
 /** Seed HTML for the editor. A legacy HTML string passes through untouched — that is the
- * migration ramp: an old value still opens, and the first save writes it back as a doc. */
+ * migration ramp (see `RichText`, which upgrades it on mount).
+ *
+ * `generateHTML` throws a RangeError for any node or mark outside RT_EXTENSIONS, and this
+ * runs in a useState initializer with no ErrorBoundary above it — so an un-normalized
+ * document (a custom `richTextSchema`, an import, a bootstrap seed, `ctx.db.exec`) would
+ * throw during render and blank the whole SPA, not just this field. Fail to an empty
+ * editor and say so instead. */
 function docToEditorHtml(value: RichTextDoc | string | null | undefined): string {
   if (typeof value === "string") return value;
   if (!isRichTextDoc(value)) return "";
-  return generateHTML(value, RT_EXTENSIONS);
+  try {
+    return generateHTML(value, RT_EXTENSIONS);
+  } catch (e) {
+    console.error("pramen/cms-editor: rich-text document uses nodes this editor cannot render", e);
+    return "";
+  }
 }
 
 export function RichText({ value, onChange }: { value: RichTextDoc | string | null; onChange: (v: RichTextDoc) => void }) {
@@ -307,6 +329,20 @@ export function RichText({ value, onChange }: { value: RichTextDoc | string | nu
   // HTML lives in local state and the doc goes upward.
   const [html, setHtml] = useState(() => docToEditorHtml(value));
   const emitted = useRef<RichTextDoc | null>(null);
+
+  // Upgrade a legacy HTML value to a document AS SOON AS IT OPENS, not on first edit of
+  // this field. The server only tolerates a legacy string that is byte-identical to what
+  // is stored, and both renderers emit nothing for a string — so a value that is never
+  // upgraded stays invisible on the site forever. Converting on mount means any ordinary
+  // save (even of a sibling field) writes it back as a document.
+  const upgraded = useRef(false);
+  useEffect(() => {
+    if (upgraded.current || typeof value !== "string" || value === "") return;
+    upgraded.current = true;
+    const doc = htmlToDoc(value);
+    emitted.current = doc;
+    onChange(doc);
+  }, [value, onChange]);
 
   // Re-seed only when the parent hands us a doc that is not the one we last emitted —
   // i.e. the form switched to a different block, not our own change coming back around.
@@ -319,7 +355,7 @@ export function RichText({ value, onChange }: { value: RichTextDoc | string | nu
 
   const handleChange = (nextHtml: string) => {
     setHtml(nextHtml);
-    const doc = generateJSON(nextHtml, RT_EXTENSIONS) as RichTextDoc;
+    const doc = htmlToDoc(nextHtml);
     emitted.current = doc;
     onChange(doc);
   };
