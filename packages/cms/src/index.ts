@@ -43,7 +43,6 @@ import {
   PramenError,
 } from "@pramen/server";
 import type { HandlerContext, Policy, FileRef, BootstrapFn, JsonValue } from "@pramen/server";
-import { filterXSS } from "xss";
 import type { EnvBag } from "@pramen/server";
 
 // --- field schema DSL (the block-editor field language) ---------------------
@@ -143,8 +142,38 @@ export interface DefaultBlockDefinition {
 // the schema, exactly like `typeof app.handlers` types the RPC client. (A `pramen cms codegen`
 // command that emits these types from DB-stored schemas is future work.)
 
-/** A rich-text value — a serialized editor document (or a plain string). */
-export type RichText = string | { type: string; content?: unknown[] };
+/**
+ * A rich-text document — the editor's structured JSON (a ProseMirror/TipTap doc tree).
+ *
+ * **Not an HTML string.** HTML never enters storage: the write path validates this tree
+ * against a node/mark allow-list (`normalizeRichText`) and the render side maps node types
+ * to components, so there is no `set:html` / `dangerouslySetInnerHTML` anywhere in the
+ * chain and nothing to scrub. The one attribute that can still carry script is a `link`
+ * mark's `href`, so that one IS checked — see `isSafeHref`.
+ */
+export interface RichTextDoc {
+  type: "doc";
+  content?: RichTextNode[];
+}
+
+/** One node in a {@link RichTextDoc}. A leaf carries `text` (plus optional inline `marks`);
+ * a container carries `content`. */
+export interface RichTextNode {
+  type: string;
+  content?: RichTextNode[];
+  text?: string;
+  marks?: RichTextMark[];
+  attrs?: Record<string, JsonValue>;
+}
+
+/** An inline mark on a text node — bold, link, highlight, … */
+export interface RichTextMark {
+  type: string;
+  attrs?: Record<string, JsonValue>;
+}
+
+/** The value of a `richtext` field. */
+export type RichText = RichTextDoc;
 
 /** Map one FieldDefinition (as a const literal) to the TS type of its RENDERED value.
  * Media resolves to `ResolvedMedia` (the assemble-time shape a component receives). */
@@ -556,7 +585,13 @@ export function validateFields(schema: FieldDefinition[] | undefined | null, val
         if (!isSlugString(v)) throw new BadRequest(`field '${at}' must be a slug (lowercase letters, digits and single hyphens)`);
         break;
       case "richtext":
-        if (typeof v !== "string" && typeof v !== "object") throw new BadRequest(`field '${at}' must be rich text`);
+        // A document tree, never a string. A legacy HTML value is REJECTED rather than
+        // silently normalized to an empty doc — a 400 names the migration; a blank field
+        // would look like the content simply vanished.
+        if (typeof v === "string") throw new BadRequest(`field '${at}' must be a rich-text document, not an HTML string`);
+        if (typeof v !== "object" || Array.isArray(v) || (v as unknown as RichTextDoc).type !== "doc") {
+          throw new BadRequest(`field '${at}' must be a rich-text document ({ type: "doc", content: [...] })`);
+        }
         break;
       case "number":
         if (typeof v !== "number") throw new BadRequest(`field '${at}' must be a number`);
@@ -593,39 +628,174 @@ export function validateFields(schema: FieldDefinition[] | undefined | null, val
   }
 }
 
-// --- rich-text sanitization (server-side — the real XSS boundary) -------------
+// --- rich text: the structural allow-list (server-side — the real XSS boundary) ---
 //
-// richtext fields are HTML the site renders with set:html, so they MUST be sanitized
-// before persistence. Client-side scrubbing is not a boundary — a caller can POST any
-// value straight to these handlers. We sanitize on write against a strict tag/attribute
-// allow-list with js-xss (`xss`), which is SYNCHRONOUS and pure-JS — this matters because
-// sanitize runs inside the DO's storage.transaction(), where async stream I/O (e.g.
-// HTMLRewriter) deadlocks. js-xss drops disallowed tags/attributes and blanks
-// javascript:/data: URLs in href/src by default.
+// A `richtext` value is a document TREE, so there is no HTML to scrub — the boundary is
+// STRUCTURAL: an unknown node or mark type is dropped, only the attributes declared for a
+// type survive, an attribute value must be a JSON primitive, and a `link` href must pass a
+// scheme allow-list. Client-side checks are not a boundary — a caller can POST any value
+// straight to these handlers — so this runs on write, like the HTML sanitizer it replaces.
+//
+// Everything here is SYNCHRONOUS and pure. That still matters: normalization runs inside
+// the DO's storage.transaction(), where async stream I/O (e.g. HTMLRewriter) deadlocks —
+// the same constraint that once ruled out a DOM-based sanitizer.
 
-const RT_WHITELIST: Record<string, string[]> = {
-  p: [], br: [], hr: [], blockquote: [], pre: [], code: [],
-  strong: [], b: [], em: [], i: [], u: [], s: [], strike: [], del: [], ins: [], mark: [], sub: [], sup: [],
-  h2: [], h3: [], h4: [], ul: [], ol: [], li: [], a: ["href", "title"],
-};
-const RT_XSS_OPTS = { whiteList: RT_WHITELIST, stripIgnoreTag: true, stripIgnoreTagBody: ["script", "style"] as string[] };
-
-/** Sanitize one richtext HTML string to the allow-list. Synchronous by design. */
-function sanitizeRichText(html: string): string {
-  return html ? filterXSS(html, RT_XSS_OPTS) : html;
+/** The node/mark vocabulary a `richtext` value may use. A node entry maps a node type to
+ * the attribute names kept on it; a mark entry does the same for a mark type. */
+export interface RichTextSchema {
+  nodes: Record<string, readonly string[]>;
+  marks: Record<string, readonly string[]>;
 }
 
-/** Deep-sanitize the richtext fields in a values object against a field schema (recursing
- * into group/repeater). Returns a sanitized copy; non-richtext fields pass through. */
-export function sanitizeFields(schema: FieldDefinition[] | undefined | null, values: FieldValues): FieldValues {
+/** What the shipped editor can actually produce (TipTap StarterKit + Highlight + TaskList,
+ * as configured by @podoba/react's BlockEditor). Pass your own to `normalizeFields` if your
+ * editor adds extensions — a node type absent from the schema is dropped on write. */
+export const DEFAULT_RICH_TEXT_SCHEMA: RichTextSchema = {
+  nodes: {
+    doc: [],
+    paragraph: [],
+    text: [],
+    hardBreak: [],
+    horizontalRule: [],
+    heading: ["level"],
+    blockquote: [],
+    codeBlock: ["language"],
+    bulletList: [],
+    orderedList: ["start"],
+    listItem: [],
+    taskList: [],
+    taskItem: ["checked"],
+  },
+  marks: {
+    bold: [],
+    italic: [],
+    underline: [],
+    strike: [],
+    code: [],
+    highlight: ["color"],
+    link: ["href", "title", "target"],
+  },
+};
+
+/** Allow-list for a link href: http(s), mailto, tel, or a relative/anchor path. The prefix
+ * allow-list inherently rejects `javascript:`, `data:` and `vbscript:`.
+ *
+ * Deliberately the same rule as the editor's own link panel (@podoba/react's `safeLinkUrl`)
+ * so the UI guard and this boundary can't drift — but THIS is the one that counts. */
+export function isSafeHref(raw: unknown): boolean {
+  return typeof raw === "string" && /^(https?:\/\/|mailto:|tel:|\/|#)/i.test(raw.trim());
+}
+
+/** Keep only the declared attributes, and only those holding a JSON primitive — an object
+ * or array in an attr is never something the editor emits, so it is smuggled payload. */
+function normalizeAttrs(attrs: unknown, allowed: readonly string[]): Record<string, JsonValue> | undefined {
+  if (!allowed.length || !attrs || typeof attrs !== "object" || Array.isArray(attrs)) return undefined;
+  const out: Record<string, JsonValue> = {};
+  for (const name of allowed) {
+    const v = (attrs as Record<string, unknown>)[name];
+    if (v === undefined) continue;
+    if (v !== null && typeof v !== "string" && typeof v !== "number" && typeof v !== "boolean") continue;
+    if (name === "level" && (typeof v !== "number" || !Number.isInteger(v) || v < 1 || v > 6)) continue;
+    out[name] = v;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+/** Drop unknown marks and any `link` whose href fails the scheme allow-list (dropping the
+ * whole mark, not just the href — an anchor with no destination is worse than plain text). */
+function normalizeMarks(marks: unknown, schema: RichTextSchema): RichTextMark[] | undefined {
+  if (!Array.isArray(marks)) return undefined;
+  const out: RichTextMark[] = [];
+  for (const raw of marks) {
+    if (!raw || typeof raw !== "object") continue;
+    const mark = raw as RichTextMark;
+    const allowed = schema.marks[mark.type];
+    if (!allowed) continue;
+    const attrs = normalizeAttrs(mark.attrs, allowed);
+    if (mark.type === "link" && !isSafeHref(attrs?.href)) continue;
+    out.push(attrs ? { type: mark.type, attrs } : { type: mark.type });
+  }
+  return out.length ? out : undefined;
+}
+
+/** Normalize one node, or `null` if its type is not in the schema. */
+function normalizeNode(raw: unknown, schema: RichTextSchema): RichTextNode | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const node = raw as RichTextNode;
+  const allowed = schema.nodes[node.type];
+  if (!allowed) return null;
+
+  const out: RichTextNode = { type: node.type };
+  if (node.type === "text") {
+    // A text node with no string is not text; drop it rather than emit an empty leaf.
+    if (typeof node.text !== "string") return null;
+    out.text = node.text;
+    const marks = normalizeMarks(node.marks, schema);
+    if (marks) out.marks = marks;
+  }
+  const attrs = normalizeAttrs(node.attrs, allowed);
+  if (attrs) out.attrs = attrs;
+  if (Array.isArray(node.content)) {
+    const content = normalizeNodes(node.content, schema);
+    if (content.length) out.content = content;
+  }
+  return out;
+}
+
+function normalizeNodes(nodes: readonly unknown[], schema: RichTextSchema): RichTextNode[] {
+  const out: RichTextNode[] = [];
+  for (const n of nodes) {
+    const node = normalizeNode(n, schema);
+    if (node) out.push(node);
+  }
+  return out;
+}
+
+/** Normalize a rich-text value to a document the renderers can trust. A value that is not
+ * a doc at all yields an empty doc — `validateFields` rejects those first, so in handler
+ * flow this only ever sees a doc; the fallback is for direct callers. */
+export function normalizeRichText(value: unknown, schema: RichTextSchema = DEFAULT_RICH_TEXT_SCHEMA): RichTextDoc {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { type: "doc", content: [] };
+  const content = Array.isArray((value as RichTextDoc).content) ? normalizeNodes((value as RichTextDoc).content ?? [], schema) : [];
+  return { type: "doc", content };
+}
+
+/** The block-level node types that end a line when flattening to plain text. */
+const RT_BLOCK_TYPES = new Set(["paragraph", "heading", "listItem", "taskItem", "blockquote", "codeBlock", "horizontalRule"]);
+
+/** Flatten a rich-text document to plain text — for excerpts, meta descriptions, and search
+ * indexing, which want the words without the structure. */
+export function richTextToPlainText(value: RichTextDoc | null | undefined): string {
+  const parts: string[] = [];
+  const walk = (nodes: readonly RichTextNode[]): void => {
+    for (const node of nodes) {
+      if (node.type === "text") parts.push(node.text ?? "");
+      else if (node.type === "hardBreak") parts.push("\n");
+      if (node.content) walk(node.content);
+      if (RT_BLOCK_TYPES.has(node.type)) parts.push("\n");
+    }
+  };
+  walk(value?.content ?? []);
+  // A block inside a block (a paragraph in a list item) closes both, so collapse the run:
+  // every boundary is worth exactly one line break in a flattened excerpt.
+  return parts.join("").replace(/\n{2,}/g, "\n").trim();
+}
+
+/** Deep-normalize the richtext fields in a values object against a field schema (recursing
+ * into group/repeater). Returns a normalized copy; other field types pass through. */
+export function normalizeFields(
+  schema: FieldDefinition[] | undefined | null,
+  values: FieldValues,
+  richTextSchema: RichTextSchema = DEFAULT_RICH_TEXT_SCHEMA,
+): FieldValues {
   const defs = Array.isArray(schema) ? schema : [];
   const out: FieldValues = { ...values };
   for (const def of defs) {
     const v = out[def.name];
     if (v == null) continue;
-    if (def.type === "richtext" && typeof v === "string") out[def.name] = sanitizeRichText(v);
-    else if (def.type === "group" && typeof v === "object" && !Array.isArray(v)) out[def.name] = sanitizeFields(def.fields, v as FieldValues);
-    else if (def.type === "repeater" && Array.isArray(v)) out[def.name] = v.map((it) => (it && typeof it === "object" ? sanitizeFields(def.fields, it as FieldValues) : it));
+    if (def.type === "richtext") out[def.name] = normalizeRichText(v, richTextSchema);
+    else if (def.type === "group" && typeof v === "object" && !Array.isArray(v)) out[def.name] = normalizeFields(def.fields, v as FieldValues, richTextSchema);
+    else if (def.type === "repeater" && Array.isArray(v)) out[def.name] = v.map((it) => (it && typeof it === "object" ? normalizeFields(def.fields, it as FieldValues, richTextSchema) : it));
   }
   return out;
 }
@@ -686,7 +856,7 @@ export interface AssembledPage {
 /** One authored field value inside a block / collection / page `fields` bag. Stored
  * as JSON; a `"media"` field is resolved from its stored id to a `ResolvedMedia` at
  * assemble time, and `group`/`repeater` fields nest further bags. */
-export type FieldValue = JsonValue | ResolvedMedia | FieldValues | FieldValue[];
+export type FieldValue = JsonValue | ResolvedMedia | RichTextDoc | FieldValues | FieldValue[];
 
 /** A block / collection / page `fields` bag — field name -> authored value. */
 export interface FieldValues {
@@ -1249,7 +1419,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
      * Blocks are edited via addBlock/updateBlock; SEO via updatePageSeo; this covers the
      * page record itself, which was previously only settable at createPage. A slug/locale
      * change re-checks (slug, locale) uniqueness (excluding this page); `fields` is validated
-     * + sanitized against the content type's fieldsSchema, exactly like createPage. */
+     * + normalized against the content type's fieldsSchema, exactly like createPage. */
     updatePage: mutation(async (ctx, input: { pageId: string; title?: string; slug?: string; locale?: string; fields?: FieldValues }) => {
       const db = cdb(ctx);
       const rows = await db.find({ from: "cms_pages", where: { id: input.pageId }, limit: 1 });
@@ -1268,7 +1438,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
         const ctRows = await db.find({ from: "cms_content_types", where: { id: page.typeId }, limit: 1 });
         const schema = ctRows[0]?.fieldsSchema as FieldDefinition[] | undefined;
         validateFields(schema, input.fields, "page.fields", { requireRequired: false });
-        patch.fields = await sanitizeFields(schema, input.fields);
+        patch.fields = normalizeFields(schema, input.fields);
       }
       const updated = await db.update("cms_pages", input.pageId, patch);
       if (!updated) throw notFound("page");
@@ -1292,7 +1462,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       const ct = ctRows[0];
       if (!ct) throw new BadRequest("unknown content type");
       validateFields(ct.fieldsSchema as FieldDefinition[] | undefined, input.fields ?? {}, "page.fields", { requireRequired: false });
-      const cleanPageFields = await sanitizeFields(ct.fieldsSchema as FieldDefinition[] | undefined, input.fields ?? {});
+      const cleanPageFields = normalizeFields(ct.fieldsSchema as FieldDefinition[] | undefined, input.fields ?? {});
       const locale = input.locale ?? defaultLocale;
       await assertSlugFree(db, input.slug, locale);
 
@@ -1316,7 +1486,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
           if (!bts[0]) throw new BadRequest(`unknown block type '${d.blockTypeSlug}'`);
           await assertRegionAllows(db, page, d.region, d.blockTypeSlug);
           validateFields(bts[0].fieldsSchema as FieldDefinition[] | undefined, d.fields ?? {}, "", { requireRequired: false });
-          const cleanDefault = await sanitizeFields(bts[0].fieldsSchema as FieldDefinition[] | undefined, d.fields ?? {});
+          const cleanDefault = normalizeFields(bts[0].fieldsSchema as FieldDefinition[] | undefined, d.fields ?? {});
           const block = await db.insert("cms_blocks", { typeId: bts[0].id, fields: cleanDefault });
           const position = await nextPosition(db, String(page.id), d.region);
           await db.insert("cms_page_blocks", { pageId: page.id, blockId: block.id, region: d.region, position });
@@ -1414,7 +1584,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       const bt = await loadBlockTypeBySlug(db, input.blockTypeSlug);
       await assertRegionAllows(db, page, input.region, input.blockTypeSlug);
       validateFields(bt.fieldsSchema as FieldDefinition[] | undefined, input.fields ?? {}, "", { requireRequired: false });
-      const cleanFields = await sanitizeFields(bt.fieldsSchema as FieldDefinition[] | undefined, input.fields ?? {});
+      const cleanFields = normalizeFields(bt.fieldsSchema as FieldDefinition[] | undefined, input.fields ?? {});
 
       const block = await db.insert("cms_blocks", {
         typeId: bt.id,
@@ -1462,7 +1632,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       let cleanOverrides: Record<string, unknown> | null = input.overrides ?? null;
       if (input.overrides !== undefined) {
         validateFields(bts[0]?.fieldsSchema as FieldDefinition[] | undefined, { ...asObj(block.fields), ...input.overrides }, "", { requireRequired: false });
-        cleanOverrides = await sanitizeFields(bts[0]?.fieldsSchema as FieldDefinition[] | undefined, input.overrides);
+        cleanOverrides = normalizeFields(bts[0]?.fieldsSchema as FieldDefinition[] | undefined, input.overrides);
       }
       const position = input.position ?? (await nextPosition(db, input.pageId, input.region));
       return db.insert("cms_page_blocks", {
@@ -1507,7 +1677,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       if (input.fields !== undefined) {
         const bt = await db.find({ from: "cms_block_types", where: { id: block.typeId }, limit: 1 });
         validateFields(bt[0]?.fieldsSchema as FieldDefinition[] | undefined, input.fields, "", { requireRequired: false });
-        cleanFields = await sanitizeFields(bt[0]?.fieldsSchema as FieldDefinition[] | undefined, input.fields);
+        cleanFields = normalizeFields(bt[0]?.fieldsSchema as FieldDefinition[] | undefined, input.fields);
       }
       const patch: Record<string, unknown> = { updatedAt: nowStamp() };
       if (cleanFields !== undefined) patch.fields = cleanFields;
@@ -1951,9 +2121,9 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
   const toColumns = (c: CollectionDef, values: unknown, requireRequired: boolean): Record<string, unknown> => {
     const obj = asObj(values);
     validateFields([...c.fields], obj, "", { requireRequired });
-    const sanitized = sanitizeFields([...c.fields], obj);
+    const normalized = normalizeFields([...c.fields], obj);
     const out: Record<string, unknown> = {};
-    for (const f of c.fields) if (f.name in sanitized) out[f.name] = sanitized[f.name];
+    for (const f of c.fields) if (f.name in normalized) out[f.name] = normalized[f.name];
     return out;
   };
   const idInput = (raw: unknown): string => {

@@ -133,13 +133,32 @@ a component you provide:
 import { RegionRenderer } from "@pramen/cms/react";
 import { useLiveQuery } from "@pramen/react";
 
-const components = { hero: Hero, rich_text: RichText };
+const components = { hero: Hero, rich_text: RichTextBlock };
 function Page({ slug }: { slug: string }) {
   const { data } = useLiveQuery(client, "getPage", { slug });
   if (!data) return null;
   return <RegionRenderer regions={data.regions} name="content" components={components} />;
 }
 ```
+
+A `richtext` field is a **document tree**, not an HTML string — render it with
+`RichTextRenderer`, which walks the tree into real elements (no `dangerouslySetInnerHTML`,
+nothing to sanitize at render time):
+
+```tsx
+import { RichTextRenderer } from "@pramen/cms/react";
+
+const RichTextBlock = ({ fields }) => <RichTextRenderer value={fields.body} />;
+```
+
+Pass `components` to override any node type (`paragraph`, `heading`, `link`, …) with your
+own element. `richTextToPlainText(doc)` flattens a document for excerpts and meta
+descriptions.
+
+Writes are checked against a structural allow-list (`normalizeRichText`): an unknown node
+or mark type is dropped, only declared attributes survive, and a `link` href must pass a
+scheme check — so a hand-crafted payload can't smuggle markup past the editor. Widen or
+narrow the vocabulary with a custom `RichTextSchema`.
 
 ## Limitations
 

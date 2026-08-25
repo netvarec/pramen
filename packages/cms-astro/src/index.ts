@@ -11,6 +11,9 @@
 
 import type { Loader, LoaderContext } from "astro/loaders";
 
+/** Any JSON value — the wire form of everything the CMS stores. */
+export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+
 /** A resolved media reference (a `"media"` block field, resolved by the CMS). */
 export interface ResolvedMedia {
   id: string;
@@ -19,6 +22,29 @@ export interface ResolvedMedia {
   alt: string | null;
   contentType: string | null;
   filename: string | null;
+}
+
+/** A rich-text document — the structured JSON a `richtext` field stores. Mirrors
+ * `RichTextDoc` in @pramen/cms; render it with `RichText.astro`. Never an HTML string:
+ * nothing on this path uses `set:html`. */
+export interface RichTextDoc {
+  type: "doc";
+  content?: RichTextNode[];
+}
+
+/** One node in a {@link RichTextDoc}. */
+export interface RichTextNode {
+  type: string;
+  content?: RichTextNode[];
+  text?: string;
+  marks?: RichTextMark[];
+  attrs?: Record<string, JsonValue>;
+}
+
+/** An inline mark on a text node. */
+export interface RichTextMark {
+  type: string;
+  attrs?: Record<string, JsonValue>;
 }
 
 export interface RenderedBlock {

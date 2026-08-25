@@ -1,0 +1,49 @@
+---
+// Wrap a text leaf in its inline marks, peeling one mark per recursion. Split out of
+// RichText.astro because marks nest arbitrarily (bold inside a link inside a highlight)
+// and a template can't build that chain in one pass.
+//
+// A `link` is the only mark carrying attributes through. `target="_blank"` gets `rel`
+// forced: this component owns the markup, and a bare `_blank` hands the opened page a
+// live `window.opener` handle back to yours.
+
+import type { RichTextMark } from "./index";
+import Self from "./RichTextMarks.astro";
+
+interface Props {
+  text: string;
+  marks?: RichTextMark[];
+}
+
+const { text, marks = [] } = Astro.props;
+const [mark, ...rest] = marks;
+
+const MARK_TAGS: Record<string, string> = {
+  bold: "strong",
+  italic: "em",
+  underline: "u",
+  strike: "s",
+  code: "code",
+  highlight: "mark",
+};
+
+const attrs = mark?.attrs ?? {};
+const href = typeof attrs.href === "string" ? attrs.href : "";
+const title = typeof attrs.title === "string" ? attrs.title : undefined;
+const target = typeof attrs.target === "string" ? attrs.target : undefined;
+const Tag = MARK_TAGS[mark?.type ?? ""] ?? "span";
+---
+
+{
+  !mark ? (
+    text
+  ) : mark.type === "link" ? (
+    <a href={href} title={title} target={target} rel={target === "_blank" ? "noopener noreferrer" : undefined}>
+      <Self text={text} marks={rest} />
+    </a>
+  ) : (
+    <Tag>
+      <Self text={text} marks={rest} />
+    </Tag>
+  )
+}

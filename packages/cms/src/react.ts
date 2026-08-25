@@ -13,8 +13,8 @@
 // normally write `<BlockRenderer .../>` — it's an ordinary component either way.
 
 import { createElement, Fragment } from "react";
-import type { ComponentType, ReactElement } from "react";
-import type { RenderedBlock, BlockTypeDef, BlockFieldsOf } from "./index";
+import type { ComponentType, ReactElement, ReactNode } from "react";
+import type { RenderedBlock, BlockTypeDef, BlockFieldsOf, RichTextDoc, RichTextNode, RichTextMark } from "./index";
 
 /** Props a component for a specific typed block type receives — `fields` is inferred from
  * the block type's schema via `BlockFieldsOf` (see `defineBlockType`). */
@@ -73,4 +73,112 @@ export interface RegionRendererProps {
 /** Render a single named region from an AssembledPage's `regions` map. */
 export function RegionRenderer({ regions, name, components, fallback }: RegionRendererProps): ReactElement {
   return BlockRenderer({ blocks: regions[name] ?? [], region: name, components, fallback });
+}
+
+// --- rich text ----------------------------------------------------------------------
+// A `richtext` field is a document tree, not an HTML string, so it renders as REAL React
+// elements — no `dangerouslySetInnerHTML`, and nothing to sanitize at render time (the
+// write path already dropped every node/mark outside the allow-list). Override any node
+// type through `components` when your design system wants its own element.
+
+/** Props a rich-text node component receives. `children` is the already-rendered subtree. */
+export interface RichTextNodeProps {
+  node: RichTextNode;
+  children: ReactNode;
+}
+
+/** Per-node-type component overrides, keyed by node type (`"paragraph"`, `"heading"`, …). */
+export type RichTextNodeComponents = Record<string, ComponentType<RichTextNodeProps>>;
+
+const MARK_TAGS: Record<string, string> = {
+  bold: "strong",
+  italic: "em",
+  underline: "u",
+  strike: "s",
+  code: "code",
+  highlight: "mark",
+};
+
+/** Wrap a text leaf in its marks, innermost-first. A `link` is the only mark carrying
+ * attributes we pass through; `target="_blank"` gets `rel` forced, since the renderer owns
+ * the markup and a bare `_blank` hands the opened page a `window.opener` handle. */
+function renderMarks(text: string, marks: RichTextMark[] | undefined): ReactNode {
+  let out: ReactNode = text;
+  for (const mark of marks ?? []) {
+    if (mark.type === "link") {
+      const attrs = mark.attrs ?? {};
+      const target = typeof attrs.target === "string" ? attrs.target : undefined;
+      out = createElement(
+        "a",
+        {
+          href: String(attrs.href ?? ""),
+          title: typeof attrs.title === "string" ? attrs.title : undefined,
+          target,
+          rel: target === "_blank" ? "noopener noreferrer" : undefined,
+        },
+        out,
+      );
+    } else {
+      out = createElement(MARK_TAGS[mark.type] ?? "span", null, out);
+    }
+  }
+  return out;
+}
+
+function renderRichTextNode(node: RichTextNode, key: number, components?: RichTextNodeComponents): ReactNode {
+  if (node.type === "text") return createElement(Fragment, { key }, renderMarks(node.text ?? "", node.marks));
+
+  const children = (node.content ?? []).map((child, i) => renderRichTextNode(child, i, components));
+  const Override = components?.[node.type];
+  if (Override) return createElement(Override, { key, node, children });
+
+  const attrs = node.attrs ?? {};
+  switch (node.type) {
+    case "paragraph":
+      return createElement("p", { key }, children);
+    case "heading": {
+      const level = typeof attrs.level === "number" ? attrs.level : 2;
+      return createElement(`h${level}`, { key }, children);
+    }
+    case "blockquote":
+      return createElement("blockquote", { key }, children);
+    case "codeBlock":
+      return createElement(
+        "pre",
+        { key },
+        createElement("code", { className: typeof attrs.language === "string" ? `language-${attrs.language}` : undefined }, children),
+      );
+    case "bulletList":
+      return createElement("ul", { key }, children);
+    case "orderedList":
+      return createElement("ol", { key, start: typeof attrs.start === "number" ? attrs.start : undefined }, children);
+    case "listItem":
+      return createElement("li", { key }, children);
+    case "taskList":
+      return createElement("ul", { key, "data-type": "taskList" }, children);
+    case "taskItem":
+      return createElement("li", { key, "data-type": "taskItem", "data-checked": attrs.checked === true ? "true" : "false" }, children);
+    case "hardBreak":
+      return createElement("br", { key });
+    case "horizontalRule":
+      return createElement("hr", { key });
+    default:
+      // Unreachable through the write path (normalizeRichText drops unknown types), so
+      // rendering the subtree is a rescue for hand-written content, not a policy.
+      return createElement(Fragment, { key }, children);
+  }
+}
+
+export interface RichTextRendererProps {
+  value: RichTextDoc | null | undefined;
+  components?: RichTextNodeComponents;
+}
+
+/** Render a rich-text document as React elements. */
+export function RichTextRenderer({ value, components }: RichTextRendererProps): ReactElement {
+  return createElement(
+    Fragment,
+    null,
+    (value?.content ?? []).map((node, i) => renderRichTextNode(node, i, components)),
+  );
 }
