@@ -124,6 +124,22 @@ Editor flow: `createBlockType` → `createContentType` → `createPage` → `add
 `publishPage`. Public: `getPage({ slug })` returns the published snapshot; editors pass
 `{ slug, preview: true }` to assemble the live draft.
 
+### Typed block fields
+
+A developer-authored block type gets compile-time typing with no build step —
+`defineBlockType(slug, fields as const)` plus `BlockFieldsOf<typeof def>`.
+
+Webmaster-authored types are **data** (rows in `cms_block_types`, added with no deploy), so
+they can't be typed at compile time. Read them back out of a running instance instead:
+
+```bash
+pramen cms types --url https://cms.example.workers.dev --tenant acme --out src/cms.gen.ts
+```
+
+That writes an interface per block-type slug plus a `BlockFieldsBySlug` registry. With no
+`--out` it prints, so it composes with a pipe. Re-run it after a webmaster adds or changes
+a block type.
+
 ### Rendering (headless)
 
 The backend never dictates markup. `@pramen/cms/react` maps a block's `block_type` slug to

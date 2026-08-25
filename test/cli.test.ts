@@ -31,6 +31,19 @@ describe("pramen cli", () => {
     expect(a).toBe(b);
   });
 
+  test("help lists the cms codegen command", () => {
+    const { out } = run("help");
+    expect(out).toContain("cms types");
+  });
+
+  test("cms types fails clearly when it cannot reach an instance", () => {
+    // Port 1 is never a pramen instance — the point is that it fails with a message
+    // naming the command, not an unhandled fetch rejection.
+    const { err, code } = run("cms", "types", "--url", "http://127.0.0.1:1");
+    expect(code).not.toBe(0);
+    expect(err).toContain("cms types");
+  });
+
   test("token mints a 3-part JWT", () => {
     const tok = run("token", "alice", "author", "--tenant", "main").out.trim();
     expect(tok.split(".").length).toBe(3);
