@@ -274,8 +274,14 @@ export async function runCms(base: string): Promise<void> {
   await new Promise((r) => setTimeout(r, 1200));
   await drain(base, admin);
   assert((await call("getPage", { slug: "sched-doomed" })).status === 404, "cms: a scheduled publish does not resurrect a trashed page");
-  const stillTrashed = (await call("listTrash", {}, admin)).body.result as { pages: Array<{ id: string }> };
-  assert(stillTrashed.pages.some((p) => p.id === schedId), "cms: the trashed page stays trashed through its scheduled time");
+  const stillTrashed = (await call("listTrash", {}, admin)).body.result as { pages: Array<{ id: string; status: string }> };
+  const schedRow = stillTrashed.pages.find((p) => p.id === schedId);
+  assert(schedRow !== undefined, "cms: the trashed page stays trashed through its scheduled time");
+  // THIS is the assertion that tests the fix. The two above pass either way: `getPage`
+  // 404s on `deletedAt IS NOT NULL` regardless of status, and trash membership is keyed on
+  // deletedAt, which publishing never touches. Only `status` shows whether the SYSTEM-context
+  // task actually published it — the one property the ACL read scope cannot cover.
+  assert(schedRow!.status !== "published", `cms: the scheduled task did not publish the trashed page (status=${schedRow!.status})`);
 
   // A trashed translation still blocks its locale — the guard reads raw, not through the
   // ACL, or restoring the first would leave two live pages for one locale in a group.

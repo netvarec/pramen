@@ -1095,6 +1095,10 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
   const [hasMore, setHasMore] = useState(false);
   const [selected, setSelected] = useState<Media | null>(null);
   const [busy, setBusy] = useState(false);
+  // Trashed files. Deleting no longer removes the R2 object, so without this the bytes stay
+  // publicly fetchable with no way to reach purgeMedia — the case a takedown request needs.
+  const [trash, setTrash] = useState<Media[]>([]);
+  const [showTrash, setShowTrash] = useState(false);
 
   const load = useCallback(
     (off: number) => {
@@ -1109,7 +1113,30 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
     },
     [api, onError],
   );
+  const loadTrash = useCallback(() => {
+    api.listTrash().then((r) => setTrash(r.media ?? [])).catch((e) => onError(errMsg(e)));
+  }, [api, onError]);
   useEffect(() => { load(0); }, [load]);
+  useEffect(() => { loadTrash(); }, [loadTrash]);
+
+  const restore = async (id: string) => {
+    try {
+      await api.restoreMedia(id);
+      loadTrash();
+      load(0);
+    } catch (e) {
+      onError(errMsg(e));
+    }
+  };
+  const purge = async (id: string) => {
+    if (!confirm("Delete this file permanently? The file itself is removed and cannot be recovered.")) return;
+    try {
+      await api.purgeMedia(id);
+      loadTrash();
+    } catch (e) {
+      onError(errMsg(e));
+    }
+  };
 
   const upload = async (files: FileList | null) => {
     if (!files?.length) return;
@@ -1153,13 +1180,37 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
             <Button variant="secondary" size="sm" onPress={() => load(offset)}>Load more</Button>
           </div>
         ) : null}
+        {trash.length > 0 ? (
+          <div className="mt-6 border-t border-border pt-4">
+            <button type="button" className="text-small text-fg-muted underline" onClick={() => setShowTrash((v) => !v)}>
+              {showTrash ? "Hide" : "Show"} trash ({trash.length})
+            </button>
+            {showTrash ? (
+              <>
+                <p className="mt-2 text-small text-fg-subtle">
+                  Trashed files are hidden from the library but the file itself still exists — a page published
+                  while it was in use keeps showing it. Delete permanently to remove the file.
+                </p>
+                <div className="mt-2.5 flex flex-col gap-1.5">
+                  {trash.map((m) => (
+                    <div key={m.id} className="flex items-center gap-2.5 rounded-lg border border-border bg-surface-muted px-3 py-2">
+                      <span className="flex-1 truncate text-small text-fg-muted">{m.file?.filename ?? m.id}</span>
+                      <Button variant="secondary" size="sm" onPress={() => restore(m.id)}>Restore</Button>
+                      <Button variant="secondary" size="sm" onPress={() => purge(m.id)}>Delete permanently</Button>
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : null}
+          </div>
+        ) : null}
         {selected ? (
           <MediaDetail
             api={api}
             media={selected}
             onClose={() => setSelected(null)}
             onSaved={(m) => { setSelected(m); setMedia((prev) => prev.map((x) => (x.id === m.id ? m : x))); }}
-            onDeleted={(id) => { setSelected(null); setMedia((prev) => prev.filter((x) => x.id !== id)); }}
+            onDeleted={(id) => { setSelected(null); setMedia((prev) => prev.filter((x) => x.id !== id)); loadTrash(); }}
             onError={onError}
           />
         ) : null}
@@ -1185,7 +1236,7 @@ function MediaDetail({ api, media, onClose, onSaved, onDeleted, onError }: { api
     }
   };
   const del = async () => {
-    if (!confirm("Move this file to the trash? Blocks still referencing it will show a broken image until it is restored.")) return;
+    if (!confirm("Move this file to the trash? It disappears from the library, but a page published while it was in use keeps showing it — delete it permanently from the trash to remove the file itself.")) return;
     setBusy(true);
     try {
       await api.deleteMedia(media.id);
