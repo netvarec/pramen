@@ -236,6 +236,43 @@ export async function runCms(base: string): Promise<void> {
   assert(!/javascript:/i.test(rtBody), "cms: richtext sanitized on write — javascript: hrefs stripped");
   assert(/<strong>there<\/strong>/i.test(rtBody), "cms: richtext sanitization preserves allow-listed markup");
 
+  // --- trash: soft delete hides a page everywhere, restore brings it back ---
+  const trashPage = await call("createPage", { typeId: ct.body.result.id, title: "Doomed", slug: "doomed" }, admin);
+  const trashId = trashPage.body.result.id as string;
+  await call("publishPage", { pageId: trashId }, admin);
+  assert((await call("getPage", { slug: "doomed" })).body.ok, "cms: the page is publicly readable before deletion");
+
+  const trashDel = await call("deletePage", { pageId: trashId }, admin);
+  assert(trashDel.body.ok, "cms: deletePage trashes the page");
+  // The ACL read scope hides it — for anonymous AND for the editor, without either handler
+  // filtering. A published page that was trashed must stop being served.
+  assert((await call("getPage", { slug: "doomed" })).status === 404, "cms: a trashed page is gone from the public content API");
+  assert((await call("getPage", { slug: "doomed", preview: true }, admin)).status === 404, "cms: a trashed page is hidden from the editor too");
+  const afterTrashPages = (await call("listPages", {}, admin)).body.result as Array<{ id: string }>;
+  assert(!afterTrashPages.some((p) => p.id === trashId), "cms: a trashed page drops out of listPages");
+  const afterTrashPublished = (await call("listPublishedPages", {})).body.result as Array<{ slug: string }>;
+  assert(!afterTrashPublished.some((p) => p.slug === "doomed"), "cms: a trashed page drops out of listPublishedPages (and the sitemap)");
+
+  const trash = (await call("listTrash", {}, admin)).body.result as Array<{ id: string }>;
+  assert(trash.some((p) => p.id === trashId), "cms: listTrash shows the trashed page");
+
+  // The slug is still held while trashed — a DB unique constraint, so say so plainly.
+  const slugClash = await call("createPage", { typeId: ct.body.result.id, title: "Reuse", slug: "doomed" }, admin);
+  assert(slugClash.status === 400 && /trash/i.test(String(slugClash.body.error ?? "")), "cms: reusing a trashed page's slug fails with a message naming the trash");
+
+  const restored = await call("restorePage", { pageId: trashId }, admin);
+  assert(restored.body.ok, "cms: restorePage brings it back");
+  assert((await call("getPage", { slug: "doomed" })).body.ok, "cms: a restored page is publicly readable again");
+
+  // Purge is irreversible and refuses a LIVE page — trash it first.
+  assert((await call("purgePage", { pageId: trashId }, admin)).status === 404, "cms: purging a live page is refused");
+  await call("deletePage", { pageId: trashId }, admin);
+  assert((await call("purgePage", { pageId: trashId }, admin)).body.ok, "cms: purgePage removes a trashed page for good");
+  assert((await call("listTrash", {}, admin)).body.result.every((p: { id: string }) => p.id !== trashId), "cms: a purged page leaves the trash");
+  // Its slug is free again now that the row is gone.
+  const reuse = await call("createPage", { typeId: ct.body.result.id, title: "Reuse", slug: "doomed" }, admin);
+  assert(reuse.body.ok, "cms: purging frees the slug");
+
   const served = await fetch(`${base}/media/${mediaKey}`);
   assert(served.status === 200 && served.headers.get("content-type") === "image/png", "cms: the public /media route serves the blob (no auth)");
 
@@ -248,9 +285,21 @@ export async function runCms(base: string): Promise<void> {
   assert(altRead.body.result.alt === "Updated alt", "cms: the new alt text persists");
 
   const del = await call("deleteMedia", { id: mediaId }, admin);
-  assert(del.body.ok, "cms: deleteMedia removes the media");
+  assert(del.body.ok, "cms: deleteMedia trashes the media row");
+  // getMedia returns null (not 404) for an unreadable row — the read scope simply
+  // yields nothing, which is what "hidden" means here.
+  assert((await call("getMedia", { id: mediaId }, admin)).body.result === null, "cms: trashed media is hidden by the read scope");
+  // The BLOB survives a soft delete on purpose — dropping the bytes here would make
+  // restoreMedia a lie, and a block still holding the id would render a dead url.
+  assert((await fetch(`${base}/media/${mediaKey}`)).status === 200, "cms: the R2 object survives deleteMedia");
+
+  assert((await call("restoreMedia", { id: mediaId }, admin)).body.ok, "cms: restoreMedia brings the row back");
+  assert((await call("getMedia", { id: mediaId }, admin)).body.result !== null, "cms: restored media is readable again");
+
+  await call("deleteMedia", { id: mediaId }, admin);
+  assert((await call("purgeMedia", { id: mediaId }, admin)).body.ok, "cms: purgeMedia removes the row for good");
   const gone = await fetch(`${base}/media/${mediaKey}`);
-  assert(gone.status === 404, "cms: the blob is gone after deleteMedia");
+  assert(gone.status === 404, "cms: the blob is gone after purgeMedia");
 
   // --- SEO: meta fields, og:image resolution, sitemap.xml, robots.txt ---
   const seoUp = await call("signMediaUpload", { contentType: "image/png" }, admin);

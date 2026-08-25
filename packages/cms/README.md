@@ -124,6 +124,29 @@ Editor flow: `createBlockType` → `createContentType` → `createPage` → `add
 `publishPage`. Public: `getPage({ slug })` returns the published snapshot; editors pass
 `{ slug, preview: true }` to assemble the live draft.
 
+### Trash (soft delete)
+
+`deletePage` and `deleteMedia` are **soft**: the row stays and `deletedAt` is stamped.
+Filtering lives in the ACL, not in each handler — a read scope is AND-merged into every
+`ctx.db` read, so one policy hides a trashed row from the public content API, the editor,
+`listPublishedPages`/the sitemap, relation traversals and eager-loads at once.
+
+| Handler | Role | Effect |
+| --- | --- | --- |
+| `deletePage` / `deleteMedia` | editor | stamp `deletedAt` — reversible |
+| `listTrash` | editor / reviewer | what is currently trashed |
+| `restorePage` / `restoreMedia` | editor | clear `deletedAt` |
+| `purgePage` / `purgeMedia` | reviewer | permanent — row, placements, revisions, audit, R2 object |
+
+Two things worth knowing:
+
+- **A trashed page keeps its slug.** `(slug, locale)` is a DB unique index, so the
+  alternative was mangling the stored slug on delete. Creating a page over a trashed slug
+  fails with a message saying so; purging frees it.
+- **Trashing media keeps the R2 object.** Dropping the bytes would make `restoreMedia` a
+  lie, and a block still referencing the id would render a dead url. `purgeMedia` removes
+  both.
+
 ### Rendering (headless)
 
 The backend never dictates markup. `@pramen/cms/react` maps a block's `block_type` slug to
