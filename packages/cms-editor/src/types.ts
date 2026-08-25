@@ -5,9 +5,32 @@
 /** Any JSON value — the wire form of everything the CMS stores. */
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
+/** A rich-text document — the editor's structured JSON. Mirrors `RichTextDoc` in
+ * @pramen/cms; a `richtext` field is this tree, never an HTML string. */
+export interface RichTextDoc {
+  type: "doc";
+  content?: RichTextNode[];
+}
+
+/** One node in a {@link RichTextDoc}. */
+export interface RichTextNode {
+  type: string;
+  content?: RichTextNode[];
+  text?: string;
+  marks?: RichTextMark[];
+  attrs?: Record<string, JsonValue>;
+}
+
+/** An inline mark on a text node. */
+export interface RichTextMark {
+  type: string;
+  attrs?: Record<string, JsonValue>;
+}
+
 /** One authored field value. Mirrors `FieldValue` in @pramen/cms: a `"media"` field
- * arrives resolved to a `Media`, and `group`/`repeater` fields nest further bags. */
-export type FieldValue = JsonValue | Media | FieldValues | FieldValue[];
+ * arrives resolved to a `Media`, a `"richtext"` field is a `RichTextDoc`, and
+ * `group`/`repeater` fields nest further bags. */
+export type FieldValue = JsonValue | Media | RichTextDoc | FieldValues | FieldValue[];
 
 /** A block / collection / page `fields` bag — field name -> authored value. */
 export interface FieldValues {
