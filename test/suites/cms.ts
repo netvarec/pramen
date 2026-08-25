@@ -139,6 +139,39 @@ export async function runCms(base: string): Promise<void> {
   const anonPreview = await call("getPage", { slug, preview: true });
   assert(anonPreview.status === 403, "cms: anonymous preview is forbidden (403)");
 
+  // --- signed preview links: a capability, not a role ---
+  // The point of preview is the stakeholder WITHOUT an account. An editor mints a signed,
+  // self-expiring link naming one page; redeeming it needs no session at all.
+  const pageRow = (await call("listPages", {}, admin)).body.result.find((p: { slug: string }) => p.slug === slug) as { id: string };
+  const minted = await call("signPagePreview", { pageId: pageRow.id }, admin);
+  assert(minted.body.ok && typeof minted.body.result.token === "string", "cms: signPagePreview mints a token for an editor");
+  assert(String(minted.body.result.url).startsWith("/cms/preview?token="), "cms: the minted preview url is relative, like a signed file url");
+  const previewToken = minted.body.result.token as string;
+
+  // minting is editor-gated even though redeeming is not
+  const anonMint = await call("signPagePreview", { pageId: pageRow.id });
+  assert(anonMint.status === 403, "cms: minting a preview link is editor-gated (403)");
+
+  // redeem with NO auth header at all
+  const redeemed = await fetch(`${base}${minted.body.result.url}`);
+  const redeemedBody = await redeemed.json() as { regions?: Record<string, unknown[]>; isPreview?: boolean };
+  assert(redeemed.status === 200, "cms: a signed preview link is redeemable with no session");
+  assert(redeemedBody.isPreview === true, "cms: a redeemed preview is flagged isPreview");
+  assert((redeemedBody.regions?.content ?? []).length === 2, "cms: the redeemed preview carries the LIVE draft blocks");
+  assert(redeemed.headers.get("cache-control") === "private, no-store", "cms: a preview response is never cached");
+
+  // a tampered token is refused — the signature covers the page id
+  const [tokData, tokSig] = previewToken.split(".");
+  const tampered = await fetch(`${base}/cms/preview?token=${encodeURIComponent(`${tokData}x.${tokSig}`)}`);
+  assert(tampered.status === 403, "cms: a tampered preview token is refused (403)");
+  const noToken = await fetch(`${base}/cms/preview`);
+  assert(noToken.status === 403, "cms: a preview request with no token is refused (403)");
+
+  // the /rpc back door stays shut: getPagePreview is role-gated, so knowing a page id
+  // is not enough — only the signed route can reach a draft anonymously.
+  const anonDirect = await call("getPagePreview", { pageId: pageRow.id });
+  assert(anonDirect.status === 403, "cms: getPagePreview over /rpc is role-gated (403)");
+
   // --- publish: snapshots the assembled page; the public API now serves it ---
   const published = await call("publishPage", { pageId }, admin);
   assert(published.body.ok && published.body.result.page.status === "published", "cms: publishPage flips status to published");

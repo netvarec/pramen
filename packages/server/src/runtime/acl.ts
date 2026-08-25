@@ -64,6 +64,10 @@ export interface AclContext {
   /** The app schema — lets `where` rules traverse relations (`{ rel: { col } }`),
    * compiled to a subquery with the related entity's read scope AND-merged in. */
   readonly schema?: SchemaDef;
+  /** The tenant this request is for — the `x-pramen-tenant` value the DO was addressed
+   * with. Carried so a handler can mint a tenant-scoped capability (e.g. a signed page
+   * preview link) without the caller supplying, and thus being able to forge, a tenant. */
+  readonly tenant?: string;
   /** The partition this DO serves. When set, Db rejects any access to a table that
    * lives in a different partition (a partition-DO only owns its own tables). Unset
    * (e.g. the D1/Worker shared-store path) disables the guard — a no-op. */

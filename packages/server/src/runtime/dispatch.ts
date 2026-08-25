@@ -92,6 +92,7 @@ export async function dispatch(
     files,
     env,
     identity: acl.identity,
+    tenant: acl.tenant ?? "main",
     tasks: tasksFacade(driver, () => enqueued++),
     mail: createMail(env, kv),
     queue: createQueue(env),

@@ -263,6 +263,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
       files: this.filesFor(this.tenant),
       env: this.envBag,
       identity,
+      tenant: this.tenant,
       tasks: tasksFacade(this.driver),
       mail: createMail(this.envBag, this.kv),
       queue: createQueue(this.envBag),
@@ -601,7 +602,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
     // Carry the schema so any consumer of this context (not just Db) can compile
     // relation-aware `where` rules into subqueries, and the active partition so Db's
     // table-access guard rejects any table outside this DO's partition.
-    return { acl: this.acl, identity, schema: this.app.schema, partition };
+    return { acl: this.acl, identity, schema: this.app.schema, partition, tenant: this.tenant };
   }
 
   // The DO env (bindings + vars + secrets) handed to handlers as ctx.env. Loosely

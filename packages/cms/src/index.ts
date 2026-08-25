@@ -41,6 +41,9 @@ import {
   BadRequest,
   Forbidden,
   PramenError,
+  signToken,
+  verifyToken,
+  resolveSecret,
 } from "@pramen/server";
 import type { HandlerContext, Policy, FileRef, BootstrapFn, JsonValue } from "@pramen/server";
 import { filterXSS } from "xss";
@@ -679,6 +682,9 @@ export interface AssembledPage {
     seo: PageSeo;
   };
   regions: Record<string, RenderedBlock[]>;
+  /** True when this is a live draft assembled behind a preview grant, rather than the
+   * published snapshot — so a frontend can render a "you are viewing a draft" banner. */
+  isPreview?: boolean;
 }
 
 // --- media -------------------------------------------------------------------
@@ -966,6 +972,44 @@ async function assertRegionAllows(db: CmsDb, page: Record<string, unknown>, regi
 
 // --- handlers ----------------------------------------------------------------
 
+// --- page preview links (signed capability urls) -----------------------------
+//
+// Preview used to be a ROLE check, so previewing a draft required an editor account —
+// which excludes the person preview actually exists for: the stakeholder reviewing copy
+// before it ships. A preview link is instead a signed, self-expiring CAPABILITY: it names
+// ONE page, carries its own expiry, and is verified in the Worker before any read happens.
+// Minting stays editor-gated; redeeming needs no account at all.
+//
+// Same machinery as signed file urls (`signToken`/`verifyToken` from @pramen/server), and
+// the same fail-closed rule: without a usable secret we refuse to mint rather than hand out
+// forgeable links.
+
+/** What a preview link authorizes: one page, in one tenant, until `exp`. */
+export interface PreviewToken {
+  /** tenant */ t: string;
+  /** page id — the grant is scoped to this ONE page, never "all drafts" */ p: string;
+  /** expiry (epoch seconds) */ exp: number;
+}
+
+/** Secret preference order. `PREVIEW_SECRET` lets an operator rotate preview links without
+ * invalidating every signed file url, but falling back keeps the common case zero-config. */
+export const PREVIEW_SECRET_NAMES = ["PREVIEW_SECRET", "FILES_SECRET", "AUTH_SECRET"] as const;
+
+/** Resolve the preview signing secret, or `undefined` when nothing usable is configured. */
+export function previewSecret(env: EnvBag): string | undefined {
+  return resolveSecret(env, PREVIEW_SECRET_NAMES);
+}
+
+const previewUnconfigured = () =>
+  new PramenError("page preview is not configured (set a strong PREVIEW_SECRET, FILES_SECRET or AUTH_SECRET)", 503, "unavailable");
+
+/** Where a preview link is redeemed. Spread `cmsRoutes()` into `app.routes` to serve it. */
+export const PREVIEW_PATH = "/cms/preview";
+
+/** Default preview-link lifetime: 1 hour. Long enough to share and open, short enough that
+ * a link pasted into a public channel stops working the same afternoon. */
+export const DEFAULT_PREVIEW_TTL_SECONDS = 3600;
+
 export interface CmsHandlerOpts {
   /** Roles permitted to call the editor mutations (also enforced by the ACL). Default
    * `["editor", "admin"]`. */
@@ -977,6 +1021,8 @@ export interface CmsHandlerOpts {
   /** Roles permitted to approve/reject a page in review and publish (the editorial gate).
    * Default `["reviewer", "admin"]`. */
   reviewerRoles?: readonly string[];
+  /** Preview-link lifetime in seconds. Default 3600 (1 hour). */
+  previewTtlSeconds?: number;
 }
 
 /** Build the CMS handler map. Spread into your app's handlers. Editor mutations are
@@ -988,6 +1034,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
   const defaultLocale = opts.defaultLocale ?? "en";
   const reviewerRoles = opts.reviewerRoles ?? ["reviewer", "admin"];
   const reviewer = { auth: reviewerRoles };
+  const previewTtl = opts.previewTtlSeconds ?? DEFAULT_PREVIEW_TTL_SECONDS;
   // Anyone who edits OR reviews may VIEW content (a reviewer must preview a page + load its
   // content type/blocks before approving). Read/preview handlers use this; writes stay editor.
   const viewerRoles = [...new Set([...editorRoles, ...reviewerRoles])];
@@ -1737,6 +1784,48 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
      * snapshot (the ACL scopes `cms_pages` reads to `status = published`). Editors may pass
      * `preview: true` to assemble the current DRAFT live from the tables. `locale` defaults
      * to the configured default locale; a slug is unique per locale. */
+    /** Mint a signed, self-expiring preview link for one page. Editor-gated to MINT —
+     * anyone holding the resulting link can redeem it, which is the point. */
+    signPagePreview: mutation(async (ctx, input: { pageId: string; expiresIn?: number }) => {
+      const secret = previewSecret(ctx.env);
+      if (!secret) throw previewUnconfigured(); // fail closed — never mint a forgeable link
+      const db = cdb(ctx);
+      // Read the page through the ACL first: minting a link is granting access to it, so a
+      // caller who cannot read the page must not be able to mint a link that can.
+      const rows = await db.find({ from: "cms_pages", where: { id: input.pageId }, limit: 1 });
+      const page = rows[0];
+      if (!page) throw notFound("page");
+
+      const ttl = Math.max(60, Math.min(input.expiresIn ?? previewTtl, 30 * 24 * 3600));
+      const exp = Math.floor(Date.now() / 1000) + ttl;
+      // Server-resolved, never caller-supplied — so the tenant inside the signature
+      // cannot be steered by whoever asks for the link.
+      const tenant = ctx.tenant;
+      const token = await signToken<PreviewToken>({ t: tenant, p: String(page.id), exp }, secret);
+      // RELATIVE, like signed file urls — the client resolves it against the CMS origin.
+      return { url: `${PREVIEW_PATH}?token=${encodeURIComponent(token)}`, token, expiresAt: exp * 1000 };
+    }, editor),
+
+    /** Assemble a page's LIVE draft by id. Not the redemption endpoint — that is the public
+     * `GET /cms/preview` route, which verifies the token and then calls this privileged.
+     * Role-gated so it is not an anonymous back door on the /rpc surface. */
+    getPagePreview: query(async (ctx, input: { pageId: string }) => {
+      const db = cdb(ctx);
+      const rows = await db.find({ from: "cms_pages", where: { id: input.pageId }, limit: 1 });
+      const page = rows[0];
+      if (!page) throw notFound("page");
+      const assembled = await assembleLive(db, page);
+      assembled.isPreview = true;
+      return assembled;
+    }, {
+      ...viewer,
+      input: (raw): { pageId: string } => {
+        const o = asObj(raw);
+        if (typeof o.pageId !== "string" || o.pageId === "") throw new BadRequest("pageId is required");
+        return { pageId: o.pageId };
+      },
+    }),
+
     getPage: query(async (ctx, input: { slug: string; locale?: string; preview?: boolean }) => {
       const db = cdb(ctx);
       // Preview is an editor capability — gate it before the lookup so a non-editor gets a
@@ -2110,7 +2199,19 @@ interface CmsRoute {
   handler: (request: Request, env: EnvBag, ctx: RouteCtx) => Promise<Response>;
 }
 
-/** Turnkey public routes for `GET /sitemap.xml` and `GET /robots.txt`. Spread into
+const previewJson = (status: number, code: string, message: string): Response =>
+  new Response(JSON.stringify({ ok: false, code, message }), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "private, no-store" },
+  });
+/** One response for a missing, malformed, forged, or expired token — and for a page that
+ * is not there. Distinguishing them would let a caller probe for valid page ids. */
+const previewDenied = (status = 403, message = "invalid or expired preview link"): Response =>
+  previewJson(status, status === 404 ? "not_found" : "forbidden", message);
+const preview503 = (): Response =>
+  previewJson(503, "unavailable", "page preview is not configured (set a strong PREVIEW_SECRET, FILES_SECRET or AUTH_SECRET)");
+
+/** Turnkey public routes for `GET /sitemap.xml`, `GET /cms/preview` and `GET /robots.txt`. Spread into
  * `app.routes`. The sitemap pulls published pages via `callPrivileged(listPublishedPages)`.
  * `origin` defaults to the request's origin; `pageUrl` customizes the URL shape. */
 export function cmsRoutes(opts: { origin?: string; tenant?: string; pageUrl?: SitemapOpts["pageUrl"]; disallow?: string[] } = {}): CmsRoute[] {
@@ -2125,6 +2226,37 @@ export function cmsRoutes(opts: { origin?: string; tenant?: string; pageUrl?: Si
         const body = (await res.json().catch(() => ({}))) as { result?: SitemapEntry[] };
         const xml = sitemapXml(body.result ?? [], { origin, pageUrl: opts.pageUrl });
         return new Response(xml, { headers: { "content-type": "application/xml; charset=utf-8" } });
+      },
+    },
+    {
+      // Redeem a preview link. PUBLIC and pre-auth by design — the signature IS the
+      // authorization, so a reviewer with no account can open it. The token is verified
+      // BEFORE any read, and it names one page, so a valid signature never widens into
+      // "see all drafts". Only then do we reach the DO, privileged.
+      method: "GET",
+      path: PREVIEW_PATH,
+      handler: async (request, env, ctx) => {
+        const secret = previewSecret(env);
+        // Fail closed: with no usable secret every signature would verify against a weak
+        // key, so refuse to verify at all rather than accept forged links.
+        if (!secret) return preview503();
+        const raw = new URL(request.url).searchParams.get("token");
+        if (!raw) return previewDenied();
+        const payload = await verifyToken<PreviewToken>(raw, secret);
+        if (!payload || typeof payload.p !== "string" || typeof payload.t !== "string") return previewDenied();
+
+        const res = await ctx.callPrivileged({
+          name: "getPagePreview",
+          input: { pageId: payload.p },
+          tenant: payload.t, // from the SIGNED payload, never from the query string
+          roles: ["admin"],
+        });
+        const body = (await res.json().catch(() => ({}))) as { ok?: boolean; result?: JsonValue };
+        if (body.ok !== true) return previewDenied(404, "page not found");
+        // Never cache a draft, anywhere.
+        return new Response(JSON.stringify(body.result), {
+          headers: { "content-type": "application/json; charset=utf-8", "cache-control": "private, no-store" },
+        });
       },
     },
     {

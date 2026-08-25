@@ -3,7 +3,9 @@
 Consume a [`@pramen/cms`](../cms) backend from an **Astro** site. Self-contained (no
 `@pramen/server` dependency — it speaks the CMS's public HTTP content API).
 
-- **`createCmsClient({ baseUrl })`** — `getPage(slug, locale?)` and `listPublishedPages()`.
+- **`createCmsClient({ baseUrl })`** — `getPage(slug, locale?)`, `listPublishedPages()`, and
+  `getPreview(token)` to redeem a signed preview link (no session needed — the signature is
+  the authorization; the result carries `isPreview: true`).
 - **`cmsLoader({ client })`** — an Astro **content-collection loader**. Wire it into a
   collection and the CMS's published pages become available via `getCollection()` /
   `getEntry()`, rendered to static HTML at build time (re-run the build — a publish webhook —

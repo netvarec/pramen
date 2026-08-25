@@ -243,7 +243,9 @@ export function makeWorker(app: PramenApp) {
     const db = new Db(driver, { acl: d1Acl, identity, system: true, schema: app.schema, suppressTriggers: true }, app.schema);
     const kv = new Kv(env.KV);
     const bag = envBag(env);
-    return { db, kv, files, env: bag, identity, tasks: tasksFacade(driver), mail: createMail(bag, kv), queue: createQueue(bag) };
+    // The D1 store is not per-tenant addressed (one shared database, no DO), so the
+    // task context runs as the default tenant — matching the `files` scope just above.
+    return { db, kv, files, env: bag, identity, tenant: "main", tasks: tasksFacade(driver), mail: createMail(bag, kv), queue: createQueue(bag) };
   };
 
   /** Drain the D1 outbox in the Worker (no DO/alarm on this path) — called by the

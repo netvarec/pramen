@@ -40,6 +40,9 @@ export interface HandlerContext<S extends SchemaDef = SchemaDef> {
   readonly env: EnvBag;
   /** Resolved identity for this request (null = anonymous). */
   readonly identity: Identity | null;
+  /** The tenant this request is for (the `x-pramen-tenant` value; `"main"` by default).
+   * Server-resolved, never caller-supplied — safe to embed in a signed capability. */
+  readonly tenant: string;
   /** Deferred side-effects (a transactional outbox). `tasks.enqueue` persists a task
    * row in the SAME transaction as a mutation (atomic with the data write); a drainer
    * runs the matching `app.tasks` handler after commit, off the write path, with

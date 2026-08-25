@@ -47,6 +47,9 @@ export interface AssembledPage {
     seo?: Record<string, unknown>;
   };
   regions: Record<string, RenderedBlock[]>;
+  /** True when this is a live draft fetched through a preview link, not the published
+   * snapshot — render a "viewing a draft" banner off it. */
+  isPreview?: boolean;
 }
 
 export interface PublishedPageRef {
@@ -68,6 +71,9 @@ export interface CmsClientOptions {
 
 export interface CmsClient {
   getPage(slug: string, locale?: string): Promise<AssembledPage | null>;
+  /** Redeem a signed preview link. The token names one page and carries its own expiry,
+   * so this needs no session — pass through whatever arrived in the request's query. */
+  getPreview(token: string): Promise<AssembledPage | null>;
   listPublishedPages(): Promise<PublishedPageRef[]>;
   /** Absolute URL for a relative CMS path (e.g. a media `/media/...` url). */
   resolve(path: string): string;
@@ -98,6 +104,13 @@ export function createCmsClient(opts: CmsClientOptions): CmsClient {
   return {
     baseUrl: base,
     getPage: (slug, locale) => call<AssembledPage>("getPage", { slug, locale }),
+    getPreview: async (token) => {
+      // Not an /rpc call: the preview route is public and pre-auth, and the signature IS
+      // the authorization, so there is no bearer token to send.
+      const res = await fetch(`${base}/cms/preview?token=${encodeURIComponent(token)}`, { headers: { "x-pramen-tenant": opts.tenant ?? "main" } });
+      if (!res.ok) return null;
+      return (await res.json().catch(() => null)) as AssembledPage | null;
+    },
     listPublishedPages: async () => (await call<PublishedPageRef[]>("listPublishedPages", {})) ?? [],
     resolve: (path) => (path.startsWith("http") ? path : `${base}${path}`),
   };

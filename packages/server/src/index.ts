@@ -82,6 +82,12 @@ export { Kv, denySession, allowSession, isSessionDenied } from "./runtime/kv";
 // --- files ---
 export type { FileRef, Files, SignUploadOpts, SignDownloadOpts, HeadResult } from "./sdk/files";
 export { R2Adapter, MemoryAdapter, createFiles, handleFileRequest } from "./runtime/storage";
+
+// Signed capability tokens (HMAC-SHA256) — the machinery behind signed file urls and
+// page-preview links. Exported so an app (or @pramen/cms) can mint its own capability url
+// without a second signing implementation.
+export { signToken, verifyToken, isUsableSecret, resolveSecret, MIN_TOKEN_SECRET_LEN } from "./runtime/token";
+export type { ExpiringToken } from "./runtime/token";
 export type { StorageAdapter, PutResult, GetResult } from "./runtime/storage";
 
 // --- mail (ctx.mail) ---
