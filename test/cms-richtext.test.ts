@@ -66,9 +66,11 @@ test("normalizeRichText keeps only declared attributes, and only JSON primitives
   expect(out.content?.[0].attrs).toEqual({ level: 3 });
 });
 
-test("normalizeRichText rejects an out-of-range heading level", () => {
-  const out = normalizeRichText(doc({ type: "heading", attrs: { level: 99 }, content: [text("H")] }));
-  expect(out.content?.[0].attrs).toBeUndefined();
+test("normalizeRichText clamps an out-of-range heading level and drops a non-integer", () => {
+  // Clamped, not dropped: a level-less heading defaults to h1 in TipTap and h2 in the
+  // renderers, which is the silent mutation the bound exists to prevent.
+  expect(normalizeRichText(doc({ type: "heading", attrs: { level: 99 }, content: [text("H")] })).content?.[0].attrs).toEqual({ level: 3 });
+  expect(normalizeRichText(doc({ type: "heading", attrs: { level: 2.5 }, content: [text("H")] })).content?.[0].attrs).toBeUndefined();
 });
 
 test("normalizeRichText yields an empty doc for a non-document value", () => {
@@ -226,4 +228,42 @@ test("richTextToPlainText gives a collapsed block something to show", () => {
   // field is an object, so a prose-only block read "empty".
   const body = doc(para(text("Wide-ranging notes on the topic")));
   expect(richTextToPlainText(body)).toBe("Wide-ranging notes on the topic");
+});
+
+// --- round-4 review gates ----------------------------------------------------
+
+test("the legacy baseline descends into group and repeater", () => {
+  // Stopping at the top level meant a pre-migration value nested one deep was rejected on
+  // every write that echoed the stored bag back — and placeBlock, which merges the block's
+  // OWN stored fields, could not place such a block at all.
+  const schema: FieldDefinition[] = [
+    { name: "meta", type: "group", fields: [{ name: "note", type: "richtext" }] },
+    { name: "items", type: "repeater", fields: [{ name: "body", type: "richtext" }] },
+  ];
+  const stored = { meta: { note: "<p>old</p>" }, items: [{ body: "<p>a</p>" }, { body: "<p>b</p>" }] };
+  expect(() => validateFields(schema, stored, "", { legacyBaseline: stored })).not.toThrow();
+  // A DIFFERENT string is still refused, at any depth.
+  const attack = { meta: { note: "<img src=x onerror=alert(1)>" }, items: [] };
+  expect(() => validateFields(schema, attack, "", { legacyBaseline: stored })).toThrow(/not an HTML string/);
+});
+
+test("an out-of-range heading level is clamped, not dropped", () => {
+  // Dropping `level` left the node level-less, and TipTap's Heading defaults to 1 — so the
+  // imported h4 still opened as h1 while the renderers fell back to h2.
+  const out = normalizeRichText(doc({ type: "heading", attrs: { level: 5 }, content: [text("H")] }));
+  expect(out.content?.[0].attrs).toEqual({ level: 3 });
+  // ...and a schema can widen the ceiling, which is what the docs promise.
+  const wide = normalizeRichText(doc({ type: "heading", attrs: { level: 5 }, content: [text("H")] }), {
+    ...DEFAULT_RICH_TEXT_SCHEMA,
+    maxHeadingLevel: 6,
+  });
+  expect(wide.content?.[0].attrs).toEqual({ level: 5 });
+});
+
+test("a nested doc node is dropped", () => {
+  // `doc` in the node list only ever authorized a NESTED doc, which TipTap cannot render —
+  // the field opened blank and the first keystroke saved the blank over the content.
+  const out = normalizeRichText(doc(para({ type: "doc", content: [para(text("smuggled"))] }, text("kept"))));
+  expect(JSON.stringify(out)).not.toContain("smuggled");
+  expect(JSON.stringify(out)).toContain("kept");
 });

@@ -161,7 +161,15 @@ scheme check — so a hand-crafted payload can't smuggle markup past the editor.
 narrow the vocabulary with `createCmsHandlers({ richTextSchema })` (also accepted by
 `createCollectionHandlers`) when your editor adds TipTap extensions.
 
-Heading levels are 1–3, matching the shipped editor's StarterKit config — TipTap silently
+Opening a page in the editor **migrates** any legacy HTML rich text on it: each field
+converts to a document on mount and the ordinary autosave persists it. That conversion is
+lossy for anything the editor's extension set doesn't model (an `h4` clamps to `h3`;
+`sub`/`sup`/`ins` flatten), so convert deliberately if that matters.
+
+Heading levels are 1–3 by default, matching the shipped editor's StarterKit config — raise
+`richTextSchema.maxHeadingLevel` if your editor is configured for more. Out-of-range levels
+are **clamped**, not dropped: a level-less heading would render as `h1` in the editor and
+`h2` on the site — TipTap silently
 demotes an unknown level on parse, so permitting more meant an imported `h4` opened as `h1`
 and the next autosave persisted that.
 

@@ -14,7 +14,7 @@
 
 import { createElement, Fragment } from "react";
 import type { ComponentType, ReactElement, ReactNode } from "react";
-import { isSafeHref, normalizeHref } from "./index";
+import { isSafeHref, normalizeHref } from "./href";
 import type { RenderedBlock, BlockTypeDef, BlockFieldsOf, RichTextDoc, RichTextNode, RichTextMark } from "./index";
 
 /** Props a component for a specific typed block type receives — `fields` is inferred from
@@ -53,7 +53,9 @@ export function BlockRenderer({ blocks, region, components, fallback }: BlockRen
     Fragment,
     null,
     blocks.map((block, index) => {
-      const Component = components[block.block_type];
+      // hasOwn: a block type slugged `constructor`/`valueOf` would otherwise resolve off
+      // the prototype and crash the whole page render (createBlockType accepts any string).
+      const Component = Object.hasOwn(components, block.block_type) ? components[block.block_type] : undefined;
       if (!Component) {
         return fallback
           ? createElement(fallback, { key: block.id, block })

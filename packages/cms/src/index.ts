@@ -44,6 +44,7 @@ import {
 } from "@pramen/server";
 import type { HandlerContext, Policy, FileRef, BootstrapFn, JsonValue } from "@pramen/server";
 import type { EnvBag } from "@pramen/server";
+import { isSafeHref, normalizeHref } from "./href";
 
 // --- field schema DSL (the block-editor field language) ---------------------
 
@@ -627,15 +628,35 @@ export function validateFields(schema: FieldDefinition[] | undefined | null, val
         // (collectMediaIds/resolveMediaFields only handle string ids).
         if (typeof v !== "string") throw new BadRequest(`field '${at}' must be a media id (string)`);
         break;
-      case "group":
-        // The baseline is per-field at this level only; a nested bag re-validates strictly.
-        validateFields(def.fields, v, at, { requireRequired: opts.requireRequired });
+      case "group": {
+        // The baseline MUST descend. Stopping at the top level meant a pre-migration
+        // richtext value nested in a group was rejected on every write that echoed the
+        // stored bag back — and placeBlock, which merges the block's OWN stored fields,
+        // could not place such a block at all. No editor can fix that: none ever mounted it.
+        const nested = opts.legacyBaseline?.[def.name];
+        validateFields(def.fields, v, at, {
+          requireRequired: opts.requireRequired,
+          legacyBaseline: nested && typeof nested === "object" && !Array.isArray(nested) ? (nested as FieldValues) : undefined,
+        });
         break;
+      }
       case "repeater": {
         if (!Array.isArray(v)) throw new BadRequest(`field '${at}' must be a list`);
         if (def.min != null && v.length < def.min) throw new BadRequest(`field '${at}' needs at least ${def.min} item(s)`);
         if (def.max != null && v.length > def.max) throw new BadRequest(`field '${at}' allows at most ${def.max} item(s)`);
-        v.forEach((item, i) => validateFields(def.fields, item, `${at}[${i}]`, { requireRequired: opts.requireRequired }));
+        {
+          // Per-item baseline, positionally — a repeater item that kept its slot keeps its
+          // stored value, so an untouched legacy value inside one still validates.
+          const base = opts.legacyBaseline?.[def.name];
+          const baseItems = Array.isArray(base) ? base : [];
+          v.forEach((item, i) => {
+            const bi = baseItems[i];
+            validateFields(def.fields, item, `${at}[${i}]`, {
+              requireRequired: opts.requireRequired,
+              legacyBaseline: bi && typeof bi === "object" && !Array.isArray(bi) ? (bi as FieldValues) : undefined,
+            });
+          });
+        }
         break;
       }
       default:
@@ -661,6 +682,10 @@ export function validateFields(schema: FieldDefinition[] | undefined | null, val
 export interface RichTextSchema {
   nodes: Record<string, readonly string[]>;
   marks: Record<string, readonly string[]>;
+  /** Highest heading level accepted; anything above is CLAMPED to it, not dropped.
+   * Defaults to `MAX_HEADING_LEVEL` (3, the shipped editor's StarterKit config). Raise it
+   * if your editor is configured for more — this is the widening the docs promise. */
+  maxHeadingLevel?: number;
 }
 
 /** What the shipped editor can actually produce (TipTap StarterKit + Highlight + TaskList,
@@ -671,7 +696,10 @@ export const MAX_HEADING_LEVEL = 3;
 
 export const DEFAULT_RICH_TEXT_SCHEMA: RichTextSchema = {
   nodes: {
-    doc: [],
+    // NOTE: no `doc`. normalizeRichText builds the root itself and never looks it up, so
+    // an entry here would only ever authorize a NESTED doc — which TipTap cannot render
+    // (Document declares no renderHTML), blanking the field in the editor while the site
+    // renderers still showed the subtree. The first keystroke then saved the blank over it.
     paragraph: [],
     text: [],
     hardBreak: [],
@@ -696,29 +724,9 @@ export const DEFAULT_RICH_TEXT_SCHEMA: RichTextSchema = {
   },
 };
 
-/** Allow-list for a link href: http(s), mailto, tel, or a relative/anchor path.
- *
- * The input is stripped of ASCII tab/CR/LF FIRST, because the WHATWG URL parser removes
- * those before parsing — so `/\r\n/evil.example/x` and `/\t\\evil.example/x` both resolve to
- * `https://evil.example/x` while looking site-relative to a naive prefix test. Then a
- * single leading slash only, whose next character may be neither `/` nor `\` (the parser
- * folds `\` to `/` at path-start for special schemes). The scheme allow-list inherently
- * rejects `javascript:`, `data:` and `vbscript:`.
- *
- * This is the security boundary — the write-path normalizer and BOTH renderers call it —
- * not the UI hint that @podoba/react's `safeLinkUrl` is. Use `normalizeHref` to get the
- * value that should actually be stored or rendered. */
-export function isSafeHref(raw: unknown): boolean {
-  return typeof raw === "string" && /^(https?:\/\/|mailto:|tel:|\/(?![/\\])|#)/i.test(stripUrlWhitespace(raw));
-}
-
-/** Remove the characters the URL parser ignores, then trim. Storing and rendering THIS
- * form (not the raw one) keeps what was validated and what a browser resolves identical. */
-export function normalizeHref(raw: string): string {
-  return stripUrlWhitespace(raw);
-}
-
-const stripUrlWhitespace = (raw: string): string => raw.replace(/[\t\n\r]/g, "").trim();
+// Re-exported from the leaf module `./href` so `@pramen/cms/react` can import them at
+// runtime without dragging this file (and the whole server SDK) into a browser bundle.
+export { isSafeHref, normalizeHref } from "./href";
 
 /** Keep only the declared attributes, and only those holding a JSON primitive — an object
  * or array in an attr is never something the editor emits, so it is smuggled payload. */
@@ -733,18 +741,22 @@ function allowedAttrsFor(table: Record<string, readonly string[]>, type: unknown
   return table[type];
 }
 
-function normalizeAttrs(attrs: unknown, allowed: readonly string[]): Record<string, JsonValue> | undefined {
+function normalizeAttrs(attrs: unknown, allowed: readonly string[], maxHeading: number = MAX_HEADING_LEVEL): Record<string, JsonValue> | undefined {
   if (!allowed.length || !attrs || typeof attrs !== "object" || Array.isArray(attrs)) return undefined;
   const out: Record<string, JsonValue> = {};
   for (const name of allowed) {
     const v = (attrs as Record<string, unknown>)[name];
     if (v === undefined) continue;
     if (v !== null && typeof v !== "string" && typeof v !== "number" && typeof v !== "boolean") continue;
-    // 1-3, matching the editor's StarterKit config. TipTap silently demotes an unknown
-    // level to levels[0] on parse, so permitting 4-6 here meant an imported h4 opened as
-    // h1 and the next autosave persisted that — silent content mutation. Widen with a
-    // custom RichTextSchema if your editor is configured for more.
-    if (name === "level" && (typeof v !== "number" || !Number.isInteger(v) || v < 1 || v > MAX_HEADING_LEVEL)) continue;
+    // CLAMP, don't drop. Dropping `level` left the node level-less, and TipTap's Heading
+    // declares `level: { default: 1 }` — so an imported h4 still opened as h1 and the next
+    // autosave still persisted h1, while the renderers fell back to h2. Same silent
+    // mutation the narrowing was meant to stop, plus an editor/site mismatch.
+    if (name === "level") {
+      if (typeof v !== "number" || !Number.isInteger(v)) continue;
+      out[name] = Math.min(Math.max(v, 1), maxHeading);
+      continue;
+    }
     out[name] = v;
   }
   return Object.keys(out).length ? out : undefined;
@@ -760,7 +772,7 @@ function normalizeMarks(marks: unknown, schema: RichTextSchema): RichTextMark[] 
     const mark = raw as RichTextMark;
     const allowed = allowedAttrsFor(schema.marks, mark.type);
     if (!allowed) continue;
-    const attrs = normalizeAttrs(mark.attrs, allowed);
+    const attrs = normalizeAttrs(mark.attrs, allowed, schema.maxHeadingLevel);
     if (mark.type === "link") {
       if (!isSafeHref(attrs?.href)) continue;
       // Persist the parser-normalized form, so what was validated is what resolves.
@@ -797,7 +809,7 @@ function normalizeNode(raw: unknown, schema: RichTextSchema, depth = 0): RichTex
     const marks = normalizeMarks(node.marks, schema);
     if (marks) out.marks = marks;
   }
-  const attrs = normalizeAttrs(node.attrs, allowed);
+  const attrs = normalizeAttrs(node.attrs, allowed, schema.maxHeadingLevel);
   if (attrs) out.attrs = attrs;
   if (Array.isArray(node.content)) {
     const content = normalizeNodes(node.content, schema, depth + 1);
@@ -2243,8 +2255,16 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
       // Read the current row first: the editor autosaves the WHOLE values bag, so a
       // pre-Portable-Text richtext value rides along with an unrelated edit. It is
       // tolerated only when byte-identical to what is stored (see `legacyBaseline`).
-      const current = await db.find({ from: c.entity, where: { [idOf(c)]: input.id }, limit: 1 });
-      const updated = await db.update(c.entity, input.id, toColumns(c, input.values, false, (current[0] ?? {}) as FieldValues));
+      // A policy may grant `update` without `read` on the entity — that worked before this
+      // pre-read existed, so it must not start 403ing. No baseline simply means a legacy
+      // string is rejected, which is the strict default.
+      let current: FieldValues | undefined;
+      try {
+        current = (await db.find({ from: c.entity, where: { [idOf(c)]: input.id }, limit: 1 }))[0] as FieldValues | undefined;
+      } catch {
+        current = undefined;
+      }
+      const updated = await db.update(c.entity, input.id, toColumns(c, input.values, false, current));
       if (updated === undefined) throw notFound(c.label);
       return updated;
     }, editor),
