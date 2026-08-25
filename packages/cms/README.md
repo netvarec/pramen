@@ -151,7 +151,8 @@ Structural operations (`addBlock`, `removeBlock`, `reorderRegion`) are not guard
 are additive and already ordered by the single writer.
 
 `version` is returned on `AssembledPage.page` and on every `RenderedBlock`, so the value to
-echo back comes from the same read that loaded the content.
+echo back comes from the same read that loaded the content — including the public
+(snapshot) path, where it is backfilled from the live row rather than the baked snapshot.
 
 On the **D1 store** (`x-pramen-store: d1`) there is no interactive transaction, so two
 requests in the same millisecond can both read the same version and both write. The guard

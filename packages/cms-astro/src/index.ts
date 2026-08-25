@@ -23,6 +23,8 @@ export interface ResolvedMedia {
 
 export interface RenderedBlock {
   id: string;
+  /** Optimistic-concurrency token — pass back as `expectedVersion` on a write. */
+  version: number;
   block_id: string;
   block_type: string;
   title: string | null;
@@ -45,6 +47,8 @@ export interface AssembledPage {
     metaTitle: string | null;
     metaDescription: string | null;
     seo?: Record<string, unknown>;
+    /** Optimistic-concurrency token — pass back as `expectedVersion` on a write. */
+    version: number;
   };
   regions: Record<string, RenderedBlock[]>;
 }

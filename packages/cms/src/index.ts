@@ -1034,7 +1034,11 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     // version 7 gets a permanent unresolvable 409, and an unguarded save then LOWERS the
     // stored version, so a genuinely stale write is accepted later. Fail loudly instead.
     if (typeof row.version !== "number") {
-      throw new PramenError(`${label} has no readable version — grant read on the \`version\` column`, 500, "internal");
+      // Log the actionable detail; return a generic 500. PramenError's message is returned
+      // VERBATIM to the caller, so naming the column here would tell an unprivileged caller
+      // about the schema and the ACL shape while the operator who needs it saw nothing.
+      console.error(`pramen/cms: ${label} has no readable version — grant read on the \`version\` column`);
+      throw new Error("version unavailable");
     }
     const current = row.version;
     if (expected !== undefined && expected !== current) {
@@ -1826,6 +1830,13 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
           // those keys, but AssembledPage now types them as present — backfill from the live
           // page row so a frontend head template never hits `page.seo` === undefined.
           if (!snap.page.seo) snap.page.seo = pageMeta(page).seo;
+          // `version` comes from the LIVE row, never the snapshot. A snapshot is baked at
+          // publish time, so a client reading the public path would echo back a version
+          // frozen then — 409ing forever after the first draft edit, with a re-read
+          // returning the same stale number. A pre-`version` snapshot has none at all, and
+          // the field is typed `number`, so `undefined` would silently drop out of the
+          // request body and hand back exactly the last-write-wins this feature removes.
+          snap.page.version = typeof page.version === "number" ? page.version : 1;
           if (snap.page.translationGroupId === undefined) snap.page.translationGroupId = (page.translationGroupId as string | null) ?? null;
           return snap;
         }

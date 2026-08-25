@@ -200,6 +200,15 @@ export async function runCms(base: string): Promise<void> {
   const vRead = await call("getPage", { slug: "concurrent", preview: true }, admin);
   assert(vRead.body.result.page.version === 3, "cms: getPage exposes the page version for a client to echo");
 
+  // The PUBLIC path serves a snapshot baked at publish time, so its version must come from
+  // the LIVE row — otherwise a client echoes a frozen number and 409s forever, and a
+  // re-read hands back the same stale value.
+  await call("publishPage", { pageId: vId }, admin);
+  await call("updatePage", { pageId: vId, title: "After publish" }, admin);
+  const vPublic = await call("getPage", { slug: "concurrent" });
+  const vLive = (await call("getPage", { slug: "concurrent", preview: true }, admin)).body.result.page.version as number;
+  assert(vPublic.body.result.page.version === vLive, `cms: the published snapshot reports the LIVE version (${vPublic.body.result.page.version} vs ${vLive})`);
+
   const badVersion = await call("updatePage", { pageId: vId, title: "x", expectedVersion: "2" }, admin);
   assert(badVersion.status === 400, "cms: a non-integer expectedVersion is a 400");
 
@@ -214,8 +223,11 @@ export async function runCms(base: string): Promise<void> {
   assert((await call("updateBlock", { blockId: vBlockId, title: "B2", expectedVersion: 1 }, admin)).status === 409, "cms: a stale block expectedVersion is a 409");
 
   // updatePageSeo shares the page's version line — SEO and body edits conflict with each other.
-  assert((await call("updatePageSeo", { pageId: vId, metaTitle: "M", expectedVersion: 3 }, admin)).body.ok, "cms: updatePageSeo accepts a matching expectedVersion");
-  assert((await call("updatePageSeo", { pageId: vId, metaTitle: "M2", expectedVersion: 3 }, admin)).status === 409, "cms: updatePageSeo shares the page version line");
+  // Read the current version rather than hardcoding it, so adding a write above doesn't
+  // silently retune these two.
+  const seoVersion = (await call("getPage", { slug: "concurrent", preview: true }, admin)).body.result.page.version as number;
+  assert((await call("updatePageSeo", { pageId: vId, metaTitle: "M", expectedVersion: seoVersion }, admin)).body.ok, "cms: updatePageSeo accepts a matching expectedVersion");
+  assert((await call("updatePageSeo", { pageId: vId, metaTitle: "M2", expectedVersion: seoVersion }, admin)).status === 409, "cms: updatePageSeo shares the page version line");
 
   // --- media library: upload → attach to a block → resolved URL in the content API ---
   const imgType = await call("createBlockType", {
