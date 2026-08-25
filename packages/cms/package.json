@@ -1,7 +1,7 @@
 {
   "name": "@pramen/cms",
   "version": "0.0.49",
-  "description": "Optional block/page builder for pramen — Drupal-Paragraphs-style typed blocks in named regions, reusable blocks, scheduled publishing, built entirely from pramen primitives.",
+  "description": "Optional block/page builder for pramen \u2014 Drupal-Paragraphs-style typed blocks in named regions, reusable blocks, scheduled publishing, built entirely from pramen primitives.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -30,7 +30,10 @@
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "files": ["dist", "src"],
+  "files": [
+    "dist",
+    "src"
+  ],
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json"
   },
@@ -48,5 +51,11 @@
     "react": {
       "optional": true
     }
+  },
+  "bin": {
+    "pramen-cms": "./dist/cli.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0"
   }
 }

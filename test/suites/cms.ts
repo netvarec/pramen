@@ -246,10 +246,10 @@ export async function runCms(base: string): Promise<void> {
   const genDir = mkdtempSync(join(tmpdir(), "pramen-cms-types-"));
   const genPath = join(genDir, "cms.gen.ts");
   const cli = Bun.spawnSync(
-    ["bun", "scripts/cli.ts", "cms", "types", "--url", base, "--tenant", TENANT, "--token", admin, "--out", genPath],
+    ["bun", "packages/cms/src/cli.ts", "types", "--url", base, "--tenant", TENANT, "--token", admin, "--out", genPath],
     { cwd: join(import.meta.dir, "..", "..") },
   );
-  assert(cli.exitCode === 0, `cms: \`pramen cms types\` exits 0 (${cli.stderr.toString()})`);
+  assert(cli.exitCode === 0, `cms: \`pramen-cms types\` exits 0 (${cli.stderr.toString()})`);
   const generated = readFileSync(genPath, "utf8");
   assert(generated.includes("export interface RichTextFields"), "cms: codegen emits an interface per block-type slug");
   assert(/"body"\??: RichText;/.test(generated), "cms: codegen maps a richtext field to the RichText type");

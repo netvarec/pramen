@@ -11,7 +11,6 @@
 //   pramen schema diff                compare the schema to the snapshot (safe vs unsafe changes)
 //   pramen schema status [--tenant t] [--url u] [--token jwt]   compare a deployed tenant to the schema
 //   pramen token <sub> [roles...] [--tenant a,b]                mint a dev JWT
-//   pramen cms types [--tenant t] [--url u] [--out path]        codegen for CMS block types
 //
 // The bin uses a `bun` shebang: the `schema *` commands import your app module (a .ts
 // file), and the built package's dist/ uses extensionless ESM imports — both of which
@@ -24,38 +23,15 @@ import { createTableSql } from "./runtime/ddl";
 import { schemaHash } from "./runtime/migrate";
 import { diffSchemaFingerprint, schemaFingerprint, type SchemaFingerprint } from "./runtime/schema-diff";
 import { entitiesInPartition, partitionsOf, type SchemaDef } from "./sdk/schema";
+import { signDevToken } from "./runtime/dev-token";
 
 /** Mint an HS256 JWT — mirrors what a real auth service would issue, for local
  * dev/testing (`pramen token`, and the default token for `schema status`). Signs
  * with AUTH_SECRET when set, else the dev secret from the scaffolded oblaka.ts. */
-const DEV_SECRET = "dev-secret-change-me";
-
-function bytesToB64url(bytes: Uint8Array): string {
-  let bin = "";
-  for (const b of bytes) bin += String.fromCharCode(b);
-  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-const strToB64url = (s: string) => bytesToB64url(new TextEncoder().encode(s));
-
 /** The dev JWT claims `pramen token` mints. */
 type TokenClaims = { sub: string; roles: string[]; tenants?: string[] };
 
-async function sign(payload: Record<string, unknown>): Promise<string> {
-  const secret = process.env.AUTH_SECRET || DEV_SECRET;
-  const now = Math.floor(Date.now() / 1000);
-  const header = strToB64url(JSON.stringify({ alg: "HS256", typ: "JWT" }));
-  const body = strToB64url(JSON.stringify({ iat: now, exp: now + 3600, ...payload }));
-  const data = `${header}.${body}`;
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(data));
-  return `${data}.${bytesToB64url(new Uint8Array(sig))}`;
-}
+const sign = (payload: Record<string, unknown>): Promise<string> => signDevToken(payload);
 
 /** The sub-schema of a single partition (used to mirror the DO's per-partition hash,
  * which migrate() computes over exactly this subset). For a single-partition app the
@@ -111,8 +87,6 @@ Usage: pramen <command>
   schema status             compare a deployed tenant's schema to the local schema
                             [--tenant t] [--url u] [--token jwt]
   token <sub> [roles...]    mint a dev JWT [--tenant a,b]
-  cms types                 generate TS interfaces for a tenant's CMS block types
-                            [--tenant t] [--url u] [--token jwt] [--out path]
 
 Flags: --app <path> to point at your app module (default ./app.ts or ./example/app.ts).`;
 
@@ -240,79 +214,6 @@ async function tokenCmd(args: string[]): Promise<void> {
   console.log(await sign(claims));
 }
 
-/** `pramen cms types` — emit TS interfaces for a tenant's block types.
- *
- * Block types are DATA (rows in `cms_block_types`), not code: a webmaster adds one with no
- * deploy. That is the point of the design, and the reason this command exists — the
- * data-driven half of the content model is the half that cannot be typed at compile time,
- * so the types have to be read back out of a running instance.
- *
- * @pramen/cms is optional, so it is imported dynamically (through a variable specifier, so
- * the type-checker does not try to resolve an optional package). The generator itself lives
- * there — this command only fetches the rows and writes the file.
- */
-async function cmsCmd(sub: string | undefined): Promise<void> {
-  if (sub !== "types") {
-    console.log(HELP);
-    return;
-  }
-  const specifier = "@pramen/cms";
-  let generateBlockTypes: (rows: Array<{ slug: string; fieldsSchema?: unknown }>) => string;
-  try {
-    ({ generateBlockTypes } = (await import(specifier)) as {
-      generateBlockTypes: (rows: Array<{ slug: string; fieldsSchema?: unknown }>) => string;
-    });
-  } catch {
-    fail("cms types: @pramen/cms is not installed (add it to this project)");
-  }
-
-  const url = flag("url") ?? "http://localhost:8787";
-  const tenant = flag("tenant") ?? "main";
-  const token = flag("token") ?? (await sign({ sub: "cli", roles: ["admin"] }));
-
-  let res: Response;
-  try {
-    res = await fetch(`${url}/rpc/listBlockTypes`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-pramen-tenant": tenant,
-        authorization: `Bearer ${token}`,
-      },
-      body: "{}",
-    });
-  } catch (e) {
-    // A wrong --url is the common mistake; surface it as a CLI error rather than an
-    // unhandled fetch rejection with a stack trace.
-    fail(`cms types: cannot reach ${url} (${e instanceof Error ? e.message : String(e)})`);
-  }
-  const body = (await res!.json().catch(() => ({}))) as {
-    ok?: boolean;
-    result?: Array<{ slug: string; fieldsSchema?: unknown }>;
-    error?: string;
-    message?: string;
-  };
-  if (!res!.ok || body.ok !== true || !Array.isArray(body.result)) {
-    fail(`cms types: listBlockTypes failed (${body.message ?? body.error ?? res!.status})`);
-  }
-  const rows = body.result!;
-  if (rows.length === 0) {
-    console.error(`pramen: cms types: tenant '${tenant}' has no block types yet — nothing to generate.`);
-  }
-
-  const out = generateBlockTypes!(rows);
-  const dest = flag("out");
-  if (!dest) {
-    // No --out: print, so it composes with a pipe like `schema sql` does.
-    process.stdout.write(out);
-    return;
-  }
-  const path = resolve(process.cwd(), dest);
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, out);
-  console.log(`  + ${dest}  (${rows.length} block type${rows.length === 1 ? "" : "s"} from tenant '${tenant}')`);
-}
-
 function initCmd(args: string[]): void {
   const dir = resolve(process.cwd(), positionals(args)[0] ?? ".");
   mkdirSync(dir, { recursive: true });
@@ -414,8 +315,6 @@ async function main(): Promise<void> {
       return schemaCmd(argv[1]);
     case "token":
       return tokenCmd(argv.slice(1));
-    case "cms":
-      return cmsCmd(argv[1]);
     default:
       console.error(`pramen: unknown command "${cmd}"\n`);
       console.log(HELP);

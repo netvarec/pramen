@@ -31,22 +31,15 @@ describe("pramen cli", () => {
     expect(a).toBe(b);
   });
 
-  test("help lists the cms codegen command", () => {
-    const { out } = run("help");
-    expect(out).toContain("cms types");
-  });
-
-  test("cms types fails clearly when it cannot reach an instance", () => {
-    // Port 1 is never a pramen instance — the point is that it fails with a message
-    // naming the command, not an unhandled fetch rejection.
-    const { err, code } = run("cms", "types", "--url", "http://127.0.0.1:1");
-    expect(code).not.toBe(0);
-    expect(err).toContain("cms types");
-  });
-
   test("token mints a 3-part JWT", () => {
     const tok = run("token", "alice", "author", "--tenant", "main").out.trim();
     expect(tok.split(".").length).toBe(3);
+  });
+
+  test("the runtime CLI carries no CMS command", () => {
+    // @pramen/cms is optional, so its codegen lives in its own `pramen-cms` bin.
+    const { out } = run("help");
+    expect(out).not.toContain("cms");
   });
 
   test("unknown command exits non-zero", () => {
@@ -87,5 +80,30 @@ describe("pramen cli", () => {
       } catch {}
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("pramen-cms cli", () => {
+  const runCms = (...args: string[]) => {
+    const p = Bun.spawnSync(["bun", "packages/cms/src/cli.ts", ...args], { cwd: ROOT });
+    return { out: p.stdout.toString(), err: p.stderr.toString(), code: p.exitCode };
+  };
+
+  test("help describes the types command", () => {
+    const { out } = runCms("help");
+    expect(out).toContain("Usage: pramen-cms <command>");
+    expect(out).toContain("types");
+  });
+
+  test("types fails clearly when it cannot reach an instance", () => {
+    // Port 1 is never a pramen instance — the point is a CLI error naming the bin,
+    // not an unhandled fetch rejection with a stack trace.
+    const { err, code } = runCms("types", "--url", "http://127.0.0.1:1");
+    expect(code).not.toBe(0);
+    expect(err).toContain("pramen-cms: types");
+  });
+
+  test("unknown command exits non-zero", () => {
+    expect(runCms("frobnicate").code).not.toBe(0);
   });
 });

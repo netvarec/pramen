@@ -133,8 +133,11 @@ Webmaster-authored types are **data** (rows in `cms_block_types`, added with no 
 they can't be typed at compile time. Read them back out of a running instance instead:
 
 ```bash
-pramen cms types --url https://cms.example.workers.dev --tenant acme --out src/cms.gen.ts
+npx pramen-cms types --url https://cms.example.workers.dev --tenant acme --out src/cms.gen.ts
 ```
+
+(Its own bin, not a `pramen` subcommand: `@pramen/cms` is optional, so the runtime CLI
+doesn't carry a command named after it.)
 
 That writes an interface per block-type slug plus a `BlockFieldsBySlug` registry. With no
 `--out` it prints, so it composes with a pipe. Re-run it after a webmaster adds or changes
