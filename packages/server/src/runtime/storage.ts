@@ -17,7 +17,7 @@
 
 import { BadRequest, PramenError } from "./errors";
 import type { Files, FileRef, HeadResult } from "../sdk/files";
-import { signToken, verifyToken, type ExpiringToken } from "./token";
+import { signToken, verifyToken, isUsableSecret, MIN_TOKEN_SECRET_LEN, type ExpiringToken } from "./token";
 
 // The portable type surface (FileRef, Files, sign opts) lives in sdk/files.ts;
 // re-export it here so runtime callers have one import site.
@@ -201,10 +201,8 @@ export interface FilesConfig {
  * would be forgeable (HMAC over an empty/weak key). Below this, file storage is
  * treated as unconfigured — fail closed rather than mint forgeable urls. The dev
  * defaults satisfy it; production should set a strong, random FILES_SECRET. */
-export const MIN_FILES_SECRET_LEN = 16;
-export function isUsableFilesSecret(secret: string | undefined | null): secret is string {
-  return typeof secret === "string" && secret.length >= MIN_FILES_SECRET_LEN;
-}
+export const MIN_FILES_SECRET_LEN = MIN_TOKEN_SECRET_LEN;
+export const isUsableFilesSecret = isUsableSecret;
 const filesUnconfigured = () =>
   new PramenError("file storage is not configured (set a strong FILES_SECRET)", 503, "unavailable");
 

@@ -503,7 +503,9 @@ export function makeWorker(app: PramenApp) {
       const bag = envBag(env);
       try {
         await ensureD1Migrated(driver, env.PRAMEN_ALLOW_DESTRUCTIVE === "true");
-        const { result, enqueued } = await dispatch(app.handlers, app.schema, driver, new Kv(env.KV), files, bag, { acl: d1Acl, identity }, name, input);
+        // `tenant` matters here: a handler minting a tenant-scoped capability (a signed
+        // preview link) would otherwise stamp it "main" while reading acme's rows.
+        const { result, enqueued } = await dispatch(app.handlers, app.schema, driver, new Kv(env.KV), files, bag, { acl: d1Acl, identity, tenant }, name, input);
         // Kick an immediate drain in the request tail when this handler enqueued tasks
         // (e.g. sendMagicLinkEmail). Without this, tasks wait for the next Cron trigger
         // — up to a full minute. `waitUntil` lets the response return now while the

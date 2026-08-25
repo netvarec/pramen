@@ -160,6 +160,28 @@ export async function runCms(base: string): Promise<void> {
   assert((redeemedBody.regions?.content ?? []).length === 2, "cms: the redeemed preview carries the LIVE draft blocks");
   assert(redeemed.headers.get("cache-control") === "private, no-store", "cms: a preview response is never cached");
 
+  // The route must work under the roles an app ACTUALLY configures. The e2e app defines
+  // an `admin` role, which masked a bug where the route hardcoded roles:["admin"] — under
+  // the README's own wiring (anonymous + editor, no admin) every link 404'd. Redeeming as
+  // a plain editor exercises the configured-viewer-roles path.
+  const plainEditor = await token("cms-editor-only", ["editor"]);
+  const editorMint = await call("signPagePreview", { pageId: pageRow.id }, plainEditor);
+  assert(editorMint.body.ok, "cms: a plain editor (no admin role) can mint a preview link");
+  const editorRedeem = await fetch(`${base}${editorMint.body.result.url}`);
+  assert(editorRedeem.status === 200, "cms: a link minted by a plain editor redeems (the route presents viewer roles, not admin)");
+
+  // Bad input is a 400, not a 500 or a link that can never be redeemed.
+  assert((await call("signPagePreview", { pageId: pageRow.id, expiresIn: "3600" }, admin)).status === 400, "cms: a non-numeric expiresIn is rejected");
+  assert((await call("signPagePreview", {}, admin)).status === 400, "cms: a missing pageId is rejected");
+
+  // Errors use pramen's standard { ok, error, code } shape.
+  const denied = await (await fetch(`${base}/cms/preview?token=nonsense`)).json() as { error?: string; code?: string };
+  assert(typeof denied.error === "string" && denied.code === "forbidden", "cms: a preview denial uses the standard error body shape");
+
+  // An editor's own preview is flagged the same way a token redemption is.
+  const editorPreview = await call("getPage", { slug, preview: true }, admin);
+  assert(editorPreview.body.result.isPreview === true, "cms: getPage(preview) sets isPreview like the token route does");
+
   // a tampered token is refused — the signature covers the page id
   const [tokData, tokSig] = previewToken.split(".");
   const tampered = await fetch(`${base}/cms/preview?token=${encodeURIComponent(`${tokData}x.${tokSig}`)}`);

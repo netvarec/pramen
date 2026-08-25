@@ -140,6 +140,17 @@ authorization. Spread `cmsRoutes()` into `app.routes` to serve `GET /cms/preview
 verifies the token in the Worker before any read and returns the live draft with
 `isPreview: true` and `Cache-Control: private, no-store`.
 
+If you pass custom roles to `createCmsHandlers`, pass the same ones to `cmsRoutes`:
+
+```ts
+const roles = { editorRoles: ["editor"], reviewerRoles: ["reviewer"] };
+const handlers = { ...createCmsHandlers(roles) };
+const routes = [...cmsRoutes({ viewerRoles: ["editor", "reviewer"] })];
+```
+
+The route presents that identity to the Durable Object, and it must satisfy both the
+handler gate and your ACL — otherwise every link resolves to "not found".
+
 The grant is scoped to **one page** and carries its own expiry (default 1 hour, clamped to
 30 days), so a leaked link is not "see all drafts" and stops working on its own. Signing
 uses `PREVIEW_SECRET`, falling back to `FILES_SECRET` then `AUTH_SECRET` — the same

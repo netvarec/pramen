@@ -1003,6 +1003,10 @@ export function previewSecret(env: EnvBag): string | undefined {
 const previewUnconfigured = () =>
   new PramenError("page preview is not configured (set a strong PREVIEW_SECRET, FILES_SECRET or AUTH_SECRET)", 503, "unavailable");
 
+/** The default viewer roles — `createCmsHandlers`' editorRoles ∪ reviewerRoles defaults.
+ * Shared so `cmsRoutes()`'s preview route presents an identity the handler gate accepts. */
+export const DEFAULT_VIEWER_ROLES = ["editor", "admin", "reviewer"] as const;
+
 /** Where a preview link is redeemed. Spread `cmsRoutes()` into `app.routes` to serve it. */
 export const PREVIEW_PATH = "/cms/preview";
 
@@ -1780,13 +1784,9 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     }),
 
     // ---- public content API ----
-    /** Fetch an assembled page by slug (+ locale). Anonymous callers get the published
-     * snapshot (the ACL scopes `cms_pages` reads to `status = published`). Editors may pass
-     * `preview: true` to assemble the current DRAFT live from the tables. `locale` defaults
-     * to the configured default locale; a slug is unique per locale. */
     /** Mint a signed, self-expiring preview link for one page. Editor-gated to MINT —
      * anyone holding the resulting link can redeem it, which is the point. */
-    signPagePreview: mutation(async (ctx, input: { pageId: string; expiresIn?: number }) => {
+    signPagePreview: query(async (ctx, input: { pageId: string; expiresIn?: number }) => {
       const secret = previewSecret(ctx.env);
       if (!secret) throw previewUnconfigured(); // fail closed — never mint a forgeable link
       const db = cdb(ctx);
@@ -1804,7 +1804,20 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       const token = await signToken<PreviewToken>({ t: tenant, p: String(page.id), exp }, secret);
       // RELATIVE, like signed file urls — the client resolves it against the CMS origin.
       return { url: `${PREVIEW_PATH}?token=${encodeURIComponent(token)}`, token, expiresAt: exp * 1000 };
-    }, editor),
+    }, {
+      ...editor,
+      input: (raw): { pageId: string; expiresIn?: number } => {
+        const o = asObj(raw);
+        // Unvalidated, a non-string pageId reached the query compiler and surfaced as a
+        // 500, and a string expiresIn made exp NaN — minting a link that always 403s,
+        // with nothing anywhere to explain why.
+        if (typeof o.pageId !== "string" || o.pageId === "") throw new BadRequest("pageId is required");
+        if (o.expiresIn !== undefined && (typeof o.expiresIn !== "number" || !Number.isFinite(o.expiresIn))) {
+          throw new BadRequest("expiresIn must be a number of seconds");
+        }
+        return o as never;
+      },
+    }),
 
     /** Assemble a page's LIVE draft by id. Not the redemption endpoint — that is the public
      * `GET /cms/preview` route, which verifies the token and then calls this privileged.
@@ -1826,6 +1839,10 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       },
     }),
 
+    /** Fetch an assembled page by slug (+ locale). Anonymous callers get the published
+     * snapshot (the ACL scopes `cms_pages` reads to `status = published`). Editors may pass
+     * `preview: true` to assemble the current DRAFT live from the tables. `locale` defaults
+     * to the configured default locale; a slug is unique per locale. */
     getPage: query(async (ctx, input: { slug: string; locale?: string; preview?: boolean }) => {
       const db = cdb(ctx);
       // Preview is an editor capability — gate it before the lookup so a non-editor gets a
@@ -1836,7 +1853,11 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       const page = rows[0];
       if (!page) throw notFound("page"); // also the anonymous-vs-draft case: ACL yields no row
 
-      if (input.preview) return assembleLive(db, page);
+      if (input.preview) {
+        const live = await assembleLive(db, page);
+        live.isPreview = true; // same flag the token route sets, so a banner works either way
+        return live;
+      }
       // Public path: serve the page's current published revision snapshot (selected by the
       // page's `currentRevisionId` pointer — deterministic, unlike ordering by a
       // second-precision timestamp). We do NOT assemble live here: anonymous has no read
@@ -2200,7 +2221,8 @@ interface CmsRoute {
 }
 
 const previewJson = (status: number, code: string, message: string): Response =>
-  new Response(JSON.stringify({ ok: false, code, message }), {
+  // `{ ok, error, code }` — the shape every other pramen error uses (runtime/errors.ts).
+  new Response(JSON.stringify({ ok: false, error: message, code }), {
     status,
     headers: { "content-type": "application/json; charset=utf-8", "cache-control": "private, no-store" },
   });
@@ -2214,8 +2236,20 @@ const preview503 = (): Response =>
 /** Turnkey public routes for `GET /sitemap.xml`, `GET /cms/preview` and `GET /robots.txt`. Spread into
  * `app.routes`. The sitemap pulls published pages via `callPrivileged(listPublishedPages)`.
  * `origin` defaults to the request's origin; `pageUrl` customizes the URL shape. */
-export function cmsRoutes(opts: { origin?: string; tenant?: string; pageUrl?: SitemapOpts["pageUrl"]; disallow?: string[] } = {}): CmsRoute[] {
+export function cmsRoutes(
+  opts: {
+    origin?: string;
+    tenant?: string;
+    pageUrl?: SitemapOpts["pageUrl"];
+    disallow?: string[];
+    /** Roles the preview route presents to the DO. MUST match `createCmsHandlers`'
+     * viewer roles (editorRoles ∪ reviewerRoles) and be granted by your ACL, or every
+     * preview link 404s. Defaults to the same defaults `createCmsHandlers` uses. */
+    viewerRoles?: readonly string[];
+  } = {},
+): CmsRoute[] {
   const tenant = opts.tenant ?? "main";
+  const previewRoles = opts.viewerRoles ?? DEFAULT_VIEWER_ROLES;
   return [
     {
       method: "GET",
@@ -2245,11 +2279,17 @@ export function cmsRoutes(opts: { origin?: string; tenant?: string; pageUrl?: Si
         const payload = await verifyToken<PreviewToken>(raw, secret);
         if (!payload || typeof payload.p !== "string" || typeof payload.t !== "string") return previewDenied();
 
+        // The synthetic identity has to satisfy BOTH gates the DO applies: the handler's
+        // `auth` (viewerRoles) and the row ACL (whatever role the app granted cmsPolicies
+        // to). Hardcoding ["admin"] satisfied neither under the wiring this package's own
+        // README documents — `role("anonymous", …)` + `role("editor", …)`, no admin role
+        // at all — so every preview link 404'd. The e2e only passed because example/app.ts
+        // happens to define an admin role. Send the configured viewer roles instead.
         const res = await ctx.callPrivileged({
           name: "getPagePreview",
           input: { pageId: payload.p },
           tenant: payload.t, // from the SIGNED payload, never from the query string
-          roles: ["admin"],
+          roles: [...previewRoles],
         });
         const body = (await res.json().catch(() => ({}))) as { ok?: boolean; result?: JsonValue };
         if (body.ok !== true) return previewDenied(404, "page not found");
