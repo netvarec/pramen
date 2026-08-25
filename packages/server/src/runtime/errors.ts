@@ -34,6 +34,15 @@ export class Forbidden extends PramenError {
   }
 }
 
+/** 409 — the request conflicts with the current state of the resource. For
+ * optimistic concurrency (a stale `expectedVersion`) and for uniqueness clashes the
+ * caller could resolve by retrying with different input. */
+export class Conflict extends PramenError {
+  constructor(message = "conflict") {
+    super(message, 409, "conflict");
+  }
+}
+
 export interface ErrorBody {
   ok: false;
   error: string;

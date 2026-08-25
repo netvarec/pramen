@@ -101,7 +101,7 @@ export { routeQueue, dispatchQueueBatch } from "./runtime/queue-consumer";
 export type { QueueContext, QueueHandler, QueueMessage, QueueBatch, AppQueueMap } from "./runtime/queue-consumer";
 
 // --- errors ---
-export { PramenError, BadRequest, Unauthorized, Forbidden } from "./runtime/errors";
+export { PramenError, BadRequest, Unauthorized, Forbidden, Conflict } from "./runtime/errors";
 
 // --- substrate seam (advanced: bring your own SQL backend) ---
 export { sqliteDialect, postgresDialect, DoSqliteDriver, D1Driver } from "./runtime/driver";

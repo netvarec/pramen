@@ -41,6 +41,7 @@ import {
   BadRequest,
   Forbidden,
   PramenError,
+  Conflict,
   signToken,
   verifyToken,
   resolveSecret,
@@ -468,6 +469,9 @@ export const cmsSchema = {
       title: t.text(),
       fields: t.json(), // content matching the block type's fieldsSchema
       isReusable: defaultTo(t.bool(), false),
+      // Optimistic concurrency: bumped on every edit. A caller may pass the version it
+      // read as `expectedVersion` and get a 409 instead of silently clobbering.
+      version: defaultTo(t.int(), 1),
       createdAt: defaultTo(t.text(), expr.now()),
       updatedAt: defaultTo(t.text(), expr.now()),
     }),
@@ -511,6 +515,8 @@ export const cmsSchema = {
       ogDescription: t.text(),
       ogImage: t.uuid(), // a cms_media id, resolved to a URL at assemble time
       structuredData: t.json(), // JSON-LD, emitted as-is into <head>
+      // Optimistic concurrency — see cms_blocks.version.
+      version: defaultTo(t.int(), 1),
       createdAt: defaultTo(t.text(), expr.now()),
       updatedAt: defaultTo(t.text(), expr.now()),
     }),
@@ -931,6 +937,8 @@ export function normalizeFields(
 // --- assembled-page shape (the content-API result + revision snapshot) --------
 
 export interface RenderedBlock {
+  /** The block's optimistic-concurrency token — pass back as `expectedVersion`. */
+  version: number;
   /** The placement id (cms_page_blocks) — stable per position; used for reorder/remove. */
   id: string;
   /** The underlying block instance id (cms_blocks) — used to edit the block's content. */
@@ -975,6 +983,8 @@ export interface AssembledPage {
     metaTitle: string | null;
     metaDescription: string | null;
     seo: PageSeo;
+    /** Optimistic-concurrency token — pass back as `expectedVersion` on a write. */
+    version: number;
   };
   regions: Record<string, RenderedBlock[]>;
   /** True when this is a live draft assembled behind a preview grant, rather than the
@@ -1157,6 +1167,7 @@ async function assembleLive(db: CmsDb, page: Record<string, unknown>): Promise<A
     (regions[region] ??= []).push({
       id: String(m.p.id),
       block_id: String(m.block.id),
+      version: typeof m.block.version === "number" ? m.block.version : 1,
       block_type: typeById.get(String(m.block.typeId))?.slug ?? "unknown",
       title: (m.block.title as string | null) ?? null,
       fields: resolveMediaFields(m.fields, m.schema, mediaById),
@@ -1219,6 +1230,7 @@ function pageMeta(page: Record<string, unknown>, translations: PageTranslation[]
     slug: String(page.slug),
     status: String(page.status),
     locale: String(page.locale ?? "en"),
+    version: typeof page.version === "number" ? page.version : 1,
     contentType,
     translationGroupId: (page.translationGroupId as string | null) ?? null,
     translations,
@@ -1379,6 +1391,42 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
   const markChanged = (db: CmsDb, ...tables: string[]): void => {
     const touched = (db as unknown as { touched?: Set<string> }).touched;
     if (touched) for (const t of tables) touched.add(t);
+  };
+
+  // --- optimistic concurrency ------------------------------------------------
+  //
+  // On the DO — the default store — a read-then-write inside one mutation is atomic: the
+  // Durable Object is a single writer and DoSqliteDriver.exec is synchronous. The EDITORS
+  // are not serialized, though: two people on the same page means last save wins, silently,
+  // with no signal to the loser. Passing back the `version` you read turns that into a 409.
+  //
+  // CAVEAT — the D1 store has no interactive transaction (D1Driver.transaction is a
+  // pass-through), so two requests in the same millisecond can both read and both write.
+  // The guard still catches the human-scale editor race; it is not a hard mutex there.
+  //
+  // Optional by design: omitting `expectedVersion` keeps last-write-wins, so nothing breaks.
+  const nextVersion = (row: Record<string, unknown>, expected: number | undefined, label: string): number => {
+    // Do NOT default a missing version to 1. Under a field-restricted read grant that
+    // projected the column away, `current` would be 1 forever: a client that legitimately
+    // read version 7 gets a permanent unresolvable 409, and an unguarded save then LOWERS
+    // the stored version, so a genuinely stale write is accepted later.
+    if (typeof row.version !== "number") {
+      // Log the actionable detail, return a generic 500 — PramenError's message goes to the
+      // caller verbatim, so naming the column would leak the schema and ACL shape.
+      console.error(`pramen/cms: ${label} has no readable version — grant read on the \`version\` column`);
+      throw new Error("version unavailable");
+    }
+    const current = row.version;
+    if (expected !== undefined && expected !== current) {
+      throw new Conflict(`${label} was changed by someone else (you have version ${expected}, current is ${current}) — reload and reapply your edit`);
+    }
+    return current + 1;
+  };
+  const versionInput = (o: Record<string, unknown>): void => {
+    if (o.expectedVersion === undefined) return;
+    if (typeof o.expectedVersion !== "number" || !Number.isInteger(o.expectedVersion)) {
+      throw new BadRequest("expectedVersion must be an integer");
+    }
   };
 
   const pageIdInput = {
@@ -1652,9 +1700,12 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     }),
 
     /** Update a page's SEO fields (meta/canonical/robots/OpenGraph/JSON-LD). Editor-gated. */
-    updatePageSeo: mutation(async (ctx, input: { pageId: string; metaTitle?: string | null; metaDescription?: string | null; canonicalUrl?: string | null; robots?: string | null; ogTitle?: string | null; ogDescription?: string | null; ogImage?: string | null; structuredData?: unknown }) => {
+    updatePageSeo: mutation(async (ctx, input: { pageId: string; metaTitle?: string | null; metaDescription?: string | null; canonicalUrl?: string | null; robots?: string | null; ogTitle?: string | null; ogDescription?: string | null; ogImage?: string | null; structuredData?: unknown; expectedVersion?: number }) => {
       const db = cdb(ctx);
-      const patch: Record<string, unknown> = { updatedAt: nowStamp() };
+      // Read first so the version can be compared; this patched blind before.
+      const seoRows = await db.find({ from: "cms_pages", where: { id: input.pageId }, limit: 1 });
+      if (!seoRows[0]) throw notFound("page");
+      const patch: Record<string, unknown> = { updatedAt: nowStamp(), version: nextVersion(seoRows[0], input.expectedVersion, "this page") };
       for (const k of ["metaTitle", "metaDescription", "canonicalUrl", "robots", "ogTitle", "ogDescription", "ogImage"] as const) {
         if (k in input) patch[k] = (input as Record<string, unknown>)[k];
       }
@@ -1667,6 +1718,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       input: (raw): { pageId: string } => {
         const o = asObj(raw);
         if (typeof o.pageId !== "string") throw new BadRequest("pageId is required");
+        versionInput(o);
         return o as never;
       },
     }),
@@ -1677,12 +1729,12 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
      * page record itself, which was previously only settable at createPage. A slug/locale
      * change re-checks (slug, locale) uniqueness (excluding this page); `fields` is validated
      * + normalized against the content type's fieldsSchema, exactly like createPage. */
-    updatePage: mutation(async (ctx, input: { pageId: string; title?: string; slug?: string; locale?: string; fields?: FieldValues }) => {
+    updatePage: mutation(async (ctx, input: { pageId: string; title?: string; slug?: string; locale?: string; fields?: FieldValues; expectedVersion?: number }) => {
       const db = cdb(ctx);
       const rows = await db.find({ from: "cms_pages", where: { id: input.pageId }, limit: 1 });
       const page = rows[0];
       if (!page) throw notFound("page");
-      const patch: Record<string, unknown> = { updatedAt: nowStamp() };
+      const patch: Record<string, unknown> = { updatedAt: nowStamp(), version: nextVersion(page, input.expectedVersion, "this page") };
       if (input.title !== undefined) patch.title = input.title;
       if (input.slug !== undefined || input.locale !== undefined) {
         const nextSlug = input.slug ?? String(page.slug);
@@ -1703,12 +1755,13 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       return { ok: true, page: updated };
     }, {
       ...editor,
-      input: (raw): { pageId: string; title?: string; slug?: string; locale?: string; fields?: FieldValues } => {
+      input: (raw): { pageId: string; title?: string; slug?: string; locale?: string; fields?: FieldValues; expectedVersion?: number } => {
         const o = asObj(raw);
         if (typeof o.pageId !== "string") throw new BadRequest("pageId is required");
         for (const k of ["title", "slug", "locale"] as const) {
           if (o[k] !== undefined && typeof o[k] !== "string") throw new BadRequest(`${k} must be a string`);
         }
+        versionInput(o);
         return o as never;
       },
     }),
@@ -1946,11 +1999,14 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     }),
 
     /** Update a block's content (re-validated against its type's field schema). */
-    updateBlock: mutation(async (ctx, input: { blockId: string; fields?: FieldValues; title?: string }) => {
+    updateBlock: mutation(async (ctx, input: { blockId: string; fields?: FieldValues; title?: string; expectedVersion?: number }) => {
       const db = cdb(ctx);
       const rows = await db.find({ from: "cms_blocks", where: { id: input.blockId }, limit: 1 });
       const block = rows[0];
       if (!block) throw notFound("block");
+      // Conflict first, like updatePage: a stale write carrying invalid fields should say
+      // "someone else changed this", not 400 on content the caller is about to discard.
+      const blockVersion = nextVersion(block, input.expectedVersion, "this block");
       let cleanFields = input.fields;
       if (input.fields !== undefined) {
         const bt = await db.find({ from: "cms_block_types", where: { id: block.typeId }, limit: 1 });
@@ -1960,15 +2016,16 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
         validateFields(bt[0]?.fieldsSchema as FieldDefinition[] | undefined, input.fields, "", { requireRequired: false, legacyBaseline: asObj(block.fields) as FieldValues });
         cleanFields = normalizeFields(bt[0]?.fieldsSchema as FieldDefinition[] | undefined, input.fields, rtSchema);
       }
-      const patch: Record<string, unknown> = { updatedAt: nowStamp() };
+      const patch: Record<string, unknown> = { updatedAt: nowStamp(), version: blockVersion };
       if (cleanFields !== undefined) patch.fields = cleanFields;
       if (input.title !== undefined) patch.title = input.title;
       return db.update("cms_blocks", input.blockId, patch);
     }, {
       ...editor,
-      input: (raw): { blockId: string; fields?: FieldValues; title?: string } => {
+      input: (raw): { blockId: string; fields?: FieldValues; title?: string; expectedVersion?: number } => {
         const o = asObj(raw);
         if (typeof o.blockId !== "string") throw new BadRequest("blockId is required");
+        versionInput(o);
         return o as never;
       },
     }),
@@ -2386,6 +2443,11 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
           // those keys, but AssembledPage now types them as present — backfill from the live
           // page row so a frontend head template never hits `page.seo` === undefined.
           if (!snap.page.seo) snap.page.seo = pageMeta(page).seo;
+          // `version` from the LIVE row, never the snapshot: a snapshot is baked at publish
+          // time, so a client echoing it would 409 forever after the first draft edit — and
+          // a pre-`version` snapshot has none at all, which (typed `number`) silently drops
+          // out of the request body and reverts to the last-write-wins this feature removes.
+          snap.page.version = typeof page.version === "number" ? page.version : 1;
           if (snap.page.translationGroupId === undefined) snap.page.translationGroupId = (page.translationGroupId as string | null) ?? null;
           return snap;
         }

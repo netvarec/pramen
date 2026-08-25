@@ -249,6 +249,59 @@ export async function runCms(base: string): Promise<void> {
   assert(content2.some((b) => bodyText(b).includes("Shared CTA")), "cms: the base reusable placement shows the block's own fields");
   assert(content2.some((b) => b.is_shared && bodyText(b).includes("Overridden CTA")), "cms: a shared placement's overrides merge over the block's fields");
 
+  // --- optimistic concurrency: a stale expectedVersion is a 409, not a silent clobber ---
+  const vPage = await call("createPage", { typeId: ct.body.result.id, title: "Concurrent", slug: "concurrent" }, admin);
+  const vId = vPage.body.result.id as string;
+  assert(vPage.body.result.version === 1, "cms: a new page starts at version 1");
+
+  // Two editors both read version 1. The first save wins and bumps to 2.
+  const firstSave = await call("updatePage", { pageId: vId, title: "Editor A", expectedVersion: 1 }, admin);
+  assert(firstSave.body.ok && firstSave.body.result.page.version === 2, "cms: a matching expectedVersion saves and bumps the version");
+
+  // The second still holds version 1 — previously this silently overwrote Editor A.
+  const staleSave = await call("updatePage", { pageId: vId, title: "Editor B", expectedVersion: 1 }, admin);
+  assert(staleSave.status === 409 && staleSave.body.code === "conflict", "cms: a stale expectedVersion is refused with 409 conflict");
+  assert(/version 1.*current is 2/.test(String(staleSave.body.error ?? "")), "cms: the conflict names both versions so a client can explain itself");
+  assert((await call("getPage", { slug: "concurrent", preview: true }, admin)).body.result.page.title === "Editor A", "cms: the losing write did not land");
+
+  // Omitting expectedVersion keeps last-write-wins — this is opt-in, not a breaking change.
+  const unguarded = await call("updatePage", { pageId: vId, title: "Editor C" }, admin);
+  assert(unguarded.body.ok && unguarded.body.result.page.version === 3, "cms: omitting expectedVersion still saves, and still bumps");
+
+  // The version has to be readable from the same call that loads the content, or a client
+  // has nothing to echo back — the feature had no consumer without this.
+  const vRead = await call("getPage", { slug: "concurrent", preview: true }, admin);
+  assert(vRead.body.result.page.version === 3, "cms: getPage exposes the page version for a client to echo");
+
+  // The PUBLIC path serves a snapshot baked at publish time, so its version must come from
+  // the LIVE row — otherwise a client echoes a frozen number and 409s forever, and a
+  // re-read hands back the same stale value.
+  await call("publishPage", { pageId: vId }, admin);
+  await call("updatePage", { pageId: vId, title: "After publish" }, admin);
+  const vPublic = await call("getPage", { slug: "concurrent" });
+  const vLive = (await call("getPage", { slug: "concurrent", preview: true }, admin)).body.result.page.version as number;
+  assert(vPublic.body.result.page.version === vLive, `cms: the published snapshot reports the LIVE version (${vPublic.body.result.page.version} vs ${vLive})`);
+
+  const badVersion = await call("updatePage", { pageId: vId, title: "x", expectedVersion: "2" }, admin);
+  assert(badVersion.status === 400, "cms: a non-integer expectedVersion is a 400");
+
+  // Blocks version independently of their page.
+  const vBlock = await call("addBlock", { pageId: vId, blockTypeSlug: "rich_text", region: "content", fields: { body: rt("v") } }, admin);
+  const vBlockId = vBlock.body.result.block.id as string;
+  assert(vBlock.body.result.block.version === 1, "cms: a new block starts at version 1");
+  await call("publishPage", { pageId: vId }, admin);
+  const vBlocks = (await call("getPage", { slug: "concurrent", preview: true }, admin)).body.result.regions.content as Array<{ version: number }>;
+  assert(vBlocks.every((b) => typeof b.version === "number"), "cms: every rendered block carries its version");
+  assert((await call("updateBlock", { blockId: vBlockId, title: "B1", expectedVersion: 1 }, admin)).body.result.version === 2, "cms: updateBlock bumps the block version");
+  assert((await call("updateBlock", { blockId: vBlockId, title: "B2", expectedVersion: 1 }, admin)).status === 409, "cms: a stale block expectedVersion is a 409");
+
+  // updatePageSeo shares the page's version line — SEO and body edits conflict with each other.
+  // Read the current version rather than hardcoding it, so adding a write above doesn't
+  // silently retune these two.
+  const seoVersion = (await call("getPage", { slug: "concurrent", preview: true }, admin)).body.result.page.version as number;
+  assert((await call("updatePageSeo", { pageId: vId, metaTitle: "M", expectedVersion: seoVersion }, admin)).body.ok, "cms: updatePageSeo accepts a matching expectedVersion");
+  assert((await call("updatePageSeo", { pageId: vId, metaTitle: "M2", expectedVersion: seoVersion }, admin)).status === 409, "cms: updatePageSeo shares the page version line");
+
   // --- media library: upload → attach to a block → resolved URL in the content API ---
   const imgType = await call("createBlockType", {
     name: "Image",
