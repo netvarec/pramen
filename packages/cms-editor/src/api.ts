@@ -129,6 +129,12 @@ export class Api {
   getMedia = (id: string) => this.call<Media | null>("getMedia", { id });
   updateMedia = (id: string, alt: string | null) => this.call<Media>("updateMedia", { id, alt });
   deleteMedia = (id: string) => this.call<{ ok: true }>("deleteMedia", { id });
+  // Trash is not a UI nicety here: deleteMedia no longer removes the R2 object, so without
+  // a reachable purge a file can be "deleted" in the library and still be served on the
+  // live site — the case a takedown request actually needs.
+  listTrash = (limit = 50) => this.call<{ pages: Page[]; media: Media[] }>("listTrash", { limit });
+  restoreMedia = (id: string) => this.call<{ ok: true }>("restoreMedia", { id });
+  purgeMedia = (id: string) => this.call<{ ok: true }>("purgeMedia", { id });
 
   /** Full upload flow: sign → PUT the bytes → persist a `cms_media` row. Returns the row. */
   async uploadMedia(file: File): Promise<Media> {

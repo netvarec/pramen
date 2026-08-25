@@ -3,9 +3,15 @@
 
 import { Button, Heading, Input, ModalDialog, ModalOverlay, ModalSurface, Text, Textarea } from "@podoba/react";
 import { BlockEditor } from "@podoba/react/editor";
+import { generateHTML, generateJSON } from "@tiptap/core";
+import Highlight from "@tiptap/extension-highlight";
+import TaskItem from "@tiptap/extension-task-item";
+import TaskList from "@tiptap/extension-task-list";
+import StarterKit from "@tiptap/starter-kit";
 import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import type { Api } from "./api";
-import type { FieldDefinition, FieldValue, FieldValues, Media } from "./types";
+import { isRichTextDoc, richTextToPlainText } from "./rich-text";
+import type { FieldDefinition, FieldValue, FieldValues, Media, RichTextDoc } from "./types";
 
 // Tokenized bare control (podoba's filled-field skin) for the native inputs that
 // don't map cleanly onto a podoba primitive (number/date/select/file).
@@ -195,11 +201,11 @@ function FieldInput({ def, value, onChange, api, hideLabelAs, siblings }: { def:
         <Textarea label={label} value={asText(value)} onChange={onChange} />
       );
     case "richtext":
-      // A rich-text value is an HTML string (round-trips with the site's set:html
-      // renderers). A legacy object value isn't editable here — fall back to raw text.
+      // A rich-text value is a document tree. A legacy HTML string still opens (it seeds
+      // the editor as-is) and is upgraded to a doc by the first save.
       return (
         <FieldShell label={label}>
-          <RichText value={typeof value === "string" ? value : ""} onChange={onChange as (v: string) => void} />
+          <RichText value={value as RichTextDoc | string | null} onChange={onChange as (v: RichTextDoc) => void} />
         </FieldShell>
       );
     case "number":
@@ -271,13 +277,90 @@ function FieldInput({ def, value, onChange, api, hideLabelAs, siblings }: { def:
 
 // --- rich text (WYSIWYG) --------------------------------------------------------------
 // The `richtext` field is podoba's Notion-style BlockEditor (Tiptap): `/` slash palette,
-// block conversion, inline bubble toolbar. Still an HTML string in/out, so it round-trips
-// with existing rich_text content + every set:html renderer — no value migration. The
-// server's sanitizeRichText() (@pramen/cms) remains the XSS boundary on write; ProseMirror
-// parses HTML to its schema on load, so scripts never survive into the editor either.
+// block conversion, inline bubble toolbar.
+//
+// The STORED value is a document tree (`RichTextDoc`), never HTML. BlockEditor's own
+// value contract is an HTML string — its docs call that presentation-only — so the
+// conversion happens here, at the boundary, and the HTML never leaves this component:
+// seeded from the stored doc on mount, converted back to a doc on every change.
+//
+// The extension set MUST match BlockEditor's, or a round-trip silently drops whatever
+// only its schema knows (task lists, highlights). Kept beside it here for that reason.
+const RT_EXTENSIONS = [
+  StarterKit.configure({ heading: { levels: [1, 2, 3] }, link: { openOnClick: false, autolink: true } }),
+  Highlight,
+  TaskList,
+  TaskItem.configure({ nested: true }),
+];
 
-export function RichText({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  return <BlockEditor value={value} onChange={onChange} minHeight={180} placeholder="Write, or press '/' for blocks…" />;
+/** Parse editor HTML into a document. Never throws: a parse failure yields an empty
+ * document rather than taking the render down (this runs on every keystroke). */
+function htmlToDoc(html: string): RichTextDoc {
+  try {
+    return generateJSON(html, RT_EXTENSIONS) as RichTextDoc;
+  } catch (e) {
+    console.error("pramen/cms-editor: could not parse editor HTML", e);
+    return { type: "doc", content: [] };
+  }
+}
+
+/** Seed HTML for the editor. A legacy HTML string passes through untouched — that is the
+ * migration ramp (see `RichText`, which upgrades it on mount).
+ *
+ * `generateHTML` throws a RangeError for any node or mark outside RT_EXTENSIONS, and this
+ * runs in a useState initializer with no ErrorBoundary above it — so an un-normalized
+ * document (a custom `richTextSchema`, an import, a bootstrap seed, `ctx.db.exec`) would
+ * throw during render and blank the whole SPA, not just this field. Fail to an empty
+ * editor and say so instead. */
+function docToEditorHtml(value: RichTextDoc | string | null | undefined): string {
+  if (typeof value === "string") return value;
+  if (!isRichTextDoc(value)) return "";
+  try {
+    return generateHTML(value, RT_EXTENSIONS);
+  } catch (e) {
+    console.error("pramen/cms-editor: rich-text document uses nodes this editor cannot render", e);
+    return "";
+  }
+}
+
+export function RichText({ value, onChange }: { value: RichTextDoc | string | null; onChange: (v: RichTextDoc) => void }) {
+  // BlockEditor requires its own HTML echoed back VERBATIM — normalising in render would
+  // re-seed the document on every keystroke and throw the caret back to the start. So the
+  // HTML lives in local state and the doc goes upward.
+  const [html, setHtml] = useState(() => docToEditorHtml(value));
+  const emitted = useRef<RichTextDoc | null>(null);
+
+  // Upgrade a legacy HTML value to a document AS SOON AS IT OPENS, not on first edit of
+  // this field. The server only tolerates a legacy string that is byte-identical to what
+  // is stored, and both renderers emit nothing for a string — so a value that is never
+  // upgraded stays invisible on the site forever. Converting on mount means any ordinary
+  // save (even of a sibling field) writes it back as a document.
+  const upgraded = useRef(false);
+  useEffect(() => {
+    if (upgraded.current || typeof value !== "string" || value === "") return;
+    upgraded.current = true;
+    const doc = htmlToDoc(value);
+    emitted.current = doc;
+    onChange(doc);
+  }, [value, onChange]);
+
+  // Re-seed only when the parent hands us a doc that is not the one we last emitted —
+  // i.e. the form switched to a different block, not our own change coming back around.
+  useEffect(() => {
+    if (value !== null && value === emitted.current) return;
+    setHtml(docToEditorHtml(value));
+    // Only the incoming value should re-seed; `html` is this effect's output, not its input.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
+
+  const handleChange = (nextHtml: string) => {
+    setHtml(nextHtml);
+    const doc = htmlToDoc(nextHtml);
+    emitted.current = doc;
+    onChange(doc);
+  };
+
+  return <BlockEditor value={html} onChange={handleChange} minHeight={180} placeholder="Write, or press '/' for blocks…" />;
 }
 
 /**
@@ -327,7 +410,11 @@ function Repeater({ def, value, onChange, api, label }: { def: FieldDefinition; 
     for (const f of fields) {
       if (!readable.includes(f.type)) continue;
       const v = it[f.name];
-      if (typeof v === "string" && v.trim()) return v.replace(/<[^>]+>/g, " ").trim().slice(0, 80);
+      // A `richtext` value is a document tree, so a string check alone would skip the one
+      // prose field an item has — exactly the row this summary exists to distinguish.
+      const text = isRichTextDoc(v) ? richTextToPlainText(v) : typeof v === "string" ? v.replace(/<[^>]+>/g, " ") : "";
+      const trimmed = text.replace(/\s+/g, " ").trim();
+      if (trimmed) return trimmed.slice(0, 80);
     }
     return "";
   };

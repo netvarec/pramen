@@ -8,7 +8,8 @@ import { Api, ApiError } from "./api";
 import { FieldForm, slugify } from "./fields";
 import type { Config } from "./api";
 import type { Me } from "./app-context";
-import type { AssembledPage, AuditEntry, BlockType, CollectionMeta, ContentType, FieldDefinition, FieldValues, Media, Page, RegionDefinition, RenderedBlock } from "./types";
+import { isRichTextDoc, richTextToPlainText } from "./rich-text";
+import type { AssembledPage, AuditEntry, BlockType, CollectionMeta, ContentType, FieldDefinition, FieldValue, FieldValues, Media, Page, RegionDefinition, RenderedBlock } from "./types";
 
 export type InspectorTab = "settings" | "seo" | "workflow" | "i18n" | "audit";
 export const INSPECTOR_TABS: InspectorTab[] = ["settings", "seo", "workflow", "i18n", "audit"];
@@ -186,11 +187,16 @@ function CreatePage({ api, onClose, onCreated, onError }: { api: Api; onClose: (
 // collections, zero per-collection code. Rows are addressed by `def.idField` (the entity's
 // PK column, defaults "id"); the server resolves the real PK from the value.
 
-/** Render a list-cell value as a short string (objects/arrays are summarized, not dumped). */
+/** Render a list-cell value as a short string (objects/arrays are summarized, not dumped).
+ * A `richtext` column is a document tree, so flatten it to words rather than showing "—". */
 function cellText(v: unknown): string {
   if (v == null) return "";
   if (typeof v === "boolean") return v ? "yes" : "no";
   if (Array.isArray(v)) return v.length === 1 ? "1 item" : `${v.length} items`;
+  if (isRichTextDoc(v)) {
+    const text = richTextToPlainText(v).replace(/\s+/g, " ").trim();
+    return text.length > 80 ? text.slice(0, 80) + "…" : text;
+  }
   if (typeof v === "object") return "—";
   return String(v);
 }
@@ -629,7 +635,7 @@ function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, o
   const blockId = block.block_id;
   const placementId = block.id;
 
-  // Load RAW fields (media as ids, richtext as HTML) so the value round-trips on save.
+  // Load RAW fields (media as ids, richtext as a document tree) so the value round-trips on save.
   // A pending optimistic block has no persisted row yet — start empty and skip the fetch
   // (its temp id would 404); when it reconciles to real ids the card remounts and fetches.
   useEffect(() => {
@@ -1095,6 +1101,10 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
   const [hasMore, setHasMore] = useState(false);
   const [selected, setSelected] = useState<Media | null>(null);
   const [busy, setBusy] = useState(false);
+  // Trashed files. Deleting no longer removes the R2 object, so without this the bytes stay
+  // publicly fetchable with no way to reach purgeMedia — the case a takedown request needs.
+  const [trash, setTrash] = useState<Media[]>([]);
+  const [showTrash, setShowTrash] = useState(false);
 
   const load = useCallback(
     (off: number) => {
@@ -1109,7 +1119,30 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
     },
     [api, onError],
   );
+  const loadTrash = useCallback(() => {
+    api.listTrash().then((r) => setTrash(r.media ?? [])).catch((e) => onError(errMsg(e)));
+  }, [api, onError]);
   useEffect(() => { load(0); }, [load]);
+  useEffect(() => { loadTrash(); }, [loadTrash]);
+
+  const restore = async (id: string) => {
+    try {
+      await api.restoreMedia(id);
+      loadTrash();
+      load(0);
+    } catch (e) {
+      onError(errMsg(e));
+    }
+  };
+  const purge = async (id: string) => {
+    if (!confirm("Delete this file permanently? The file itself is removed and cannot be recovered.")) return;
+    try {
+      await api.purgeMedia(id);
+      loadTrash();
+    } catch (e) {
+      onError(errMsg(e));
+    }
+  };
 
   const upload = async (files: FileList | null) => {
     if (!files?.length) return;
@@ -1153,13 +1186,37 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
             <Button variant="secondary" size="sm" onPress={() => load(offset)}>Load more</Button>
           </div>
         ) : null}
+        {trash.length > 0 ? (
+          <div className="mt-6 border-t border-border pt-4">
+            <button type="button" className="text-small text-fg-muted underline" onClick={() => setShowTrash((v) => !v)}>
+              {showTrash ? "Hide" : "Show"} trash ({trash.length})
+            </button>
+            {showTrash ? (
+              <>
+                <p className="mt-2 text-small text-fg-subtle">
+                  Trashed files are hidden from the library but the file itself still exists — a page published
+                  while it was in use keeps showing it. Delete permanently to remove the file.
+                </p>
+                <div className="mt-2.5 flex flex-col gap-1.5">
+                  {trash.map((m) => (
+                    <div key={m.id} className="flex items-center gap-2.5 rounded-lg border border-border bg-surface-muted px-3 py-2">
+                      <span className="flex-1 truncate text-small text-fg-muted">{m.file?.filename ?? m.id}</span>
+                      <Button variant="secondary" size="sm" onPress={() => restore(m.id)}>Restore</Button>
+                      <Button variant="secondary" size="sm" onPress={() => purge(m.id)}>Delete permanently</Button>
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : null}
+          </div>
+        ) : null}
         {selected ? (
           <MediaDetail
             api={api}
             media={selected}
             onClose={() => setSelected(null)}
             onSaved={(m) => { setSelected(m); setMedia((prev) => prev.map((x) => (x.id === m.id ? m : x))); }}
-            onDeleted={(id) => { setSelected(null); setMedia((prev) => prev.filter((x) => x.id !== id)); }}
+            onDeleted={(id) => { setSelected(null); setMedia((prev) => prev.filter((x) => x.id !== id)); loadTrash(); }}
             onError={onError}
           />
         ) : null}
@@ -1185,7 +1242,7 @@ function MediaDetail({ api, media, onClose, onSaved, onDeleted, onError }: { api
     }
   };
   const del = async () => {
-    if (!confirm("Delete this file permanently? If a block or page still references it, that image will break — this cannot be undone.")) return;
+    if (!confirm("Move this file to the trash? It disappears from the library, but a page published while it was in use keeps showing it — delete it permanently from the trash to remove the file itself.")) return;
     setBusy(true);
     try {
       await api.deleteMedia(media.id);
@@ -1479,11 +1536,22 @@ function plainText(html: string): string {
     .replace(/\s+/g, " ")
     .trim();
 }
-/** One-line preview for a collapsed block: the first non-empty string field, tags stripped. */
+/** Readable text for one field value, whatever shape it is. A `richtext` field is a
+ * document tree, so the first non-empty STRING is no longer enough — a block whose only
+ * field is prose would read "empty". Legacy HTML strings still pass through `plainText`. */
+function fieldText(v: FieldValue): string {
+  if (typeof v === "string") return plainText(v);
+  if (isRichTextDoc(v)) return richTextToPlainText(v).replace(/\s+/g, " ").trim();
+  return "";
+}
+/** One-line preview for a collapsed block: the first field with readable text in it. */
 function blockPreview(fields: FieldValues): string {
-  const first = Object.values(fields).find((v) => typeof v === "string" && v.trim());
-  if (typeof first !== "string") return "";
-  const text = plainText(first);
+  let text = "";
+  for (const v of Object.values(fields)) {
+    text = fieldText(v);
+    if (text) break;
+  }
+  if (!text) return "";
   return text.length > 90 ? text.slice(0, 90) + "…" : text;
 }
 function reorderMove(blocks: RenderedBlock[], region: string, i: number, d: number, reorder: (region: string, order: string[]) => void) {
