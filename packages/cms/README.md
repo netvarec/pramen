@@ -131,7 +131,12 @@ you read back as `expectedVersion` and a stale write is refused with **409 confl
 instead of silently overwriting whoever saved first:
 
 ```ts
-const { page } = await client.call("updatePage", { pageId, title, expectedVersion: page.version });
+const { page: current } = await client.call("getPage", { slug, preview: true });
+const { page: saved } = await client.call("updatePage", {
+  pageId: current.id,
+  title,
+  expectedVersion: current.version,
+});
 // 409: "this page was changed by someone else (you have version 3, current is 4)"
 ```
 
@@ -144,6 +149,13 @@ and an SEO edit conflict with each other; blocks version independently.
 
 Structural operations (`addBlock`, `removeBlock`, `reorderRegion`) are not guarded — they
 are additive and already ordered by the single writer.
+
+`version` is returned on `AssembledPage.page` and on every `RenderedBlock`, so the value to
+echo back comes from the same read that loaded the content.
+
+On the **D1 store** (`x-pramen-store: d1`) there is no interactive transaction, so two
+requests in the same millisecond can both read the same version and both write. The guard
+still catches the editor race it exists for; it is not a hard mutex there.
 
 ### Rendering (headless)
 

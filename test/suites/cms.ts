@@ -195,6 +195,11 @@ export async function runCms(base: string): Promise<void> {
   const unguarded = await call("updatePage", { pageId: vId, title: "Editor C" }, admin);
   assert(unguarded.body.ok && unguarded.body.result.page.version === 3, "cms: omitting expectedVersion still saves, and still bumps");
 
+  // The version has to be readable from the same call that loads the content, or a client
+  // has nothing to echo back — the feature had no consumer without this.
+  const vRead = await call("getPage", { slug: "concurrent", preview: true }, admin);
+  assert(vRead.body.result.page.version === 3, "cms: getPage exposes the page version for a client to echo");
+
   const badVersion = await call("updatePage", { pageId: vId, title: "x", expectedVersion: "2" }, admin);
   assert(badVersion.status === 400, "cms: a non-integer expectedVersion is a 400");
 
@@ -202,6 +207,9 @@ export async function runCms(base: string): Promise<void> {
   const vBlock = await call("addBlock", { pageId: vId, blockTypeSlug: "rich_text", region: "content", fields: { body: "<p>v</p>" } }, admin);
   const vBlockId = vBlock.body.result.block.id as string;
   assert(vBlock.body.result.block.version === 1, "cms: a new block starts at version 1");
+  await call("publishPage", { pageId: vId }, admin);
+  const vBlocks = (await call("getPage", { slug: "concurrent", preview: true }, admin)).body.result.regions.content as Array<{ version: number }>;
+  assert(vBlocks.every((b) => typeof b.version === "number"), "cms: every rendered block carries its version");
   assert((await call("updateBlock", { blockId: vBlockId, title: "B1", expectedVersion: 1 }, admin)).body.result.version === 2, "cms: updateBlock bumps the block version");
   assert((await call("updateBlock", { blockId: vBlockId, title: "B2", expectedVersion: 1 }, admin)).status === 409, "cms: a stale block expectedVersion is a 409");
 

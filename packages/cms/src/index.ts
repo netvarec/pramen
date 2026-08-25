@@ -639,6 +639,8 @@ export function sanitizeFields(schema: FieldDefinition[] | undefined | null, val
 // --- assembled-page shape (the content-API result + revision snapshot) --------
 
 export interface RenderedBlock {
+  /** The block's optimistic-concurrency token — pass back as `expectedVersion`. */
+  version: number;
   /** The placement id (cms_page_blocks) — stable per position; used for reorder/remove. */
   id: string;
   /** The underlying block instance id (cms_blocks) — used to edit the block's content. */
@@ -683,6 +685,10 @@ export interface AssembledPage {
     metaTitle: string | null;
     metaDescription: string | null;
     seo: PageSeo;
+    /** Optimistic-concurrency token — pass back as `expectedVersion` on a write. Without
+     * it here the feature had no consumer: `getPage({ preview: true })` is how the editor
+     * loads a page, so there was nothing for it to echo. */
+    version: number;
   };
   regions: Record<string, RenderedBlock[]>;
 }
@@ -862,6 +868,7 @@ async function assembleLive(db: CmsDb, page: Record<string, unknown>): Promise<A
     (regions[region] ??= []).push({
       id: String(m.p.id),
       block_id: String(m.block.id),
+      version: typeof m.block.version === "number" ? m.block.version : 1,
       block_type: typeById.get(String(m.block.typeId))?.slug ?? "unknown",
       title: (m.block.title as string | null) ?? null,
       fields: resolveMediaFields(m.fields, m.schema, mediaById),
@@ -924,6 +931,7 @@ function pageMeta(page: Record<string, unknown>, translations: PageTranslation[]
     slug: String(page.slug),
     status: String(page.status),
     locale: String(page.locale ?? "en"),
+    version: typeof page.version === "number" ? page.version : 1,
     contentType,
     translationGroupId: (page.translationGroupId as string | null) ?? null,
     translations,
@@ -1007,15 +1015,28 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
 
   // --- optimistic concurrency ------------------------------------------------
   //
-  // The DO is a single writer, so a read-then-write inside one mutation is already
-  // atomic — but the EDITORS are not serialized. Two people on the same page today:
-  // last save wins, silently, and the loser gets no signal at all. A caller that passes
-  // back the `version` it read gets a 409 instead of clobbering.
+  // On the DO — the default store — a read-then-write inside one mutation is atomic: the
+  // Durable Object is a single writer and DoSqliteDriver.exec is synchronous, so nothing
+  // interleaves. The EDITORS are not serialized, though: two people on the same page today
+  // means last save wins, silently, with no signal to the loser. Passing back the `version`
+  // you read turns that into a 409.
+  //
+  // CAVEAT — the D1 store (`x-pramen-store: d1`) has no interactive transaction
+  // (D1Driver.transaction is a pass-through), so two requests landing in the same
+  // millisecond can both read the same version and both write. The guard still catches the
+  // human-scale editor race it is for, but it is not a hard mutex there.
   //
   // Optional by design: omitting `expectedVersion` keeps the previous last-write-wins
   // behaviour, so no existing client breaks.
   const nextVersion = (row: Record<string, unknown>, expected: number | undefined, label: string): number => {
-    const current = typeof row.version === "number" ? row.version : 1;
+    // Do NOT default a missing version to 1. If a field-restricted read grant projected
+    // the column away, `current` would be 1 forever: a client that legitimately read
+    // version 7 gets a permanent unresolvable 409, and an unguarded save then LOWERS the
+    // stored version, so a genuinely stale write is accepted later. Fail loudly instead.
+    if (typeof row.version !== "number") {
+      throw new PramenError(`${label} has no readable version — grant read on the \`version\` column`, 500, "internal");
+    }
+    const current = row.version;
     if (expected !== undefined && expected !== current) {
       throw new Conflict(`${label} was changed by someone else (you have version ${expected}, current is ${current}) — reload and reapply your edit`);
     }
@@ -1538,13 +1559,16 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       const rows = await db.find({ from: "cms_blocks", where: { id: input.blockId }, limit: 1 });
       const block = rows[0];
       if (!block) throw notFound("block");
+      // Conflict first, like updatePage: a stale write carrying invalid fields should say
+      // "someone else changed this", not 400 on content the caller is about to discard.
+      const version = nextVersion(block, input.expectedVersion, "this block");
       let cleanFields = input.fields;
       if (input.fields !== undefined) {
         const bt = await db.find({ from: "cms_block_types", where: { id: block.typeId }, limit: 1 });
         validateFields(bt[0]?.fieldsSchema as FieldDefinition[] | undefined, input.fields, "", { requireRequired: false });
         cleanFields = await sanitizeFields(bt[0]?.fieldsSchema as FieldDefinition[] | undefined, input.fields);
       }
-      const patch: Record<string, unknown> = { updatedAt: nowStamp(), version: nextVersion(block, input.expectedVersion, "this block") };
+      const patch: Record<string, unknown> = { updatedAt: nowStamp(), version };
       if (cleanFields !== undefined) patch.fields = cleanFields;
       if (input.title !== undefined) patch.title = input.title;
       return db.update("cms_blocks", input.blockId, patch);
