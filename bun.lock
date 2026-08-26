@@ -28,9 +28,9 @@
       "name": "@pramen/admin",
       "version": "0.0.49",
       "dependencies": {
-        "@podoba/react": "^0.0.32",
-        "@podoba/tailwind": "^0.0.32",
-        "@podoba/tokens": "^0.0.32",
+        "@podoba/react": "^0.0.34",
+        "@podoba/tailwind": "^0.0.34",
+        "@podoba/tokens": "^0.0.34",
         "react": "^19.0.0",
         "react-dom": "^19.0.0",
       },
@@ -84,9 +84,9 @@
       "version": "0.0.49",
       "dependencies": {
         "@buzola/router": "^0.0.12",
-        "@podoba/react": "^0.0.32",
-        "@podoba/tailwind": "^0.0.32",
-        "@podoba/tokens": "^0.0.32",
+        "@podoba/react": "^0.0.34",
+        "@podoba/tailwind": "^0.0.34",
+        "@podoba/tokens": "^0.0.34",
         "@tiptap/core": "^3.27.4",
         "@tiptap/extension-highlight": "^3.27.4",
         "@tiptap/extension-placeholder": "^3.27.4",
@@ -421,11 +421,11 @@
 
     "@parcel/watcher-win32-x64": ["@parcel/watcher-win32-x64@2.5.1", "", { "os": "win32", "cpu": "x64" }, "sha512-9lHBdJITeNR++EvSQVUcaZoWupyHfXe1jZvGZ06O/5MflPcuPLtEphScIBL+AiCWBO46tDSHzWyD0uDmmZqsgA=="],
 
-    "@podoba/react": ["@podoba/react@0.0.32", "", { "dependencies": { "@podoba/tailwind": "^0.0.32", "@podoba/tokens": "^0.0.32", "@radix-ui/react-slot": "1.2.4", "class-variance-authority": "0.7.1", "clsx": "2.1.1", "react-aria-components": "1.18.0", "tailwind-merge": "3.6.0" }, "peerDependencies": { "@tiptap/extension-highlight": "^3.27.4", "@tiptap/extension-placeholder": "^3.27.4", "@tiptap/extension-task-item": "^3.27.4", "@tiptap/extension-task-list": "^3.27.4", "@tiptap/pm": "^3.27.4", "@tiptap/react": "^3.27.4", "@tiptap/starter-kit": "^3.27.4", "react": ">=19", "react-dom": ">=19" }, "optionalPeers": ["@tiptap/extension-highlight", "@tiptap/extension-placeholder", "@tiptap/extension-task-item", "@tiptap/extension-task-list", "@tiptap/pm", "@tiptap/react", "@tiptap/starter-kit"] }, "sha512-/FF8toWJj+FVmkAP5Vtzftnr9zpvb5Uz42jN0U/wBqdepYkIGnxBKCT3EnezbVGmQ/WuN6ou3bvkYw/xBzQDkQ=="],
+    "@podoba/react": ["@podoba/react@0.0.34", "", { "dependencies": { "@podoba/tailwind": "^0.0.34", "@podoba/tokens": "^0.0.34", "@radix-ui/react-slot": "1.2.4", "class-variance-authority": "0.7.1", "clsx": "2.1.1", "react-aria-components": "1.18.0", "tailwind-merge": "3.6.0" }, "peerDependencies": { "@tiptap/extension-highlight": "^3.27.4", "@tiptap/extension-placeholder": "^3.27.4", "@tiptap/extension-task-item": "^3.27.4", "@tiptap/extension-task-list": "^3.27.4", "@tiptap/pm": "^3.27.4", "@tiptap/react": "^3.27.4", "@tiptap/starter-kit": "^3.27.4", "react": ">=19", "react-dom": ">=19" }, "optionalPeers": ["@tiptap/extension-highlight", "@tiptap/extension-placeholder", "@tiptap/extension-task-item", "@tiptap/extension-task-list", "@tiptap/pm", "@tiptap/react", "@tiptap/starter-kit"] }, "sha512-BOra9P4RFxzi3kzdvQmZ1wg8swWBp5KHFCC21U/UHhIY3VlZwc14ajfoYrg1F1C1gykR6ntMZtmarNn5pMNDQg=="],
 
-    "@podoba/tailwind": ["@podoba/tailwind@0.0.32", "", { "dependencies": { "@tailwindcss/typography": "0.5.20" }, "peerDependencies": { "tailwindcss": "^4.0.0" } }, "sha512-lfUTaGPbRno5xIwFyQja3apyNxNoD9GJ6M61pZ0pEX1u0QPSs4GoBCHp5Xycr5vVxOZxUjbgI8M66j93PKb1+A=="],
+    "@podoba/tailwind": ["@podoba/tailwind@0.0.34", "", { "dependencies": { "@tailwindcss/typography": "0.5.20" }, "peerDependencies": { "tailwindcss": "^4.0.0" } }, "sha512-Tbiu0oO8RJlLWIGH5XRr/DqbjdNkqlNtxMZpHul5ivG40wGpkev/LGrVebg6mWIlrqcfKzWRLsjy30+WTBtDZQ=="],
 
-    "@podoba/tokens": ["@podoba/tokens@0.0.32", "", {}, "sha512-EaI0qOjct1LD6E5WfTRrKfbGRgHoEn60Q4zD3CAwnZaMEqiQbiaTxJPYgjC7z+mrMkrWSA7Ni2Bwg78EnTGsWQ=="],
+    "@podoba/tokens": ["@podoba/tokens@0.0.34", "", {}, "sha512-Qmrs2nOxnTK7vyl7uq6FN0E9giAxgkTuhweGCZr5ZjzC5iQC5Zx2Zy2Hy3KPsGHED+WcEZ9xD/xS3dUtXitH+g=="],
 
     "@poppinss/colors": ["@poppinss/colors@4.1.6", "", { "dependencies": { "kleur": "^4.1.5" } }, "sha512-H9xkIdFswbS8n1d6vmRd8+c10t2Qe+rZITbbDHHkQixH5+2x1FDGmi/0K+WgWiqQFKPSlIYB7jlH6Kpfn6Fleg=="],
 
