@@ -349,8 +349,18 @@ const tasks    = { ...cmsTasks,    ...createCollectionTasks(collections) };
 const acl = [
   role("anonymous", [...cmsPolicies().public, ...collectionPublicPolicies(collections)]),
   role("editor",    [...cmsPolicies().editor, ...collectionPolicies(collections)]),
+  // …and EVERY other role that should see published content:
+  role("user",      [...cmsPolicies({ prefix: "cms-user" }).public,
+                     ...collectionPublicPolicies(collections, { prefix: "cms-user" })]),
 ];
 ```
+
+> **`anonymous` is not "everyone".** pramen assigns that role only to callers with **no
+> verified token**, so granting public reads there alone means a **logged-in** user is
+> denied content a logged-**out** visitor can read — a public list handler returns rows to a
+> guest and 403s for a member. There is no implicit everyone-role: spread the public grants
+> into each role that should have them (distinct `prefix` per role keeps the policy names
+> unique).
 
 **A managed column is never in the write whitelist.** `fields` is the whitelist, so a
 `status` entry there would let any editor send `values: { status: "published" }` through
@@ -398,9 +408,16 @@ Ordering is by a monotonic per-row `revision` counter, never a timestamp — a r
 written on every edit, and two writes land in the same millisecond often enough that
 "restore the previous version" would otherwise be a coin flip.
 
-`collectionDelete` **purges** the row's revisions in the same transaction. A collection PK
-can be a caller-chosen `textId`, so an id can come back; inherited history would let an
-editor restore a deleted row's content over the new one.
+`collectionDelete` **purges** the row's revisions. A collection PK can be a caller-chosen
+`textId`, so an id can come back; inherited history would let an editor restore a deleted
+row's content over the new one.
+
+Ordering is backed by a composite `unique` on `(collection, rowId, revision)`. The
+read-then-increment is serialized by the DO's single writer, but **on the D1 store it is
+not** — `D1Driver.transaction` is a no-op, since D1 has no interactive transactions — so the
+index is what turns a concurrent duplicate into a visible failure instead of a silently
+ambiguous history. For the same reason the delete-and-purge pair is atomic on the DO but not
+on D1.
 
 ## Limitations
 
@@ -429,6 +446,12 @@ editor restore a deleted row's content over the new one.
 - **Collections have no trash.** `supports` covers drafts/scheduling/revisions/preview;
   `collectionDelete` is a hard delete and also purges the row's revisions. Soft delete is
   `cms_pages`-only.
+- **`collectionSchedule` patches the takedown, it doesn't reset it.** Omitting `unpublishAt`
+  leaves an existing one standing (so moving a publish date doesn't silently revoke a
+  scheduled removal); pass `unpublishAt: null` to cancel one deliberately.
+- **Publishing clears a takedown instant that has already passed**, but leaves a future one
+  standing — publishing early is not a cancellation, yet a spent instant would otherwise
+  make the publish a silent no-op under the read scope.
 - **Scheduling a future publish does not take a live row down.** `collectionSchedule` sets
   `scheduledAt` and leaves `status`/`publishedAt` alone (parity with `schedulePage`), so
   scheduling a *published* row means it stays public until the task re-stamps it. Unpublish

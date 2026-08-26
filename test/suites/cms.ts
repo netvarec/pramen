@@ -749,6 +749,19 @@ export async function runCms(base: string): Promise<void> {
     "cms: a published collection row IS readable by anonymous",
   );
 
+  // …and by a LOGGED-IN member. `anonymous` is assigned only to callers with no verified
+  // token, so public grants spread there alone would deny signed-in users content that
+  // logged-out visitors can read. example/app.ts grants role("user") the same scope.
+  const wfMember = await token("cms-member", ["user"]);
+  const wfMemberRead = await call("publicLectures", {}, wfMember);
+  assert(
+    wfMemberRead.body.ok && (wfMemberRead.body.result as Array<{ id: string }>).some((r) => r.id === wfRowId),
+    "cms: a published collection row is readable by an authenticated non-editor too",
+  );
+  // The public projection is the declared fields + id — never an undeclared entity column.
+  const wfPublicRow = (wfAnonAfter.body.result as Array<Record<string, unknown>>).find((r) => r.id === wfRowId) ?? {};
+  assert(!("unpublishAt" in wfPublicRow) && !("scheduledAt" in wfPublicRow), "cms: the public projection excludes the managed workflow columns");
+
   // Revisions: the edit above snapshotted the pre-edit state.
   const wfRevs = await call("collectionListRevisions", { collection: "lectures", id: wfRowId }, admin);
   assert(wfRevs.body.ok && Array.isArray(wfRevs.body.result) && wfRevs.body.result.length >= 1, "cms: collectionListRevisions returns the row's history");

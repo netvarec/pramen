@@ -778,6 +778,13 @@ const acl = [
   // flows through the verifier + ACL (here: read notes, no body).
   role("user", [
     policy("user:read", "notes", "read", { fields: ["id", "title", "ownerId", "createdAt"] }),
+    // Public CMS content, AGAIN. `anonymous` is only assigned to callers with NO verified
+    // token (see rolesOf), so spreading the public grants there alone means a LOGGED-IN
+    // user is denied content a logged-OUT visitor can read — `publicLectures` would 403 for
+    // every signed-in member. Every role that should see published content needs the grant;
+    // there is no implicit "everyone".
+    ...cmsPolicies({ prefix: "cms-user" }).public,
+    ...collectionPublicPolicies(collections, { prefix: "cms-user" }),
     // @pramen/auth user management: a user reads + changes the email of ONLY its own
     // auth_users row (changePassword is a self-scoped credential op, no policy needed).
     ...authPolicies().self,

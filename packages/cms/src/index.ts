@@ -594,8 +594,13 @@ export const cmsSchema = {
     // collection revision is written on EVERY edit and two writes land in the same
     // millisecond often enough to be reproducible. Ordering then falls to a uuid tiebreak,
     // which is deterministic but NOT insertion order — so "restore the previous version"
-    // could pick the wrong snapshot. Assigned under the DO's single writer inside the
-    // mutation's transaction, so the read-then-increment is safe.
+    // could pick the wrong snapshot.
+    //
+    // The read-then-increment in `snapshotRow` is serialized by the DO's single writer. On
+    // the D1 store it is NOT — `D1Driver.transaction` is a no-op (D1 has no interactive
+    // transactions), so two concurrent updates in different isolates can read the same MAX.
+    // The composite unique below is what makes that a visible failure instead of a silent
+    // duplicate that quietly restores the ordering ambiguity this column exists to remove.
     revision: notNull(t.int()),
     snapshot: t.json(),
     note: t.text(),
@@ -606,7 +611,7 @@ export const cmsSchema = {
     // publish lands two rows in the same second, and `datetime('now')` (second resolution)
     // would make "the previous version" an arbitrary pick between them.
     createdAt: t.text(),
-  })),
+  }), undefined, { unique: [["collection", "rowId", "revision"]] }),
 
   // Media: a fileRef column holds only R2 metadata; bytes live in R2, uploaded via
   // ctx.files + the Worker /files/* route. Block `fields` reference a media id.
@@ -2902,8 +2907,8 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
     const values: Record<string, unknown> = {};
     for (const f of c.fields) if (f.name in row) values[f.name] = row[f.name];
     const rowId = String(row[idOf(c)]);
-    // Next in this row's sequence. Safe to read-then-write: a DO handles one request at a
-    // time and this runs inside the mutation's transaction.
+    // Next in this row's sequence. Serialized by the DO's single writer; on D1 the composite
+    // unique on (collection, rowId, revision) is the backstop — see the schema note.
     const [{ next = 1 } = {}] = (await db.exec(
       `SELECT COALESCE(MAX(revision), 0) + 1 AS next FROM ${COLLECTION_REVISIONS_TABLE} WHERE collection = ? AND rowId = ?`,
       c.slug,
@@ -3006,12 +3011,16 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
       const db = cdb(ctx);
       const ok = await db.delete(c.entity, input.id);
       if (!ok) throw notFound(c.label);
-      // PURGE the row's revisions in the same transaction. Keeping them looks like free
-      // history, but a collection PK can be a caller-chosen textId — recreating a row with
-      // the same id would inherit the dead row's history, and `collectionRestoreRevision`'s
-      // scope check (collection + rowId) would happily write the deleted row's content over
-      // the new one. It also bounds the table: a collection has no trash, so nothing else
-      // ever collects these.
+      // PURGE the row's revisions. Keeping them looks like free history, but a collection PK
+      // can be a caller-chosen textId — recreating a row with the same id would inherit the
+      // dead row's history, and `collectionRestoreRevision`'s scope check (collection +
+      // rowId) would happily write the deleted row's content over the new one. It also
+      // bounds the table: a collection has no trash, so nothing else ever collects these.
+      //
+      // Atomic with the delete on the DO (the mutation runs in storage.transaction). NOT on
+      // the D1 store, where `transaction` is a no-op — a failure in between leaves orphan
+      // revisions, which is exactly the inheritance above. Rare, and recoverable by
+      // deleting the recreated row, but it is not a guarantee on that substrate.
       if (has(c, "revisions")) {
         await db.exec(`DELETE FROM ${COLLECTION_REVISIONS_TABLE} WHERE collection = ? AND rowId = ?`, c.slug, input.id);
       }
@@ -3029,7 +3038,7 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
       const c = def(input.collection);
       needs(c, "drafts");
       const db = cdb(ctx);
-      await loadRow(db, c, input.id);
+      const row = await loadRow(db, c, input.id);
       // Deliberately NOT snapshotted. A revision records CONTENT, and publishing changes
       // none — the managed columns are excluded from `fields` by design, so a "publish"
       // revision was byte-identical to the edit before it, and restoring it wrote only the
@@ -3037,8 +3046,17 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
       // cannot be restored is worse than no entry.
       const patch: Record<string, unknown> = { status: COLLECTION_PUBLISHED };
       if (has(c, "scheduling")) {
-        patch.publishedAt = isoStamp();
+        const now = isoStamp();
+        patch.publishedAt = now;
         patch.scheduledAt = null;
+        // Clear a takedown instant that has already PASSED. A future one still stands —
+        // publishing early does not cancel a planned removal — but a spent one is not
+        // "pending" at all, and since the public scope now enforces
+        // `unpublishAt IS NULL OR unpublishAt > $now()`, leaving it would make this very
+        // publish a no-op: the editor gets back `status: "published"` and the row stays
+        // invisible, with no error to explain it. That state is reachable whenever the
+        // unpublish task never ran (tasks unwired, outbox dead-lettered, no D1 cron).
+        if (typeof row.unpublishAt === "string" && row.unpublishAt <= now) patch.unpublishAt = null;
       }
       const updated = await db.update(c.entity, input.id, patch);
       if (updated === undefined) throw notFound(c.label);
@@ -3076,42 +3094,53 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
      * The tasks are enqueued in THIS mutation's transaction (the outbox is transactional),
      * so a rolled-back schedule never leaves a task behind. They only run if you wired
      * `createCollectionTasks` into `app.tasks`. */
-    collectionSchedule: mutation(async (ctx, input: { collection: string; id: string; publishAt: number; unpublishAt?: number }) => {
+    collectionSchedule: mutation(async (ctx, input: { collection: string; id: string; publishAt: number; unpublishAt?: number | null }) => {
       const c = def(input.collection);
       needs(c, "scheduling");
       const db = cdb(ctx);
       await loadRow(db, c, input.id);
       const now = Date.now();
       const publishToken = new Date(input.publishAt).toISOString();
-      const unpublishToken = input.unpublishAt !== undefined ? new Date(input.unpublishAt).toISOString() : null;
-      await db.update(c.entity, input.id, { scheduledAt: publishToken, unpublishAt: unpublishToken });
+      // PATCH semantics on the takedown: an ABSENT `unpublishAt` leaves an existing one
+      // alone. Writing null unconditionally meant that merely moving the publish date
+      // revoked a scheduled removal — and silently, since clearing the column also
+      // neutralizes the already-enqueued task through the intent-token check. Pass
+      // `unpublishAt: null` to cancel one deliberately.
+      const hasUnpublish = input.unpublishAt !== undefined;
+      const unpublishToken = typeof input.unpublishAt === "number" ? new Date(input.unpublishAt).toISOString() : null;
+      const patch: Record<string, unknown> = { scheduledAt: publishToken };
+      if (hasUnpublish) patch.unpublishAt = unpublishToken;
+      await db.update(c.entity, input.id, patch);
       await ctx.tasks.enqueue({
         kind: TASK_COLLECTION_PUBLISH,
         payload: { collection: c.slug, id: input.id, token: publishToken },
         delayMs: Math.max(0, input.publishAt - now),
       });
-      if (input.unpublishAt !== undefined) {
+      if (typeof input.unpublishAt === "number") {
         await ctx.tasks.enqueue({
           kind: TASK_COLLECTION_UNPUBLISH,
           payload: { collection: c.slug, id: input.id, token: unpublishToken },
           delayMs: Math.max(0, input.unpublishAt - now),
         });
       }
-      return { ok: true as const, scheduledAt: publishToken, unpublishAt: unpublishToken };
+      return { ok: true as const, scheduledAt: publishToken, ...(hasUnpublish ? { unpublishAt: unpublishToken } : {}) };
     }, {
       ...editor,
-      input: (raw): { collection: string; id: string; publishAt: number; unpublishAt?: number } => {
+      input: (raw): { collection: string; id: string; publishAt: number; unpublishAt?: number | null } => {
         const o = asObj(raw);
         const base = rowInput(raw);
         // Unvalidated, a non-finite publishAt makes `new Date(x).toISOString()` throw a
         // RangeError inside the transaction — a 500 with no indication of which input was
         // wrong.
         if (typeof o.publishAt !== "number" || !Number.isFinite(o.publishAt)) throw new BadRequest("publishAt must be a finite epoch ms");
-        if (o.unpublishAt !== undefined) {
-          if (typeof o.unpublishAt !== "number" || !Number.isFinite(o.unpublishAt)) throw new BadRequest("unpublishAt must be a finite epoch ms");
+        // `null` is the explicit "cancel the takedown"; absent leaves it untouched.
+        if (o.unpublishAt !== undefined && o.unpublishAt !== null) {
+          if (typeof o.unpublishAt !== "number" || !Number.isFinite(o.unpublishAt)) throw new BadRequest("unpublishAt must be a finite epoch ms, or null to cancel");
           if (o.unpublishAt <= o.publishAt) throw new BadRequest("unpublishAt must be after publishAt");
         }
-        return { ...base, publishAt: o.publishAt, unpublishAt: o.unpublishAt as number | undefined };
+        return "unpublishAt" in o
+          ? { ...base, publishAt: o.publishAt, unpublishAt: o.unpublishAt as number | null }
+          : { ...base, publishAt: o.publishAt };
       },
     }),
 

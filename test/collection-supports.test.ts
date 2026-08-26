@@ -228,6 +228,30 @@ describe("drafts", () => {
     expect((await rowOf(d, String(id))).status).toBe("draft");
   });
 
+  // A takedown instant that has already passed is not "pending" — and since the public
+  // scope enforces it, leaving one standing would make the republish a silent no-op.
+  test("publishing clears a SPENT unpublishAt, so the row really does come back", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "back" });
+    await (systemCtx(d).db as unknown as Db).update("talks", String(id), { unpublishAt: new Date(Date.now() - 3_600_000).toISOString() });
+    await run(H.collectionPublish, ctx, { collection: "talks", id } as JsonValue);
+
+    expect((await rowOf(d, String(id))).unpublishAt).toBeNull();
+    expect((await publicCtx(d).find({ from: "talks", where: {} })) as Row[]).toHaveLength(1);
+  });
+
+  test("publishing does NOT clear a still-FUTURE takedown", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "T" });
+    const future = new Date(Date.now() + 3_600_000).toISOString();
+    await (systemCtx(d).db as unknown as Db).update("talks", String(id), { unpublishAt: future });
+    await run(H.collectionPublish, ctx, { collection: "talks", id } as JsonValue);
+
+    expect((await rowOf(d, String(id))).unpublishAt).toBe(future);
+  });
+
   test("a workflow handler on a collection that never opted in is a 400, not a 500", async () => {
     const plain = collection("plain", { entity: "talks", label: "P", fields: [{ name: "title", type: "text" }] });
     const PH = createCollectionHandlers([plain], { schema });
@@ -299,6 +323,31 @@ describe("the public read scope IS the access boundary", () => {
     expect(row.title).toBe("T");
     expect(row).not.toHaveProperty("internalNote"); // an undeclared column is NOT public
     expect(row).not.toHaveProperty("unpublishAt"); // nor the managed workflow columns
+  });
+
+  // `anonymous` is assigned ONLY to callers with no verified token, so spreading the public
+  // grants into that role alone denies logged-IN users content logged-OUT visitors can read.
+  test("an authenticated non-editor needs the grant too — `anonymous` does not cover them", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "live" });
+    await run(H.collectionPublish, ctx, { collection: "talks", id } as JsonValue);
+
+    const member: Identity = { userId: "m", roles: ["member"] };
+    const withGrant = new Db(
+      d,
+      { acl: compileAcl([role("member", collectionPublicPolicies([talks]))]), identity: member, schema, partition: undefined },
+      schema,
+    );
+    expect((await withGrant.find({ from: "talks", where: {} })) as Row[]).toHaveLength(1);
+
+    // The same caller, when the grant lives only on `anonymous`: denied outright.
+    const anonOnly = new Db(
+      d,
+      { acl: compileAcl([role("anonymous", collectionPublicPolicies([talks]))]), identity: member, schema, partition: undefined },
+      schema,
+    );
+    await expect(anonOnly.find({ from: "talks", where: {} })).rejects.toThrow();
   });
 
   test("a collection without `drafts` gets NO public policy (its exposure stays the app's call)", () => {
@@ -393,6 +442,33 @@ describe("scheduling", () => {
     const { id } = await create(ctx, { title: "T" });
     await TASKS[TASK_COLLECTION_PUBLISH](systemCtx(d), { collection: "not_registered", id, token: null });
     expect((await rowOf(d, String(id))).status).toBe("draft");
+  });
+
+  // Omitting the takedown must not revoke one: clearing the column also neutralizes the
+  // enqueued task through the intent-token check, so the removal vanishes silently.
+  test("rescheduling the publish date leaves an existing takedown alone", async () => {
+    const d = await fresh();
+    const enq: Row[] = [];
+    const ctx = editorCtx(d, enq);
+    const { id } = await create(ctx, { title: "T" });
+    const at = Date.now() + 60_000;
+    await run(H.collectionSchedule, ctx, { collection: "talks", id, publishAt: at, unpublishAt: at + 60_000 } as JsonValue);
+    const takedown = (await rowOf(d, String(id))).unpublishAt;
+
+    await run(H.collectionSchedule, ctx, { collection: "talks", id, publishAt: at + 10_000 } as JsonValue);
+    expect((await rowOf(d, String(id))).unpublishAt).toBe(takedown);
+  });
+
+  test("an explicit `unpublishAt: null` DOES cancel the takedown", async () => {
+    const d = await fresh();
+    const enq: Row[] = [];
+    const ctx = editorCtx(d, enq);
+    const { id } = await create(ctx, { title: "T" });
+    const at = Date.now() + 60_000;
+    await run(H.collectionSchedule, ctx, { collection: "talks", id, publishAt: at, unpublishAt: at + 60_000 } as JsonValue);
+    await run(H.collectionSchedule, ctx, { collection: "talks", id, publishAt: at, unpublishAt: null } as JsonValue);
+
+    expect((await rowOf(d, String(id))).unpublishAt).toBeNull();
   });
 
   test("unpublishAt must be after publishAt, and both must be finite", async () => {
@@ -540,6 +616,21 @@ describe("revisions", () => {
     const row = await rowOf(d, String(id));
     expect(row.title).toBe("v1");
     expect(row.internalNote).toBe(""); // never written
+  });
+
+  // The DO's single writer serializes the read-then-increment; D1's transaction is a no-op,
+  // so the composite unique is what stops a duplicate becoming a silent ordering ambiguity.
+  test("a duplicate (collection, rowId, revision) is rejected by the DB, not silently kept", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "v1" });
+    await run(H.collectionUpdate, ctx, { collection: "talks", id, values: { title: "v2" } } as JsonValue);
+
+    await expect(
+      d.exec("INSERT INTO cms_collection_revisions (id, collection, rowId, revision, snapshot, createdAt) VALUES (?, ?, ?, ?, ?, ?)", [
+        "forced", "talks", String(id), 1, "{}", new Date().toISOString(),
+      ]),
+    ).rejects.toThrow();
   });
 
   test("a collection without `revisions` records nothing and refuses the handlers", async () => {
