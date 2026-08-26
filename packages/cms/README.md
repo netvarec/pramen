@@ -362,19 +362,45 @@ first publish months later.
 `collectionPublicPolicies` is the **actual access boundary**, not a UI filter — it is
 AND-merged into every `ctx.db` read of the entity, so an unpublished row is invisible to
 your public queries, relation traversals and eager-loads alike. With `scheduling` it scopes
-to `status = 'published' AND publishedAt <= $now()`. That last clause matters: `{ publishedAt:
-{ isNull: false } }` matches a *future* timestamp too, so a row scheduled for next week
-would be public the moment it was saved. Your public read then stays an ordinary list —
-see `publicLectures` in `example/app.ts`.
+to:
+
+```
+status = 'published'
+  AND publishedAt <= $now()
+  AND (unpublishAt IS NULL OR unpublishAt > $now())
+```
+
+Both time clauses matter. `{ publishedAt: { isNull: false } }` matches a *future* timestamp,
+so a row scheduled for next week would be public the moment it was saved. And the
+`unpublishAt` clause means a scheduled **takedown** is enforced by the read itself, not only
+by the task — if `createCollectionTasks` was never wired or the outbox drain is stuck, the
+row still stops being readable at its instant. That is the direction where failing open is
+worst.
+
+The grant is also restricted to **the declared fields plus the id**. An entity column that
+is not in `fields` — an `internalNote`, a `reviewerEmail`, or the managed workflow columns —
+stays private even on a published row, so adding one later doesn't quietly publish it.
+
+Your public read then stays an ordinary list — see `publicLectures` in `example/app.ts`.
 
 Managed timestamps are minted as ISO-8601 UTC (`2026-08-20T12:00:00.000Z`) in exactly one
 place, because the scope compares against `$now()` **lexicographically**. This is what
 closes the trap the old `publish` field type carried, where `publish` and `datetime` wrote
 different formats into the same TEXT column and sorted against each other as if hours apart.
 
-Revisions snapshot the row's state **before** each write (edit, publish, delete, and restore
-itself), projected to the declared fields — so a restore is a plain reversal, and it replays
+Revisions snapshot the row's state **before** each content write — an edit, and a restore
+itself — projected to the declared fields, so a restore is a plain reversal that replays
 through the same whitelist rather than resurrecting a column the collection no longer owns.
+Publish and unpublish write **no** revision: they change no content, so the entry would be
+identical to the edit before it and restoring it would do nothing visible.
+
+Ordering is by a monotonic per-row `revision` counter, never a timestamp — a revision is
+written on every edit, and two writes land in the same millisecond often enough that
+"restore the previous version" would otherwise be a coin flip.
+
+`collectionDelete` **purges** the row's revisions in the same transaction. A collection PK
+can be a caller-chosen `textId`, so an id can come back; inherited history would let an
+editor restore a deleted row's content over the new one.
 
 ## Limitations
 
@@ -401,8 +427,14 @@ through the same whitelist rather than resurrecting a column the collection no l
   stale task a no-op). The `cms:publish` task is not transactional (the interactive
   `publishPage` is), so a crash mid-task self-heals on the next at-least-once redelivery.
 - **Collections have no trash.** `supports` covers drafts/scheduling/revisions/preview;
-  `collectionDelete` is a hard delete (it snapshots first when `revisions` is on, so the
-  content is recoverable, but the row id is not). Soft delete is `cms_pages`-only.
+  `collectionDelete` is a hard delete and also purges the row's revisions. Soft delete is
+  `cms_pages`-only.
+- **Scheduling a future publish does not take a live row down.** `collectionSchedule` sets
+  `scheduledAt` and leaves `status`/`publishedAt` alone (parity with `schedulePage`), so
+  scheduling a *published* row means it stays public until the task re-stamps it. Unpublish
+  first if you meant "not live until then". Doing this implicitly would be a takedown the
+  editor never asked for, which is why it isn't automatic — but the editor UI should make
+  the current state obvious.
 - **A collection's `supports` features are per-row, not per-locale** — there is no
   translation-group equivalent for collections.
 - **Duplicate slugs surface as 500, not 409** (a framework-wide limitation, not CMS-specific).

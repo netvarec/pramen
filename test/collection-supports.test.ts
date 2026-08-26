@@ -173,6 +173,29 @@ describe("supports — boot validation", () => {
   test("an idField that is not a column is refused", () => {
     expect(() => validateCollections([mk({ idField: "nope", supports: ["drafts"] })], schema)).toThrow(/idField 'nope', which is not a column/);
   });
+
+  // Reads key on idField but db.update/db.delete key on the entity's real PK, so a non-PK
+  // idField loads a row and then writes nothing — a 404 on a row just read.
+  test("an idField that is a column but NOT the primary key is refused", () => {
+    expect(() => validateCollections([mk({ idField: "speaker", supports: ["drafts"] })], schema)).toThrow(
+      /idField 'speaker', but 'talks' has primary key 'id'/,
+    );
+  });
+
+  // A DO cannot write across partitions, so this would pass boot and 500 on every snapshot.
+  test("`revisions` on an entity in another partition is refused at boot", () => {
+    const split = defineSchema({
+      ...cmsSchema,
+      talks: Entity(
+        (t) => ({ id: primaryKey(generated(t.uuid())), title: t.text(), status: defaultTo(t.text(), "draft") }),
+        undefined,
+        { partition: "content" },
+      ),
+    });
+    expect(() => validateCollections([mk({ entity: "talks", supports: ["drafts", "revisions"] })], split)).toThrow(
+      /is in partition 'content' while `cms_collection_revisions` is in 'default'/,
+    );
+  });
 });
 
 describe("drafts", () => {
@@ -249,6 +272,33 @@ describe("the public read scope IS the access boundary", () => {
     const d = await fresh();
     await create(editorCtx(d), { title: "hidden" });
     expect(await publicCtx(d).find({ from: "talks", where: { title: "hidden" } })).toHaveLength(0);
+  });
+
+  // The takedown side must not depend solely on the outbox task firing.
+  test("a scheduled UNPUBLISH is enforced by the read scope, not only by the task", async () => {
+    const d = await fresh();
+    const sys = systemCtx(d).db as unknown as Db;
+    const past = new Date(Date.now() - 3_600_000).toISOString();
+    await sys.insert("talks", { title: "still-up", status: "published", publishedAt: past, unpublishAt: new Date(Date.now() + 3_600_000).toISOString() });
+    // The task never ran (unwired, or a wedged drain) — the row is past its takedown.
+    await sys.insert("talks", { title: "expired", status: "published", publishedAt: past, unpublishAt: past });
+
+    const rows = (await publicCtx(d).find({ from: "talks", where: {} })) as Row[];
+    expect(rows.map((r) => r.title)).toEqual(["still-up"]);
+  });
+
+  // The declared fields ARE the public surface; anything else on the entity is internal.
+  test("the public grant exposes only the declared fields + the id", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "T" });
+    await (systemCtx(d).db as unknown as Db).update("talks", String(id), { internalNote: "do not publish this" });
+    await run(H.collectionPublish, ctx, { collection: "talks", id } as JsonValue);
+
+    const [row] = (await publicCtx(d).find({ from: "talks", where: {} })) as Row[];
+    expect(row.title).toBe("T");
+    expect(row).not.toHaveProperty("internalNote"); // an undeclared column is NOT public
+    expect(row).not.toHaveProperty("unpublishAt"); // nor the managed workflow columns
   });
 
   test("a collection without `drafts` gets NO public policy (its exposure stays the app's call)", () => {
@@ -397,14 +447,83 @@ describe("revisions", () => {
     expect((await rowOf(d, String(b.id))).title).toBe("b1");
   });
 
-  test("a delete snapshots the row first — the one write with no other recovery", async () => {
+  test("a delete PURGES the row's revisions — nothing else ever collects them", async () => {
     const d = await fresh();
     const ctx = editorCtx(d);
-    const { id } = await create(ctx, { title: "gone" });
+    const { id } = await create(ctx, { title: "v1" });
+    await run(H.collectionUpdate, ctx, { collection: "talks", id, values: { title: "v2" } } as JsonValue);
+    expect((await run(H.collectionListRevisions, ctx, { collection: "talks", id } as JsonValue)) as Row[]).toHaveLength(1);
+
     await run(H.collectionDelete, ctx, { collection: "talks", id } as JsonValue);
+    expect((await run(H.collectionListRevisions, ctx, { collection: "talks", id } as JsonValue)) as Row[]).toHaveLength(0);
+  });
+
+  // A collection PK may be a caller-chosen textId, so an id CAN come back. If the dead
+  // row's history survived, restoring it would write the deleted content over the new row.
+  test("a row recreated with a reused id does not inherit the dead row's history", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "v1" });
+    await run(H.collectionUpdate, ctx, { collection: "talks", id, values: { title: "v2" } } as JsonValue);
+    await run(H.collectionDelete, ctx, { collection: "talks", id } as JsonValue);
+    // Recreate with the SAME id, the way a textId-keyed collection would.
+    await (systemCtx(d).db as unknown as Db).insert("talks", { id, title: "brand new", status: "draft" });
+
+    expect((await run(H.collectionListRevisions, ctx, { collection: "talks", id } as JsonValue)) as Row[]).toHaveLength(0);
+  });
+
+  test("publish and unpublish write NO revision — they change no content", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "v1" });
+    await run(H.collectionPublish, ctx, { collection: "talks", id } as JsonValue);
+    await run(H.collectionUnpublish, ctx, { collection: "talks", id } as JsonValue);
+    // A "publish" revision would be byte-identical to the edit before it, and restoring it
+    // would write only the declared fields — leaving the row live and the button dead.
+    expect((await run(H.collectionListRevisions, ctx, { collection: "talks", id } as JsonValue)) as Row[]).toHaveLength(0);
+  });
+
+  test("revisions are stamped at ms precision and come back newest-first", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "v1" });
+    // Two writes inside the same SECOND — expr.now() would have given both the same stamp
+    // and made the ordering arbitrary.
+    await run(H.collectionUpdate, ctx, { collection: "talks", id, values: { title: "v2" } } as JsonValue);
+    await run(H.collectionUpdate, ctx, { collection: "talks", id, values: { title: "v3" } } as JsonValue);
 
     const revs = (await run(H.collectionListRevisions, ctx, { collection: "talks", id } as JsonValue)) as Row[];
-    expect((revs[0].snapshot as Row).title).toBe("gone");
+    expect(revs.map((r) => (r.snapshot as Row).title)).toEqual(["v2", "v1"]);
+    // The ORDER comes from the monotonic counter, not the stamp — two writes in the same
+    // millisecond are common, and a uuid tiebreak is deterministic but arbitrary.
+    expect(revs.map((r) => r.revision)).toEqual([2, 1]);
+    for (const r of revs) expect(String(r.createdAt)).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  });
+
+  // The above passes by luck whenever the two writes land in different milliseconds, which
+  // is most runs — so force the collision the counter exists to survive.
+  test("ordering holds when two revisions share a timestamp exactly", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "v1" });
+    await run(H.collectionUpdate, ctx, { collection: "talks", id, values: { title: "v2" } } as JsonValue);
+    await run(H.collectionUpdate, ctx, { collection: "talks", id, values: { title: "v3" } } as JsonValue);
+    await d.exec("UPDATE cms_collection_revisions SET createdAt = ? WHERE rowId = ?", ["2026-08-24T00:00:00.000Z", String(id)]);
+
+    const revs = (await run(H.collectionListRevisions, ctx, { collection: "talks", id } as JsonValue)) as Row[];
+    expect(revs.map((r) => (r.snapshot as Row).title)).toEqual(["v2", "v1"]);
+  });
+
+  test("the revisions limit is CLAMPED — a negative limit is not SQLite's `unbounded`", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "v1" });
+    for (const t of ["v2", "v3", "v4"]) await run(H.collectionUpdate, ctx, { collection: "talks", id, values: { title: t } } as JsonValue);
+
+    const all = (await run(H.collectionListRevisions, ctx, { collection: "talks", id } as JsonValue)) as Row[];
+    expect(all).toHaveLength(3);
+    const negative = (await run(H.collectionListRevisions, ctx, { collection: "talks", id, limit: -1 } as JsonValue)) as Row[];
+    expect(negative).toHaveLength(1); // clamped to 1, NOT all 3
   });
 
   // A snapshot is replayed through the same whitelist as any other write.

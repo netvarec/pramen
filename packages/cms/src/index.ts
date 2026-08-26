@@ -39,6 +39,7 @@ import {
   policy,
   allow,
   $now,
+  partitionOf,
   BadRequest,
   Forbidden,
   PramenError,
@@ -588,10 +589,23 @@ export const cmsSchema = {
     id: primaryKey(generated(t.uuid())),
     collection: indexed(notNull(t.text())),
     rowId: indexed(notNull(t.text())),
+    // A monotonic per-row counter, and the ONLY ordering key. Timestamps cannot do this
+    // job: `expr.now()` is second-resolution and even an ISO ms stamp collides, because a
+    // collection revision is written on EVERY edit and two writes land in the same
+    // millisecond often enough to be reproducible. Ordering then falls to a uuid tiebreak,
+    // which is deterministic but NOT insertion order — so "restore the previous version"
+    // could pick the wrong snapshot. Assigned under the DO's single writer inside the
+    // mutation's transaction, so the read-then-increment is safe.
+    revision: notNull(t.int()),
     snapshot: t.json(),
     note: t.text(),
     actor: t.text(),
-    createdAt: defaultTo(t.text(), expr.now()),
+    // NO expr.now() default. `snapshotRow` is the only writer and stamps this itself with
+    // ISO-8601 ms precision, because unlike cms_page_revisions (written only on publish) a
+    // collection revision is written on EVERY edit — an autosave followed immediately by a
+    // publish lands two rows in the same second, and `datetime('now')` (second resolution)
+    // would make "the previous version" an arbitrary pick between them.
+    createdAt: t.text(),
   })),
 
   // Media: a fileRef column holds only R2 metadata; bytes live in R2, uploaded via
@@ -2764,6 +2778,16 @@ export function validateCollections(collections: readonly CollectionDef[], schem
     if (!(idField in columns)) {
       throw new Error(`pramen/cms: collection '${c.slug}' has idField '${idField}', which is not a column on '${c.entity}'`);
     }
+    // …and it must be the PRIMARY KEY, not merely a column. Reads key on `idField`, but
+    // `db.update`/`db.delete` key on the entity's actual PK — so a non-PK idField loads a
+    // row fine and then writes nothing, surfacing as a 404 on a row the same handler just
+    // read. Exactly the misconfiguration this validator exists to name.
+    const pk = Object.entries(columns).find(([, f]) => (f as { primaryKey?: boolean }).primaryKey)?.[0] ?? "id";
+    if (idField !== pk) {
+      throw new Error(
+        `pramen/cms: collection '${c.slug}' has idField '${idField}', but '${c.entity}' has primary key '${pk}' — writes key on the PK, so they would silently match no row`,
+      );
+    }
     const declared = new Set(c.fields.map((f) => f.name));
     for (const f of features) {
       for (const col of COLLECTION_FEATURE_COLUMNS[f]) {
@@ -2782,10 +2806,22 @@ export function validateCollections(collections: readonly CollectionDef[], schem
         }
       }
     }
-    if (set.has("revisions") && !schema[COLLECTION_REVISIONS_TABLE]) {
-      throw new Error(
-        `pramen/cms: collection '${c.slug}' declares 'revisions', which needs the \`${COLLECTION_REVISIONS_TABLE}\` table — spread \`cmsSchema\` into defineSchema`,
-      );
+    if (set.has("revisions")) {
+      if (!schema[COLLECTION_REVISIONS_TABLE]) {
+        throw new Error(
+          `pramen/cms: collection '${c.slug}' declares 'revisions', which needs the \`${COLLECTION_REVISIONS_TABLE}\` table — spread \`cmsSchema\` into defineSchema`,
+        );
+      }
+      // A DO cannot write across a partition boundary, so a collection entity parked in its
+      // own partition would pass every check here and then 500 on the first snapshot insert
+      // (assertInPartition). `cms_collection_revisions` lives in the default partition.
+      const entityPartition = partitionOf(schema, c.entity);
+      const revPartition = partitionOf(schema, COLLECTION_REVISIONS_TABLE);
+      if (entityPartition !== revPartition) {
+        throw new Error(
+          `pramen/cms: collection '${c.slug}' declares 'revisions', but '${c.entity}' is in partition '${entityPartition}' while \`${COLLECTION_REVISIONS_TABLE}\` is in '${revPartition}' — a write cannot cross partitions, so keep the entity in '${revPartition}'`,
+        );
+      }
     }
   }
 }
@@ -2865,12 +2901,23 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
     if (!has(c, "revisions")) return;
     const values: Record<string, unknown> = {};
     for (const f of c.fields) if (f.name in row) values[f.name] = row[f.name];
+    const rowId = String(row[idOf(c)]);
+    // Next in this row's sequence. Safe to read-then-write: a DO handles one request at a
+    // time and this runs inside the mutation's transaction.
+    const [{ next = 1 } = {}] = (await db.exec(
+      `SELECT COALESCE(MAX(revision), 0) + 1 AS next FROM ${COLLECTION_REVISIONS_TABLE} WHERE collection = ? AND rowId = ?`,
+      c.slug,
+      rowId,
+    )) as Array<{ next?: number }>;
     await db.insert(COLLECTION_REVISIONS_TABLE, {
       collection: c.slug,
-      rowId: String(row[idOf(c)]),
+      rowId,
+      revision: next,
       snapshot: values,
       note,
       actor: typeof ctx.identity?.userId === "string" ? ctx.identity.userId : null,
+      // Explicit, ms-precision, and the only writer of this column — see the schema note.
+      createdAt: isoStamp(),
     });
   };
   /** Shared input validator for the `{ collection, id }` workflow handlers. */
@@ -2957,15 +3004,17 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
     collectionDelete: mutation(async (ctx, input: { collection: string; id: string }) => {
       const c = def(input.collection);
       const db = cdb(ctx);
-      // Snapshot first when the collection keeps revisions: a delete is the one write whose
-      // prior state is otherwise unrecoverable. (A collection has no trash — that is
-      // `cms_pages`' soft delete, not this.)
-      if (has(c, "revisions")) {
-        const rows = await db.find({ from: c.entity, where: { [idOf(c)]: input.id }, limit: 1 });
-        if (rows[0]) await snapshotRow(db, c, rows[0], ctx, "delete");
-      }
       const ok = await db.delete(c.entity, input.id);
       if (!ok) throw notFound(c.label);
+      // PURGE the row's revisions in the same transaction. Keeping them looks like free
+      // history, but a collection PK can be a caller-chosen textId — recreating a row with
+      // the same id would inherit the dead row's history, and `collectionRestoreRevision`'s
+      // scope check (collection + rowId) would happily write the deleted row's content over
+      // the new one. It also bounds the table: a collection has no trash, so nothing else
+      // ever collects these.
+      if (has(c, "revisions")) {
+        await db.exec(`DELETE FROM ${COLLECTION_REVISIONS_TABLE} WHERE collection = ? AND rowId = ?`, c.slug, input.id);
+      }
       return { ok: true as const };
     }, { ...editor, input: rowInput }),
 
@@ -2980,8 +3029,12 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
       const c = def(input.collection);
       needs(c, "drafts");
       const db = cdb(ctx);
-      const row = await loadRow(db, c, input.id);
-      await snapshotRow(db, c, row, ctx, "publish");
+      await loadRow(db, c, input.id);
+      // Deliberately NOT snapshotted. A revision records CONTENT, and publishing changes
+      // none — the managed columns are excluded from `fields` by design, so a "publish"
+      // revision was byte-identical to the edit before it, and restoring it wrote only the
+      // declared fields and left the row live. That reads as a broken button; an entry that
+      // cannot be restored is worse than no entry.
       const patch: Record<string, unknown> = { status: COLLECTION_PUBLISHED };
       if (has(c, "scheduling")) {
         patch.publishedAt = isoStamp();
@@ -2999,9 +3052,8 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
       const c = def(input.collection);
       needs(c, "drafts");
       const db = cdb(ctx);
-      const row = await loadRow(db, c, input.id);
-      await snapshotRow(db, c, row, ctx, "unpublish");
-      const patch: Record<string, unknown> = { status: COLLECTION_DRAFT };
+      await loadRow(db, c, input.id);
+      const patch: Record<string, unknown> = { status: COLLECTION_DRAFT }; // not snapshotted — see collectionPublish
       if (has(c, "scheduling")) {
         patch.publishedAt = null;
         patch.scheduledAt = null;
@@ -3072,7 +3124,8 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
       return cdb(ctx).find({
         from: COLLECTION_REVISIONS_TABLE,
         where: { collection: c.slug, rowId: input.id },
-        orderBy: { column: "createdAt", dir: "desc" },
+        // By the monotonic counter, never by a timestamp — see the `revision` column.
+        orderBy: { column: "revision", dir: "desc" },
         limit: input.limit ?? 50,
       });
     }, {
@@ -3080,7 +3133,11 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
       input: (raw): { collection: string; id: string; limit?: number } => {
         const o = asObj(raw);
         if (o.limit !== undefined && (typeof o.limit !== "number" || !Number.isFinite(o.limit))) throw new BadRequest("limit must be a number");
-        return { ...rowInput(raw), limit: o.limit as number | undefined };
+        // CLAMPED, not just validated: `find` binds this straight into `LIMIT ?`, and SQLite
+        // reads a negative limit as UNBOUNDED — so `limit: -1` would dump a row's entire
+        // history. A fractional value would reach the driver as-is.
+        const limit = o.limit === undefined ? undefined : Math.max(1, Math.min(Math.floor(o.limit as number), 200));
+        return { ...rowInput(raw), limit };
       },
     }),
 
@@ -3218,10 +3275,30 @@ export function collectionPublicPolicies(collections: readonly CollectionDef[], 
     const features = c.supports ?? [];
     if (!features.includes("drafts")) continue;
     const name = `${p}:public:collection:${c.entity}:read`;
+    // The PUBLIC surface is exactly what the collection declares as editable, plus its id.
+    // Granting the whole row instead would quietly publish every future column: an
+    // `internalNote` or `reviewerEmail` added to the entity — deliberately NOT a field —
+    // would go world-readable the moment a row was published, with nothing at boot or in
+    // review to catch it. The managed workflow columns are excluded for the same reason;
+    // `status` carries no information here anyway (every visible row is published).
+    const fields = [c.idField ?? "id", ...c.fields.map((f) => f.name)];
     out.push(
       features.includes("scheduling")
-        ? policy(name, c.entity, "read", { where: { status: COLLECTION_PUBLISHED, publishedAt: { lte: $now() } } })
-        : policy(name, c.entity, "read", { where: { status: COLLECTION_PUBLISHED } }),
+        ? policy(name, c.entity, "read", {
+            fields,
+            where: {
+              status: COLLECTION_PUBLISHED,
+              publishedAt: { lte: $now() },
+              // A scheduled TAKEDOWN has to be enforced HERE, not only by the task. The
+              // publish side is belt-and-braces (policy + task), but without this clause an
+              // unpublish depends entirely on `createCollectionTasks` being wired and the
+              // outbox draining — if either fails, a row an editor scheduled to come down
+              // stays world-readable indefinitely, with no signal. That is the wrong way
+              // round for a takedown, which is the direction that usually matters legally.
+              OR: [{ unpublishAt: { isNull: true } }, { unpublishAt: { gt: $now() } }],
+            },
+          })
+        : policy(name, c.entity, "read", { fields, where: { status: COLLECTION_PUBLISHED } }),
     );
   }
   return out;
