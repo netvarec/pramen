@@ -38,6 +38,7 @@ import {
   expr,
   policy,
   allow,
+  $now,
   BadRequest,
   Forbidden,
   PramenError,
@@ -46,7 +47,7 @@ import {
   verifyToken,
   resolveSecret,
 } from "@pramen/server";
-import type { HandlerContext, Policy, FileRef, BootstrapFn, JsonValue } from "@pramen/server";
+import type { HandlerContext, Policy, FileRef, BootstrapFn, JsonValue, SchemaDef } from "@pramen/server";
 import type { EnvBag } from "@pramen/server";
 import { isSafeHref, normalizeHref } from "./href";
 
@@ -570,6 +571,26 @@ export const cmsSchema = {
     toStatus: t.text(),
     actor: t.text(),
     note: t.text(),
+    createdAt: defaultTo(t.text(), expr.now()),
+  })),
+
+  // Revision history for COLLECTION rows (`supports: ["revisions"]`). One shared table
+  // rather than one per collection: a collection targets an arbitrary app entity, so there
+  // is no place to hang a per-entity revisions table and no way to declare a real FK to a
+  // target that varies. `collection` + `rowId` identify the subject; `rowId` is TEXT
+  // because a collection's PK may be a uuid or a textId.
+  //
+  // A revision holds the row's state BEFORE the write that created it, projected to the
+  // collection's declared fields — so restoring one is a plain reversal, and a snapshot
+  // taken before a field was dropped from `fields` cannot resurrect that column (restore
+  // replays through the same write whitelist).
+  cms_collection_revisions: Entity((t) => ({
+    id: primaryKey(generated(t.uuid())),
+    collection: indexed(notNull(t.text())),
+    rowId: indexed(notNull(t.text())),
+    snapshot: t.json(),
+    note: t.text(),
+    actor: t.text(),
     createdAt: defaultTo(t.text(), expr.now()),
   })),
 
@@ -2485,7 +2506,7 @@ export interface CmsPolicyOpts {
  * `editor` grants full CRUD across every cms_ table. */
 export function cmsPolicies(opts: CmsPolicyOpts = {}): { public: Policy[]; editor: Policy[] } {
   const p = opts.prefix ?? "cms";
-  const tables = ["cms_content_types", "cms_block_types", "cms_blocks", "cms_pages", "cms_page_blocks", "cms_page_revisions", "cms_media", "cms_audit"] as const;
+  const tables = ["cms_content_types", "cms_block_types", "cms_blocks", "cms_pages", "cms_page_blocks", "cms_page_revisions", "cms_media", "cms_audit", "cms_collection_revisions"] as const;
   // Soft-deleted rows are filtered in the ACL, not in each handler. A read scope is
   // AND-merged into every `ctx.db` read, so one policy hides a trashed row from the public
   // API, the editor, relation traversals and eager-loads at once — where a per-handler
@@ -2575,6 +2596,11 @@ export interface CollectionDef {
   readonly idField?: string;
   /** Default list ordering; defaults to `{ column: "createdAt", dir: "desc" }`. */
   readonly orderBy?: { column: string; dir?: "asc" | "desc" };
+  /** Workflow features this collection opts into — see {@link CollectionFeature}. Each is
+   * backed by MANAGED COLUMNS on `entity` that the CMS writes and `fields` may not declare.
+   * Validated against your schema at `createCollectionHandlers` time (which is why that call
+   * needs `{ schema }` once this is set). Absent = a plain CRUD collection, as before. */
+  readonly supports?: readonly CollectionFeature[];
 }
 
 /** Declare a collection. Spread the results into `createCollectionHandlers` +
@@ -2608,6 +2634,9 @@ export interface CollectionMeta {
   titleField: string;
   idField: string;
   orderBy?: { column: string; dir?: "asc" | "desc" };
+  /** Workflow features enabled — the editor uses this to decide which affordances to show
+   * (a Publish button, a schedule picker, a revisions tab). Empty = plain CRUD. */
+  supports: readonly CollectionFeature[];
 }
 
 /** The public view of a collection def (defaults filled). */
@@ -2623,7 +2652,167 @@ function collectionMeta(c: CollectionDef): CollectionMeta {
     titleField,
     idField: c.idField ?? "id",
     orderBy: c.orderBy,
+    supports: c.supports ?? [],
   };
+}
+
+
+// --- collection workflow features (`supports`) -------------------------------
+//
+// A collection may opt into page-style workflow with `supports: ["drafts", ...]`. Each
+// feature is backed by MANAGED COLUMNS on the collection's OWN entity: the app declares the
+// columns, the CMS owns their values.
+//
+// That ownership is the whole difference from the `publish` FIELD type this replaces. A
+// `publish` field is an ordinary entry in `fields`, and `fields` is the write whitelist —
+// so "is this row live?" was a value the client sent in the `values` bag, and the access
+// boundary was whatever the client last wrote. A managed column is never in the whitelist
+// (declaring one as a field is a boot error, see `validateCollections`), so only
+// `collectionPublish` / `collectionSchedule` / the scheduled tasks can move a row live.
+//
+// TIMESTAMP FORMAT. Managed timestamps are minted as ISO-8601 UTC with a `Z`
+// (`2026-08-20T12:00:00.000Z`), in exactly one place (`isoStamp`). That is the format
+// `$now()` produces, and the published-read scope compares against it LEXICOGRAPHICALLY.
+// It is deliberately NOT `nowStamp()` (`expr.now()`'s "YYYY-MM-DD HH:MM:SS"), which sorts
+// against the ISO form as if hours apart. Minting in one place is what closes the trap
+// documented on the `publish` field: there, `publish` and `datetime` wrote different
+// formats into the same TEXT column and both passed validation.
+
+/** A workflow feature a collection can opt into.
+ *
+ * - `drafts` — a managed `status` column (`draft` | `published`) plus `collectionPublish` /
+ *   `collectionUnpublish`. Pair with `collectionPublicPolicies` so anonymous reads see
+ *   published rows only.
+ * - `scheduling` — managed `publishedAt` / `scheduledAt` / `unpublishAt`, `collectionSchedule`,
+ *   and the deferred tasks from `createCollectionTasks`. Needs `drafts`.
+ * - `revisions` — a snapshot of the row's prior state on every write, in
+ *   `cms_collection_revisions`, with `collectionListRevisions` / `collectionRestoreRevision`.
+ * - `preview` — signed, single-row preview links (`signCollectionPreview`), redeemed at
+ *   `COLLECTION_PREVIEW_PATH` by the route `cmsRoutes()` serves. Needs `drafts`. */
+export type CollectionFeature = "drafts" | "scheduling" | "revisions" | "preview";
+
+export const COLLECTION_FEATURES: readonly CollectionFeature[] = ["drafts", "scheduling", "revisions", "preview"];
+
+/** The columns each feature needs on the collection's entity. The app declares them (they
+ * are its own entity); the CMS writes them and `fields` may not. */
+export const COLLECTION_FEATURE_COLUMNS: Readonly<Record<CollectionFeature, readonly string[]>> = {
+  drafts: ["status"],
+  scheduling: ["publishedAt", "scheduledAt", "unpublishAt"],
+  revisions: [],
+  preview: [],
+};
+
+/** Features that mean nothing on their own. Scheduling moves a row between draft and
+ * published; preview shows the unpublished version — both presuppose `drafts`. */
+const COLLECTION_FEATURE_REQUIRES: Readonly<Partial<Record<CollectionFeature, CollectionFeature>>> = {
+  scheduling: "drafts",
+  preview: "drafts",
+};
+
+/** The shared revision table for collections (see `cmsSchema`). */
+export const COLLECTION_REVISIONS_TABLE = "cms_collection_revisions";
+
+/** The two `status` values a `drafts` collection uses. */
+export const COLLECTION_DRAFT = "draft";
+export const COLLECTION_PUBLISHED = "published";
+
+/** An ISO-8601 UTC instant — the one format every managed collection timestamp is written
+ * in, so it compares correctly against `$now()`. See the note above on why this is not
+ * `nowStamp()`. */
+const isoStamp = (): string => new Date().toISOString();
+
+/** Check a collection registry at BOOT: slugs are unique, features are known and have
+ * their prerequisites, and every managed column actually exists on the target entity and
+ * is not also an editable field.
+ *
+ * Called by `createCollectionHandlers`. The point is that a misconfiguration surfaces when
+ * the Worker starts, naming the collection and the missing column — not as a 500 the first
+ * time an editor presses Publish, months later, on the one collection nobody exercised.
+ *
+ * `schema` is REQUIRED as soon as any collection declares `supports`: without it the column
+ * checks cannot run, and silently skipping them would defeat the purpose. */
+export function validateCollections(collections: readonly CollectionDef[], schema?: SchemaDef): void {
+  const seen = new Set<string>();
+  for (const c of collections) {
+    if (seen.has(c.slug)) throw new Error(`pramen/cms: duplicate collection slug '${c.slug}' — slugs are the handler registry's key`);
+    seen.add(c.slug);
+  }
+  const withFeatures = collections.filter((c) => (c.supports?.length ?? 0) > 0);
+  if (withFeatures.length === 0) return;
+  if (!schema) {
+    const names = withFeatures.map((c) => `'${c.slug}'`).join(", ");
+    throw new Error(
+      `pramen/cms: collection(s) ${names} declare \`supports\`, so createCollectionHandlers needs the schema to check their managed columns: createCollectionHandlers(collections, { schema })`,
+    );
+  }
+  for (const c of withFeatures) {
+    const features = c.supports ?? [];
+    const set = new Set<CollectionFeature>(features);
+    for (const f of features) {
+      if (!COLLECTION_FEATURES.includes(f)) {
+        throw new Error(`pramen/cms: collection '${c.slug}' declares unknown feature '${String(f)}' (known: ${COLLECTION_FEATURES.join(", ")})`);
+      }
+      const needs = COLLECTION_FEATURE_REQUIRES[f];
+      if (needs && !set.has(needs)) {
+        throw new Error(`pramen/cms: collection '${c.slug}' declares '${f}', which needs '${needs}' — add it to \`supports\``);
+      }
+    }
+    const entity = schema[c.entity];
+    if (!entity) throw new Error(`pramen/cms: collection '${c.slug}' targets entity '${c.entity}', which is not in the schema`);
+    const columns = entity.fields as Record<string, unknown>;
+    const idField = c.idField ?? "id";
+    if (!(idField in columns)) {
+      throw new Error(`pramen/cms: collection '${c.slug}' has idField '${idField}', which is not a column on '${c.entity}'`);
+    }
+    const declared = new Set(c.fields.map((f) => f.name));
+    for (const f of features) {
+      for (const col of COLLECTION_FEATURE_COLUMNS[f]) {
+        if (!(col in columns)) {
+          throw new Error(
+            `pramen/cms: collection '${c.slug}' declares '${f}', which manages a \`${col}\` column on '${c.entity}' — add \`${col}: t.text()\` to the entity`,
+          );
+        }
+        // `fields` IS the write whitelist. A `status` entry there would let any editor send
+        // `values: { status: "published" }` through collectionUpdate and bypass the publish
+        // handler entirely, leaving the gate as decoration over a client-set column.
+        if (declared.has(col)) {
+          throw new Error(
+            `pramen/cms: collection '${c.slug}' declares \`${col}\` as an editable field, but '${f}' manages that column — remove it from \`fields\` (it would be a client-writable publish gate)`,
+          );
+        }
+      }
+    }
+    if (set.has("revisions") && !schema[COLLECTION_REVISIONS_TABLE]) {
+      throw new Error(
+        `pramen/cms: collection '${c.slug}' declares 'revisions', which needs the \`${COLLECTION_REVISIONS_TABLE}\` table — spread \`cmsSchema\` into defineSchema`,
+      );
+    }
+  }
+}
+
+/** A signed grant to preview ONE collection row. Mirrors {@link PreviewToken}. */
+export interface CollectionPreviewToken {
+  /** tenant */ t: string;
+  /** collection slug */ c: string;
+  /** row id — the grant is scoped to this ONE row, never "all drafts" */ r: string;
+  /** expiry (epoch seconds) */ exp: number;
+}
+
+/** Where a collection preview link is redeemed. Served by `cmsRoutes()`. */
+export const COLLECTION_PREVIEW_PATH = "/cms/preview/collection";
+
+/** Outbox task kinds behind `collectionSchedule`. Register the handlers with
+ * `app.tasks = { ...cmsTasks, ...createCollectionTasks(collections) }`. */
+export const TASK_COLLECTION_PUBLISH = "cms:collection:publish";
+export const TASK_COLLECTION_UNPUBLISH = "cms:collection:unpublish";
+
+/** Options for `createCollectionHandlers`. */
+export interface CollectionHandlerOpts extends CmsHandlerOpts {
+  /** Your app's schema (the object you pass to `defineSchema`). REQUIRED once any
+   * collection declares `supports`: the managed columns are checked against it at boot by
+   * `validateCollections`, so a missing `status` column is a startup error naming the
+   * collection rather than a 500 on the first publish. */
+  schema?: SchemaDef;
 }
 
 /** Build generic CRUD handlers over the registered collections. Spread into your app's
@@ -2636,9 +2825,17 @@ function collectionMeta(c: CollectionDef): CollectionMeta {
  * (a fast 403 before the body) AND the row ACL (they go through `ctx.db`, so
  * `collectionPolicies` scopes them too). The `collection` param is resolved through the
  * registry — an unknown slug is a 400, never a raw table reference. */
-export function createCollectionHandlers(collections: readonly CollectionDef[], opts: CmsHandlerOpts = {}) {
+export function createCollectionHandlers(collections: readonly CollectionDef[], opts: CollectionHandlerOpts = {}) {
+  // Boot check, before a single handler is built: unknown/incoherent features and missing
+  // managed columns throw here rather than 500ing on the first publish.
+  validateCollections(collections, opts.schema);
   const collectionRtSchema = opts.richTextSchema ?? DEFAULT_RICH_TEXT_SCHEMA;
   const editor = { auth: opts.editorRoles ?? ["editor", "admin"] };
+  // Preview redemption presents editorRoles ∪ reviewerRoles (see `viewerRolesOf`), so the
+  // handler the route calls has to accept that set — gating it to `editor` alone would 403
+  // every preview link for a reviewer-only identity. Same wiring as `getPagePreview`.
+  const viewer = { auth: viewerRolesOf(opts) };
+  const previewTtl = opts.previewTtlSeconds ?? DEFAULT_PREVIEW_TTL_SECONDS;
   const bySlug = new Map(collections.map((c) => [c.slug, c] as const));
   const metas = collections.map(collectionMeta);
   const def = (slug: unknown): CollectionDef => {
@@ -2647,6 +2844,41 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
     return c;
   };
   const idOf = (c: CollectionDef): string => c.idField ?? "id";
+  const has = (c: CollectionDef, f: CollectionFeature): boolean => (c.supports ?? []).includes(f);
+  /** 400 (not 500) when a caller invokes a workflow handler on a collection that never
+   * opted into it — the handlers exist for every collection, the features do not. */
+  const needs = (c: CollectionDef, f: CollectionFeature): void => {
+    if (!has(c, f)) throw new BadRequest(`collection '${c.slug}' does not support '${f}' (add it to \`supports\`)`);
+  };
+  const loadRow = async (db: CmsDb, c: CollectionDef, id: string): Promise<Record<string, unknown>> => {
+    const rows = await db.find({ from: c.entity, where: { [idOf(c)]: id }, limit: 1 });
+    const row = rows[0];
+    if (!row) throw notFound(c.label);
+    return row;
+  };
+  /** Snapshot a row's CURRENT (pre-write) state into `cms_collection_revisions`, so a
+   * revision always reads as "what it was before this edit" and restoring one is a plain
+   * reversal. Declared fields only — the snapshot is replayed through the same write
+   * whitelist on restore, so it can never carry a column the collection doesn't own.
+   * No-op unless the collection supports `revisions`. */
+  const snapshotRow = async (db: CmsDb, c: CollectionDef, row: Record<string, unknown>, ctx: HandlerContext, note: string): Promise<void> => {
+    if (!has(c, "revisions")) return;
+    const values: Record<string, unknown> = {};
+    for (const f of c.fields) if (f.name in row) values[f.name] = row[f.name];
+    await db.insert(COLLECTION_REVISIONS_TABLE, {
+      collection: c.slug,
+      rowId: String(row[idOf(c)]),
+      snapshot: values,
+      note,
+      actor: typeof ctx.identity?.userId === "string" ? ctx.identity.userId : null,
+    });
+  };
+  /** Shared input validator for the `{ collection, id }` workflow handlers. */
+  const rowInput = (raw: unknown): { collection: string; id: string } => {
+    const o = asObj(raw);
+    if (typeof o.collection !== "string" || o.collection === "") throw new BadRequest("collection is required");
+    return { collection: o.collection, id: idInput(raw) };
+  };
   // Validate against the field schema, sanitize richtext, then PROJECT to declared field
   // names only — the write whitelist. `requireRequired` is off for updates (partial patch);
   // on for create. Nothing outside `c.fields` can reach the entity.
@@ -2684,7 +2916,18 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
 
     collectionCreate: mutation((ctx, input: { collection: string; values: Record<string, unknown> }) => {
       const c = def(input.collection);
-      return cdb(ctx).insert(c.entity, toColumns(c, input.values, true));
+      const values = toColumns(c, input.values, true);
+      // Seed the managed columns explicitly rather than leaning on a column default: the
+      // entity belongs to the app, which may have declared `status` with no default (or a
+      // NOT NULL one). A new row always starts as a draft — publishing is a separate,
+      // separately-gated act.
+      if (has(c, "drafts")) values.status = COLLECTION_DRAFT;
+      if (has(c, "scheduling")) {
+        values.publishedAt = null;
+        values.scheduledAt = null;
+        values.unpublishAt = null;
+      }
+      return cdb(ctx).insert(c.entity, values);
     }, editor),
 
     collectionUpdate: mutation(async (ctx, input: { collection: string; id: string; values: Record<string, unknown> }) => {
@@ -2702,6 +2945,10 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
       } catch {
         current = undefined;
       }
+      // Snapshot BEFORE the write. `current` is undefined only when the pre-read above was
+      // denied (update-without-read grant), in which case there is nothing to snapshot —
+      // the revision is skipped rather than written empty.
+      if (current) await snapshotRow(db, c, current as Record<string, unknown>, ctx, "edit");
       const updated = await db.update(c.entity, input.id, toColumns(c, input.values, false, current));
       if (updated === undefined) throw notFound(c.label);
       return updated;
@@ -2709,10 +2956,211 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
 
     collectionDelete: mutation(async (ctx, input: { collection: string; id: string }) => {
       const c = def(input.collection);
-      const ok = await cdb(ctx).delete(c.entity, input.id);
+      const db = cdb(ctx);
+      // Snapshot first when the collection keeps revisions: a delete is the one write whose
+      // prior state is otherwise unrecoverable. (A collection has no trash — that is
+      // `cms_pages`' soft delete, not this.)
+      if (has(c, "revisions")) {
+        const rows = await db.find({ from: c.entity, where: { [idOf(c)]: input.id }, limit: 1 });
+        if (rows[0]) await snapshotRow(db, c, rows[0], ctx, "delete");
+      }
+      const ok = await db.delete(c.entity, input.id);
       if (!ok) throw notFound(c.label);
       return { ok: true as const };
-    }, { ...editor, input: (raw) => ({ collection: asObj(raw).collection as string, id: idInput(raw) }) }),
+    }, { ...editor, input: rowInput }),
+
+    // ---- drafts -------------------------------------------------------------
+
+    /** Move a row live. With `scheduling` this also stamps `publishedAt` (the column the
+     * public read scope compares against `$now()`) and clears `scheduledAt` — which makes
+     * any pending scheduled-publish task a no-op, since its intent token no longer matches.
+     * A pending scheduled UNPUBLISH is deliberately left standing: publishing early does not
+     * cancel a planned takedown. */
+    collectionPublish: mutation(async (ctx, input: { collection: string; id: string }) => {
+      const c = def(input.collection);
+      needs(c, "drafts");
+      const db = cdb(ctx);
+      const row = await loadRow(db, c, input.id);
+      await snapshotRow(db, c, row, ctx, "publish");
+      const patch: Record<string, unknown> = { status: COLLECTION_PUBLISHED };
+      if (has(c, "scheduling")) {
+        patch.publishedAt = isoStamp();
+        patch.scheduledAt = null;
+      }
+      const updated = await db.update(c.entity, input.id, patch);
+      if (updated === undefined) throw notFound(c.label);
+      return updated;
+    }, { ...editor, input: rowInput }),
+
+    /** Take a row back to draft, clearing every schedule. Both tokens are cleared, so a
+     * pending publish AND a pending unpublish both become no-ops — unpublishing is an
+     * explicit "this is not live and nothing is queued to change that". */
+    collectionUnpublish: mutation(async (ctx, input: { collection: string; id: string }) => {
+      const c = def(input.collection);
+      needs(c, "drafts");
+      const db = cdb(ctx);
+      const row = await loadRow(db, c, input.id);
+      await snapshotRow(db, c, row, ctx, "unpublish");
+      const patch: Record<string, unknown> = { status: COLLECTION_DRAFT };
+      if (has(c, "scheduling")) {
+        patch.publishedAt = null;
+        patch.scheduledAt = null;
+        patch.unpublishAt = null;
+      }
+      const updated = await db.update(c.entity, input.id, patch);
+      if (updated === undefined) throw notFound(c.label);
+      return updated;
+    }, { ...editor, input: rowInput }),
+
+    // ---- scheduling ---------------------------------------------------------
+
+    /** Schedule a future publish, and optionally a later unpublish. Mirrors `schedulePage`,
+     * including the INTENT TOKEN: the row stores the scheduled instants
+     * (`scheduledAt`/`unpublishAt`, ISO), the enqueued task carries a copy, and the task
+     * runs only if the two still match. A reschedule overwrites the token, a manual
+     * publish/unpublish clears it, and a duplicate delivery finds it already cleared — so a
+     * superseded or cancelled schedule is a silent no-op rather than a surprise publish.
+     *
+     * The tasks are enqueued in THIS mutation's transaction (the outbox is transactional),
+     * so a rolled-back schedule never leaves a task behind. They only run if you wired
+     * `createCollectionTasks` into `app.tasks`. */
+    collectionSchedule: mutation(async (ctx, input: { collection: string; id: string; publishAt: number; unpublishAt?: number }) => {
+      const c = def(input.collection);
+      needs(c, "scheduling");
+      const db = cdb(ctx);
+      await loadRow(db, c, input.id);
+      const now = Date.now();
+      const publishToken = new Date(input.publishAt).toISOString();
+      const unpublishToken = input.unpublishAt !== undefined ? new Date(input.unpublishAt).toISOString() : null;
+      await db.update(c.entity, input.id, { scheduledAt: publishToken, unpublishAt: unpublishToken });
+      await ctx.tasks.enqueue({
+        kind: TASK_COLLECTION_PUBLISH,
+        payload: { collection: c.slug, id: input.id, token: publishToken },
+        delayMs: Math.max(0, input.publishAt - now),
+      });
+      if (input.unpublishAt !== undefined) {
+        await ctx.tasks.enqueue({
+          kind: TASK_COLLECTION_UNPUBLISH,
+          payload: { collection: c.slug, id: input.id, token: unpublishToken },
+          delayMs: Math.max(0, input.unpublishAt - now),
+        });
+      }
+      return { ok: true as const, scheduledAt: publishToken, unpublishAt: unpublishToken };
+    }, {
+      ...editor,
+      input: (raw): { collection: string; id: string; publishAt: number; unpublishAt?: number } => {
+        const o = asObj(raw);
+        const base = rowInput(raw);
+        // Unvalidated, a non-finite publishAt makes `new Date(x).toISOString()` throw a
+        // RangeError inside the transaction — a 500 with no indication of which input was
+        // wrong.
+        if (typeof o.publishAt !== "number" || !Number.isFinite(o.publishAt)) throw new BadRequest("publishAt must be a finite epoch ms");
+        if (o.unpublishAt !== undefined) {
+          if (typeof o.unpublishAt !== "number" || !Number.isFinite(o.unpublishAt)) throw new BadRequest("unpublishAt must be a finite epoch ms");
+          if (o.unpublishAt <= o.publishAt) throw new BadRequest("unpublishAt must be after publishAt");
+        }
+        return { ...base, publishAt: o.publishAt, unpublishAt: o.unpublishAt as number | undefined };
+      },
+    }),
+
+    // ---- revisions ----------------------------------------------------------
+
+    /** A row's revision history, newest first. */
+    collectionListRevisions: query(async (ctx, input: { collection: string; id: string; limit?: number }) => {
+      const c = def(input.collection);
+      needs(c, "revisions");
+      return cdb(ctx).find({
+        from: COLLECTION_REVISIONS_TABLE,
+        where: { collection: c.slug, rowId: input.id },
+        orderBy: { column: "createdAt", dir: "desc" },
+        limit: input.limit ?? 50,
+      });
+    }, {
+      ...editor,
+      input: (raw): { collection: string; id: string; limit?: number } => {
+        const o = asObj(raw);
+        if (o.limit !== undefined && (typeof o.limit !== "number" || !Number.isFinite(o.limit))) throw new BadRequest("limit must be a number");
+        return { ...rowInput(raw), limit: o.limit as number | undefined };
+      },
+    }),
+
+    /** Restore a row to one of its revisions. The CURRENT state is snapshotted first, so a
+     * restore is itself undoable. */
+    collectionRestoreRevision: mutation(async (ctx, input: { collection: string; id: string; revisionId: string }) => {
+      const c = def(input.collection);
+      needs(c, "revisions");
+      const db = cdb(ctx);
+      const revs = await db.find({ from: COLLECTION_REVISIONS_TABLE, where: { id: input.revisionId }, limit: 1 });
+      const rev = revs[0];
+      // Scope the revision to THIS collection AND row. A revision id is otherwise a global
+      // handle into a table shared by every collection, so an id from another row — or
+      // another collection entirely — would write a foreign snapshot over this row.
+      if (!rev || String(rev.collection) !== c.slug || String(rev.rowId) !== input.id) throw notFound("revision");
+      const current = await loadRow(db, c, input.id);
+      await snapshotRow(db, c, current, ctx, "restore");
+      // Replay through the SAME validate + whitelist as an ordinary write: a snapshot taken
+      // before a field was dropped from `fields` must not resurrect that column, and one
+      // taken before a field's type changed must not bypass validation.
+      const updated = await db.update(c.entity, input.id, toColumns(c, rev.snapshot, false, current as FieldValues));
+      if (updated === undefined) throw notFound(c.label);
+      return updated;
+    }, {
+      ...editor,
+      input: (raw): { collection: string; id: string; revisionId: string } => {
+        const o = asObj(raw);
+        if (typeof o.revisionId !== "string" || o.revisionId === "") throw new BadRequest("revisionId is required");
+        return { ...rowInput(raw), revisionId: o.revisionId };
+      },
+    }),
+
+    // ---- preview ------------------------------------------------------------
+
+    /** Mint a signed link that shows ONE row's unpublished state, to whoever holds it.
+     * Mirrors `signPagePreview` — same secret, same TTL clamp, same D1 refusal, and the
+     * same rule that the row is read through the ACL FIRST: minting a link is granting
+     * access to the row, so a caller who cannot read it must not be able to mint one. */
+    signCollectionPreview: query(async (ctx, input: { collection: string; id: string; expiresIn?: number }) => {
+      const c = def(input.collection);
+      needs(c, "preview");
+      const secret = previewSecret(ctx.env);
+      if (!secret) throw previewUnconfigured(); // fail closed — never mint a forgeable link
+      // Redemption always reaches a Durable Object (callPrivileged -> PRAMEN.get) and has no
+      // notion of `x-pramen-store`, so a link minted on D1 would 404 forever while the
+      // editor reported success.
+      if (ctx.store === "d1") {
+        throw new PramenError("collection preview is not available on the D1 store (redemption requires the Durable Object)", 503, "unavailable");
+      }
+      const row = await loadRow(cdb(ctx), c, input.id);
+      const ttl = Math.max(60, Math.min(input.expiresIn ?? previewTtl, 30 * 24 * 3600));
+      const exp = Math.floor(Date.now() / 1000) + ttl;
+      // Server-resolved, never caller-supplied, so the tenant inside the signature cannot
+      // be steered by whoever asks for the link.
+      const token = await signToken<CollectionPreviewToken>({ t: ctx.tenant, c: c.slug, r: String(row[idOf(c)]), exp }, secret);
+      // RELATIVE, like signed file urls — the client resolves it against the CMS origin.
+      return { url: `${COLLECTION_PREVIEW_PATH}?token=${encodeURIComponent(token)}`, token, expiresAt: exp * 1000 };
+    }, {
+      ...editor,
+      input: (raw): { collection: string; id: string; expiresIn?: number } => {
+        const o = asObj(raw);
+        if (o.expiresIn !== undefined && (typeof o.expiresIn !== "number" || !Number.isFinite(o.expiresIn))) {
+          throw new BadRequest("expiresIn must be a number of seconds");
+        }
+        return { ...rowInput(raw), expiresIn: o.expiresIn as number | undefined };
+      },
+    }),
+
+    /** Read one row's live (possibly unpublished) state. Not the redemption endpoint — that
+     * is the public `GET /cms/preview/collection` route, which verifies the token and then
+     * calls this privileged. Role-gated so it is not an anonymous back door on /rpc. */
+    getCollectionPreview: query(async (ctx, input: { collection: string; id: string }) => {
+      const c = def(input.collection);
+      needs(c, "preview");
+      const row = await loadRow(cdb(ctx), c, input.id);
+      const values: Record<string, unknown> = { [idOf(c)]: row[idOf(c)] };
+      for (const f of c.fields) if (f.name in row) values[f.name] = row[f.name];
+      if (has(c, "drafts")) values.status = row.status;
+      return { collection: c.slug, id: String(row[idOf(c)]), values };
+    }, { ...viewer, input: rowInput }),
   };
 }
 
@@ -2732,7 +3180,95 @@ export function collectionPolicies(collections: readonly CollectionDef[], opts: 
       out.push(policy(`${p}:editor:collection:${c.entity}:${action}`, c.entity, action, allow()));
     }
   }
+  // The revision table is SHARED across collections, so it is not covered by the per-entity
+  // grants above. Granting it here — rather than leaning on `cmsPolicies().editor` — keeps
+  // `revisions` self-contained: an app that registers collections without using the
+  // block/page half still gets a working feature instead of a 403 on every write. Read +
+  // create only; a revision is append-only, and nothing exposes editing or purging one.
+  if (collections.some((c) => (c.supports ?? []).includes("revisions"))) {
+    for (const action of ["read", "create"] as const) {
+      out.push(policy(`${p}:editor:${COLLECTION_REVISIONS_TABLE}:${action}`, COLLECTION_REVISIONS_TABLE, action, allow()));
+    }
+  }
   return out;
+}
+
+/** ACL fragments granting ANONYMOUS read of the PUBLISHED rows of every collection that
+ * supports `drafts`. Spread into your public role next to `cmsPolicies().public`:
+ *
+ *   role("anonymous", [...cmsPolicies().public, ...collectionPublicPolicies(collections)])
+ *
+ * This is the access boundary, not a UI filter — it is AND-merged into every `ctx.db` read
+ * of the entity, so an unpublished row is invisible to the public API, to relation
+ * traversals and to eager-loads alike, without a single query remembering to filter.
+ *
+ * With `scheduling`, the scope also requires `publishedAt <= $now()`. `status` alone would
+ * not be enough the moment anything writes a future `publishedAt`, and `{ publishedAt:
+ * { isNull: false } }` — the obvious-looking alternative — matches a FUTURE timestamp too,
+ * so a row scheduled for next week would be anonymously readable the moment it was saved.
+ * The comparison is lexicographic over TEXT, which is why every managed timestamp is minted
+ * as ISO-8601 UTC (`isoStamp`), the same shape `$now()` produces.
+ *
+ * Collections WITHOUT `drafts` get nothing here: they have no publish state, so their
+ * public exposure is entirely your app's own policy to write. */
+export function collectionPublicPolicies(collections: readonly CollectionDef[], opts: CmsPolicyOpts = {}): Policy[] {
+  const p = opts.prefix ?? "cms";
+  const out: Policy[] = [];
+  for (const c of collections) {
+    const features = c.supports ?? [];
+    if (!features.includes("drafts")) continue;
+    const name = `${p}:public:collection:${c.entity}:read`;
+    out.push(
+      features.includes("scheduling")
+        ? policy(name, c.entity, "read", { where: { status: COLLECTION_PUBLISHED, publishedAt: { lte: $now() } } })
+        : policy(name, c.entity, "read", { where: { status: COLLECTION_PUBLISHED } }),
+    );
+  }
+  return out;
+}
+
+/** Task handlers backing `collectionSchedule`. Register alongside `cmsTasks`:
+ *
+ *   const app = { tasks: { ...cmsTasks, ...createCollectionTasks(collections) } };
+ *
+ * WITHOUT THIS WIRING A SCHEDULE NEVER FIRES: `collectionSchedule` still stores the
+ * instants and enqueues the tasks, but the drain finds no handler for their kind, so the
+ * row silently stays a draft. (`cmsTasks` has the same requirement for page scheduling.)
+ *
+ * They run with a privileged, system-scoped ctx off the write path, and each validates its
+ * INTENT TOKEN against the row's current `scheduledAt`/`unpublishAt` before acting — see
+ * `collectionSchedule`. */
+export function createCollectionTasks(collections: readonly CollectionDef[]) {
+  const bySlug = new Map(collections.map((c) => [c.slug, c] as const));
+  const run = async (
+    ctx: HandlerContext,
+    payload: unknown,
+    tokenColumn: "scheduledAt" | "unpublishAt",
+    patch: Record<string, unknown>,
+  ): Promise<void> => {
+    const { collection, id, token } = asObj(payload) as { collection?: string; id?: string; token?: string };
+    if (typeof collection !== "string" || typeof id !== "string") return;
+    // Resolved through the REGISTRY, exactly as the handlers do — the payload's `collection`
+    // is never used as a table name. A task naming a collection that has since been removed
+    // from the registry is dropped, not executed against a guessed table.
+    const c = bySlug.get(collection);
+    if (!c) return;
+    const db = cdb(ctx);
+    const rows = await db.find({ from: c.entity, where: { [c.idField ?? "id"]: id }, limit: 1 });
+    const row = rows[0];
+    if (!row) return;
+    // Intent check: act only if this task is still the row's active schedule. A reschedule
+    // (new token), a manual publish/unpublish (token cleared) or a duplicate delivery after
+    // this task already ran all make it a no-op.
+    if (String(row[tokenColumn] ?? "") !== String(token ?? "")) return;
+    await db.update(c.entity, id, patch);
+  };
+  return {
+    [TASK_COLLECTION_PUBLISH]: (ctx: HandlerContext, payload: unknown) =>
+      run(ctx, payload, "scheduledAt", { status: COLLECTION_PUBLISHED, publishedAt: isoStamp(), scheduledAt: null }),
+    [TASK_COLLECTION_UNPUBLISH]: (ctx: HandlerContext, payload: unknown) =>
+      run(ctx, payload, "unpublishAt", { status: COLLECTION_DRAFT, publishedAt: null, unpublishAt: null }),
+  };
 }
 
 // --- deferred tasks (scheduled publish/unpublish) ----------------------------
@@ -2905,6 +3441,42 @@ export function cmsRoutes(
           // "page not found" that could only be diagnosed by reading source.
           console.error(`pramen/cms: preview redemption failed (${res.status} ${body.code ?? "?"}: ${body.error ?? "no detail"})`);
           return previewDenied(404, "page not found");
+        }
+        // Never cache a draft, anywhere.
+        return new Response(JSON.stringify(body.result), {
+          headers: { "content-type": "application/json; charset=utf-8", "cache-control": "private, no-store" },
+        });
+      },
+    },
+    {
+      // Redeem a COLLECTION preview link. Same contract as the page preview route above:
+      // public and pre-auth by design (the signature IS the authorization, so a reviewer
+      // with no account can open it), verified BEFORE any read, and scoped by the signed
+      // payload to one row of one collection — a valid signature never widens into "see
+      // every draft".
+      method: "GET",
+      path: COLLECTION_PREVIEW_PATH,
+      handler: async (request, env, ctx) => {
+        const secret = previewSecret(env);
+        // Fail closed: with no usable secret every signature would verify against a weak
+        // key, so refuse to verify at all rather than accept forged links.
+        if (!secret) return preview503();
+        const raw = new URL(request.url).searchParams.get("token");
+        if (!raw) return previewDenied();
+        const payload = await verifyToken<CollectionPreviewToken>(raw, secret);
+        if (!payload || typeof payload.c !== "string" || typeof payload.r !== "string" || typeof payload.t !== "string") return previewDenied();
+        const res = await ctx.callPrivileged({
+          name: "getCollectionPreview",
+          input: { collection: payload.c, id: payload.r },
+          tenant: payload.t, // from the SIGNED payload, never from the query string
+          roles: [...previewRoles],
+        });
+        const body = (await res.json().catch(() => ({}))) as { ok?: boolean; result?: JsonValue; error?: string; code?: string };
+        if (body.ok !== true) {
+          // Uniform client-visible response (probe resistance), but LOG the real reason —
+          // a role or wiring mistake here is otherwise indistinguishable from "not found".
+          console.error(`pramen/cms: collection preview redemption failed (${res.status} ${body.code ?? "?"}: ${body.error ?? "no detail"})`);
+          return previewDenied(404, "not found");
         }
         // Never cache a draft, anywhere.
         return new Response(JSON.stringify(body.result), {

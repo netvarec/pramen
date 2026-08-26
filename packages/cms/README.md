@@ -301,6 +301,81 @@ Both renderers re-check a link's href rather than trusting the stored document: 
 path normalizes, but a row written by your own mutation, a bootstrap seed or an import
 script never passed through it, and the renderer is what puts it on a page.
 
+### Collection workflow (`supports`)
+
+A **collection** points the editor at one of your own pramen entities. By default it is
+plain CRUD — no notion of published. `supports` opts it into the page-style workflow:
+
+```ts
+const talks = collection("talks", {
+  entity: "talks",
+  label: "Talk",
+  supports: ["drafts", "scheduling", "revisions", "preview"],
+  fields: [
+    { name: "title", type: "text", required: true },
+    { name: "speaker", type: "text" },
+  ],
+});
+```
+
+Each feature is backed by **managed columns on your entity** — you declare the columns, the
+CMS owns their values:
+
+| Feature | Columns you add | Handlers you get |
+| --- | --- | --- |
+| `drafts` | `status` | `collectionPublish` / `collectionUnpublish` |
+| `scheduling` | `publishedAt`, `scheduledAt`, `unpublishAt` | `collectionSchedule` (needs `drafts`) |
+| `revisions` | — (uses `cms_collection_revisions`) | `collectionListRevisions` / `collectionRestoreRevision` |
+| `preview` | — | `signCollectionPreview` (needs `drafts`) |
+
+```ts
+talks: Entity((t) => ({
+  id: primaryKey(generated(t.uuid())),
+  title: t.text(),
+  status: defaultTo(t.text(), "draft"),   // managed
+  publishedAt: t.text(),                  // managed
+  scheduledAt: t.text(),                  // managed
+  unpublishAt: t.text(),                  // managed
+  createdAt: defaultTo(t.text(), expr.now()),
+})),
+```
+
+Wire all three pieces — the handlers need your `schema`, and **scheduling silently never
+fires without the tasks**:
+
+```ts
+const handlers = { ...cmsHandlers, ...createCollectionHandlers(collections, { schema }) };
+const tasks    = { ...cmsTasks,    ...createCollectionTasks(collections) };
+const acl = [
+  role("anonymous", [...cmsPolicies().public, ...collectionPublicPolicies(collections)]),
+  role("editor",    [...cmsPolicies().editor, ...collectionPolicies(collections)]),
+];
+```
+
+**A managed column is never in the write whitelist.** `fields` is the whitelist, so a
+`status` entry there would let any editor send `values: { status: "published" }` through
+`collectionUpdate` and skip the publish gate entirely. Declaring one is a **boot error**, as
+is a missing managed column, an unknown feature, or `scheduling` without `drafts` — you
+find out when the Worker starts, naming the collection and the column, rather than on the
+first publish months later.
+
+`collectionPublicPolicies` is the **actual access boundary**, not a UI filter — it is
+AND-merged into every `ctx.db` read of the entity, so an unpublished row is invisible to
+your public queries, relation traversals and eager-loads alike. With `scheduling` it scopes
+to `status = 'published' AND publishedAt <= $now()`. That last clause matters: `{ publishedAt:
+{ isNull: false } }` matches a *future* timestamp too, so a row scheduled for next week
+would be public the moment it was saved. Your public read then stays an ordinary list —
+see `publicLectures` in `example/app.ts`.
+
+Managed timestamps are minted as ISO-8601 UTC (`2026-08-20T12:00:00.000Z`) in exactly one
+place, because the scope compares against `$now()` **lexicographically**. This is what
+closes the trap the old `publish` field type carried, where `publish` and `datetime` wrote
+different formats into the same TEXT column and sorted against each other as if hours apart.
+
+Revisions snapshot the row's state **before** each write (edit, publish, delete, and restore
+itself), projected to the declared fields — so a restore is a plain reversal, and it replays
+through the same whitelist rather than resurrecting a column the collection no longer owns.
+
 ## Limitations
 
 - **Block `fields` are opaque JSON**, so pramen's row/cell-level ACL and relational queries
@@ -325,4 +400,9 @@ script never passed through it, and the renderer is what puts it on a page.
   matches (so a reschedule, a manual publish/unpublish, or a duplicate delivery makes a
   stale task a no-op). The `cms:publish` task is not transactional (the interactive
   `publishPage` is), so a crash mid-task self-heals on the next at-least-once redelivery.
+- **Collections have no trash.** `supports` covers drafts/scheduling/revisions/preview;
+  `collectionDelete` is a hard delete (it snapshots first when `revisions` is on, so the
+  content is recoverable, but the row id is not). Soft delete is `cms_pages`-only.
+- **A collection's `supports` features are per-row, not per-locale** — there is no
+  translation-group equivalent for collections.
 - **Duplicate slugs surface as 500, not 409** (a framework-wide limitation, not CMS-specific).
