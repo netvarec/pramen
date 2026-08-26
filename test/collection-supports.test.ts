@@ -11,7 +11,7 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { defineSchema, Entity, defaultTo, expr, primaryKey, generated } from "../packages/server/src/sdk/schema";
-import { policy, role, type Identity } from "../packages/server/src/sdk/acl";
+import { allow, policy, role, type Identity } from "../packages/server/src/sdk/acl";
 import { compileAcl, type AclContext } from "../packages/server/src/runtime/acl";
 import { Db } from "../packages/server/src/runtime/db";
 import { migrate } from "../packages/server/src/runtime/migrate";
@@ -24,6 +24,7 @@ import {
   collectionPolicies,
   collectionPublicPolicies,
   validateCollections,
+  COLLECTION_REVISIONS_TABLE,
   COLLECTION_PREVIEW_PATH,
   TASK_COLLECTION_PUBLISH,
   TASK_COLLECTION_UNPUBLISH,
@@ -436,6 +437,35 @@ describe("scheduling", () => {
     expect(row.publishedAt).toBeNull();
   });
 
+  // The same repair collectionPublish does — reachable when the unpublish task never ran,
+  // and equally when THIS task drains late, after a legitimate takedown has passed.
+  test("the publish TASK also clears a spent unpublishAt, so a late drain still goes live", async () => {
+    const d = await fresh();
+    const enq: Row[] = [];
+    const ctx = editorCtx(d, enq);
+    const { id } = await create(ctx, { title: "T" });
+    await run(H.collectionSchedule, ctx, { collection: "talks", id, publishAt: Date.now() } as JsonValue);
+    // A takedown instant that has already come and gone by the time the task drains.
+    await (systemCtx(d).db as unknown as Db).update("talks", String(id), { unpublishAt: new Date(Date.now() - 1000).toISOString() });
+
+    await TASKS[TASK_COLLECTION_PUBLISH](systemCtx(d), enq[0].payload);
+    expect((await rowOf(d, String(id))).unpublishAt).toBeNull();
+    expect((await publicCtx(d).find({ from: "talks", where: {} })) as Row[]).toHaveLength(1);
+  });
+
+  // The guard compared coalesced strings, so "no token" vs "no schedule" read as a match.
+  test("a task payload with NO token never fires against an unscheduled row", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "T" });
+    // scheduledAt is null — the normal state right after an unpublish.
+    await TASKS[TASK_COLLECTION_PUBLISH](systemCtx(d), { collection: "talks", id });
+    await TASKS[TASK_COLLECTION_PUBLISH](systemCtx(d), { collection: "talks", id, token: null });
+    await TASKS[TASK_COLLECTION_PUBLISH](systemCtx(d), { collection: "talks", id, token: "" });
+
+    expect((await rowOf(d, String(id))).status).toBe("draft");
+  });
+
   test("a task naming an unregistered collection is dropped, never run against a guessed table", async () => {
     const d = await fresh();
     const ctx = editorCtx(d);
@@ -469,6 +499,32 @@ describe("scheduling", () => {
     await run(H.collectionSchedule, ctx, { collection: "talks", id, publishAt: at, unpublishAt: null } as JsonValue);
 
     expect((await rowOf(d, String(id))).unpublishAt).toBeNull();
+  });
+
+  // loadRow goes through the READ scope; db.update goes through the UPDATE scope, which can
+  // be narrower. Reporting success over a write that never landed left a confirmed schedule
+  // whose tasks then no-op'd on the intent-token mismatch.
+  test("schedule reports failure when the write falls outside the UPDATE scope", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "T" });
+
+    // read: allowed. update: scoped to rows that cannot match.
+    const readOnlyish = [
+      role("ro", [
+        policy("ro:read", "talks", "read", allow()),
+        policy("ro:update", "talks", "update", { where: { title: "something-else" } }),
+      ]),
+    ];
+    const enq: Row[] = [];
+    const roCtx = {
+      db: new Db(d, { acl: compileAcl(readOnlyish), identity: { userId: "r", roles: ["ro"] }, schema, partition: undefined }, schema),
+      identity: { userId: "r", roles: ["ro"] },
+      tasks: { enqueue: (t: Row) => { enq.push(t); return Promise.resolve(); } },
+    } as unknown as HandlerContext;
+
+    await expect(run(H.collectionSchedule, roCtx, { collection: "talks", id, publishAt: Date.now() + 1000 } as JsonValue)).rejects.toThrow(/not found/);
+    expect((await rowOf(d, String(id))).scheduledAt).toBeNull();
   });
 
   test("unpublishAt must be after publishAt, and both must be finite", async () => {
@@ -531,7 +587,11 @@ describe("revisions", () => {
     expect((await run(H.collectionListRevisions, ctx, { collection: "talks", id } as JsonValue)) as Row[]).toHaveLength(1);
 
     await run(H.collectionDelete, ctx, { collection: "talks", id } as JsonValue);
-    expect((await run(H.collectionListRevisions, ctx, { collection: "talks", id } as JsonValue)) as Row[]).toHaveLength(0);
+    // Listing now 404s (the row is gone, and the list is ACL'd through it) — so assert the
+    // purge directly against the table.
+    await expect(run(H.collectionListRevisions, ctx, { collection: "talks", id } as JsonValue)).rejects.toThrow(/not found/);
+    const left = await d.exec("SELECT count(*) AS n FROM cms_collection_revisions WHERE rowId = ?", [String(id)]);
+    expect(left[0].n).toBe(0);
   });
 
   // A collection PK may be a caller-chosen textId, so an id CAN come back. If the dead
@@ -631,6 +691,40 @@ describe("revisions", () => {
         "forced", "talks", String(id), 1, "{}", new Date().toISOString(),
       ]),
     ).rejects.toThrow();
+  });
+
+  // The revisions table is shared and granted flat, so the ROW's read scope is the only
+  // thing standing between a role and another collection's snapshots.
+  test("listing revisions is gated by the row's own read scope, not just the shared table", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "v1" });
+    await run(H.collectionUpdate, ctx, { collection: "talks", id, values: { title: "v2" } } as JsonValue);
+
+    // A role holding the shared revisions grant but NO read on the entity.
+    const narrow = [role("narrow", collectionPolicies([talks]).filter((p) => p.entity === COLLECTION_REVISIONS_TABLE))];
+    const narrowCtx = {
+      db: new Db(d, { acl: compileAcl(narrow), identity: { userId: "n", roles: ["narrow"] }, schema, partition: undefined }, schema),
+      identity: { userId: "n", roles: ["narrow"] },
+    } as unknown as HandlerContext;
+    await expect(run(H.collectionListRevisions, narrowCtx, { collection: "talks", id } as JsonValue)).rejects.toThrow();
+  });
+
+  // A snapshot is built from an ACL-PROJECTED row, so a caller whose read scope excluded
+  // every declared column stores `{}`. Db.update returns undefined for a zero-column patch,
+  // which would surface as "not found" for a row loaded two lines earlier.
+  test("restoring an EMPTY snapshot says what is wrong, not `not found`", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "v1" });
+    await run(H.collectionUpdate, ctx, { collection: "talks", id, values: { title: "v2" } } as JsonValue);
+    const [rev] = (await run(H.collectionListRevisions, ctx, { collection: "talks", id } as JsonValue)) as Row[];
+    await d.exec("UPDATE cms_collection_revisions SET snapshot = ? WHERE id = ?", ["{}", rev.id]);
+
+    await expect(run(H.collectionRestoreRevision, ctx, { collection: "talks", id, revisionId: rev.id } as JsonValue)).rejects.toThrow(
+      /has no restorable fields/,
+    );
+    expect((await rowOf(d, String(id))).title).toBe("v2"); // untouched
   });
 
   test("a collection without `revisions` records nothing and refuses the handlers", async () => {

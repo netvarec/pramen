@@ -3110,7 +3110,13 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
       const unpublishToken = typeof input.unpublishAt === "number" ? new Date(input.unpublishAt).toISOString() : null;
       const patch: Record<string, unknown> = { scheduledAt: publishToken };
       if (hasUnpublish) patch.unpublishAt = unpublishToken;
-      await db.update(c.entity, input.id, patch);
+      // `loadRow` above goes through the READ scope; this goes through the UPDATE scope,
+      // which can be narrower. Without the check a role that may read but not update the row
+      // got `{ ok: true }` and two enqueued tasks over a write that never landed — the tasks
+      // then found `scheduledAt` still null, mismatched their intent token, and no-op'd. A
+      // confirmed schedule that silently never fires. Every sibling handler checks this.
+      const updated = await db.update(c.entity, input.id, patch);
+      if (updated === undefined) throw notFound(c.label);
       await ctx.tasks.enqueue({
         kind: TASK_COLLECTION_PUBLISH,
         payload: { collection: c.slug, id: input.id, token: publishToken },
@@ -3150,7 +3156,14 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
     collectionListRevisions: query(async (ctx, input: { collection: string; id: string; limit?: number }) => {
       const c = def(input.collection);
       needs(c, "revisions");
-      return cdb(ctx).find({
+      const db = cdb(ctx);
+      // Read the ROW through the ACL first. `cms_collection_revisions` is shared across
+      // every collection and `collectionPolicies` grants it a flat allow(), so without this
+      // a role holding narrower per-entity read policies could list the snapshots of a
+      // collection it cannot read through `collectionGet`. `collectionRestoreRevision`
+      // already had this via `loadRow`; the list path did not.
+      await loadRow(db, c, input.id);
+      return db.find({
         from: COLLECTION_REVISIONS_TABLE,
         where: { collection: c.slug, rowId: input.id },
         // By the monotonic counter, never by a timestamp — see the `revision` column.
@@ -3183,11 +3196,19 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
       // another collection entirely — would write a foreign snapshot over this row.
       if (!rev || String(rev.collection) !== c.slug || String(rev.rowId) !== input.id) throw notFound("revision");
       const current = await loadRow(db, c, input.id);
+      // A snapshot is built from an ACL-PROJECTED row, so a caller whose read scope excluded
+      // every declared column stored `{}`. `Db.update` returns undefined for a zero-column
+      // patch, which would surface below as "not found" for a row loaded two lines earlier —
+      // a misleading 404. Say what is actually wrong instead.
+      const restore = toColumns(c, rev.snapshot, false, current as FieldValues);
+      if (Object.keys(restore).length === 0) {
+        throw new BadRequest(`revision ${input.revisionId} has no restorable fields (it was captured with no readable columns)`);
+      }
       await snapshotRow(db, c, current, ctx, "restore");
       // Replay through the SAME validate + whitelist as an ordinary write: a snapshot taken
       // before a field was dropped from `fields` must not resurrect that column, and one
       // taken before a field's type changed must not bypass validation.
-      const updated = await db.update(c.entity, input.id, toColumns(c, rev.snapshot, false, current as FieldValues));
+      const updated = await db.update(c.entity, input.id, restore);
       if (updated === undefined) throw notFound(c.label);
       return updated;
     }, {
@@ -3350,7 +3371,7 @@ export function createCollectionTasks(collections: readonly CollectionDef[]) {
     ctx: HandlerContext,
     payload: unknown,
     tokenColumn: "scheduledAt" | "unpublishAt",
-    patch: Record<string, unknown>,
+    buildPatch: (row: Record<string, unknown>) => Record<string, unknown>,
   ): Promise<void> => {
     const { collection, id, token } = asObj(payload) as { collection?: string; id?: string; token?: string };
     if (typeof collection !== "string" || typeof id !== "string") return;
@@ -3366,14 +3387,31 @@ export function createCollectionTasks(collections: readonly CollectionDef[]) {
     // Intent check: act only if this task is still the row's active schedule. A reschedule
     // (new token), a manual publish/unpublish (token cleared) or a duplicate delivery after
     // this task already ran all make it a no-op.
-    if (String(row[tokenColumn] ?? "") !== String(token ?? "")) return;
-    await db.update(c.entity, id, patch);
+    //
+    // Require a NON-EMPTY token on both sides. Comparing the coalesced strings alone treats
+    // "no token in the payload" and "no schedule on the row" as a MATCH — so a payload
+    // without a token (a hand-drained or replayed outbox row) against a row whose
+    // `scheduledAt` is null, the normal state right after an unpublish, would publish it
+    // unconditionally. The guard should fail closed, not open.
+    const stored = typeof row[tokenColumn] === "string" ? (row[tokenColumn] as string) : "";
+    if (!token || !stored || stored !== token) return;
+    await db.update(c.entity, id, buildPatch(row));
   };
   return {
     [TASK_COLLECTION_PUBLISH]: (ctx: HandlerContext, payload: unknown) =>
-      run(ctx, payload, "scheduledAt", { status: COLLECTION_PUBLISHED, publishedAt: isoStamp(), scheduledAt: null }),
+      run(ctx, payload, "scheduledAt", (row) => {
+        const now = isoStamp();
+        const patch: Record<string, unknown> = { status: COLLECTION_PUBLISHED, publishedAt: now, scheduledAt: null };
+        // Same repair `collectionPublish` performs, for the same reason: the public scope
+        // enforces `unpublishAt IS NULL OR unpublishAt > $now()`, so a takedown instant that
+        // has already passed would make this publish invisible. Reachable when the unpublish
+        // task never ran, and equally when THIS task drains late — after a legitimately
+        // scheduled takedown has come and gone.
+        if (typeof row.unpublishAt === "string" && row.unpublishAt <= now) patch.unpublishAt = null;
+        return patch;
+      }),
     [TASK_COLLECTION_UNPUBLISH]: (ctx: HandlerContext, payload: unknown) =>
-      run(ctx, payload, "unpublishAt", { status: COLLECTION_DRAFT, publishedAt: null, unpublishAt: null }),
+      run(ctx, payload, "unpublishAt", () => ({ status: COLLECTION_DRAFT, publishedAt: null, unpublishAt: null })),
   };
 }
 

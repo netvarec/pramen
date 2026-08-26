@@ -756,7 +756,12 @@ const acl = [
   // the workflow gate is the per-handler `auth` (submit → editor, approve/reject → reviewer).
   // Distinct policy-name prefixes so the grants don't collide with admin's.
   role("editor", [...cmsPolicies({ prefix: "cms-ed" }).editor, ...collectionPolicies(collections, { prefix: "cms-ed" })]),
-  role("reviewer", [...cmsPolicies({ prefix: "cms-rev" }).editor]),
+  // A reviewer needs the COLLECTION grants too, not just the page ones: getCollectionPreview
+  // is gated with viewerRoles (editor ∪ reviewer), so a reviewer-only identity passes the
+  // handler gate and then hits the row ACL. Without this the direct RPC 404s — the preview
+  // ROUTE happens to work anyway, because it presents admin alongside reviewer and grants
+  // OR-merge across roles, which is exactly the kind of asymmetry that hides the gap.
+  role("reviewer", [...cmsPolicies({ prefix: "cms-rev" }).editor, ...collectionPolicies(collections, { prefix: "cms-rev" })]),
   role("author", [
     policy("author:read", "notes", "read", {
       where: { ownerId: $identity("userId") },

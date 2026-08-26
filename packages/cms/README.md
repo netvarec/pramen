@@ -349,6 +349,10 @@ const tasks    = { ...cmsTasks,    ...createCollectionTasks(collections) };
 const acl = [
   role("anonymous", [...cmsPolicies().public, ...collectionPublicPolicies(collections)]),
   role("editor",    [...cmsPolicies().editor, ...collectionPolicies(collections)]),
+  // a reviewer previews collection rows, so it needs the collection grants too —
+  // `getCollectionPreview` is gated with editorRoles ∪ reviewerRoles:
+  role("reviewer",  [...cmsPolicies({ prefix: "cms-rev" }).editor,
+                     ...collectionPolicies(collections, { prefix: "cms-rev" })]),
   // …and EVERY other role that should see published content:
   role("user",      [...cmsPolicies({ prefix: "cms-user" }).public,
                      ...collectionPublicPolicies(collections, { prefix: "cms-user" })]),
@@ -446,6 +450,8 @@ on D1.
 - **Collections have no trash.** `supports` covers drafts/scheduling/revisions/preview;
   `collectionDelete` is a hard delete and also purges the row's revisions. Soft delete is
   `cms_pages`-only.
+- **Listing revisions is gated by the row's read scope**, so a *deleted* row's history is
+  unreachable through `collectionListRevisions` (it is purged on delete anyway).
 - **`collectionSchedule` patches the takedown, it doesn't reset it.** Omitting `unpublishAt`
   leaves an existing one standing (so moving a publish date doesn't silently revoke a
   scheduled removal); pass `unpublishAt: null` to cancel one deliberately.
