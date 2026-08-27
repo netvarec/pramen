@@ -301,6 +301,172 @@ Both renderers re-check a link's href rather than trusting the stored document: 
 path normalizes, but a row written by your own mutation, a bootstrap seed or an import
 script never passed through it, and the renderer is what puts it on a page.
 
+### Collection workflow (`supports`)
+
+A **collection** points the editor at one of your own pramen entities. By default it is
+plain CRUD — no notion of published. `supports` opts it into the page-style workflow:
+
+```ts
+const talks = collection("talks", {
+  entity: "talks",
+  label: "Talk",
+  supports: ["drafts", "scheduling", "revisions", "preview"],
+  fields: [
+    { name: "title", type: "text", required: true },
+    { name: "speaker", type: "text" },
+  ],
+});
+```
+
+Each feature is backed by **managed columns on your entity** — you declare the columns, the
+CMS owns their values:
+
+| Feature | Columns you add | Handlers you get |
+| --- | --- | --- |
+| `drafts` | `status` | `collectionPublish` / `collectionUnpublish` |
+| `scheduling` | `publishedAt`, `scheduledAt`, `unpublishAt` | `collectionSchedule` (needs `drafts`) |
+| `revisions` | — (uses `cms_collection_revisions`) | `collectionListRevisions` / `collectionRestoreRevision` |
+| `preview` | — | `signCollectionPreview` (needs `drafts`) |
+
+The editor renders the matching controls on a collection row — Publish / Unpublish, a
+schedule picker, a preview link, and a restorable revision list — driven entirely by
+`supports`, so a plain CRUD collection shows none of them.
+
+```ts
+talks: Entity((t) => ({
+  id: primaryKey(generated(t.uuid())),
+  title: t.text(),
+  status: defaultTo(t.text(), "draft"),   // managed
+  publishedAt: t.text(),                  // managed
+  scheduledAt: t.text(),                  // managed
+  unpublishAt: t.text(),                  // managed
+  createdAt: defaultTo(t.text(), expr.now()),
+})),
+```
+
+Wire all three pieces — the handlers need your `schema`, and **scheduling silently never
+fires without the tasks**:
+
+```ts
+const handlers = { ...cmsHandlers, ...createCollectionHandlers(collections, { schema }) };
+const tasks    = { ...cmsTasks,    ...createCollectionTasks(collections) };
+const acl = [
+  role("anonymous", [...cmsPolicies().public, ...collectionPublicPolicies(collections)]),
+  role("editor",    [...cmsPolicies().editor, ...collectionPolicies(collections)]),
+  // a reviewer previews collection rows, so it needs the collection grants too —
+  // `getCollectionPreview` is gated with editorRoles ∪ reviewerRoles:
+  role("reviewer",  [...cmsPolicies({ prefix: "cms-rev" }).editor,
+                     ...collectionPolicies(collections, { prefix: "cms-rev" })]),
+  // …and EVERY other role that should see published content:
+  role("user",      [...cmsPolicies({ prefix: "cms-user" }).public,
+                     ...collectionPublicPolicies(collections, { prefix: "cms-user" })]),
+];
+```
+
+> **`anonymous` is not "everyone".** pramen assigns that role only to callers with **no
+> verified token**, so granting public reads there alone means a **logged-in** user is
+> denied content a logged-**out** visitor can read — a public list handler returns rows to a
+> guest and 403s for a member. There is no implicit everyone-role: spread the public grants
+> into each role that should have them (distinct `prefix` per role keeps the policy names
+> unique).
+
+**A managed column is never in the write whitelist.** `fields` is the whitelist, so a
+`status` entry there would let any editor send `values: { status: "published" }` through
+`collectionUpdate` and skip the publish gate entirely. Declaring one is a **boot error**.
+
+`createCollectionHandlers` **requires your `schema`** and validates the whole registry
+against it at startup, naming the collection and the column, rather than failing on the
+first call months later. It refuses:
+
+- a managed column that is missing, `notNull()`, `hidden()`, not `t.text()`, or also
+  declared as an editable field — a name check alone left "the CMS owns these values"
+  resting on a convention, and every wrong declaration failed *silently* (a `t.json()`
+  `status` stores `"\"published\""`, so the row is invisible forever while Publish reports
+  success);
+- a declared field that is not a column on the entity, or whose type cannot live in that
+  column (`richtext`/`group`/`repeater` need `t.json()`) — otherwise the first write fails
+  with a raw driver message and no HTTP status;
+- an `idField` that is not the entity's primary key, an `orderBy` over a missing column
+  (SQLite resolves the quoted name to a *constant* and sorts every row equal — no error),
+  an entity outside the default partition (every handler dispatches there), an unknown
+  feature, and `scheduling`/`preview` without `drafts`;
+- **two collections over the same entity.** The ACL keys policies by `(role, entity,
+  action)` and OR-merges them, so a second collection does not add a second view — it
+  *widens* the first one's read scope.
+
+All of this now applies to a collection with no `supports` too: it is column-mapped just
+the same.
+
+`collectionPublicPolicies` is the **actual access boundary**, not a UI filter — it is
+AND-merged into every `ctx.db` read of the entity, so an unpublished row is invisible to
+your public queries, relation traversals and eager-loads alike. With `scheduling` it scopes
+to:
+
+```
+status = 'published'
+  AND (publishedAt IS NULL OR publishedAt <= $now())
+  AND (unpublishAt IS NULL OR unpublishAt > $now())
+```
+
+Both time clauses matter. `{ publishedAt: { isNull: false } }` matches a *future* timestamp,
+so a row scheduled for next week would be public the moment it was saved. And the
+`unpublishAt` clause means a scheduled **takedown** is enforced by the read itself, not only
+by the task — if `createCollectionTasks` was never wired or the outbox drain is stuck, the
+row still stops being readable at its instant. That is the direction where failing open is
+worst.
+
+`publishedAt IS NULL` counts as published: a row seeded by `cmsBootstrap`, imported, or
+published while the collection was still `supports: ["drafts"]` has no stamp, and
+`NULL <= '2026-…'` is NULL — so requiring the comparison alone emptied a whole public site
+the moment `scheduling` was added to an existing collection. NULL cannot mean "scheduled for
+later": `publishedAt` is managed (never client-writable) and only ever takes *now* or null,
+while a row awaiting a scheduled publish is `status: 'draft'` with the instant in
+`scheduledAt`.
+
+The grant is restricted to **the declared fields, the id, `status`, and (with `scheduling`)
+`publishedAt`**. An entity column that is not in `fields` — an `internalNote`, a
+`reviewerEmail` — stays private even on a published row, so adding one later doesn't quietly
+publish it. `publishedAt` is in because a caller may not `orderBy` a column it cannot read,
+and "newest published first" is the public query: excluding it 403'd anonymous while working
+for an editor. The forward-looking `scheduledAt` / `unpublishAt` stay out — "this comes down
+on Friday" is not public.
+
+Your public read then stays an ordinary list — see `publicLectures` in `example/app.ts`.
+
+Managed timestamps are minted as ISO-8601 UTC (`2026-08-20T12:00:00.000Z`) in exactly one
+place, because the scope compares against `$now()` **lexicographically**. This is what
+closes the trap the old `publish` field type carried, where `publish` and `datetime` wrote
+different formats into the same TEXT column and sorted against each other as if hours apart.
+
+Revisions snapshot the row's state **before** each content write — an edit, and a restore
+itself — so a restore is a plain reversal that replays through the same whitelist rather
+than resurrecting a column the collection no longer owns.
+
+The snapshot is taken through the raw path, so **history does not depend on who made the
+edit**: an editor whose read policy withholds a column would otherwise have silently dropped
+it from the snapshot, and every later "restore to before that edit" would restore an
+incomplete row. Reading history is projected the other way — `collectionListRevisions`
+narrows each snapshot to the fields *that* caller may read on the entity, and
+`collectionRestoreRevision` writes back exactly that set. Field-level read policies hold
+through history; what you can see is what you can put back.
+Publish and unpublish write **no** revision: they change no content, so the entry would be
+identical to the edit before it and restoring it would do nothing visible.
+
+Ordering is by a monotonic per-row `revision` counter, never a timestamp — a revision is
+written on every edit, and two writes land in the same millisecond often enough that
+"restore the previous version" would otherwise be a coin flip.
+
+`collectionDelete` **purges** the row's revisions. A collection PK can be a caller-chosen
+`textId`, so an id can come back; inherited history would let an editor restore a deleted
+row's content over the new one.
+
+Ordering is backed by a composite `unique` on `(collection, rowId, revision)`. The
+read-then-increment is serialized by the DO's single writer, but **on the D1 store it is
+not** — `D1Driver.transaction` is a no-op, since D1 has no interactive transactions — so the
+index is what turns a concurrent duplicate into a visible failure instead of a silently
+ambiguous history. For the same reason the delete-and-purge pair is atomic on the DO but not
+on D1.
+
 ## Limitations
 
 - **Block `fields` are opaque JSON**, so pramen's row/cell-level ACL and relational queries
@@ -325,4 +491,41 @@ script never passed through it, and the renderer is what puts it on a page.
   matches (so a reschedule, a manual publish/unpublish, or a duplicate delivery makes a
   stale task a no-op). The `cms:publish` task is not transactional (the interactive
   `publishPage` is), so a crash mid-task self-heals on the next at-least-once redelivery.
+- **Collections have no trash.** `supports` covers drafts/scheduling/revisions/preview;
+  `collectionDelete` is a hard delete and also purges the row's revisions. Soft delete is
+  `cms_pages`-only.
+- **Listing revisions is gated by the row's read scope**, so a *deleted* row's history is
+  unreachable through `collectionListRevisions` (it is purged on delete anyway).
+- **`drafts` gates VISIBILITY, not content.** A collection is column-mapped: the public
+  reads the entity's own columns, so there is nowhere to stage an unpublished *version* of a
+  live row. An edit to a published row — and a `collectionRestoreRevision` on one — goes
+  live immediately, and `preview` on a published row shows what the public already sees.
+  This is the one place collections do NOT reach page parity: `getPage` serves a baked
+  revision snapshot, which is what lets a page hold unreviewed edits back. Unpublish first
+  if an edit needs review. (Staging content would mean the public read stopped being a query
+  over your entity, which is the entire point of a collection.)
+- **`collectionSchedule` patches the takedown, it doesn't reset it.** Omitting `unpublishAt`
+  leaves an existing one standing (so moving a publish date doesn't silently revoke a
+  scheduled removal); pass `unpublishAt: null` to cancel one deliberately. The new publish
+  instant is checked against the takedown *already stored*, not just one sent in the same
+  call — a reschedule cannot slide the publish past a pending takedown (which would fire
+  first, cancel itself, and leave the row public forever).
+- **A schedule converges, in any drain order.** The tasks are at-least-once and can drain
+  arbitrarily late. The publish task therefore resolves to the state the schedule implies at
+  drain time: if the takedown instant has also passed by then, the row lands **down**, with
+  both tokens spent — it does not publish and discard the takedown. The takedown task
+  likewise clears the pending publish token, so a retried or late publish cannot resurrect
+  the row.
+- **An interactive publish is different from the scheduled one**: `collectionPublish` clears
+  a takedown instant that has already passed and puts the row live, because a person with
+  publish rights is saying "live, now" about a takedown that has already been served. A
+  *future* takedown always stands.
+- **Scheduling a future publish does not take a live row down.** `collectionSchedule` sets
+  `scheduledAt` and leaves `status`/`publishedAt` alone (parity with `schedulePage`), so
+  scheduling a *published* row means it stays public until the task re-stamps it. Unpublish
+  first if you meant "not live until then". Doing this implicitly would be a takedown the
+  editor never asked for, which is why it isn't automatic — but the editor UI should make
+  the current state obvious.
+- **A collection's `supports` features are per-row, not per-locale** — there is no
+  translation-group equivalent for collections.
 - **Duplicate slugs surface as 500, not 409** (a framework-wide limitation, not CMS-specific).

@@ -1,0 +1,1262 @@
+// @pramen/cms collections — the `supports: [...]` workflow features (issue #28).
+//
+// The point of the feature is that publish state stops being a VALUE THE CLIENT SENDS.
+// Before this, a collection went live via a `publish` FIELD, and `fields` is the write
+// whitelist — so "is this row live?" was whatever the client last PUT. These tests pin the
+// replacement: managed columns the CMS owns, a boot check that refuses to let one back into
+// the whitelist, and a public read scope that is the actual access boundary.
+//
+// Driven directly against a real ACL'd Db over bun:sqlite, like collection.test.ts.
+
+import { describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import { defineSchema, Entity, defaultTo, expr, primaryKey, generated, hidden, notNull } from "../packages/server/src/sdk/schema";
+import { allow, policy, role, type Identity } from "../packages/server/src/sdk/acl";
+import { compileAcl, type AclContext } from "../packages/server/src/runtime/acl";
+import { Db } from "../packages/server/src/runtime/db";
+import { migrate } from "../packages/server/src/runtime/migrate";
+import { bunSqliteDriver } from "./sqlite-driver";
+import {
+  cmsSchema,
+  collection,
+  createCollectionHandlers,
+  createCollectionTasks,
+  collectionPolicies,
+  collectionPublicPolicies,
+  cmsPolicies,
+  validateCollections,
+  COLLECTION_REVISIONS_TABLE,
+  COLLECTION_PREVIEW_PATH,
+  TASK_COLLECTION_PUBLISH,
+  TASK_COLLECTION_UNPUBLISH,
+} from "../packages/cms/src/index";
+import { verifyToken } from "../packages/server/src/runtime/token";
+import type { CollectionPreviewToken } from "../packages/cms/src/index";
+import type { HandlerContext, JsonValue, Row } from "@pramen/server";
+
+// `talks` carries the managed columns for all four features. `internalNote` is a real
+// column that the collection deliberately does NOT declare as a field — the pre-existing
+// write-whitelist guarantee has to survive the new write paths (publish, restore).
+const schema = defineSchema({
+  ...cmsSchema,
+  talks: Entity((t) => ({
+    id: primaryKey(generated(t.uuid())),
+    title: t.text(),
+    speaker: defaultTo(t.text(), ""),
+    internalNote: defaultTo(t.text(), ""),
+    // managed by `drafts` / `scheduling` — never in `fields`
+    status: defaultTo(t.text(), "draft"),
+    publishedAt: t.text(),
+    scheduledAt: t.text(),
+    unpublishAt: t.text(),
+    createdAt: defaultTo(t.text(), expr.now()),
+  })),
+});
+
+const talks = collection("talks", {
+  entity: "talks",
+  label: "Talk",
+  titleField: "title",
+  supports: ["drafts", "scheduling", "revisions", "preview"],
+  fields: [
+    { name: "title", type: "text", required: true },
+    { name: "speaker", type: "text" },
+  ],
+});
+
+const H = createCollectionHandlers([talks], { schema });
+const TASKS = createCollectionTasks([talks]);
+
+// Invoke a handler the way dispatch does: run its boundary `input` validator FIRST, then
+// the body, all inside a promise so a SYNC throw from either surfaces as a rejection.
+// Calling `.run` bare would skip the validators entirely — and half of what they guard
+// (a non-finite publishAt, an unpublishAt before its publish) never reaches the body.
+const run = (h: { run: (c: never, i: never) => unknown; input?: (raw: JsonValue) => unknown }, ctx: unknown, input: JsonValue) =>
+  Promise.resolve().then(() => h.run(ctx as never, (h.input ? h.input(input) : input) as never));
+
+const editor: Identity = { userId: "ed", roles: ["editor"] };
+const editorRoles = [role("editor", collectionPolicies([talks]))];
+
+async function fresh() {
+  const driver = bunSqliteDriver(new Database(":memory:"));
+  await migrate(driver, schema);
+  return driver;
+}
+type Driver = Awaited<ReturnType<typeof fresh>>;
+
+// A ctx with the extras the workflow handlers reach for: tasks (recorded, not run),
+// tenant/store/env for preview.
+function editorCtx(driver: Driver, enqueued: Row[] = []) {
+  const acl: AclContext = { acl: compileAcl(editorRoles), identity: editor, schema, partition: undefined };
+  return {
+    db: new Db(driver, acl, schema),
+    identity: editor,
+    tenant: "acme",
+    store: "do",
+    env: { AUTH_SECRET: "a-sufficiently-long-test-secret" },
+    tasks: { enqueue: (t: Row) => { enqueued.push(t); return Promise.resolve(); } },
+  } as unknown as HandlerContext;
+}
+function systemCtx(driver: Driver) {
+  const acl: AclContext = { acl: compileAcl([]), identity: null, schema, system: true, partition: undefined };
+  return { db: new Db(driver, acl, schema), identity: null } as unknown as HandlerContext;
+}
+// Anonymous, holding only the public collection scope — the boundary under test.
+function publicCtx(driver: Driver, cols = [talks]) {
+  const acl: AclContext = { acl: compileAcl([role("anonymous", collectionPublicPolicies(cols))]), identity: null, schema, partition: undefined };
+  return new Db(driver, acl, schema);
+}
+
+const create = async (ctx: HandlerContext, values: Record<string, unknown>) =>
+  (await run(H.collectionCreate, ctx, { collection: "talks", values } as JsonValue)) as Row;
+const rowOf = async (driver: Driver, id: string) =>
+  (await driver.exec("SELECT * FROM talks WHERE id = ?", [id]))[0];
+
+// ---------------------------------------------------------------------------
+
+describe("supports — boot validation", () => {
+  const mk = (over: Record<string, unknown>) =>
+    collection("x", { entity: "talks", label: "X", fields: [{ name: "title", type: "text" }], ...over });
+
+  test("registering a collection without the schema is a boot error, not a runtime 500", () => {
+    expect(() => createCollectionHandlers([mk({ supports: ["drafts"] })])).toThrow(/needs your schema/);
+  });
+
+  // A collection that declares no `supports` is column-mapped just the same, so every
+  // structural check still applies to it. Skipping them for a feature-less collection is
+  // what let an unwritable idField, a field name typo and a foreign partition all boot clean
+  // and fail at the first call instead.
+  test("a collection with NO features is validated too — the schema is always required", () => {
+    expect(() => createCollectionHandlers([mk({})])).toThrow(/needs your schema/);
+    expect(() => createCollectionHandlers([mk({})], { schema })).not.toThrow();
+  });
+
+  test("a plain CRUD collection gets the SAME structural checks as one with features", () => {
+    // Each of these used to be caught only when `supports` was non-empty.
+    expect(() => validateCollections([mk({ idField: "speaker" })], schema)).toThrow(/primary key 'id'/);
+    expect(() => validateCollections([mk({ entity: "ghosts" })], schema)).toThrow(/not in the schema/);
+    expect(() => validateCollections([mk({ idField: "nope" })], schema)).toThrow(/not a column/);
+  });
+
+  test("an unknown feature names the known set", () => {
+    expect(() => validateCollections([mk({ supports: ["drafs"] as never })], schema)).toThrow(/unknown feature 'drafs'/);
+  });
+
+  test("`scheduling` without `drafts` is refused", () => {
+    expect(() => validateCollections([mk({ supports: ["scheduling"] })], schema)).toThrow(/'scheduling', which needs 'drafts'/);
+  });
+
+  test("`preview` without `drafts` is refused", () => {
+    expect(() => validateCollections([mk({ supports: ["preview"] })], schema)).toThrow(/'preview', which needs 'drafts'/);
+  });
+
+  test("a missing managed column names the collection, the feature AND the column", () => {
+    const bare = defineSchema({ bare: Entity((t) => ({ id: primaryKey(generated(t.uuid())), title: t.text() })) });
+    expect(() =>
+      validateCollections([collection("b", { entity: "bare", label: "B", supports: ["drafts"], fields: [{ name: "title", type: "text" }] })], bare),
+    ).toThrow(/collection 'b' declares 'drafts', which manages a `status` column on 'bare'/);
+  });
+
+  // THE security check. `fields` is the write whitelist, so a `status` field would let any
+  // editor send values:{status:"published"} straight through collectionUpdate and skip the
+  // publish gate entirely.
+  test("a managed column declared as an editable field is refused", () => {
+    expect(() =>
+      validateCollections(
+        [collection("t", { entity: "talks", label: "T", supports: ["drafts"], fields: [{ name: "title", type: "text" }, { name: "status", type: "text" }] })],
+        schema,
+      ),
+    ).toThrow(/declares `status` as an editable field.*client-writable publish gate/s);
+  });
+
+  test("an entity missing from the schema is refused", () => {
+    expect(() => validateCollections([mk({ entity: "ghosts", supports: ["drafts"] })], schema)).toThrow(/entity 'ghosts', which is not in the schema/);
+  });
+
+  test("`revisions` without the shared revisions table is refused", () => {
+    const noCms = defineSchema({
+      talks: Entity((t) => ({ id: primaryKey(generated(t.uuid())), title: t.text(), status: defaultTo(t.text(), "draft") })),
+    });
+    expect(() => validateCollections([mk({ supports: ["drafts", "revisions"] })], noCms)).toThrow(/cms_collection_revisions/);
+  });
+
+  test("duplicate slugs are refused (the registry is keyed by slug)", () => {
+    expect(() => validateCollections([mk({}), mk({})])).toThrow(/duplicate collection slug 'x'/);
+  });
+
+  test("an idField that is not a column is refused", () => {
+    expect(() => validateCollections([mk({ idField: "nope", supports: ["drafts"] })], schema)).toThrow(/idField 'nope', which is not a column/);
+  });
+
+  // Reads key on idField but db.update/db.delete key on the entity's real PK, so a non-PK
+  // idField loads a row and then writes nothing — a 404 on a row just read.
+  test("an idField that is a column but NOT the primary key is refused", () => {
+    expect(() => validateCollections([mk({ idField: "speaker", supports: ["drafts"] })], schema)).toThrow(
+      /idField 'speaker', but 'talks' has primary key 'id'/,
+    );
+  });
+
+  // No collection handler declares a `partition`, so /rpc dispatches every one of them to
+  // the DEFAULT partition's DO — where the entity's table does not exist. This used to be
+  // checked only inside the `revisions` branch, so a `drafts`+`preview` collection booted
+  // clean and then 400'd on every call, with preview links 404ing forever.
+  const split = defineSchema({
+    ...cmsSchema,
+    talks: Entity(
+      (t) => ({ id: primaryKey(generated(t.uuid())), title: t.text(), status: defaultTo(t.text(), "draft") }),
+      undefined,
+      { partition: "content" },
+    ),
+  });
+
+  test("an entity outside the default partition is refused at boot — with or without features", () => {
+    expect(() => validateCollections([mk({ entity: "talks", supports: ["drafts", "preview"] })], split)).toThrow(
+      /in partition 'content', but the collection handlers are dispatched to the 'default' partition/,
+    );
+    expect(() => validateCollections([mk({ entity: "talks" })], split)).toThrow(/dispatched to the 'default' partition/);
+  });
+
+  // Two collections over ONE entity do not give two views: compileAcl keys policies by
+  // (role, entity, action) and OR-merges them, so the looser scope wins — a `drafts`-only
+  // sibling erases a `scheduling` collection's time bounds.
+  test("two collections over the same entity are refused (the ACL would OR-merge their scopes)", () => {
+    expect(() =>
+      validateCollections([collection("a", { entity: "talks", label: "A", fields: [] }), collection("b", { entity: "talks", label: "B", fields: [] })], schema),
+    ).toThrow(/both target entity 'talks'.*OR-merges/s);
+  });
+
+  // The declared fields ARE columns. A typo used to boot clean and then surface as the raw
+  // driver message ("table talks has no column named titel") with no HTTP status.
+  test("a field that is not a column on the entity is refused", () => {
+    expect(() => validateCollections([mk({ fields: [{ name: "titel", type: "text" }] })], schema)).toThrow(
+      /declares a field 'titel', which is not a column on 'talks'/,
+    );
+  });
+
+  // The other half of the same trap, documented in example/app.ts: a richtext value is a
+  // DOCUMENT, so it needs t.json(). In a TEXT column the driver rejects the bound object.
+  test("a document field over a scalar column is refused, naming the column type to use", () => {
+    expect(() => validateCollections([mk({ fields: [{ name: "title", type: "richtext" }] })], schema)).toThrow(
+      /declares 'title' as 'richtext', which is stored as json, but 'talks.title' is text — declare it as t.json\(\)/,
+    );
+    // …and the inverse: a scalar field over a json column.
+    const withDoc = defineSchema({
+      ...cmsSchema,
+      talks: Entity((t) => ({ id: primaryKey(generated(t.uuid())), title: t.json(), status: defaultTo(t.text(), "draft") })),
+    });
+    expect(() => validateCollections([mk({ fields: [{ name: "title", type: "text" }] })], withDoc)).toThrow(/is json — declare it as t.text\(\)/);
+  });
+
+  test("a hidden() column declared as an editable field is refused", () => {
+    const withSecret = defineSchema({
+      ...cmsSchema,
+      talks: Entity((t) => ({ id: primaryKey(generated(t.uuid())), title: t.text(), secret: hidden(t.text()) })),
+    });
+    expect(() => validateCollections([mk({ fields: [{ name: "secret", type: "text" }] })], withSecret)).toThrow(/is hidden\(\)/);
+  });
+
+  // A managed column checked by NAME only left "the CMS owns these values" resting on a
+  // naming convention: every wrong declaration below boots clean and then fails silently.
+  test("a managed column declared with the wrong TYPE is refused (it would never match the scope)", () => {
+    const jsonStatus = defineSchema({
+      ...cmsSchema,
+      talks: Entity((t) => ({ id: primaryKey(generated(t.uuid())), title: t.text(), status: t.json() })),
+    });
+    // t.json() stores "\"published\"" — the policy's status = 'published' never matches, so
+    // the row is invisible forever while collectionPublish echoes success.
+    expect(() => validateCollections([mk({ supports: ["drafts"] })], jsonStatus)).toThrow(/manages `talks.status` as TEXT, but it is json/);
+  });
+
+  test("a managed column declared notNull() is refused (the CMS seeds it as NULL)", () => {
+    const notNullPub = defineSchema({
+      ...cmsSchema,
+      talks: Entity((t) => ({
+        id: primaryKey(generated(t.uuid())),
+        title: t.text(),
+        status: defaultTo(t.text(), "draft"),
+        publishedAt: notNull(t.text()),
+        scheduledAt: t.text(),
+        unpublishAt: t.text(),
+      })),
+    });
+    expect(() => validateCollections([mk({ supports: ["drafts", "scheduling"] })], notNullPub)).toThrow(/the column is notNull\(\)/);
+  });
+
+  test("a managed column declared hidden() is refused (the CMS reads it back)", () => {
+    const hiddenStatus = defineSchema({
+      ...cmsSchema,
+      talks: Entity((t) => ({ id: primaryKey(generated(t.uuid())), title: t.text(), status: hidden(defaultTo(t.text(), "draft")) })),
+    });
+    expect(() => validateCollections([mk({ supports: ["drafts"] })], hiddenStatus)).toThrow(/the column is hidden\(\)/);
+  });
+
+  // ORDER BY over a name that is not a column does not fail: SQLite resolves the quoted
+  // identifier to a string constant, every row sorts equal, and the order is arbitrary.
+  test("an orderBy over a missing column is refused at boot", () => {
+    expect(() => validateCollections([mk({ orderBy: { column: "nope", dir: "desc" } })], schema)).toThrow(
+      /orders by 'nope', which is not a column on 'talks'/,
+    );
+  });
+
+  test("`revisions` on an entity in another partition than the revisions table is refused", () => {
+    const revsElsewhere = defineSchema({
+      ...cmsSchema,
+      talks: schema.talks,
+      // The shared revisions table moved out of the default partition — a collection entity
+      // that stays put now cannot write its own history.
+      cms_collection_revisions: Entity(
+        (t) => ({
+          id: primaryKey(generated(t.uuid())),
+          collection: notNull(t.text()),
+          rowId: notNull(t.text()),
+          revision: notNull(t.int()),
+          snapshot: t.json(),
+          note: t.text(),
+          actor: t.text(),
+          createdAt: t.text(),
+        }),
+        undefined,
+        { partition: "content" },
+      ),
+    });
+    expect(() => validateCollections([mk({ supports: ["drafts", "revisions"] })], revsElsewhere)).toThrow(/a write cannot cross partitions/);
+  });
+});
+
+describe("drafts", () => {
+  test("a new row is seeded as a draft, never live-on-create", async () => {
+    const d = await fresh();
+    const row = await create(editorCtx(d), { title: "T" });
+    expect(row.status).toBe("draft");
+  });
+
+  test("publish moves it live and stamps publishedAt; unpublish reverses both", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "T" });
+    const pub = (await run(H.collectionPublish, ctx, { collection: "talks", id } as JsonValue)) as Row;
+    expect(pub.status).toBe("published");
+    expect(typeof pub.publishedAt).toBe("string");
+
+    const un = (await run(H.collectionUnpublish, ctx, { collection: "talks", id } as JsonValue)) as Row;
+    expect(un.status).toBe("draft");
+    expect(un.publishedAt).toBeNull();
+  });
+
+  // The whitelist has to hold on the WORKFLOW columns specifically, or `supports` is
+  // decoration over a client-set value — exactly the `publish`-field trap it replaces.
+  test("collectionUpdate cannot set `status` — it is managed, not a field", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "T" });
+    await run(H.collectionUpdate, ctx, { collection: "talks", id, values: { title: "T2", status: "published" } } as JsonValue);
+    expect((await rowOf(d, String(id))).status).toBe("draft");
+  });
+
+  // A takedown instant that has already passed is not "pending" — and since the public
+  // scope enforces it, leaving one standing would make the republish a silent no-op.
+  test("publishing clears a SPENT unpublishAt, so the row really does come back", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "back" });
+    await (systemCtx(d).db as unknown as Db).update("talks", String(id), { unpublishAt: new Date(Date.now() - 3_600_000).toISOString() });
+    await run(H.collectionPublish, ctx, { collection: "talks", id } as JsonValue);
+
+    expect((await rowOf(d, String(id))).unpublishAt).toBeNull();
+    expect((await publicCtx(d).find({ from: "talks", where: {} })) as Row[]).toHaveLength(1);
+  });
+
+  test("publishing does NOT clear a still-FUTURE takedown", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "T" });
+    const future = new Date(Date.now() + 3_600_000).toISOString();
+    await (systemCtx(d).db as unknown as Db).update("talks", String(id), { unpublishAt: future });
+    await run(H.collectionPublish, ctx, { collection: "talks", id } as JsonValue);
+
+    expect((await rowOf(d, String(id))).unpublishAt).toBe(future);
+  });
+
+  test("a workflow handler on a collection that never opted in is a 400, not a 500", async () => {
+    const plain = collection("plain", { entity: "talks", label: "P", fields: [{ name: "title", type: "text" }] });
+    const PH = createCollectionHandlers([plain], { schema });
+    const d = await fresh();
+    await expect(run(PH.collectionPublish, editorCtx(d), { collection: "plain", id: "x" } as JsonValue)).rejects.toThrow(/does not support 'drafts'/);
+  });
+
+  test("publish stamps publishedAt in the ISO-Z shape $now() compares against", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "T" });
+    await run(H.collectionPublish, ctx, { collection: "talks", id } as JsonValue);
+    // Not nowStamp()'s "YYYY-MM-DD HH:MM:SS" — that sorts against the ISO form as if hours
+    // apart, which is the documented `publish`-vs-`datetime` trap.
+    expect(String((await rowOf(d, String(id))).publishedAt)).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  });
+});
+
+describe("the public read scope IS the access boundary", () => {
+  test("anonymous sees a published row and never a draft", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const live = await create(ctx, { title: "live" });
+    await create(ctx, { title: "hidden" });
+    await run(H.collectionPublish, ctx, { collection: "talks", id: live.id } as JsonValue);
+
+    const rows = (await publicCtx(d).find({ from: "talks", where: {} })) as Row[];
+    expect(rows.map((r) => r.title)).toEqual(["live"]);
+  });
+
+  // The reason the scope is `publishedAt <= $now()` and not `isNull: false`.
+  test("a row published with a FUTURE publishedAt stays hidden", async () => {
+    const d = await fresh();
+    const sys = systemCtx(d).db as unknown as Db;
+    await sys.insert("talks", { title: "future", status: "published", publishedAt: new Date(Date.now() + 3_600_000).toISOString() });
+    await sys.insert("talks", { title: "past", status: "published", publishedAt: new Date(Date.now() - 3_600_000).toISOString() });
+    const rows = (await publicCtx(d).find({ from: "talks", where: {} })) as Row[];
+    expect(rows.map((r) => r.title)).toEqual(["past"]);
+  });
+
+  test("a caller cannot widen the scope by asking for the hidden row by name", async () => {
+    const d = await fresh();
+    await create(editorCtx(d), { title: "hidden" });
+    expect(await publicCtx(d).find({ from: "talks", where: { title: "hidden" } })).toHaveLength(0);
+  });
+
+  // The takedown side must not depend solely on the outbox task firing.
+  test("a scheduled UNPUBLISH is enforced by the read scope, not only by the task", async () => {
+    const d = await fresh();
+    const sys = systemCtx(d).db as unknown as Db;
+    const past = new Date(Date.now() - 3_600_000).toISOString();
+    await sys.insert("talks", { title: "still-up", status: "published", publishedAt: past, unpublishAt: new Date(Date.now() + 3_600_000).toISOString() });
+    // The task never ran (unwired, or a wedged drain) — the row is past its takedown.
+    await sys.insert("talks", { title: "expired", status: "published", publishedAt: past, unpublishAt: past });
+
+    const rows = (await publicCtx(d).find({ from: "talks", where: {} })) as Row[];
+    expect(rows.map((r) => r.title)).toEqual(["still-up"]);
+  });
+
+  // The declared fields ARE the public surface; anything else on the entity is internal.
+  test("the public grant exposes only the declared fields + the id", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "T" });
+    await (systemCtx(d).db as unknown as Db).update("talks", String(id), { internalNote: "do not publish this" });
+    await run(H.collectionPublish, ctx, { collection: "talks", id } as JsonValue);
+
+    const [row] = (await publicCtx(d).find({ from: "talks", where: {} })) as Row[];
+    expect(row.title).toBe("T");
+    expect(row).not.toHaveProperty("internalNote"); // an undeclared column is NOT public
+    expect(row).not.toHaveProperty("unpublishAt"); // nor the managed workflow columns
+  });
+
+  // A published row with NO publishedAt stamp — a bootstrap seed, an import, or a row
+  // published while the collection was still `supports: ["drafts"]`. `NULL <= '2026-…'` is
+  // NULL, not true, so requiring the comparison alone made every such row vanish the moment
+  // `scheduling` was added to an existing collection: a whole public site emptying at once,
+  // with nothing at boot or in the editor to explain it.
+  test("a published row with no publishedAt stamp is still public (NULL is not 'scheduled')", async () => {
+    const d = await fresh();
+    const sys = systemCtx(d).db as unknown as Db;
+    await sys.insert("talks", { title: "seeded", status: "published" }); // publishedAt NULL
+    const rows = (await publicCtx(d).find({ from: "talks", where: {} })) as Row[];
+    expect(rows.map((r) => r.title)).toEqual(["seeded"]);
+    // …and it is still subject to a takedown.
+    await sys.update("talks", String(rows[0].id), { unpublishAt: new Date(Date.now() - 1000).toISOString() });
+    expect(await publicCtx(d).find({ from: "talks", where: {} })).toHaveLength(0);
+  });
+
+  // The most obvious public query there is. `publishedAt` was excluded from the grant, and a
+  // caller may not ORDER BY a column it cannot read — so "newest published first" 403'd for
+  // anonymous while working for an editor.
+  test("the public grant can order by publishedAt — the natural public listing works", async () => {
+    const d = await fresh();
+    const sys = systemCtx(d).db as unknown as Db;
+    await sys.insert("talks", { title: "older", status: "published", publishedAt: new Date(Date.now() - 7_200_000).toISOString() });
+    await sys.insert("talks", { title: "newer", status: "published", publishedAt: new Date(Date.now() - 3_600_000).toISOString() });
+    const rows = (await publicCtx(d).find({ from: "talks", where: {}, orderBy: { column: "publishedAt", dir: "desc" } })) as Row[];
+    expect(rows.map((r) => r.title)).toEqual(["newer", "older"]);
+    // The FORWARD-looking columns stay private — a planned takedown is not public.
+    expect(rows[0]).not.toHaveProperty("unpublishAt");
+    expect(rows[0]).not.toHaveProperty("scheduledAt");
+  });
+
+  // `anonymous` is assigned ONLY to callers with no verified token, so spreading the public
+  // grants into that role alone denies logged-IN users content logged-OUT visitors can read.
+  test("an authenticated non-editor needs the grant too — `anonymous` does not cover them", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "live" });
+    await run(H.collectionPublish, ctx, { collection: "talks", id } as JsonValue);
+
+    const member: Identity = { userId: "m", roles: ["member"] };
+    const withGrant = new Db(
+      d,
+      { acl: compileAcl([role("member", collectionPublicPolicies([talks]))]), identity: member, schema, partition: undefined },
+      schema,
+    );
+    expect((await withGrant.find({ from: "talks", where: {} })) as Row[]).toHaveLength(1);
+
+    // The same caller, when the grant lives only on `anonymous`: denied outright.
+    const anonOnly = new Db(
+      d,
+      { acl: compileAcl([role("anonymous", collectionPublicPolicies([talks]))]), identity: member, schema, partition: undefined },
+      schema,
+    );
+    await expect(anonOnly.find({ from: "talks", where: {} })).rejects.toThrow();
+  });
+
+  test("a collection without `drafts` gets NO public policy (its exposure stays the app's call)", () => {
+    const plain = collection("plain", { entity: "talks", label: "P", fields: [{ name: "title", type: "text" }] });
+    expect(collectionPublicPolicies([plain])).toHaveLength(0);
+  });
+});
+
+describe("scheduling", () => {
+  test("schedule stores ISO tokens and enqueues both tasks in the mutation", async () => {
+    const d = await fresh();
+    const enq: Row[] = [];
+    const ctx = editorCtx(d, enq);
+    const { id } = await create(ctx, { title: "T" });
+    const at = Date.now() + 60_000;
+    await run(H.collectionSchedule, ctx, { collection: "talks", id, publishAt: at, unpublishAt: at + 60_000 } as JsonValue);
+
+    expect(enq.map((e) => e.kind)).toEqual([TASK_COLLECTION_PUBLISH, TASK_COLLECTION_UNPUBLISH]);
+    expect(String((await rowOf(d, String(id))).scheduledAt)).toBe(new Date(at).toISOString());
+  });
+
+  test("the task publishes when its intent token still matches", async () => {
+    const d = await fresh();
+    const enq: Row[] = [];
+    const ctx = editorCtx(d, enq);
+    const { id } = await create(ctx, { title: "T" });
+    await run(H.collectionSchedule, ctx, { collection: "talks", id, publishAt: Date.now() } as JsonValue);
+
+    await TASKS[TASK_COLLECTION_PUBLISH](systemCtx(d), enq[0].payload);
+    const row = await rowOf(d, String(id));
+    expect(row.status).toBe("published");
+    expect(row.scheduledAt).toBeNull();
+  });
+
+  // Superseded schedules are the whole reason for the token.
+  test("a RESCHEDULE makes the first task a no-op", async () => {
+    const d = await fresh();
+    const enq: Row[] = [];
+    const ctx = editorCtx(d, enq);
+    const { id } = await create(ctx, { title: "T" });
+    await run(H.collectionSchedule, ctx, { collection: "talks", id, publishAt: Date.now() + 1000 } as JsonValue);
+    const stale = enq[0].payload;
+    await run(H.collectionSchedule, ctx, { collection: "talks", id, publishAt: Date.now() + 5000 } as JsonValue);
+
+    await TASKS[TASK_COLLECTION_PUBLISH](systemCtx(d), stale);
+    expect((await rowOf(d, String(id))).status).toBe("draft");
+  });
+
+  test("a manual unpublish cancels a pending scheduled publish", async () => {
+    const d = await fresh();
+    const enq: Row[] = [];
+    const ctx = editorCtx(d, enq);
+    const { id } = await create(ctx, { title: "T" });
+    await run(H.collectionSchedule, ctx, { collection: "talks", id, publishAt: Date.now() + 1000 } as JsonValue);
+    await run(H.collectionUnpublish, ctx, { collection: "talks", id } as JsonValue);
+
+    await TASKS[TASK_COLLECTION_PUBLISH](systemCtx(d), enq[0].payload);
+    expect((await rowOf(d, String(id))).status).toBe("draft");
+  });
+
+  test("a duplicate delivery of an already-run task is a no-op, not a re-publish", async () => {
+    const d = await fresh();
+    const enq: Row[] = [];
+    const ctx = editorCtx(d, enq);
+    const { id } = await create(ctx, { title: "T" });
+    await run(H.collectionSchedule, ctx, { collection: "talks", id, publishAt: Date.now() } as JsonValue);
+    await TASKS[TASK_COLLECTION_PUBLISH](systemCtx(d), enq[0].payload);
+    await run(H.collectionUnpublish, ctx, { collection: "talks", id } as JsonValue);
+    await TASKS[TASK_COLLECTION_PUBLISH](systemCtx(d), enq[0].payload); // redelivered
+
+    expect((await rowOf(d, String(id))).status).toBe("draft");
+  });
+
+  test("the unpublish task takes a live row back to draft", async () => {
+    const d = await fresh();
+    const enq: Row[] = [];
+    const ctx = editorCtx(d, enq);
+    const { id } = await create(ctx, { title: "T" });
+    const at = Date.now();
+    await run(H.collectionSchedule, ctx, { collection: "talks", id, publishAt: at, unpublishAt: at + 1000 } as JsonValue);
+    await TASKS[TASK_COLLECTION_PUBLISH](systemCtx(d), enq[0].payload);
+    await TASKS[TASK_COLLECTION_UNPUBLISH](systemCtx(d), enq[1].payload);
+
+    const row = await rowOf(d, String(id));
+    expect(row.status).toBe("draft");
+    expect(row.publishedAt).toBeNull();
+  });
+
+  // The same repair collectionPublish does — reachable when the unpublish task never ran,
+  // and equally when THIS task drains late, after a legitimate takedown has passed.
+  // A LATE drain must not resurrect a row whose takedown has already come and gone. The
+  // publish task used to publish anyway and NULL the passed `unpublishAt` to keep the row
+  // visible — which destroyed both the takedown task's intent token (it then no-op'd) and
+  // the read scope's `unpublishAt > $now()` backstop, leaving the row world-readable
+  // permanently. The task converges to the state the schedule implies at drain time.
+  test("the publish TASK lands DOWN when the takedown instant has already passed", async () => {
+    const d = await fresh();
+    const enq: Row[] = [];
+    const ctx = editorCtx(d, enq);
+    const { id } = await create(ctx, { title: "T" });
+    await run(H.collectionSchedule, ctx, { collection: "talks", id, publishAt: Date.now(), unpublishAt: Date.now() + 60_000 } as JsonValue);
+    // Both instants are in the past by the time the outbox actually drains.
+    await (systemCtx(d).db as unknown as Db).update("talks", String(id), { unpublishAt: new Date(Date.now() - 1000).toISOString() });
+
+    await TASKS[TASK_COLLECTION_PUBLISH](systemCtx(d), enq[0].payload);
+    const row = await rowOf(d, String(id));
+    expect(row.status).toBe("draft");
+    expect(row.publishedAt).toBeNull();
+    // Both tokens spent, so neither task can fire against this schedule again.
+    expect(row.scheduledAt).toBeNull();
+    expect(row.unpublishAt).toBeNull();
+    expect((await publicCtx(d).find({ from: "talks", where: {} })) as Row[]).toHaveLength(0);
+
+    // …and a redelivery of the takedown task cannot change that either.
+    await TASKS[TASK_COLLECTION_UNPUBLISH](systemCtx(d), enq[1].payload);
+    expect((await publicCtx(d).find({ from: "talks", where: {} })) as Row[]).toHaveLength(0);
+  });
+
+  // The reverse drain order, and the retry case. The takedown task used to clear only
+  // status/publishedAt/unpublishAt, leaving `scheduledAt` — so the publish task (draining
+  // late, or retried after a throw) still matched its token and put the row back up, with
+  // no takedown left to bring it down again.
+  test("the unpublish TASK spends the pending publish token, so a late publish cannot republish", async () => {
+    const d = await fresh();
+    const enq: Row[] = [];
+    const ctx = editorCtx(d, enq);
+    const { id } = await create(ctx, { title: "T" });
+    await run(H.collectionSchedule, ctx, { collection: "talks", id, publishAt: Date.now(), unpublishAt: Date.now() + 60_000 } as JsonValue);
+    // The takedown drains FIRST (its instant has arrived; the publish task is still queued
+    // or being retried).
+    await (systemCtx(d).db as unknown as Db).update("talks", String(id), { status: "published", publishedAt: new Date().toISOString() });
+    await TASKS[TASK_COLLECTION_UNPUBLISH](systemCtx(d), enq[1].payload);
+    const down = await rowOf(d, String(id));
+    expect(down.status).toBe("draft");
+    expect(down.scheduledAt).toBeNull();
+
+    // The publish task now arrives. Its token no longer matches anything.
+    await TASKS[TASK_COLLECTION_PUBLISH](systemCtx(d), enq[0].payload);
+    expect((await rowOf(d, String(id))).status).toBe("draft");
+    expect((await publicCtx(d).find({ from: "talks", where: {} })) as Row[]).toHaveLength(0);
+  });
+
+  // The guard compared coalesced strings, so "no token" vs "no schedule" read as a match.
+  test("a task payload with NO token never fires against an unscheduled row", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "T" });
+    // scheduledAt is null — the normal state right after an unpublish.
+    await TASKS[TASK_COLLECTION_PUBLISH](systemCtx(d), { collection: "talks", id });
+    await TASKS[TASK_COLLECTION_PUBLISH](systemCtx(d), { collection: "talks", id, token: null });
+    await TASKS[TASK_COLLECTION_PUBLISH](systemCtx(d), { collection: "talks", id, token: "" });
+
+    expect((await rowOf(d, String(id))).status).toBe("draft");
+  });
+
+  // The payload's `collection` is never used as a table name — it is resolved through the
+  // registry. An unknown slug THROWS rather than returning quietly: a slug the handlers
+  // accept but the tasks do not know is a wiring mistake (two different collection arrays),
+  // and swallowing it made the drain report success while the row stayed a draft forever.
+  test("a task naming an unregistered collection throws — it is never run against a guessed table", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "T" });
+    await expect(TASKS[TASK_COLLECTION_PUBLISH](systemCtx(d), { collection: "not_registered", id, token: null })).rejects.toThrow(
+      /no collection 'not_registered' in createCollectionTasks' registry/,
+    );
+    expect((await rowOf(d, String(id))).status).toBe("draft");
+  });
+
+  // Omitting the takedown must not revoke one: clearing the column also neutralizes the
+  // enqueued task through the intent-token check, so the removal vanishes silently.
+  test("rescheduling the publish date leaves an existing takedown alone", async () => {
+    const d = await fresh();
+    const enq: Row[] = [];
+    const ctx = editorCtx(d, enq);
+    const { id } = await create(ctx, { title: "T" });
+    const at = Date.now() + 60_000;
+    await run(H.collectionSchedule, ctx, { collection: "talks", id, publishAt: at, unpublishAt: at + 60_000 } as JsonValue);
+    const takedown = (await rowOf(d, String(id))).unpublishAt;
+
+    await run(H.collectionSchedule, ctx, { collection: "talks", id, publishAt: at + 10_000 } as JsonValue);
+    expect((await rowOf(d, String(id))).unpublishAt).toBe(takedown);
+  });
+
+  test("an explicit `unpublishAt: null` DOES cancel the takedown", async () => {
+    const d = await fresh();
+    const enq: Row[] = [];
+    const ctx = editorCtx(d, enq);
+    const { id } = await create(ctx, { title: "T" });
+    const at = Date.now() + 60_000;
+    await run(H.collectionSchedule, ctx, { collection: "talks", id, publishAt: at, unpublishAt: at + 60_000 } as JsonValue);
+    await run(H.collectionSchedule, ctx, { collection: "talks", id, publishAt: at, unpublishAt: null } as JsonValue);
+
+    expect((await rowOf(d, String(id))).unpublishAt).toBeNull();
+  });
+
+  // loadRow goes through the READ scope; db.update goes through the UPDATE scope, which can
+  // be narrower. Reporting success over a write that never landed left a confirmed schedule
+  // whose tasks then no-op'd on the intent-token mismatch.
+  test("schedule reports failure when the write falls outside the UPDATE scope", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "T" });
+
+    // read: allowed. update: scoped to rows that cannot match.
+    const readOnlyish = [
+      role("ro", [
+        policy("ro:read", "talks", "read", allow()),
+        policy("ro:update", "talks", "update", { where: { title: "something-else" } }),
+      ]),
+    ];
+    const enq: Row[] = [];
+    const roCtx = {
+      db: new Db(d, { acl: compileAcl(readOnlyish), identity: { userId: "r", roles: ["ro"] }, schema, partition: undefined }, schema),
+      identity: { userId: "r", roles: ["ro"] },
+      tasks: { enqueue: (t: Row) => { enq.push(t); return Promise.resolve(); } },
+    } as unknown as HandlerContext;
+
+    await expect(run(H.collectionSchedule, roCtx, { collection: "talks", id, publishAt: Date.now() + 1000 } as JsonValue)).rejects.toThrow(/not found/);
+    expect((await rowOf(d, String(id))).scheduledAt).toBeNull();
+  });
+
+  // The documented way to move a publish date is `collectionSchedule({ publishAt })` with
+  // `unpublishAt` omitted, which leaves an existing takedown standing. Comparing the two
+  // instants only WITHIN one call let a reschedule push the publish PAST that takedown: the
+  // takedown fired first and cleared itself, the publish fired after it, and the row was
+  // public forever with nothing left to bring it down. No stalled drain required.
+  test("a reschedule cannot move the publish date past a PENDING takedown", async () => {
+    const d = await fresh();
+    const enq: Row[] = [];
+    const ctx = editorCtx(d, enq);
+    const { id } = await create(ctx, { title: "T" });
+    const t1 = Date.now() + 60_000;
+    const t2 = Date.now() + 120_000;
+    await run(H.collectionSchedule, ctx, { collection: "talks", id, publishAt: t1, unpublishAt: t2 } as JsonValue);
+
+    await expect(run(H.collectionSchedule, ctx, { collection: "talks", id, publishAt: t2 + 60_000 } as JsonValue)).rejects.toThrow(
+      /at or after the scheduled takedown/,
+    );
+    // The stored schedule is untouched, and moving the takedown along with it is accepted.
+    expect((await rowOf(d, String(id))).scheduledAt).toBe(new Date(t1).toISOString());
+    await run(H.collectionSchedule, ctx, { collection: "talks", id, publishAt: t2 + 60_000, unpublishAt: t2 + 120_000 } as JsonValue);
+    expect((await rowOf(d, String(id))).scheduledAt).toBe(new Date(t2 + 60_000).toISOString());
+    // …as is cancelling it outright.
+    await run(H.collectionSchedule, ctx, { collection: "talks", id, publishAt: t2 + 300_000, unpublishAt: null } as JsonValue);
+    expect((await rowOf(d, String(id))).unpublishAt).toBeNull();
+  });
+
+  // `Number.isFinite` is not a bound. Above the max Date, `toISOString()` throws INSIDE the
+  // mutation (an opaque 500 for the common epoch-microseconds slip); from year 10000 up it
+  // mints an expanded-year string whose leading `+` sorts BEFORE every real timestamp,
+  // inverting every comparison the feature rests on.
+  test("a schedule epoch outside the sane Date range is a 400, not a 500 or a `+010000` token", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "T" });
+    const bad = (v: unknown) => run(H.collectionSchedule, ctx, { collection: "talks", id, publishAt: v } as JsonValue);
+    await expect(bad(1e16)).rejects.toThrow(/publishAt must be an epoch ms between/); // epoch µs
+    await expect(bad(8.64e15)).rejects.toThrow(/between/); // year 275760 — a valid Date, still absurd
+    await expect(bad(253402300800000)).rejects.toThrow(/between/); // year 10000 exactly
+    await expect(bad(-1)).rejects.toThrow(/between/);
+    await expect(bad(1.5)).rejects.toThrow(/whole number/);
+    await expect(
+      run(H.collectionSchedule, ctx, { collection: "talks", id, publishAt: Date.now(), unpublishAt: 253402300800000 } as JsonValue),
+    ).rejects.toThrow(/unpublishAt must be an epoch ms between/);
+    // The boundary itself is accepted, and stays a 4-digit year.
+    await run(H.collectionSchedule, ctx, { collection: "talks", id, publishAt: 253402300799999 } as JsonValue);
+    expect(String((await rowOf(d, String(id))).scheduledAt)).toMatch(/^9999-/);
+  });
+
+  test("unpublishAt must be after publishAt, and both must be finite", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "T" });
+    const base = { collection: "talks", id } as Record<string, unknown>;
+    await expect(run(H.collectionSchedule, ctx, { ...base, publishAt: 1000, unpublishAt: 500 } as JsonValue)).rejects.toThrow(/must be after publishAt/);
+    await expect(run(H.collectionSchedule, ctx, { ...base, publishAt: "soon" } as JsonValue)).rejects.toThrow(/finite epoch ms/);
+  });
+});
+
+describe("revision history is append-only in the ACL, not just by convention", () => {
+  // `collectionPolicies` grants read+create on the shared revisions table and says why. The
+  // block/page half used to list the SAME table in its full-CRUD loop, and every wiring in
+  // the README spreads both fragments — so the append-only guarantee held for nobody, since
+  // duplicate policies on one (role, entity, action) OR-merge and the wider grant wins.
+  test("cmsPolicies().editor does not grant update or delete on cms_collection_revisions", () => {
+    const acts = cmsPolicies()
+      .editor.filter((p) => p.entity === COLLECTION_REVISIONS_TABLE)
+      .map((p) => p.action);
+    expect(acts).toEqual([]);
+  });
+
+  test("collectionPolicies grants exactly read + create on it", () => {
+    const acts = collectionPolicies([talks])
+      .filter((p) => p.entity === COLLECTION_REVISIONS_TABLE)
+      .map((p) => p.action)
+      .sort();
+    expect(acts).toEqual(["create", "read"]);
+  });
+
+  // The wiring the README documents: both fragments in one role. History still cannot be
+  // rewritten or purged through it.
+  test("a role holding BOTH fragments still cannot rewrite or purge a revision", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "v1" });
+    await run(H.collectionUpdate, ctx, { collection: "talks", id, values: { title: "v2" } } as JsonValue);
+    const [rev] = (await d.exec("SELECT id FROM cms_collection_revisions WHERE rowId = ?", [String(id)])) as Array<{ id: string }>;
+
+    const both: Identity = { userId: "b", roles: ["both"] };
+    const db = new Db(
+      d,
+      { acl: compileAcl([role("both", [...cmsPolicies().editor, ...collectionPolicies([talks])])]), identity: both, schema, partition: undefined },
+      schema,
+    );
+    await expect(db.update(COLLECTION_REVISIONS_TABLE, rev.id, { snapshot: { title: "forged" } })).rejects.toThrow();
+    await expect(db.delete(COLLECTION_REVISIONS_TABLE, rev.id)).rejects.toThrow();
+  });
+});
+
+describe("input validation (the CRUD handlers, not just the workflow ones)", () => {
+  // `collectionGet`/`Update`/`Create`/`List` had no boundary validator, so a caller-supplied
+  // OBJECT reached the where-compiler as an OPERATOR predicate: `{ id: { gt: "" } }`
+  // compiled to `WHERE id > '' LIMIT 1` and returned an ARBITRARY row.
+  test("an operator object where an id belongs is a 400, not an arbitrary row", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    await create(ctx, { title: "A" });
+    await create(ctx, { title: "B" });
+    await expect(run(H.collectionGet, ctx, { collection: "talks", id: { gt: "" } } as unknown as JsonValue)).rejects.toThrow(/id is required/);
+    await expect(
+      run(H.collectionUpdate, ctx, { collection: "talks", id: { gt: "" }, values: { title: "X" } } as unknown as JsonValue),
+    ).rejects.toThrow(/id is required/);
+    await expect(run(H.collectionDelete, ctx, { collection: "talks", id: { gt: "" } } as unknown as JsonValue)).rejects.toThrow(/id is required/);
+    // …and nothing was written on the way to the rejection.
+    expect(await d.exec("SELECT id FROM cms_collection_revisions", [])).toHaveLength(0);
+  });
+
+  test("a non-object `values` is a 400", async () => {
+    const ctx = editorCtx(await fresh());
+    await expect(run(H.collectionCreate, ctx, { collection: "talks", values: "title=x" } as unknown as JsonValue)).rejects.toThrow(/values must be an object/);
+    await expect(run(H.collectionCreate, ctx, { collection: "talks", values: ["title"] } as unknown as JsonValue)).rejects.toThrow(/values must be an object/);
+  });
+
+  test("a missing/blank collection is a 400 on every handler", async () => {
+    const ctx = editorCtx(await fresh());
+    await expect(run(H.collectionList, ctx, {} as JsonValue)).rejects.toThrow(/collection is required/);
+    await expect(run(H.collectionGet, ctx, { collection: "", id: "x" } as JsonValue)).rejects.toThrow(/collection is required/);
+  });
+
+  // SQLite reads a NEGATIVE limit as unbounded, and a fractional one reaches the driver
+  // as-is. Both are clamped rather than merely validated.
+  test("collectionList clamps limit and offset", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    for (const t of ["a", "b", "c"]) await create(ctx, { title: t });
+    expect(await run(H.collectionList, ctx, { collection: "talks", limit: -1 } as JsonValue)).toHaveLength(1);
+    expect(await run(H.collectionList, ctx, { collection: "talks", limit: 2.7 } as JsonValue)).toHaveLength(2);
+    expect(await run(H.collectionList, ctx, { collection: "talks", limit: 10_000 } as JsonValue)).toHaveLength(3);
+    expect(await run(H.collectionList, ctx, { collection: "talks", offset: -5 } as JsonValue)).toHaveLength(3);
+    await expect(run(H.collectionList, ctx, { collection: "talks", limit: "10" } as unknown as JsonValue)).rejects.toThrow(/limit must be a number/);
+  });
+
+  // The default ordering is `createdAt desc` — but that column is not guaranteed to exist,
+  // and an ORDER BY over a missing column does not fail: SQLite resolves the quoted
+  // identifier to a string constant and every row sorts equal.
+  test("a collection whose entity has no createdAt still orders deterministically", async () => {
+    const noCreated = defineSchema({
+      ...cmsSchema,
+      notes: Entity((t) => ({ id: primaryKey(generated(t.uuid())), title: t.text() })),
+    });
+    const notes = collection("notes", { entity: "notes", label: "Note", fields: [{ name: "title", type: "text" }] });
+    const NH = createCollectionHandlers([notes], { schema: noCreated });
+    const driver = bunSqliteDriver(new Database(":memory:"));
+    await migrate(driver, noCreated);
+    const ident: Identity = { userId: "ed", roles: ["editor"] };
+    const ctx = {
+      db: new Db(driver, { acl: compileAcl([role("editor", collectionPolicies([notes]))]), identity: ident, schema: noCreated, partition: undefined }, noCreated),
+      identity: ident,
+    } as unknown as HandlerContext;
+    await run(NH.collectionCreate, ctx, { collection: "notes", values: { title: "one" } } as JsonValue);
+    const rows = (await run(NH.collectionList, ctx, { collection: "notes" } as JsonValue)) as Row[];
+    expect(rows).toHaveLength(1);
+  });
+});
+
+describe("revisions", () => {
+  test("an edit snapshots the PRIOR state, and restore reverses it", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "v1", speaker: "alice" });
+    await run(H.collectionUpdate, ctx, { collection: "talks", id, values: { title: "v2", speaker: "alice" } } as JsonValue);
+
+    const revs = (await run(H.collectionListRevisions, ctx, { collection: "talks", id } as JsonValue)) as Row[];
+    expect(revs).toHaveLength(1);
+    expect((revs[0].snapshot as Row).title).toBe("v1");
+
+    const back = (await run(H.collectionRestoreRevision, ctx, { collection: "talks", id, revisionId: revs[0].id } as JsonValue)) as Row;
+    expect(back.title).toBe("v1");
+  });
+
+  test("a restore is itself snapshotted, so it can be undone", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "v1" });
+    await run(H.collectionUpdate, ctx, { collection: "talks", id, values: { title: "v2" } } as JsonValue);
+    const [first] = (await run(H.collectionListRevisions, ctx, { collection: "talks", id } as JsonValue)) as Row[];
+    await run(H.collectionRestoreRevision, ctx, { collection: "talks", id, revisionId: first.id } as JsonValue);
+
+    const revs = (await run(H.collectionListRevisions, ctx, { collection: "talks", id } as JsonValue)) as Row[];
+    expect(revs.map((r) => (r.snapshot as Row).title)).toContain("v2");
+  });
+
+  // The revisions table is shared by every collection, so a revision id is a global handle.
+  test("a revision belonging to a DIFFERENT row cannot be restored over this one", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const a = await create(ctx, { title: "a1" });
+    const b = await create(ctx, { title: "b1" });
+    await run(H.collectionUpdate, ctx, { collection: "talks", id: a.id, values: { title: "a2" } } as JsonValue);
+    const [aRev] = (await run(H.collectionListRevisions, ctx, { collection: "talks", id: a.id } as JsonValue)) as Row[];
+
+    await expect(
+      run(H.collectionRestoreRevision, ctx, { collection: "talks", id: b.id, revisionId: aRev.id } as JsonValue),
+    ).rejects.toThrow(/revision not found/);
+    expect((await rowOf(d, String(b.id))).title).toBe("b1");
+  });
+
+  test("a delete PURGES the row's revisions — nothing else ever collects them", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "v1" });
+    await run(H.collectionUpdate, ctx, { collection: "talks", id, values: { title: "v2" } } as JsonValue);
+    expect((await run(H.collectionListRevisions, ctx, { collection: "talks", id } as JsonValue)) as Row[]).toHaveLength(1);
+
+    await run(H.collectionDelete, ctx, { collection: "talks", id } as JsonValue);
+    // Listing now 404s (the row is gone, and the list is ACL'd through it) — so assert the
+    // purge directly against the table.
+    await expect(run(H.collectionListRevisions, ctx, { collection: "talks", id } as JsonValue)).rejects.toThrow(/not found/);
+    const left = await d.exec("SELECT count(*) AS n FROM cms_collection_revisions WHERE rowId = ?", [String(id)]);
+    expect(left[0].n).toBe(0);
+  });
+
+  // A collection PK may be a caller-chosen textId, so an id CAN come back. If the dead
+  // row's history survived, restoring it would write the deleted content over the new row.
+  test("a row recreated with a reused id does not inherit the dead row's history", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "v1" });
+    await run(H.collectionUpdate, ctx, { collection: "talks", id, values: { title: "v2" } } as JsonValue);
+    await run(H.collectionDelete, ctx, { collection: "talks", id } as JsonValue);
+    // Recreate with the SAME id, the way a textId-keyed collection would.
+    await (systemCtx(d).db as unknown as Db).insert("talks", { id, title: "brand new", status: "draft" });
+
+    expect((await run(H.collectionListRevisions, ctx, { collection: "talks", id } as JsonValue)) as Row[]).toHaveLength(0);
+  });
+
+  test("publish and unpublish write NO revision — they change no content", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "v1" });
+    await run(H.collectionPublish, ctx, { collection: "talks", id } as JsonValue);
+    await run(H.collectionUnpublish, ctx, { collection: "talks", id } as JsonValue);
+    // A "publish" revision would be byte-identical to the edit before it, and restoring it
+    // would write only the declared fields — leaving the row live and the button dead.
+    expect((await run(H.collectionListRevisions, ctx, { collection: "talks", id } as JsonValue)) as Row[]).toHaveLength(0);
+  });
+
+  test("revisions are stamped at ms precision and come back newest-first", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "v1" });
+    // Two writes inside the same SECOND — expr.now() would have given both the same stamp
+    // and made the ordering arbitrary.
+    await run(H.collectionUpdate, ctx, { collection: "talks", id, values: { title: "v2" } } as JsonValue);
+    await run(H.collectionUpdate, ctx, { collection: "talks", id, values: { title: "v3" } } as JsonValue);
+
+    const revs = (await run(H.collectionListRevisions, ctx, { collection: "talks", id } as JsonValue)) as Row[];
+    expect(revs.map((r) => (r.snapshot as Row).title)).toEqual(["v2", "v1"]);
+    // The ORDER comes from the monotonic counter, not the stamp — two writes in the same
+    // millisecond are common, and a uuid tiebreak is deterministic but arbitrary.
+    expect(revs.map((r) => r.revision)).toEqual([2, 1]);
+    for (const r of revs) expect(String(r.createdAt)).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  });
+
+  // The above passes by luck whenever the two writes land in different milliseconds, which
+  // is most runs — so force the collision the counter exists to survive.
+  test("ordering holds when two revisions share a timestamp exactly", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "v1" });
+    await run(H.collectionUpdate, ctx, { collection: "talks", id, values: { title: "v2" } } as JsonValue);
+    await run(H.collectionUpdate, ctx, { collection: "talks", id, values: { title: "v3" } } as JsonValue);
+    await d.exec("UPDATE cms_collection_revisions SET createdAt = ? WHERE rowId = ?", ["2026-08-24T00:00:00.000Z", String(id)]);
+
+    const revs = (await run(H.collectionListRevisions, ctx, { collection: "talks", id } as JsonValue)) as Row[];
+    expect(revs.map((r) => (r.snapshot as Row).title)).toEqual(["v2", "v1"]);
+  });
+
+  test("the revisions limit is CLAMPED — a negative limit is not SQLite's `unbounded`", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "v1" });
+    for (const t of ["v2", "v3", "v4"]) await run(H.collectionUpdate, ctx, { collection: "talks", id, values: { title: t } } as JsonValue);
+
+    const all = (await run(H.collectionListRevisions, ctx, { collection: "talks", id } as JsonValue)) as Row[];
+    expect(all).toHaveLength(3);
+    const negative = (await run(H.collectionListRevisions, ctx, { collection: "talks", id, limit: -1 } as JsonValue)) as Row[];
+    expect(negative).toHaveLength(1); // clamped to 1, NOT all 3
+  });
+
+  // A snapshot is replayed through the same whitelist as any other write.
+  test("restoring cannot write a column the collection does not declare", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "v1" });
+    await run(H.collectionUpdate, ctx, { collection: "talks", id, values: { title: "v2" } } as JsonValue);
+    const [rev] = (await run(H.collectionListRevisions, ctx, { collection: "talks", id } as JsonValue)) as Row[];
+    // Forge an undeclared column into the stored snapshot.
+    await d.exec("UPDATE cms_collection_revisions SET snapshot = ? WHERE id = ?", [JSON.stringify({ title: "v1", internalNote: "leaked" }), rev.id]);
+    await run(H.collectionRestoreRevision, ctx, { collection: "talks", id, revisionId: rev.id } as JsonValue);
+
+    const row = await rowOf(d, String(id));
+    expect(row.title).toBe("v1");
+    expect(row.internalNote).toBe(""); // never written
+  });
+
+  // The DO's single writer serializes the read-then-increment; D1's transaction is a no-op,
+  // so the composite unique is what stops a duplicate becoming a silent ordering ambiguity.
+  test("a duplicate (collection, rowId, revision) is rejected by the DB, not silently kept", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "v1" });
+    await run(H.collectionUpdate, ctx, { collection: "talks", id, values: { title: "v2" } } as JsonValue);
+
+    await expect(
+      d.exec("INSERT INTO cms_collection_revisions (id, collection, rowId, revision, snapshot, createdAt) VALUES (?, ?, ?, ?, ?, ?)", [
+        "forced", "talks", String(id), 1, "{}", new Date().toISOString(),
+      ]),
+    ).rejects.toThrow();
+  });
+
+  // The revisions table is shared and granted flat, so the ROW's read scope is the only
+  // thing standing between a role and another collection's snapshots.
+  test("listing revisions is gated by the row's own read scope, not just the shared table", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "v1" });
+    await run(H.collectionUpdate, ctx, { collection: "talks", id, values: { title: "v2" } } as JsonValue);
+
+    // A role holding the shared revisions grant but NO read on the entity.
+    const narrow = [role("narrow", collectionPolicies([talks]).filter((p) => p.entity === COLLECTION_REVISIONS_TABLE))];
+    const narrowCtx = {
+      db: new Db(d, { acl: compileAcl(narrow), identity: { userId: "n", roles: ["narrow"] }, schema, partition: undefined }, schema),
+      identity: { userId: "n", roles: ["narrow"] },
+    } as unknown as HandlerContext;
+    await expect(run(H.collectionListRevisions, narrowCtx, { collection: "talks", id } as JsonValue)).rejects.toThrow();
+  });
+
+  // A snapshot is built from an ACL-PROJECTED row, so a caller whose read scope excluded
+  // every declared column stores `{}`. Db.update returns undefined for a zero-column patch,
+  // which would surface as "not found" for a row loaded two lines earlier.
+  // FIELD-level read restrictions have to hold through history too. The row gate above is
+  // row-level, and `collectionPolicies` grants the shared revisions table a flat allow() —
+  // so a junior editor scoped to `fields: ["id","title","status"]` could read every withheld
+  // column straight out of the snapshot JSON, and write them back with a restore.
+  test("a snapshot is projected to the caller's readable FIELDS, not just the readable row", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "v1", speaker: "SECRET-SPEAKER" });
+    await run(H.collectionUpdate, ctx, { collection: "talks", id, values: { title: "v2", speaker: "SECRET-SPEAKER" } } as JsonValue);
+
+    // Read+update on the row, but only two of its columns.
+    const junior: Identity = { userId: "j", roles: ["junior"] };
+    const juniorRoles = [
+      role("junior", [
+        policy("j:read", "talks", "read", { fields: ["id", "title", "status"] }),
+        policy("j:update", "talks", "update", { fields: ["id", "title"] }),
+        ...collectionPolicies([talks]).filter((p) => p.entity === COLLECTION_REVISIONS_TABLE),
+      ]),
+    ];
+    const juniorCtx = {
+      db: new Db(d, { acl: compileAcl(juniorRoles), identity: junior, schema, partition: undefined }, schema),
+      identity: junior,
+    } as unknown as HandlerContext;
+
+    const revs = (await run(H.collectionListRevisions, juniorCtx, { collection: "talks", id } as JsonValue)) as Row[];
+    expect(revs).toHaveLength(1);
+    expect((revs[0].snapshot as Record<string, unknown>).title).toBe("v1");
+    expect(revs[0].snapshot).not.toHaveProperty("speaker"); // withheld by the field scope
+
+    // …and a restore writes back only what that caller could see.
+    await run(H.collectionRestoreRevision, juniorCtx, { collection: "talks", id, revisionId: String(revs[0].id) } as JsonValue);
+    const row = await rowOf(d, String(id));
+    expect(row.title).toBe("v1");
+    expect(row.speaker).toBe("SECRET-SPEAKER"); // untouched, not restored from an unseen value
+
+    // The stored snapshot itself is COMPLETE — history is an audit record, not a view. An
+    // editor with full read sees the whole thing.
+    const full = (await run(H.collectionListRevisions, ctx, { collection: "talks", id } as JsonValue)) as Row[];
+    expect((full.at(-1)!.snapshot as Record<string, unknown>).speaker).toBe("SECRET-SPEAKER");
+  });
+
+  // The snapshot is taken through the RAW path, so what it records does not depend on who
+  // made the edit — history was otherwise lossy as a function of the actor's field scope.
+  test("an edit by a field-restricted editor still snapshots the row's full prior state", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "v1", speaker: "Ada" });
+
+    const junior: Identity = { userId: "j", roles: ["junior"] };
+    const juniorRoles = [
+      role("junior", [
+        policy("j:read", "talks", "read", { fields: ["id", "title", "status"] }),
+        policy("j:update", "talks", "update", { fields: ["id", "title"] }),
+        ...collectionPolicies([talks]).filter((p) => p.entity === COLLECTION_REVISIONS_TABLE),
+      ]),
+    ];
+    const juniorCtx = {
+      db: new Db(d, { acl: compileAcl(juniorRoles), identity: junior, schema, partition: undefined }, schema),
+      identity: junior,
+    } as unknown as HandlerContext;
+    await run(H.collectionUpdate, juniorCtx, { collection: "talks", id, values: { title: "v2" } } as JsonValue);
+
+    const stored = (await d.exec("SELECT snapshot FROM cms_collection_revisions WHERE rowId = ?", [String(id)])) as Array<{ snapshot: string }>;
+    expect(JSON.parse(stored[0].snapshot) as Record<string, unknown>).toEqual({ title: "v1", speaker: "Ada" });
+  });
+
+  // On D1 `transaction` is a no-op, so a revision written BEFORE the patch was validated
+  // survived the rejected edit — a phantom entry recording no change, and a burnt value in
+  // the per-row revision counter.
+  test("a REJECTED edit writes no revision", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "v1" });
+    await expect(run(H.collectionUpdate, ctx, { collection: "talks", id, values: { title: 42 } } as JsonValue)).rejects.toThrow();
+    expect(await d.exec("SELECT id FROM cms_collection_revisions WHERE rowId = ?", [String(id)])).toHaveLength(0);
+  });
+
+  // The snapshot round-trip over the types that are NOT plain text: a json-backed document
+  // column (the raw read returns stored TEXT, not the parsed value) and a NULL column (the
+  // projected read simply omitted it before). Both have to come back out of history in the
+  // shape an ordinary write would take.
+  test("a document field and a NULL field survive snapshot -> restore", async () => {
+    const docSchema = defineSchema({
+      ...cmsSchema,
+      posts: Entity((t) => ({
+        id: primaryKey(generated(t.uuid())),
+        title: t.text(),
+        subtitle: t.text(), // nullable, never written
+        body: t.json(),
+        createdAt: defaultTo(t.text(), expr.now()),
+      })),
+    });
+    const posts = collection("posts", {
+      entity: "posts",
+      label: "Post",
+      supports: ["revisions"],
+      fields: [
+        { name: "title", type: "text" },
+        { name: "subtitle", type: "text" },
+        { name: "body", type: "richtext" },
+      ],
+    });
+    const PH = createCollectionHandlers([posts], { schema: docSchema });
+    const driver = bunSqliteDriver(new Database(":memory:"));
+    await migrate(driver, docSchema);
+    const ident: Identity = { userId: "ed", roles: ["editor"] };
+    const ctx = {
+      db: new Db(driver, { acl: compileAcl([role("editor", collectionPolicies([posts]))]), identity: ident, schema: docSchema, partition: undefined }, docSchema),
+      identity: ident,
+    } as unknown as HandlerContext;
+
+    const doc = { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "v1 prose" }] }] };
+    const made = (await run(PH.collectionCreate, ctx, { collection: "posts", values: { title: "v1", body: doc } } as JsonValue)) as Row;
+    await run(PH.collectionUpdate, ctx, { collection: "posts", id: made.id, values: { title: "v2" } } as JsonValue);
+
+    const revs = (await run(PH.collectionListRevisions, ctx, { collection: "posts", id: made.id } as JsonValue)) as Row[];
+    const snap = revs[0].snapshot as Record<string, unknown>;
+    expect(snap.title).toBe("v1");
+    expect(snap.subtitle).toBeNull(); // captured as NULL, not silently dropped
+    expect(snap.body).toEqual(doc); // decoded from the stored TEXT, not a JSON string
+
+    await run(PH.collectionRestoreRevision, ctx, { collection: "posts", id: made.id, revisionId: String(revs[0].id) } as JsonValue);
+    const back = (await run(PH.collectionGet, ctx, { collection: "posts", id: made.id } as JsonValue)) as Row;
+    expect(back.title).toBe("v1");
+    expect(back.body).toEqual(doc);
+  });
+
+  test("restoring an EMPTY snapshot says what is wrong, not `not found`", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "v1" });
+    await run(H.collectionUpdate, ctx, { collection: "talks", id, values: { title: "v2" } } as JsonValue);
+    const [rev] = (await run(H.collectionListRevisions, ctx, { collection: "talks", id } as JsonValue)) as Row[];
+    await d.exec("UPDATE cms_collection_revisions SET snapshot = ? WHERE id = ?", ["{}", rev.id]);
+
+    await expect(run(H.collectionRestoreRevision, ctx, { collection: "talks", id, revisionId: rev.id } as JsonValue)).rejects.toThrow(
+      /has no restorable fields/,
+    );
+    expect((await rowOf(d, String(id))).title).toBe("v2"); // untouched
+  });
+
+  test("a collection without `revisions` records nothing and refuses the handlers", async () => {
+    const plain = collection("plain", { entity: "talks", label: "P", fields: [{ name: "title", type: "text" }] });
+    const PH = createCollectionHandlers([plain], { schema });
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "T" });
+    await expect(run(PH.collectionListRevisions, ctx, { collection: "plain", id } as JsonValue)).rejects.toThrow(/does not support 'revisions'/);
+  });
+});
+
+describe("preview", () => {
+  test("a signed link round-trips to the row's unpublished state", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "secret draft" });
+    const minted = (await run(H.signCollectionPreview, ctx, { collection: "talks", id } as JsonValue)) as Row;
+    expect(String(minted.url)).toStartWith(`${COLLECTION_PREVIEW_PATH}?token=`);
+
+    const payload = await verifyToken<CollectionPreviewToken>(String(minted.token), "a-sufficiently-long-test-secret");
+    expect(payload).toMatchObject({ t: "acme", c: "talks", r: String(id) });
+
+    const got = (await run(H.getCollectionPreview, ctx, { collection: "talks", id } as JsonValue)) as Row;
+    expect((got.values as Row).title).toBe("secret draft");
+    expect(got.values).not.toHaveProperty("internalNote"); // declared fields only
+  });
+
+  test("a tampered token does not verify", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "T" });
+    const minted = (await run(H.signCollectionPreview, ctx, { collection: "talks", id } as JsonValue)) as Row;
+    const [data, sig] = String(minted.token).split(".");
+    const forged = `${data.slice(0, -1)}${data.slice(-1) === "A" ? "B" : "A"}.${sig}`;
+    expect(await verifyToken<CollectionPreviewToken>(forged, "a-sufficiently-long-test-secret")).toBeNull();
+  });
+
+  test("minting fails CLOSED when no usable secret is configured", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "T" });
+    const noSecret = { ...ctx, env: {} } as unknown as HandlerContext;
+    await expect(run(H.signCollectionPreview, noSecret, { collection: "talks", id } as JsonValue)).rejects.toThrow(/not configured/);
+  });
+
+  // Redemption always reaches a DO, so a D1-minted link would 404 forever.
+  test("minting is refused on the D1 store rather than handing out a dead link", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "T" });
+    const onD1 = { ...ctx, store: "d1" } as unknown as HandlerContext;
+    await expect(run(H.signCollectionPreview, onD1, { collection: "talks", id } as JsonValue)).rejects.toThrow(/not available on the D1 store/);
+  });
+});

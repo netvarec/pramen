@@ -44,7 +44,7 @@ const lectures = collection("lectures", {
   ],
 });
 
-const H = createCollectionHandlers([lectures]);
+const H = createCollectionHandlers([lectures], { schema });
 
 // Invoke a handler the way dispatch does — always awaited — so a SYNC throw (registry
 // lookup, field validation) surfaces as a rejection just like an async one, and both are

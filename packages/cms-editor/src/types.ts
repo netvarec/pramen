@@ -126,7 +126,16 @@ export interface CollectionMeta {
    * from this to open/save/delete it. */
   idField: string;
   orderBy?: { column: string; dir?: "asc" | "desc" };
+  /** The workflow features the collection opted into server-side (`supports`), e.g.
+   * `["drafts", "scheduling"]`. Carried here so this mirror stays faithful to
+   * `CollectionMeta`. The editor renders the matching affordances (publish/unpublish, a
+   * schedule picker, a preview link, a revision list) in `CollectionWorkflow`; an empty
+   * list renders none of them. */
+  supports?: CollectionFeature[];
 }
+
+/** Mirror of @pramen/cms `CollectionFeature`. */
+export type CollectionFeature = "drafts" | "scheduling" | "revisions" | "preview";
 
 export interface Page {
   id: string;

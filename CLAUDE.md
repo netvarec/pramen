@@ -282,7 +282,12 @@ log) for independent single-writer serialization and storage.
   cell-ACL) that ALSO gets a list/form UI — no `cms_pages` row, no mandatory slug.
   `collection(slug, { entity, label, fields, list?, titleField?, idField?, orderBy? })`
   declares one (**column-mapped**: each scalar field is a real column; repeater/group map to a
-  `t.json()` column). Wire with `createCollectionHandlers(collections)` (spread into handlers —
+  `t.json()` column). Wire with `createCollectionHandlers(collections, { schema })` (the schema is
+  REQUIRED — the whole registry is validated against your entities at boot: managed columns
+  exist and are nullable TEXT, declared fields map to columns that can hold them, `idField`
+  is the PK, `orderBy` names a real column, the entity is in the default partition, and no
+  two collections share an entity, which the ACL would OR-merge into a widened read scope;
+  spread into handlers —
   `listCollections` for editor discovery + `collectionList`/`Get`/`Create`/`Update`/`Delete`,
   all `editorRoles`-gated AND row-ACL'd through `ctx.db`) and `collectionPolicies(collections)`
   (spread into the editor/admin role). Security: the generic handlers dispatch through a
@@ -290,7 +295,12 @@ log) for independent single-writer serialization and storage.
   are **whitelisted to declared fields** (a caller can't set an undeclared column like a
   `passwordHash`). The editor discovers collections at runtime (one generic editor, N
   collections, zero per-collection code) — nav + `/collections/:slug` list + `/collections/:slug/:id`
-  edit routes, all driven by `FieldForm`. See `example/app.ts` (the `lectures` collection).
+  edit routes, all driven by `FieldForm` — plus the `supports` controls (publish/unpublish,
+  schedule, preview link, revision restore) on a row. `supports` gates VISIBILITY, not
+  content: a collection is column-mapped, so an edit to a published row goes live at once
+  (no page-style staged snapshot). Scheduling converges in any drain order — a publish task
+  that drains after its own takedown instant lands the row DOWN rather than publishing and
+  discarding the takedown. See `example/app.ts` (the `lectures` collection).
 - Native queues: `ctx.queue.send(binding, body, { delaySeconds?, contentType? })` /
   `sendBatch(binding, msgs, opts?)` (`runtime/queue.ts`) — a facade + adapter seam (like
   `ctx.mail`) over **Cloudflare Queues**, distinct from `ctx.tasks` (NOT transactional with

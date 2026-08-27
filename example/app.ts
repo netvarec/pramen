@@ -47,7 +47,7 @@ import {
   hashPassword,
 } from "@pramen/auth";
 // @pramen/cms — the block/page builder, wired as an ordinary app fragment.
-import { cmsSchema, cmsHandlers, cmsPolicies, cmsTasks, cmsRoutes, defineBlockType, defineContentType, cmsBootstrap, collection, createCollectionHandlers, collectionPolicies } from "@pramen/cms";
+import { cmsSchema, cmsHandlers, cmsPolicies, cmsTasks, cmsRoutes, defineBlockType, defineContentType, cmsBootstrap, collection, createCollectionHandlers, createCollectionTasks, collectionPolicies, collectionPublicPolicies } from "@pramen/cms";
 
 /** The columns `createNote` writes. `meta` is omitted (not null) when absent, so a
  * role with a restricted create-field list isn't tripped by an always-present column. */
@@ -99,6 +99,13 @@ const schema = defineSchema({
     // exactly like a group/repeater field. In a TEXT column the Db chokepoint would bind
     // the object raw and DO SQLite would reject the parameter.
     abstract: t.json(),
+    // Managed by the collection's `supports: ["drafts", "scheduling", …]` — the CMS writes
+    // these, the collection's `fields` may NOT declare them (that would put the publish
+    // gate back in the client-writable `values` bag, which is a boot error).
+    status: defaultTo(t.text(), "draft"),
+    publishedAt: t.text(),
+    scheduledAt: t.text(),
+    unpublishAt: t.text(),
     createdAt: defaultTo(t.text(), expr.now()),
   })),
   // A custom, authSchema-shaped users table with an EXTRA `tenants` column — the
@@ -247,6 +254,9 @@ const collections = [
     titleField: "title",
     list: ["title", "speaker", "date"],
     orderBy: { column: "date", dir: "desc" },
+    // Opt into the page-style workflow: a draft/published status, scheduled publication,
+    // revision history and signed preview links — all over this ordinary entity.
+    supports: ["drafts", "scheduling", "revisions", "preview"],
     fields: [
       { name: "title", type: "text", required: true },
       { name: "speaker", type: "text" },
@@ -348,7 +358,17 @@ const handlers = {
   ...cmsHandlers,
   // @pramen/cms collections: listCollections + collectionList/get/create/update/delete over
   // the registered `lectures` entity (editor-gated). The generic "edit any entity" surface.
-  ...createCollectionHandlers(collections),
+  // `schema` is required once a collection declares `supports`: the managed columns are
+  // checked against it at boot, so a missing `status` is a startup error naming the
+  // collection rather than a 500 on the first publish.
+  ...createCollectionHandlers(collections, { schema }),
+  // The PUBLIC read for the `lectures` collection. Deliberately un-gated (no `auth`), so
+  // anonymous can call it — what limits the result is the ACL, not this query. Anonymous
+  // holds only `collectionPublicPolicies`, which scopes `lectures` reads to
+  // `status = 'published' AND publishedAt <= $now()`, so a draft or a scheduled-but-not-yet-due
+  // row is simply not among the rows this returns. The boundary is the policy; the handler
+  // stays a plain list.
+  publicLectures: query((ctx) => ctx.db.find({ from: "lectures", orderBy: { column: "date", dir: "desc" }, limit: 50 })),
   // The same handlers over the custom org_accounts table, under prefixed names, plus
   // an app-owned setOrgAccountTenants writing the extra `tenants` column (the Tah
   // setUserTenants analog) — permitted by authPolicies adminWriteFields below.
@@ -726,13 +746,22 @@ const acl = [
     // @pramen/cms: guests read PUBLISHED pages + their snapshots only (getPage serves the
     // snapshot; unpublished block rows are never exposed).
     ...cmsPolicies().public,
+    // …and PUBLISHED collection rows. For `lectures` this compiles to
+    // `status = 'published' AND publishedAt <= $now()`, so a scheduled row stays invisible
+    // until its instant actually arrives — the read scope IS the boundary, not a UI filter.
+    ...collectionPublicPolicies(collections),
   ]),
   // @pramen/cms editorial roles: an `editor` can author + submit for review; a `reviewer`
   // can approve/reject/publish. Both need the same CMS data ACL (full CRUD on cms_ tables);
   // the workflow gate is the per-handler `auth` (submit → editor, approve/reject → reviewer).
   // Distinct policy-name prefixes so the grants don't collide with admin's.
   role("editor", [...cmsPolicies({ prefix: "cms-ed" }).editor, ...collectionPolicies(collections, { prefix: "cms-ed" })]),
-  role("reviewer", [...cmsPolicies({ prefix: "cms-rev" }).editor]),
+  // A reviewer needs the COLLECTION grants too, not just the page ones: getCollectionPreview
+  // is gated with viewerRoles (editor ∪ reviewer), so a reviewer-only identity passes the
+  // handler gate and then hits the row ACL. Without this the direct RPC 404s — the preview
+  // ROUTE happens to work anyway, because it presents admin alongside reviewer and grants
+  // OR-merge across roles, which is exactly the kind of asymmetry that hides the gap.
+  role("reviewer", [...cmsPolicies({ prefix: "cms-rev" }).editor, ...collectionPolicies(collections, { prefix: "cms-rev" })]),
   role("author", [
     policy("author:read", "notes", "read", {
       where: { ownerId: $identity("userId") },
@@ -754,6 +783,13 @@ const acl = [
   // flows through the verifier + ACL (here: read notes, no body).
   role("user", [
     policy("user:read", "notes", "read", { fields: ["id", "title", "ownerId", "createdAt"] }),
+    // Public CMS content, AGAIN. `anonymous` is only assigned to callers with NO verified
+    // token (see rolesOf), so spreading the public grants there alone means a LOGGED-IN
+    // user is denied content a logged-OUT visitor can read — `publicLectures` would 403 for
+    // every signed-in member. Every role that should see published content needs the grant;
+    // there is no implicit "everyone".
+    ...cmsPolicies({ prefix: "cms-user" }).public,
+    ...collectionPublicPolicies(collections, { prefix: "cms-user" }),
     // @pramen/auth user management: a user reads + changes the email of ONLY its own
     // auth_users row (changePassword is a self-scoped credential op, no policy needed).
     ...authPolicies().self,
@@ -856,6 +892,9 @@ const tasks = {
   },
   // @pramen/cms: scheduled publish/unpublish (backing schedulePage), run off the write path.
   ...cmsTasks,
+  // Without this, `collectionSchedule` stores the schedule and enqueues the tasks but the
+  // drain finds no handler for their kind — the row would silently stay a draft.
+  ...createCollectionTasks(collections),
   // @pramen/auth: sendMagicLinkEmail — invokes the app's sendEmail after commit, so a slow
   // transport can't hold the requestMagicLink mutation's storage transaction open.
   ...magicLink.tasks,

@@ -15,7 +15,7 @@ import type { FieldDefinition, FieldValue, FieldValues, Media, RichTextDoc } fro
 
 // Tokenized bare control (podoba's filled-field skin) for the native inputs that
 // don't map cleanly onto a podoba primitive (number/date/select/file).
-const CONTROL = "h-10 w-full rounded-lg border border-border bg-surface-card px-4 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus:border-brand-green";
+export const CONTROL = "h-10 w-full rounded-lg border border-border bg-surface-card px-4 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus:border-brand-green";
 
 function FieldShell({ label, children }: { label: ReactNode; children: ReactNode }) {
   return (
@@ -39,7 +39,7 @@ function FieldShell({ label, children }: { label: ReactNode; children: ReactNode
  * Returns "" for anything Date can't parse — a legacy or hand-written column value must
  * not reach the input as `NaN-NaN-NaNTNaN:NaN`, which the browser silently discards.
  */
-function toLocalInput(value: string): string {
+export function toLocalInput(value: string): string {
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return "";
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -47,12 +47,12 @@ function toLocalInput(value: string): string {
 }
 
 /** A `datetime-local` string (local wall clock) -> the UTC ISO instant we store. */
-function fromLocalInput(local: string): string | null {
+export function fromLocalInput(local: string): string | null {
   const at = new Date(local);
   return Number.isNaN(at.getTime()) ? null : at.toISOString();
 }
 
-function formatWhen(value: string): string {
+export function formatWhen(value: string): string {
   const at = new Date(value);
   return Number.isNaN(at.getTime()) ? value : at.toLocaleString();
 }
