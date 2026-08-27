@@ -40,6 +40,7 @@ import {
   allow,
   $now,
   partitionOf,
+  DEFAULT_PARTITION,
   BadRequest,
   Forbidden,
   PramenError,
@@ -48,7 +49,7 @@ import {
   verifyToken,
   resolveSecret,
 } from "@pramen/server";
-import type { HandlerContext, Policy, FileRef, BootstrapFn, JsonValue, SchemaDef } from "@pramen/server";
+import type { HandlerContext, Policy, FileRef, BootstrapFn, JsonValue, SchemaDef, FieldDef, FieldType } from "@pramen/server";
 import type { EnvBag } from "@pramen/server";
 import { isSafeHref, normalizeHref } from "./href";
 
@@ -2740,31 +2741,69 @@ export const COLLECTION_PUBLISHED = "published";
  * `nowStamp()`. */
 const isoStamp = (): string => new Date().toISOString();
 
-/** Check a collection registry at BOOT: slugs are unique, features are known and have
- * their prerequisites, and every managed column actually exists on the target entity and
- * is not also an editable field.
+/** The column types a declared field can be stored in. A collection field is COLUMN-MAPPED,
+ * so the entity's column type has to match what the field writes: a `richtext`/`group`/
+ * `repeater` value is a document (`t.json()`), the rest are scalars. Getting this wrong is
+ * not a type error anywhere — it surfaces as a raw driver message on the first write
+ * ("Binding expected string, TypedArray, …"), which is why it is checked at boot. */
+const COLLECTION_FIELD_COLUMN_TYPES: Readonly<Record<FieldDefinition["type"], readonly FieldType[]>> = {
+  text: ["text", "uuid"],
+  textarea: ["text"],
+  richtext: ["json"],
+  url: ["text"],
+  number: ["integer", "real"],
+  boolean: ["boolean", "integer"],
+  date: ["text"],
+  datetime: ["text"],
+  publish: ["text"],
+  slug: ["text"],
+  media: ["text", "uuid"],
+  select: ["text"],
+  repeater: ["json"],
+  group: ["json"],
+};
+
+/** Check a collection registry at BOOT: slugs and entities are unique, features are known
+ * and have their prerequisites, every declared field maps to a column that can hold it, and
+ * every managed column exists, has the shape the CMS writes, and is not also an editable
+ * field.
  *
  * Called by `createCollectionHandlers`. The point is that a misconfiguration surfaces when
- * the Worker starts, naming the collection and the missing column — not as a 500 the first
- * time an editor presses Publish, months later, on the one collection nobody exercised.
+ * the Worker starts, naming the collection and the column — not as a 500 the first time an
+ * editor presses Publish, months later, on the one collection nobody exercised.
  *
- * `schema` is REQUIRED as soon as any collection declares `supports`: without it the column
- * checks cannot run, and silently skipping them would defeat the purpose. */
+ * `schema` is REQUIRED. Every check here reads the target entity, so a registry validated
+ * without one is not validated at all — and the failures it catches (a field name typo, a
+ * richtext field over a TEXT column, a non-PK idField) are exactly as fatal on a collection
+ * that declares no `supports` as on one that declares all four. */
 export function validateCollections(collections: readonly CollectionDef[], schema?: SchemaDef): void {
   const seen = new Set<string>();
+  const byEntity = new Map<string, string>();
   for (const c of collections) {
     if (seen.has(c.slug)) throw new Error(`pramen/cms: duplicate collection slug '${c.slug}' — slugs are the handler registry's key`);
     seen.add(c.slug);
+    // ONE collection per entity. The ACL keys policies by (role, entity, action) and
+    // OR-merges the matches — the policy NAME is not part of the key — so a second
+    // collection over the same entity does not add a second, separate view: it WIDENS the
+    // first one's read scope. Two `collectionPublicPolicies` grants over one entity collapse
+    // to the loosest of the two, which is how a `drafts`-only collection silently removes
+    // the `publishedAt <= $now()` and `unpublishAt > $now()` clauses from a `scheduling`
+    // sibling — publishing a row a year early and defeating its scheduled takedown.
+    const first = byEntity.get(c.entity);
+    if (first) {
+      throw new Error(
+        `pramen/cms: collections '${first}' and '${c.slug}' both target entity '${c.entity}' — the ACL OR-merges policies on the same (role, entity, action), so a second collection widens the first one's read scope instead of adding a separate view. Register one collection per entity.`,
+      );
+    }
+    byEntity.set(c.entity, c.slug);
   }
-  const withFeatures = collections.filter((c) => (c.supports?.length ?? 0) > 0);
-  if (withFeatures.length === 0) return;
+  if (collections.length === 0) return;
   if (!schema) {
-    const names = withFeatures.map((c) => `'${c.slug}'`).join(", ");
     throw new Error(
-      `pramen/cms: collection(s) ${names} declare \`supports\`, so createCollectionHandlers needs the schema to check their managed columns: createCollectionHandlers(collections, { schema })`,
+      `pramen/cms: createCollectionHandlers needs your schema to check the registry against your entities: createCollectionHandlers(collections, { schema })`,
     );
   }
-  for (const c of withFeatures) {
+  for (const c of collections) {
     const features = c.supports ?? [];
     const set = new Set<CollectionFeature>(features);
     for (const f of features) {
@@ -2778,7 +2817,18 @@ export function validateCollections(collections: readonly CollectionDef[], schem
     }
     const entity = schema[c.entity];
     if (!entity) throw new Error(`pramen/cms: collection '${c.slug}' targets entity '${c.entity}', which is not in the schema`);
-    const columns = entity.fields as Record<string, unknown>;
+    const columns = entity.fields as Record<string, FieldDef>;
+    // EVERY collection handler dispatches to the default partition's DO: none of them
+    // declares a `partition`, and `/rpc` routes by the handler's. An entity parked in
+    // another partition therefore boots clean and then 400s on every single call
+    // (`assertInPartition`), and a preview link 404s forever — `callPrivileged` has no
+    // partition to pass either. Name it here instead.
+    const entityPartition = partitionOf(schema, c.entity);
+    if (entityPartition !== DEFAULT_PARTITION) {
+      throw new Error(
+        `pramen/cms: collection '${c.slug}' targets entity '${c.entity}' in partition '${entityPartition}', but the collection handlers are dispatched to the '${DEFAULT_PARTITION}' partition — every call would fail. Keep a collection's entity in the default partition.`,
+      );
+    }
     const idField = c.idField ?? "id";
     if (!(idField in columns)) {
       throw new Error(`pramen/cms: collection '${c.slug}' has idField '${idField}', which is not a column on '${c.entity}'`);
@@ -2787,18 +2837,76 @@ export function validateCollections(collections: readonly CollectionDef[], schem
     // `db.update`/`db.delete` key on the entity's actual PK — so a non-PK idField loads a
     // row fine and then writes nothing, surfacing as a 404 on a row the same handler just
     // read. Exactly the misconfiguration this validator exists to name.
-    const pk = Object.entries(columns).find(([, f]) => (f as { primaryKey?: boolean }).primaryKey)?.[0] ?? "id";
+    const pk = Object.entries(columns).find(([, f]) => f.primaryKey)?.[0] ?? "id";
     if (idField !== pk) {
       throw new Error(
         `pramen/cms: collection '${c.slug}' has idField '${idField}', but '${c.entity}' has primary key '${pk}' — writes key on the PK, so they would silently match no row`,
       );
     }
+    // Declared fields ARE columns on the entity (that is what "column-mapped" means), so a
+    // typo is a write that fails with the driver's own message and no HTTP status, and a
+    // document field over a TEXT column is the trap example/app.ts documents in a comment.
+    // Both are visible right here, with `columns` in hand.
+    for (const f of c.fields) {
+      const col = columns[f.name];
+      if (!col) {
+        throw new Error(
+          `pramen/cms: collection '${c.slug}' declares a field '${f.name}', which is not a column on '${c.entity}' — a collection field is column-mapped, so every declared field needs its own column`,
+        );
+      }
+      const allowed = COLLECTION_FIELD_COLUMN_TYPES[f.type];
+      if (allowed && !allowed.includes(col.type)) {
+        const want = allowed.map((t) => `t.${t === "integer" ? "int" : t === "boolean" ? "bool" : t}()`).join(" or ");
+        throw new Error(
+          `pramen/cms: collection '${c.slug}' declares '${f.name}' as '${f.type}', which is stored as ${allowed.join("/")}, but '${c.entity}.${f.name}' is ${col.type} — declare it as ${want}`,
+        );
+      }
+      if (col.hidden) {
+        throw new Error(
+          `pramen/cms: collection '${c.slug}' declares '${f.name}' as an editable field, but '${c.entity}.${f.name}' is hidden() — a hidden column is stripped from every read, so the editor would show it empty and overwrite it on every save`,
+        );
+      }
+    }
+    // A declared `orderBy` fails SILENTLY when the column does not exist: the dialect
+    // double-quotes the name and SQLite resolves an unknown quoted identifier to a string
+    // CONSTANT, so every row sorts equal and the list comes back in arbitrary storage order
+    // with no error anywhere.
+    if (c.orderBy && !(c.orderBy.column in columns)) {
+      throw new Error(
+        `pramen/cms: collection '${c.slug}' orders by '${c.orderBy.column}', which is not a column on '${c.entity}' — SQLite would resolve the quoted name to a constant and sort every row equal`,
+      );
+    }
     const declared = new Set(c.fields.map((f) => f.name));
     for (const f of features) {
       for (const col of COLLECTION_FEATURE_COLUMNS[f]) {
-        if (!(col in columns)) {
+        const column = columns[col];
+        if (!column) {
           throw new Error(
             `pramen/cms: collection '${c.slug}' declares '${f}', which manages a \`${col}\` column on '${c.entity}' — add \`${col}: t.text()\` to the entity`,
+          );
+        }
+        // NAME alone is not enough. The CMS writes these columns as TEXT (an ISO-8601
+        // instant or a status word) and compares them lexicographically in the public read
+        // scope, and every wrong declaration fails SILENTLY rather than loudly:
+        //   - `t.json()` stores `"\"published\""` (the Db chokepoint stringifies), so the
+        //     policy's `status = 'published'` never matches and the row is invisible
+        //     forever while `collectionPublish` echoes success;
+        //   - `notNull()` 500s on every create (the managed columns are seeded as NULL);
+        //   - `hidden()` strips the column from every read, disabling the spent-takedown
+        //     repair and hiding the state from the editor.
+        if (column.type !== "text") {
+          throw new Error(
+            `pramen/cms: collection '${c.slug}' declares '${f}', which manages \`${c.entity}.${col}\` as TEXT, but it is ${column.type} — declare it as \`${col}: t.text()\` (a non-TEXT column compares wrong against $now() and would never match the published scope)`,
+          );
+        }
+        if (column.notNull) {
+          throw new Error(
+            `pramen/cms: collection '${c.slug}' declares '${f}', which manages \`${c.entity}.${col}\`, but the column is notNull() — the CMS seeds and clears it with NULL, so every write would fail. Drop notNull() (a defaultTo() is fine).`,
+          );
+        }
+        if (column.hidden) {
+          throw new Error(
+            `pramen/cms: collection '${c.slug}' declares '${f}', which manages \`${c.entity}.${col}\`, but the column is hidden() — the CMS reads it back to decide the row's state, so it must be projectable`,
           );
         }
         // `fields` IS the write whitelist. A `status` entry there would let any editor send
@@ -2818,9 +2926,9 @@ export function validateCollections(collections: readonly CollectionDef[], schem
         );
       }
       // A DO cannot write across a partition boundary, so a collection entity parked in its
-      // own partition would pass every check here and then 500 on the first snapshot insert
-      // (assertInPartition). `cms_collection_revisions` lives in the default partition.
-      const entityPartition = partitionOf(schema, c.entity);
+      // own partition would 500 on the first snapshot insert (assertInPartition). The
+      // default-partition check above already covers this; keep the specific message for
+      // the case where `cms_collection_revisions` itself was moved.
       const revPartition = partitionOf(schema, COLLECTION_REVISIONS_TABLE);
       if (entityPartition !== revPartition) {
         throw new Error(
@@ -2849,17 +2957,18 @@ export const TASK_COLLECTION_UNPUBLISH = "cms:collection:unpublish";
 
 /** Options for `createCollectionHandlers`. */
 export interface CollectionHandlerOpts extends CmsHandlerOpts {
-  /** Your app's schema (the object you pass to `defineSchema`). REQUIRED once any
-   * collection declares `supports`: the managed columns are checked against it at boot by
-   * `validateCollections`, so a missing `status` column is a startup error naming the
-   * collection rather than a 500 on the first publish. */
+  /** Your app's schema (the object you pass to `defineSchema`). REQUIRED: the whole registry
+   * is checked against it at boot by `validateCollections` — managed columns, declared
+   * field ↔ column types, the idField/PK pairing, `orderBy`, the partition — so a
+   * misconfiguration is a startup error naming the collection and the column rather than a
+   * 500 (or a silent wrong answer) on the first call. */
   schema?: SchemaDef;
 }
 
 /** Build generic CRUD handlers over the registered collections. Spread into your app's
  * handlers alongside `cmsHandlers`:
  *
- *   const handlers = { ...cmsHandlers, ...createCollectionHandlers([lectures]) };
+ *   const handlers = { ...cmsHandlers, ...createCollectionHandlers([lectures], { schema }) };
  *
  * Exposes `listCollections` (editor discovery) + `collectionList` / `collectionGet` /
  * `collectionCreate` / `collectionUpdate` / `collectionDelete`, all gated by `editorRoles`

@@ -282,7 +282,12 @@ log) for independent single-writer serialization and storage.
   cell-ACL) that ALSO gets a list/form UI — no `cms_pages` row, no mandatory slug.
   `collection(slug, { entity, label, fields, list?, titleField?, idField?, orderBy? })`
   declares one (**column-mapped**: each scalar field is a real column; repeater/group map to a
-  `t.json()` column). Wire with `createCollectionHandlers(collections)` (spread into handlers —
+  `t.json()` column). Wire with `createCollectionHandlers(collections, { schema })` (the schema is
+  REQUIRED — the whole registry is validated against your entities at boot: managed columns
+  exist and are nullable TEXT, declared fields map to columns that can hold them, `idField`
+  is the PK, `orderBy` names a real column, the entity is in the default partition, and no
+  two collections share an entity, which the ACL would OR-merge into a widened read scope;
+  spread into handlers —
   `listCollections` for editor discovery + `collectionList`/`Get`/`Create`/`Update`/`Delete`,
   all `editorRoles`-gated AND row-ACL'd through `ctx.db`) and `collectionPolicies(collections)`
   (spread into the editor/admin role). Security: the generic handlers dispatch through a

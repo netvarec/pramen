@@ -10,7 +10,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { defineSchema, Entity, defaultTo, expr, primaryKey, generated } from "../packages/server/src/sdk/schema";
+import { defineSchema, Entity, defaultTo, expr, primaryKey, generated, hidden, notNull } from "../packages/server/src/sdk/schema";
 import { allow, policy, role, type Identity } from "../packages/server/src/sdk/acl";
 import { compileAcl, type AclContext } from "../packages/server/src/runtime/acl";
 import { Db } from "../packages/server/src/runtime/db";
@@ -117,12 +117,24 @@ describe("supports — boot validation", () => {
   const mk = (over: Record<string, unknown>) =>
     collection("x", { entity: "talks", label: "X", fields: [{ name: "title", type: "text" }], ...over });
 
-  test("declaring `supports` without a schema is a boot error, not a runtime 500", () => {
-    expect(() => createCollectionHandlers([mk({ supports: ["drafts"] })])).toThrow(/needs the schema/);
+  test("registering a collection without the schema is a boot error, not a runtime 500", () => {
+    expect(() => createCollectionHandlers([mk({ supports: ["drafts"] })])).toThrow(/needs your schema/);
   });
 
-  test("a collection with NO features still needs no schema (unchanged wiring keeps working)", () => {
-    expect(() => createCollectionHandlers([mk({})])).not.toThrow();
+  // A collection that declares no `supports` is column-mapped just the same, so every
+  // structural check still applies to it. Skipping them for a feature-less collection is
+  // what let an unwritable idField, a field name typo and a foreign partition all boot clean
+  // and fail at the first call instead.
+  test("a collection with NO features is validated too — the schema is always required", () => {
+    expect(() => createCollectionHandlers([mk({})])).toThrow(/needs your schema/);
+    expect(() => createCollectionHandlers([mk({})], { schema })).not.toThrow();
+  });
+
+  test("a plain CRUD collection gets the SAME structural checks as one with features", () => {
+    // Each of these used to be caught only when `supports` was non-empty.
+    expect(() => validateCollections([mk({ idField: "speaker" })], schema)).toThrow(/primary key 'id'/);
+    expect(() => validateCollections([mk({ entity: "ghosts" })], schema)).toThrow(/not in the schema/);
+    expect(() => validateCollections([mk({ idField: "nope" })], schema)).toThrow(/not a column/);
   });
 
   test("an unknown feature names the known set", () => {
@@ -183,19 +195,130 @@ describe("supports — boot validation", () => {
     );
   });
 
-  // A DO cannot write across partitions, so this would pass boot and 500 on every snapshot.
-  test("`revisions` on an entity in another partition is refused at boot", () => {
-    const split = defineSchema({
+  // No collection handler declares a `partition`, so /rpc dispatches every one of them to
+  // the DEFAULT partition's DO — where the entity's table does not exist. This used to be
+  // checked only inside the `revisions` branch, so a `drafts`+`preview` collection booted
+  // clean and then 400'd on every call, with preview links 404ing forever.
+  const split = defineSchema({
+    ...cmsSchema,
+    talks: Entity(
+      (t) => ({ id: primaryKey(generated(t.uuid())), title: t.text(), status: defaultTo(t.text(), "draft") }),
+      undefined,
+      { partition: "content" },
+    ),
+  });
+
+  test("an entity outside the default partition is refused at boot — with or without features", () => {
+    expect(() => validateCollections([mk({ entity: "talks", supports: ["drafts", "preview"] })], split)).toThrow(
+      /in partition 'content', but the collection handlers are dispatched to the 'default' partition/,
+    );
+    expect(() => validateCollections([mk({ entity: "talks" })], split)).toThrow(/dispatched to the 'default' partition/);
+  });
+
+  // Two collections over ONE entity do not give two views: compileAcl keys policies by
+  // (role, entity, action) and OR-merges them, so the looser scope wins — a `drafts`-only
+  // sibling erases a `scheduling` collection's time bounds.
+  test("two collections over the same entity are refused (the ACL would OR-merge their scopes)", () => {
+    expect(() =>
+      validateCollections([collection("a", { entity: "talks", label: "A", fields: [] }), collection("b", { entity: "talks", label: "B", fields: [] })], schema),
+    ).toThrow(/both target entity 'talks'.*OR-merges/s);
+  });
+
+  // The declared fields ARE columns. A typo used to boot clean and then surface as the raw
+  // driver message ("table talks has no column named titel") with no HTTP status.
+  test("a field that is not a column on the entity is refused", () => {
+    expect(() => validateCollections([mk({ fields: [{ name: "titel", type: "text" }] })], schema)).toThrow(
+      /declares a field 'titel', which is not a column on 'talks'/,
+    );
+  });
+
+  // The other half of the same trap, documented in example/app.ts: a richtext value is a
+  // DOCUMENT, so it needs t.json(). In a TEXT column the driver rejects the bound object.
+  test("a document field over a scalar column is refused, naming the column type to use", () => {
+    expect(() => validateCollections([mk({ fields: [{ name: "title", type: "richtext" }] })], schema)).toThrow(
+      /declares 'title' as 'richtext', which is stored as json, but 'talks.title' is text — declare it as t.json\(\)/,
+    );
+    // …and the inverse: a scalar field over a json column.
+    const withDoc = defineSchema({
       ...cmsSchema,
-      talks: Entity(
-        (t) => ({ id: primaryKey(generated(t.uuid())), title: t.text(), status: defaultTo(t.text(), "draft") }),
+      talks: Entity((t) => ({ id: primaryKey(generated(t.uuid())), title: t.json(), status: defaultTo(t.text(), "draft") })),
+    });
+    expect(() => validateCollections([mk({ fields: [{ name: "title", type: "text" }] })], withDoc)).toThrow(/is json — declare it as t.text\(\)/);
+  });
+
+  test("a hidden() column declared as an editable field is refused", () => {
+    const withSecret = defineSchema({
+      ...cmsSchema,
+      talks: Entity((t) => ({ id: primaryKey(generated(t.uuid())), title: t.text(), secret: hidden(t.text()) })),
+    });
+    expect(() => validateCollections([mk({ fields: [{ name: "secret", type: "text" }] })], withSecret)).toThrow(/is hidden\(\)/);
+  });
+
+  // A managed column checked by NAME only left "the CMS owns these values" resting on a
+  // naming convention: every wrong declaration below boots clean and then fails silently.
+  test("a managed column declared with the wrong TYPE is refused (it would never match the scope)", () => {
+    const jsonStatus = defineSchema({
+      ...cmsSchema,
+      talks: Entity((t) => ({ id: primaryKey(generated(t.uuid())), title: t.text(), status: t.json() })),
+    });
+    // t.json() stores "\"published\"" — the policy's status = 'published' never matches, so
+    // the row is invisible forever while collectionPublish echoes success.
+    expect(() => validateCollections([mk({ supports: ["drafts"] })], jsonStatus)).toThrow(/manages `talks.status` as TEXT, but it is json/);
+  });
+
+  test("a managed column declared notNull() is refused (the CMS seeds it as NULL)", () => {
+    const notNullPub = defineSchema({
+      ...cmsSchema,
+      talks: Entity((t) => ({
+        id: primaryKey(generated(t.uuid())),
+        title: t.text(),
+        status: defaultTo(t.text(), "draft"),
+        publishedAt: notNull(t.text()),
+        scheduledAt: t.text(),
+        unpublishAt: t.text(),
+      })),
+    });
+    expect(() => validateCollections([mk({ supports: ["drafts", "scheduling"] })], notNullPub)).toThrow(/the column is notNull\(\)/);
+  });
+
+  test("a managed column declared hidden() is refused (the CMS reads it back)", () => {
+    const hiddenStatus = defineSchema({
+      ...cmsSchema,
+      talks: Entity((t) => ({ id: primaryKey(generated(t.uuid())), title: t.text(), status: hidden(defaultTo(t.text(), "draft")) })),
+    });
+    expect(() => validateCollections([mk({ supports: ["drafts"] })], hiddenStatus)).toThrow(/the column is hidden\(\)/);
+  });
+
+  // ORDER BY over a name that is not a column does not fail: SQLite resolves the quoted
+  // identifier to a string constant, every row sorts equal, and the order is arbitrary.
+  test("an orderBy over a missing column is refused at boot", () => {
+    expect(() => validateCollections([mk({ orderBy: { column: "nope", dir: "desc" } })], schema)).toThrow(
+      /orders by 'nope', which is not a column on 'talks'/,
+    );
+  });
+
+  test("`revisions` on an entity in another partition than the revisions table is refused", () => {
+    const revsElsewhere = defineSchema({
+      ...cmsSchema,
+      talks: schema.talks,
+      // The shared revisions table moved out of the default partition — a collection entity
+      // that stays put now cannot write its own history.
+      cms_collection_revisions: Entity(
+        (t) => ({
+          id: primaryKey(generated(t.uuid())),
+          collection: notNull(t.text()),
+          rowId: notNull(t.text()),
+          revision: notNull(t.int()),
+          snapshot: t.json(),
+          note: t.text(),
+          actor: t.text(),
+          createdAt: t.text(),
+        }),
         undefined,
         { partition: "content" },
       ),
     });
-    expect(() => validateCollections([mk({ entity: "talks", supports: ["drafts", "revisions"] })], split)).toThrow(
-      /is in partition 'content' while `cms_collection_revisions` is in 'default'/,
-    );
+    expect(() => validateCollections([mk({ supports: ["drafts", "revisions"] })], revsElsewhere)).toThrow(/a write cannot cross partitions/);
   });
 });
 

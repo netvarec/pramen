@@ -368,10 +368,30 @@ const acl = [
 
 **A managed column is never in the write whitelist.** `fields` is the whitelist, so a
 `status` entry there would let any editor send `values: { status: "published" }` through
-`collectionUpdate` and skip the publish gate entirely. Declaring one is a **boot error**, as
-is a missing managed column, an unknown feature, or `scheduling` without `drafts` — you
-find out when the Worker starts, naming the collection and the column, rather than on the
-first publish months later.
+`collectionUpdate` and skip the publish gate entirely. Declaring one is a **boot error**.
+
+`createCollectionHandlers` **requires your `schema`** and validates the whole registry
+against it at startup, naming the collection and the column, rather than failing on the
+first call months later. It refuses:
+
+- a managed column that is missing, `notNull()`, `hidden()`, not `t.text()`, or also
+  declared as an editable field — a name check alone left "the CMS owns these values"
+  resting on a convention, and every wrong declaration failed *silently* (a `t.json()`
+  `status` stores `"\"published\""`, so the row is invisible forever while Publish reports
+  success);
+- a declared field that is not a column on the entity, or whose type cannot live in that
+  column (`richtext`/`group`/`repeater` need `t.json()`) — otherwise the first write fails
+  with a raw driver message and no HTTP status;
+- an `idField` that is not the entity's primary key, an `orderBy` over a missing column
+  (SQLite resolves the quoted name to a *constant* and sorts every row equal — no error),
+  an entity outside the default partition (every handler dispatches there), an unknown
+  feature, and `scheduling`/`preview` without `drafts`;
+- **two collections over the same entity.** The ACL keys policies by `(role, entity,
+  action)` and OR-merges them, so a second collection does not add a second view — it
+  *widens* the first one's read scope.
+
+All of this now applies to a collection with no `supports` too: it is column-mapped just
+the same.
 
 `collectionPublicPolicies` is the **actual access boundary**, not a UI filter — it is
 AND-merged into every `ctx.db` read of the entity, so an unpublished row is invisible to
