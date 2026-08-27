@@ -90,8 +90,14 @@ export default function RootLayout() {
           </Button>
           {extraNav.map((l) => (
             // Companion tools live OUTSIDE this SPA (a separate static page/worker route), so
-            // open them in a new tab. A same-tab click would be caught by the client router
-            // (Navigation API) and fall to the in-app 404, since the path isn't an SPA route.
+            // open them in a new tab. NOT a style choice, and `target: "_self"` alone would not
+            // fix it: `_404.tsx` registers the catch-all `/:__notFound+`, so buzola matches
+            // EVERY same-origin path and intercepts it — a same-tab click and `location.assign`
+            // both land on the in-app 404 (verified). Only a cross-origin url escapes on its own.
+            //
+            // The supported same-tab route is `router.leaveApp(href)` (@buzola/router >= 0.0.16),
+            // which releases one navigation to the browser. This package still pins ^0.0.12, so
+            // adopting it is a version bump plus a `target` option on the config item.
             <a
               key={l.href}
               href={l.href}
