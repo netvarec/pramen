@@ -6,14 +6,14 @@ import { createPage, useNavigate } from "@buzola/router";
 import { Button } from "@podoba/react";
 import { useEffect, useState } from "react";
 import { useApp } from "../app-context";
-import { INSPECTOR_TABS, PageEditor, errMsg, type InspectorTab } from "../components";
+import { PageEditor, errMsg, visibleTabs, type InspectorTab } from "../components";
 import type { BlockType, Page } from "../types";
 
 export default createPage()
   .params({ pageId: "string", tab: "?string" })
   .route("/pages/:pageId")
   .render(function PageEditorRoute({ params }) {
-    const { api, setError, setNavGuard } = useApp();
+    const { api, cms, setError, setNavGuard } = useApp();
     const navigate = useNavigate();
     const [page, setPage] = useState<Page | null>(null);
     const [blockTypes, setBlockTypes] = useState<BlockType[]>([]);
@@ -35,8 +35,17 @@ export default createPage()
       return () => { live = false; };
     }, [api, params.pageId, setError]);
 
-    const tab: InspectorTab = INSPECTOR_TABS.includes(params.tab as InspectorTab) ? (params.tab as InspectorTab) : "settings";
+    // The visible set comes from the server (`visibleTabs`), so a deep link to `?tab=i18n`
+    // on a single-locale deployment falls back to settings — and the URL is REWRITTEN to
+    // match. Rendering one tab under another tab's address means a refresh, a Back, or a
+    // shared link all disagree with what is on screen; `setTab` already replaces without
+    // adding a history entry, so reconciling costs nothing.
+    const shown = visibleTabs(cms.multilingual);
+    const tab: InspectorTab = shown.includes(params.tab as InspectorTab) ? (params.tab as InspectorTab) : "settings";
     const setTab = (t: InspectorTab) => navigate("page", { params: { pageId: params.pageId, tab: t }, replace: true });
+    useEffect(() => {
+      if (params.tab !== undefined && params.tab !== tab) setTab(tab);
+    }, [params.tab, tab]);
 
     if (missing) {
       return (

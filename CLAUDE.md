@@ -267,6 +267,15 @@ log) for independent single-writer serialization and storage.
   on an actual value CHANGE; `hidden()` columns are stripped from the payload; raw
   `ctx.db.exec` and task-handler writes (suppressTriggers) don't fire triggers (no
   cascade); `createPramen` rejects a trigger whose `task` has no `app.tasks` handler.
+- CMS locales (`@pramen/cms`): a deployment DECLARES what it publishes in —
+  `createCmsHandlers({ locales: ["cs", "en"] })` — and the editor renders its i18n surface
+  off `listCmsCapabilities` (the pages-side counterpart to a collection's `supports: [...]`),
+  never off a client flag. One locale ⇒ monolingual: no i18n chrome, and the editor stops
+  sending `locale` on a save so nothing overwrites a field it no longer shows. `locales[0]`
+  IS the default stamp (no separate `defaultLocale` to disagree with it). Deliberately not
+  inferred from the data: `createTranslation` is only reachable from the panel that would be
+  hidden, so "show i18n once a 2nd locale exists" can never become true. `listLocales` stays
+  a DATA query (what is authored), distinct from what is declared.
 - Bootstrap (code-defined reference data): `app.bootstrap: BootstrapFn[]` runs once after
   schema migration on each boot (DO first-fetch / D1 isolate init) with a privileged system
   `Db` — converge code-declared reference data (content types, block types, roles, flags)

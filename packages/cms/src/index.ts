@@ -1379,8 +1379,19 @@ export interface CmsHandlerOpts {
   editorRoles?: readonly string[];
   /** Max accepted media upload size in bytes (enforced at the Worker). Default 25 MB. */
   mediaMaxSize?: number;
-  /** Default locale used when `getPage`/`createPage` omit one. Default `"en"`. */
-  defaultLocale?: string;
+  /** The locales this deployment publishes in, most-preferred first. Default `["en"]`.
+   *
+   * DECLARED, not inferred. The editor renders its i18n surface — the Translations panel,
+   * the Locale field, the per-row locale column — only when there is more than one, and
+   * `listCmsCapabilities` is how it finds out. Inferring "is this site multilingual?" from
+   * the locales PRESENT IN DATA cannot work: the only way to create a second locale is
+   * `createTranslation`, which the editor exposes from inside the very panel that would
+   * stay hidden, so a monolingual site could never become multilingual.
+   *
+   * The first entry is the default stamped on a page created without one, which is why
+   * `defaultLocale` is derived from this rather than configured beside it — two options
+   * that can disagree about the same fact is how a Czech-only site ends up stamping "en". */
+  locales?: readonly string[];
   /** Roles permitted to approve/reject a page in review and publish (the editorial gate).
    * Default `["reviewer", "admin"]`. */
   reviewerRoles?: readonly string[];
@@ -1398,7 +1409,8 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
   const editorRoles = opts.editorRoles ?? ["editor", "admin"];
   const editor = { auth: editorRoles };
   const mediaMaxSize = opts.mediaMaxSize ?? 25_000_000;
-  const defaultLocale = opts.defaultLocale ?? "en";
+  const locales = opts.locales && opts.locales.length > 0 ? [...opts.locales] : ["en"];
+  const defaultLocale = locales[0]!;
   const reviewerRoles = opts.reviewerRoles ?? ["reviewer", "admin"];
   const reviewer = { auth: reviewerRoles };
   const previewTtl = opts.previewTtlSeconds ?? DEFAULT_PREVIEW_TTL_SECONDS;
@@ -1932,7 +1944,18 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       },
     }),
 
-    /** Distinct locales present across all pages. */
+    /** What this deployment supports, for an editor to render against — the pages-side
+     * counterpart to `listCollections`' `supports: [...]`.
+     *
+     * The editor asks the SERVER what exists rather than being told by its own /config.js:
+     * a client flag can hide a control but cannot make the data right, and the two drift
+     * the moment someone adds a locale. `multilingual` is the derived answer to the only
+     * question the UI actually asks, so each surface doesn't re-derive it from the list. */
+    listCmsCapabilities: query(() => ({ locales, defaultLocale, multilingual: locales.length > 1 }), viewer),
+
+    /** Distinct locales present across all pages. NOTE: a DATA query — what is in the
+     * store — not configuration. `listCmsCapabilities().locales` is what the deployment
+     * declares; these two differ while a locale is declared but not yet authored. */
     listLocales: query(async (ctx) => {
       // Raw exec bypasses the ACL, so the trash filter has to be written out by hand —
       // otherwise the editor's locale switcher offers a locale with zero live pages.

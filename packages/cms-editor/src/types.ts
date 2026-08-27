@@ -134,6 +134,25 @@ export interface CollectionMeta {
   supports?: CollectionFeature[];
 }
 
+/** What the server says this deployment supports (mirror of `listCmsCapabilities`).
+ *
+ * Server-declared, like a collection's `supports: [...]`: the editor asks what exists
+ * rather than being configured to hide things locally, so the chrome and the data cannot
+ * disagree. `multilingual` is the derived answer to the question the UI actually asks. */
+export interface CmsCapabilities {
+  /** Declared locales, most-preferred first. */
+  locales: string[];
+  /** The locale a page gets when created without one — `locales[0]`. */
+  defaultLocale: string;
+  /** More than one declared locale. Gates the whole i18n surface. */
+  multilingual: boolean;
+}
+
+/** Used until `listCmsCapabilities` answers, and when it cannot (an older server). Assumes
+ * MONOLINGUAL: a hidden i18n surface on a multilingual site is recoverable by reloading,
+ * where a half-rendered one on a single-locale site is what this replaced. */
+export const DEFAULT_CAPABILITIES: CmsCapabilities = { locales: ["en"], defaultLocale: "en", multilingual: false };
+
 /** Mirror of @pramen/cms `CollectionFeature`. */
 export type CollectionFeature = "drafts" | "scheduling" | "revisions" | "preview";
 

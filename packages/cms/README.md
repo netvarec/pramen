@@ -467,6 +467,28 @@ index is what turns a concurrent duplicate into a visible failure instead of a s
 ambiguous history. For the same reason the delete-and-purge pair is atomic on the DO but not
 on D1.
 
+### Locales
+
+A deployment declares the locales it publishes in, and the editor renders its i18n surface
+off that — the Translations panel, the Locale field, the per-row locale column:
+
+```ts
+const handlers = { ...createCmsHandlers({ locales: ["cs", "en"] }), ... };
+```
+
+One locale (or none declared) means monolingual: no i18n chrome anywhere, and the editor
+stops sending `locale` on a page save at all, so nothing can blind-overwrite a field it no
+longer shows. The FIRST entry is the locale a page is stamped with when created without
+one — derived, not a second `defaultLocale` option, because two settings that can disagree
+about the same fact is how a Czech-only site ends up publishing `en`.
+
+Declared, not inferred from the data: the only way to create a second locale is
+`createTranslation`, which the editor exposes from inside the Translations panel — so a rule
+like "show i18n once a second locale exists" would mean a monolingual site could never
+become multilingual. `listCmsCapabilities` is what the editor reads; `listLocales` remains a
+DATA query (which locales are actually authored), and the two differ while a locale is
+declared but not yet used.
+
 ## Limitations
 
 - **Block `fields` are opaque JSON**, so pramen's row/cell-level ACL and relational queries

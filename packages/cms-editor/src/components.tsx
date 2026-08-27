@@ -7,12 +7,19 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { Api, ApiError } from "./api";
 import { CONTROL, FieldForm, formatWhen, fromLocalInput, slugify, toLocalInput } from "./fields";
 import type { Config } from "./api";
-import type { Me } from "./app-context";
+import { useApp, type Me } from "./app-context";
 import { isRichTextDoc, richTextToPlainText } from "./rich-text";
 import type { AssembledPage, AuditEntry, BlockType, CollectionMeta, ContentType, FieldDefinition, FieldValue, FieldValues, Media, Page, RegionDefinition, RenderedBlock } from "./types";
 
 export type InspectorTab = "settings" | "seo" | "workflow" | "i18n" | "audit";
 export const INSPECTOR_TABS: InspectorTab[] = ["settings", "seo", "workflow", "i18n", "audit"];
+
+/** The tabs a deployment actually shows. ONE definition, used by the tab bar, the panel
+ * switch and the route's deep-link fallback — three places that previously each re-derived
+ * "is i18n visible?" and could disagree. */
+export function visibleTabs(multilingual: boolean): InspectorTab[] {
+  return multilingual ? INSPECTOR_TABS : INSPECTOR_TABS.filter((t) => t !== "i18n");
+}
 
 // --- presentational primitives (podoba tokens; replaces styles.ts classes) ---
 
@@ -102,6 +109,8 @@ const Dim = ({ children }: { children: ReactNode }) => <span className="text-fg-
 // --- pages list --------------------------------------------------------------
 
 export function PageList({ api, pages, blockTypes, onOpen, onCreated, onError }: { api: Api; pages: Page[]; blockTypes: BlockType[]; onOpen: (p: Page) => void; onCreated: () => void; onError: (s: string) => void }) {
+  // From the SERVER (listCmsCapabilities), not a local flag — see `CmsCapabilities`.
+  const { cms: { multilingual } } = useApp();
   const [creating, setCreating] = useState(false);
   return (
     <>
@@ -116,7 +125,7 @@ export function PageList({ api, pages, blockTypes, onOpen, onCreated, onError }:
             <div className={`${ROW} cursor-pointer hover:bg-surface-muted`} key={p.id} onClick={() => onOpen(p)}>
               <span className="flex-1 truncate font-medium">{p.title}</span>
               <span className="text-fg-subtle">/{p.slug}</span>
-              <span className="text-fg-subtle">{p.locale}</span>
+              {multilingual ? <span className="text-fg-subtle">{p.locale}</span> : null}
               <Pill status={p.status}>{p.status}</Pill>
             </div>
           ))}
@@ -538,6 +547,7 @@ export function CollectionEditor({ api, def, id, onSaved, onDeleted, onBack, onE
 // --- page editor -------------------------------------------------------------
 
 export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange, registerGuard }: { api: Api; page: Page; blockTypes: BlockType[]; tab: InspectorTab; onTab: (t: InspectorTab) => void; onBack: () => void; onChange: (p: Page) => void; registerGuard: (fn: (() => boolean) | null) => void }) {
+  const { cms: { multilingual } } = useApp();
   const [ct, setCt] = useState<ContentType | null>(null);
   const [assembled, setAssembled] = useState<AssembledPage | null>(null);
   const [err, setErr] = useState("");
@@ -776,14 +786,14 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
 
       <div className="overflow-auto rounded-panel border border-border bg-surface-card p-5">
         <div className="mb-3 flex gap-1">
-          {INSPECTOR_TABS.map((t) => (
+          {visibleTabs(multilingual).map((t) => (
             <Button key={t} variant="ghost" size="sm" className={tab === t ? "bg-surface-muted text-fg" : "text-fg-muted"} onPress={() => onTab(t)}>{t}</Button>
           ))}
         </div>
         {tab === "settings" ? <PageMeta api={api} page={page} onSaved={onChange} onError={setErr} /> : null}
         {tab === "seo" ? <SeoPanel api={api} page={page} onError={setErr} /> : null}
         {tab === "workflow" ? <Workflow api={api} page={page} onChanged={(p) => { onChange(p); }} onError={setErr} /> : null}
-        {tab === "i18n" ? <I18n api={api} page={page} onError={setErr} /> : null}
+        {tab === "i18n" && multilingual ? <I18n api={api} page={page} onError={setErr} /> : null}
         {tab === "audit" ? <AuditLog api={api} pageId={page.id} onError={setErr} /> : null}
       </div>
     </div>
@@ -1044,6 +1054,7 @@ function Inserter({ allowed, btBySlug, onAdd, compact }: { allowed: string[]; bt
  * type has no regions look empty — a wide, blank canvas next to a cramped form.
  */
 function PageMeta({ api, page, onSaved, onError }: { api: Api; page: Page; onSaved: (p: Page) => void; onError: (s: string) => void }) {
+  const { cms: { multilingual, locales } } = useApp();
   const [title, setTitle] = useState(page.title);
   const [slug, setSlug] = useState(page.slug);
   const [locale, setLocale] = useState(page.locale);
@@ -1057,7 +1068,12 @@ function PageMeta({ api, page, onSaved, onError }: { api: Api; page: Page; onSav
     try {
       // Meta only — `fields` is deliberately omitted so saving here can never clobber
       // content edited in the canvas (updatePage patches only what it is given).
-      const r = await api.call<{ page?: Page }>("updatePage", { pageId: page.id, title, slug, locale });
+      // `locale` is sent ONLY where it is editable. On a single-locale deployment there is
+      // no control for it, so including it would blind-overwrite whatever the row holds
+      // with mount-time state — reverting an import or another editor's change through a
+      // field this user cannot see. `updatePage` treats an absent key as no-change.
+      const patch = multilingual ? { title, slug: slug.trim(), locale } : { title, slug: slug.trim() };
+      const r = await api.call<{ page?: Page }>("updatePage", { pageId: page.id, ...patch });
       if (r?.page) onSaved(r.page);
       setOk(true);
       setTimeout(() => setOk(false), 1500);
@@ -1074,7 +1090,18 @@ function PageMeta({ api, page, onSaved, onError }: { api: Api; page: Page; onSav
       {ok ? <Banner ok>saved</Banner> : null}
       <Input label="Title" value={title} onChange={setTitle} />
       <Input label="Slug" value={slug} onChange={setSlug} />
-      <Input label="Locale" value={locale} onChange={setLocale} />
+      {/* A SELECT over the declared locales, not free text: a typo'd or blank locale saves
+          fine, previews fine (the editor round-trips the same string) and then 404s on the
+          live site, which is the hardest kind of wrong to see. */}
+      {multilingual ? (
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="font-medium text-fg">Locale</span>
+          <select className={CONTROL} value={locale} onChange={(e) => setLocale(e.target.value)}>
+            {locales.includes(locale) ? null : <option value={locale}>{locale || "(unset)"} — not a declared locale</option>}
+            {locales.map((l) => <option key={l} value={l}>{l}</option>)}
+          </select>
+        </label>
+      ) : null}
       <Button onPress={save} isDisabled={busy || !title.trim() || !slug.trim()}>{busy ? "Saving…" : "Save"}</Button>
       <KV><span>Status</span><span>{page.status}</span></KV>
     </div>
