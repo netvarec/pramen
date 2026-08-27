@@ -310,6 +310,16 @@ log) for independent single-writer serialization and storage.
   (no page-style staged snapshot). Scheduling converges in any drain order — a publish task
   that drains after its own takedown instant lands the row DOWN rather than publishing and
   discarding the takedown. See `example/app.ts` (the `lectures` collection).
+- `@pramen/cms-astro` front door: `pramenCms({ backend: { url, tenant?, token? }, collections?, locale? })`
+  is an Astro INTEGRATION (issue #35) — it builds the client once and exposes it, `resolve()`
+  and the generated collections through a `pramen:cms` virtual module (types injected). The
+  site re-exports once: `export { collections } from "pramen:cms"` — Astro has NO API for an
+  integration to define content collections (checked against Astro 7), so that one line is
+  the honest version of "auto-registered". `collections: "auto"` (default) reads the un-gated
+  `listPublicContentTypes` at `astro:config:setup` (build time has no editor session; slug +
+  name only, never the regions/field schema) and FAILS the build if the CMS is unreachable —
+  generating zero collections would deploy an empty site green. `createCmsClient`/`cmsLoader`
+  stay exported for hand-wired collections.
 - Native queues: `ctx.queue.send(binding, body, { delaySeconds?, contentType? })` /
   `sendBatch(binding, msgs, opts?)` (`runtime/queue.ts`) — a facade + adapter seam (like
   `ctx.mail`) over **Cloudflare Queues**, distinct from `ctx.tasks` (NOT transactional with

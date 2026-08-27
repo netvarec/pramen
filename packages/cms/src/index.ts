@@ -1724,6 +1724,21 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
 
     listContentTypes: query((ctx) => cdb(ctx).find({ from: "cms_content_types", orderBy: { column: "name" } }), viewer),
 
+    /** Content-type slugs + names, PUBLIC. The editor-facing `listContentTypes` above is
+     * viewer-gated, which a BUILD cannot satisfy: `@pramen/cms-astro`'s `collections: "auto"`
+     * runs in `astro:config:setup`, where there is no editor session and shipping a token to
+     * CI just to list type names would be the wrong trade.
+     *
+     * Nothing new is exposed. `cmsPolicies().public` already grants anonymous read of
+     * `cms_content_types` ("slugs/names are structural, not sensitive"), and
+     * `listPublishedPages` already returns the content-type slug of every published page.
+     * The projection is deliberately narrow — slug and name only, never the regions or
+     * field schema, which describe the editing surface rather than the published site. */
+    listPublicContentTypes: query(async (ctx) => {
+      const rows = await cdb(ctx).find({ from: "cms_content_types", orderBy: { column: "name" } });
+      return rows.map((r) => ({ slug: String(r.slug), name: String(r.name ?? r.slug) }));
+    }),
+
     getContentType: query(async (ctx, input: { id: string }) => {
       const rows = await cdb(ctx).find({ from: "cms_content_types", where: { id: input.id }, limit: 1 });
       return rows[0] ?? null;

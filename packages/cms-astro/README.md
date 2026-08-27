@@ -3,6 +3,63 @@
 Consume a [`@pramen/cms`](../cms) backend from an **Astro** site. Self-contained (no
 `@pramen/server` dependency — it speaks the CMS's public HTTP content API).
 
+## The front door: `pramenCms()`
+
+One integration, and the collections come from the store:
+
+```ts
+// astro.config.mjs
+import { defineConfig } from "astro/config";
+import pramenCms from "@pramen/cms-astro";
+
+export default defineConfig({
+  integrations: [pramenCms({ backend: { url: "https://cms.example.workers.dev" } })],
+});
+```
+
+```ts
+// src/content.config.ts — once, and never again
+export { collections } from "pramen:cms";
+```
+
+That is the whole wiring. `collections: "auto"` (the default) asks the CMS which content
+types exist and generates one collection per type, named after its slug — so adding a
+content type in the editor takes effect on the next build with no code change. Pass a map
+when you want your own names or a subset: `collections: { clanky: "article" }`.
+
+The `pramen:cms` virtual module also exports the **configured client** and a bound
+**`resolve()`**, so a component that needs a media URL imports it instead of
+re-instantiating the client with a duplicated base URL:
+
+```astro
+---
+import { client, resolve } from "pramen:cms";
+const page = await client.getPage("o-nas");
+---
+<img src={resolve(page.page.fields.hero.url)} alt="" />
+```
+
+Types for that module are injected automatically (`pramen-cms.d.ts`), so there is no
+hand-written `d.ts` to keep in step.
+
+**Why the one-line re-export?** Astro has no API for an integration to define content
+collections — `astro:config:setup` offers routes, scripts, middleware, renderers and Vite
+config, and nothing for the content layer. Collections must be exported from
+`src/content.config.ts`. So the integration generates them and you re-export once, instead
+of hand-writing a `defineCollection` per type that has to track rows in the store.
+
+**`"auto"` fails the build if it cannot reach the CMS**, rather than generating nothing.
+Zero collections would otherwise build green and deploy an empty site. Discovery reads
+`listPublicContentTypes`, which is un-gated — no build-time token needed, and nothing new is
+exposed (a content type's slug already reaches the public through `listPublishedPages`). If
+your deployment does need auth for reads, pass `backend: { token }`.
+
+`createCmsClient` / `cmsLoader` stay exported and are documented below — the integration is
+the front door, not a replacement. A site that wants to define its own collections by hand
+still can.
+
+## The kit of parts
+
 - **`createCmsClient({ baseUrl })`** — `getPage(slug, locale?)`, `listPublishedPages()`, and
   `getPreview(token)` to redeem a signed preview link (no session needed — the signature is
   the authorization; the result carries `isPreview: true`).

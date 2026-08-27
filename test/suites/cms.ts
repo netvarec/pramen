@@ -51,6 +51,17 @@ export async function runCms(base: string): Promise<void> {
   const anonCreate = await call("createBlockType", { name: "X", slug: "x" });
   assert(anonCreate.status === 403 && anonCreate.body.ok === false, "cms: anonymous cannot create a block type (403)");
 
+  // `listPublicContentTypes` is the un-gated listing `@pramen/cms-astro`'s
+  // `collections: "auto"` reads at BUILD time, where there is no editor session. The
+  // editor-facing `listContentTypes` stays viewer-gated beside it.
+  const anonTypes = await call("listPublicContentTypes", {});
+  assert(anonTypes.body.ok === true && Array.isArray(anonTypes.body.result), "cms: listPublicContentTypes is readable anonymously");
+  assert(
+    (anonTypes.body.result as Array<Record<string, unknown>>).every((t) => typeof t.slug === "string" && typeof t.name === "string" && !("regions" in t) && !("fieldsSchema" in t)),
+    "cms: the public content-type listing is slug + name only — never the editing surface",
+  );
+  assert((await call("listContentTypes", {})).status === 403, "cms: the editor-facing listContentTypes stays viewer-gated");
+
   // --- define block types (data-driven: a webmaster adds a type with no deploy) ---
   const heroType = await call("createBlockType", {
     name: "Hero",

@@ -11,6 +11,12 @@
 
 import type { Loader, LoaderContext } from "astro/loaders";
 
+// The integration — the front door (`pramenCms()`), re-exported so
+// `import pramenCms from "@pramen/cms-astro"` works. The kit of parts below stays exported:
+// a site that defines its own collections by hand still can.
+export { pramenCms, default } from "./integration.js";
+export type { CmsBackend, CollectionMap, PramenCmsOptions } from "./integration.js";
+
 /** Any JSON value — the wire form of everything the CMS stores. */
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
