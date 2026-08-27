@@ -26,8 +26,8 @@ allow-lists, and the review/publish gates are all enforced server-side.
 ## Run it
 
 ```bash
-bun --cwd packages/cms-editor run build    # → dist/ (index.html + hashed JS)
-bun --cwd packages/cms-editor run dev      # watch + preview on http://localhost:5175
+bun run --cwd packages/cms-editor build    # → dist/ (index.html + hashed JS)
+bun run --cwd packages/cms-editor dev      # watch + preview on http://localhost:5175
 ```
 
 It's a **standalone static SPA** (no server-package dependency — local types + `fetch`).

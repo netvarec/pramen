@@ -74,7 +74,7 @@ A standalone **React visual editor** — page list, a region canvas with allowed
 palettes, schema-driven field forms (incl. a media picker, date/datetime pickers, repeaters,
 groups), and inspector
 panels for SEO / workflow / i18n / audit. It mutates through the semantic handlers (so all
-validation and gates apply). Build with `bun --cwd packages/cms-editor run build`, deploy the
+validation and gates apply). Build with `bun run --cwd packages/cms-editor build`, deploy the
 static `dist/`, and point it at your Worker (set `CORS_ORIGINS`) with an editor/reviewer JWT.
 
 Views are real, deep-linkable URLs — file-based routing via [`@buzola/router`](https://www.npmjs.com/package/@buzola/router)
