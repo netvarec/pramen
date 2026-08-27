@@ -2753,6 +2753,27 @@ const MAX_COLLECTION_LIST_LIMIT = 500;
  * `nowStamp()`. */
 const isoStamp = (): string => new Date().toISOString();
 
+/** The epoch-ms range a schedule may name: 1970-01-01 up to (not including) year 10000.
+ *
+ * `Number.isFinite` is NOT a sufficient bound, in two directions. Above `8.64e15` (the max
+ * `Date`) `toISOString()` throws a `RangeError` INSIDE the mutation — an opaque 500 for the
+ * common client slip of sending epoch microseconds. And from year 10000 up, `toISOString()`
+ * mints an EXPANDED-year string (`"+010000-01-01T00:00:00.000Z"`) whose leading `+` sorts
+ * BEFORE every ordinary timestamp — inverting every lexicographic comparison this feature
+ * rests on, so a takedown 8000 years out reads as already passed and a publish instant in
+ * the far future reads as due. One range check closes both. */
+const MIN_SCHEDULE_MS = 0;
+const MAX_SCHEDULE_MS = 253402300799999; // 9999-12-31T23:59:59.999Z
+
+const epochInput = (name: string, v: unknown): number => {
+  if (typeof v !== "number" || !Number.isFinite(v)) throw new BadRequest(`${name} must be a finite epoch ms`);
+  if (!Number.isInteger(v)) throw new BadRequest(`${name} must be a whole number of epoch ms`);
+  if (v < MIN_SCHEDULE_MS || v > MAX_SCHEDULE_MS) {
+    throw new BadRequest(`${name} must be an epoch ms between ${MIN_SCHEDULE_MS} and ${MAX_SCHEDULE_MS} (1970 … 9999) — got ${v}`);
+  }
+  return v;
+};
+
 /** The column types a declared field can be stored in. A collection field is COLUMN-MAPPED,
  * so the entity's column type has to match what the field writes: a `richtext`/`group`/
  * `repeater` value is a document (`t.json()`), the rest are scalars. Getting this wrong is
@@ -3283,7 +3304,11 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
         const now = isoStamp();
         patch.publishedAt = now;
         patch.scheduledAt = null;
-        // Clear a takedown instant that has already PASSED. A future one still stands —
+        // Clear a takedown instant that has already PASSED. This is an EXPLICIT act by a
+        // human holding publish rights, which is why it resolves differently from the
+        // scheduled-publish task: that one converges to the state the schedule implies (a
+        // passed takedown wins, and the row lands down), while here the editor is saying
+        // "live, now" about a takedown that has already been served. A future one stands —
         // publishing early does not cancel a planned removal — but a spent one is not
         // "pending" at all, and since the public scope now enforces
         // `unpublishAt IS NULL OR unpublishAt > $now()`, leaving it would make this very
@@ -3332,9 +3357,30 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
       const c = def(input.collection);
       needs(c, "scheduling");
       const db = cdb(ctx);
-      await loadRow(db, c, input.id);
+      const row = await loadRow(db, c, input.id);
       const now = Date.now();
       const publishToken = new Date(input.publishAt).toISOString();
+      // Cross-call ordering. The boundary validator compares the two instants WITHIN one
+      // call, which is not the invariant that matters: the documented way to move a publish
+      // date is `collectionSchedule({ publishAt })` with `unpublishAt` omitted, and an
+      // omitted takedown is left standing. Without this check a reschedule could push the
+      // publish PAST a pending takedown — the takedown then fires first (clearing itself),
+      // the publish fires after it against nothing, and the row is public with no takedown
+      // left and no repair path. Compare against the takedown that will actually be in
+      // effect: the one being written, or the one already stored.
+      const effectiveUnpublish =
+        input.unpublishAt !== undefined
+          ? typeof input.unpublishAt === "number"
+            ? new Date(input.unpublishAt).toISOString()
+            : null
+          : typeof row.unpublishAt === "string" && row.unpublishAt !== ""
+            ? row.unpublishAt
+            : null;
+      if (effectiveUnpublish !== null && effectiveUnpublish <= publishToken) {
+        throw new BadRequest(
+          `publishAt (${publishToken}) is at or after the scheduled takedown (${effectiveUnpublish}) — move or cancel the takedown too (pass \`unpublishAt\`, or \`unpublishAt: null\` to cancel it)`,
+        );
+      }
       // PATCH semantics on the takedown: an ABSENT `unpublishAt` leaves an existing one
       // alone. Writing null unconditionally meant that merely moving the publish date
       // revoked a scheduled removal — and silently, since clearing the column also
@@ -3369,18 +3415,18 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
       input: (raw): { collection: string; id: string; publishAt: number; unpublishAt?: number | null } => {
         const o = asObj(raw);
         const base = rowInput(raw);
-        // Unvalidated, a non-finite publishAt makes `new Date(x).toISOString()` throw a
-        // RangeError inside the transaction — a 500 with no indication of which input was
-        // wrong.
-        if (typeof o.publishAt !== "number" || !Number.isFinite(o.publishAt)) throw new BadRequest("publishAt must be a finite epoch ms");
+        // Range-checked, not merely finite — see `epochInput`. An out-of-range value would
+        // otherwise either throw a RangeError inside the transaction (an opaque 500) or
+        // mint an expanded-year ISO string that compares backwards forever.
+        const publishAt = epochInput("publishAt", o.publishAt);
         // `null` is the explicit "cancel the takedown"; absent leaves it untouched.
         if (o.unpublishAt !== undefined && o.unpublishAt !== null) {
-          if (typeof o.unpublishAt !== "number" || !Number.isFinite(o.unpublishAt)) throw new BadRequest("unpublishAt must be a finite epoch ms, or null to cancel");
-          if (o.unpublishAt <= o.publishAt) throw new BadRequest("unpublishAt must be after publishAt");
+          const unpublishAt = epochInput("unpublishAt", o.unpublishAt);
+          if (unpublishAt <= publishAt) throw new BadRequest("unpublishAt must be after publishAt");
+          return { ...base, publishAt, unpublishAt };
         }
-        return "unpublishAt" in o
-          ? { ...base, publishAt: o.publishAt, unpublishAt: o.unpublishAt as number | null }
-          : { ...base, publishAt: o.publishAt };
+        // Only `unpublishAt: null` (cancel) and an absent key reach here.
+        return "unpublishAt" in o ? { ...base, publishAt, unpublishAt: null } : { ...base, publishAt };
       },
     }),
 
@@ -3577,27 +3623,54 @@ export function collectionPublicPolicies(collections: readonly CollectionDef[], 
     const features = c.supports ?? [];
     if (!features.includes("drafts")) continue;
     const name = `${p}:public:collection:${c.entity}:read`;
-    // The PUBLIC surface is exactly what the collection declares as editable, plus its id.
+    // The PUBLIC surface is exactly what the collection declares as editable, plus its id
+    // and the two columns a public page legitimately reads: `status` (constant `published`
+    // for every visible row) and, with `scheduling`, `publishedAt`.
+    //
     // Granting the whole row instead would quietly publish every future column: an
     // `internalNote` or `reviewerEmail` added to the entity — deliberately NOT a field —
     // would go world-readable the moment a row was published, with nothing at boot or in
-    // review to catch it. The managed workflow columns are excluded for the same reason;
-    // `status` carries no information here anyway (every visible row is published).
-    const fields = [c.idField ?? "id", ...c.fields.map((f) => f.name)];
+    // review to catch it. But excluding `publishedAt` went too far the other way: the
+    // single most obvious public query, "newest published first", 403s for anonymous while
+    // working for an editor, because a caller may not order by a column it cannot read.
+    // A publication date is public by construction — it is printed on the page. The
+    // FORWARD-looking columns stay private: `scheduledAt` and `unpublishAt` would leak
+    // "this comes down on Friday" to everyone.
+    const fields = [c.idField ?? "id", ...c.fields.map((f) => f.name), "status", ...(features.includes("scheduling") ? ["publishedAt"] : [])];
     out.push(
       features.includes("scheduling")
         ? policy(name, c.entity, "read", {
             fields,
             where: {
               status: COLLECTION_PUBLISHED,
-              publishedAt: { lte: $now() },
-              // A scheduled TAKEDOWN has to be enforced HERE, not only by the task. The
-              // publish side is belt-and-braces (policy + task), but without this clause an
-              // unpublish depends entirely on `createCollectionTasks` being wired and the
-              // outbox draining — if either fails, a row an editor scheduled to come down
-              // stays world-readable indefinitely, with no signal. That is the wrong way
-              // round for a takedown, which is the direction that usually matters legally.
-              OR: [{ unpublishAt: { isNull: true } }, { unpublishAt: { gt: $now() } }],
+              // Both time clauses are OR-groups, so they go in an explicit `AND: [...]` —
+              // two `OR` keys in one object literal would be the same property, and the
+              // second would silently REPLACE the first.
+              AND: [
+                {
+                  // `publishedAt <= $now()` alone silently hides every published row with
+                  // no stamp — a `cmsBootstrap` seed, an import, a row published while the
+                  // collection was still `supports: ["drafts"]` — and does it EN MASSE the
+                  // moment `scheduling` is added to an existing collection, because
+                  // `NULL <= '2026-…'` is NULL, not true. NULL here means "published,
+                  // instant unknown", never "scheduled for later": `publishedAt` is a
+                  // managed column (never in the write whitelist) that only ever takes
+                  // `isoStamp()` or null, and a row awaiting a scheduled publish is
+                  // `status: 'draft'` with the instant in `scheduledAt`. So a missing stamp
+                  // cannot be a future one, and treating it as "already published" is both
+                  // safe and what the editor already shows.
+                  OR: [{ publishedAt: { isNull: true } }, { publishedAt: { lte: $now() } }],
+                },
+                {
+                  // A scheduled TAKEDOWN has to be enforced HERE, not only by the task. The
+                  // publish side is belt-and-braces (policy + task), but without this clause
+                  // an unpublish depends entirely on `createCollectionTasks` being wired and
+                  // the outbox draining — if either fails, a row an editor scheduled to come
+                  // down stays world-readable indefinitely, with no signal. That is the
+                  // wrong way round for a takedown, the direction that matters legally.
+                  OR: [{ unpublishAt: { isNull: true } }, { unpublishAt: { gt: $now() } }],
+                },
+              ],
             },
           })
         : policy(name, c.entity, "read", { fields, where: { status: COLLECTION_PUBLISHED } }),
@@ -3623,15 +3696,20 @@ export function createCollectionTasks(collections: readonly CollectionDef[]) {
     ctx: HandlerContext,
     payload: unknown,
     tokenColumn: "scheduledAt" | "unpublishAt",
-    buildPatch: (row: Record<string, unknown>) => Record<string, unknown>,
+    buildPatch: (row: Record<string, unknown>, now: string) => Record<string, unknown>,
   ): Promise<void> => {
     const { collection, id, token } = asObj(payload) as { collection?: string; id?: string; token?: string };
     if (typeof collection !== "string" || typeof id !== "string") return;
     // Resolved through the REGISTRY, exactly as the handlers do — the payload's `collection`
-    // is never used as a table name. A task naming a collection that has since been removed
-    // from the registry is dropped, not executed against a guessed table.
+    // is never used as a table name.
     const c = bySlug.get(collection);
-    if (!c) return;
+    // A slug the handlers accept but this registry does not know is a WIRING mistake:
+    // `createCollectionHandlers(collections)` and `createCollectionTasks(otherList)` built
+    // from different arrays. Returning quietly made the drain report `{ succeeded: 1 }`
+    // while the row stayed a draft forever — strictly worse than not registering the tasks
+    // at all, which dead-letters loudly. Throw so the outbox retries and then dead-letters
+    // with the slug in the message.
+    if (!c) throw new Error(`pramen/cms: no collection '${collection}' in createCollectionTasks' registry — pass the SAME collections array to createCollectionHandlers and createCollectionTasks`);
     const db = cdb(ctx);
     const rows = await db.find({ from: c.entity, where: { [c.idField ?? "id"]: id }, limit: 1 });
     const row = rows[0];
@@ -3647,23 +3725,41 @@ export function createCollectionTasks(collections: readonly CollectionDef[]) {
     // unconditionally. The guard should fail closed, not open.
     const stored = typeof row[tokenColumn] === "string" ? (row[tokenColumn] as string) : "";
     if (!token || !stored || stored !== token) return;
-    await db.update(c.entity, id, buildPatch(row));
+    await db.update(c.entity, id, buildPatch(row, isoStamp()));
   };
   return {
     [TASK_COLLECTION_PUBLISH]: (ctx: HandlerContext, payload: unknown) =>
-      run(ctx, payload, "scheduledAt", (row) => {
-        const now = isoStamp();
-        const patch: Record<string, unknown> = { status: COLLECTION_PUBLISHED, publishedAt: now, scheduledAt: null };
-        // Same repair `collectionPublish` performs, for the same reason: the public scope
-        // enforces `unpublishAt IS NULL OR unpublishAt > $now()`, so a takedown instant that
-        // has already passed would make this publish invisible. Reachable when the unpublish
-        // task never ran, and equally when THIS task drains late — after a legitimately
-        // scheduled takedown has come and gone.
-        if (typeof row.unpublishAt === "string" && row.unpublishAt <= now) patch.unpublishAt = null;
-        return patch;
+      run(ctx, payload, "scheduledAt", (row, now) => {
+        // CONVERGE to the state the schedule implies AT `now`, rather than blindly applying
+        // the step this task was enqueued for. A drain can lag arbitrarily (D1 cron
+        // granularity, outbox backoff, a stalled DO alarm), and the two tasks can arrive in
+        // either order, so "publish" has to mean "publish IF the takedown has not come yet".
+        //
+        // The previous behavior — publish anyway, and null the passed `unpublishAt` to keep
+        // the row visible — destroyed a scheduled takedown outright: the token the unpublish
+        // task compares against was gone, so it no-op'd, and the read scope's
+        // `unpublishAt IS NULL OR unpublishAt > $now()` backstop had nothing left to enforce.
+        // A row scheduled to come down at noon stayed world-readable forever, silently.
+        // A takedown that failing OPEN cannot be recovered from is the wrong way round.
+        if (typeof row.unpublishAt === "string" && row.unpublishAt !== "" && row.unpublishAt <= now) {
+          // Both instants are in the past: the row's whole scheduled life has elapsed.
+          // Land on the END state (down), and spend both tokens so neither task can fire
+          // against this schedule again.
+          return { status: COLLECTION_DRAFT, publishedAt: null, scheduledAt: null, unpublishAt: null };
+        }
+        // The ordinary case: publish now, keep a still-future takedown standing.
+        return { status: COLLECTION_PUBLISHED, publishedAt: now, scheduledAt: null };
       }),
     [TASK_COLLECTION_UNPUBLISH]: (ctx: HandlerContext, payload: unknown) =>
-      run(ctx, payload, "unpublishAt", () => ({ status: COLLECTION_DRAFT, publishedAt: null, unpublishAt: null })),
+      // Clear `scheduledAt` too — the third column `collectionUnpublish` clears and this
+      // task used to leave behind. A pending publish token that survived a takedown is a
+      // live re-publish: if the publish task drains after this one (either order is
+      // possible) or is retried after a throw, it finds its token still matching and puts
+      // the row back up — with `unpublishAt` now null, permanently and with no repair path.
+      // A schedule always orders publish BEFORE takedown (`collectionSchedule` enforces it
+      // against the stored value as well as the submitted one), so any `scheduledAt` still
+      // standing at the takedown is spent by definition.
+      run(ctx, payload, "unpublishAt", () => ({ status: COLLECTION_DRAFT, publishedAt: null, scheduledAt: null, unpublishAt: null })),
   };
 }
 

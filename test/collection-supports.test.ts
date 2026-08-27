@@ -450,6 +450,37 @@ describe("the public read scope IS the access boundary", () => {
     expect(row).not.toHaveProperty("unpublishAt"); // nor the managed workflow columns
   });
 
+  // A published row with NO publishedAt stamp — a bootstrap seed, an import, or a row
+  // published while the collection was still `supports: ["drafts"]`. `NULL <= '2026-…'` is
+  // NULL, not true, so requiring the comparison alone made every such row vanish the moment
+  // `scheduling` was added to an existing collection: a whole public site emptying at once,
+  // with nothing at boot or in the editor to explain it.
+  test("a published row with no publishedAt stamp is still public (NULL is not 'scheduled')", async () => {
+    const d = await fresh();
+    const sys = systemCtx(d).db as unknown as Db;
+    await sys.insert("talks", { title: "seeded", status: "published" }); // publishedAt NULL
+    const rows = (await publicCtx(d).find({ from: "talks", where: {} })) as Row[];
+    expect(rows.map((r) => r.title)).toEqual(["seeded"]);
+    // …and it is still subject to a takedown.
+    await sys.update("talks", String(rows[0].id), { unpublishAt: new Date(Date.now() - 1000).toISOString() });
+    expect(await publicCtx(d).find({ from: "talks", where: {} })).toHaveLength(0);
+  });
+
+  // The most obvious public query there is. `publishedAt` was excluded from the grant, and a
+  // caller may not ORDER BY a column it cannot read — so "newest published first" 403'd for
+  // anonymous while working for an editor.
+  test("the public grant can order by publishedAt — the natural public listing works", async () => {
+    const d = await fresh();
+    const sys = systemCtx(d).db as unknown as Db;
+    await sys.insert("talks", { title: "older", status: "published", publishedAt: new Date(Date.now() - 7_200_000).toISOString() });
+    await sys.insert("talks", { title: "newer", status: "published", publishedAt: new Date(Date.now() - 3_600_000).toISOString() });
+    const rows = (await publicCtx(d).find({ from: "talks", where: {}, orderBy: { column: "publishedAt", dir: "desc" } })) as Row[];
+    expect(rows.map((r) => r.title)).toEqual(["newer", "older"]);
+    // The FORWARD-looking columns stay private — a planned takedown is not public.
+    expect(rows[0]).not.toHaveProperty("unpublishAt");
+    expect(rows[0]).not.toHaveProperty("scheduledAt");
+  });
+
   // `anonymous` is assigned ONLY to callers with no verified token, so spreading the public
   // grants into that role alone denies logged-IN users content logged-OUT visitors can read.
   test("an authenticated non-editor needs the grant too — `anonymous` does not cover them", async () => {
@@ -563,18 +594,56 @@ describe("scheduling", () => {
 
   // The same repair collectionPublish does — reachable when the unpublish task never ran,
   // and equally when THIS task drains late, after a legitimate takedown has passed.
-  test("the publish TASK also clears a spent unpublishAt, so a late drain still goes live", async () => {
+  // A LATE drain must not resurrect a row whose takedown has already come and gone. The
+  // publish task used to publish anyway and NULL the passed `unpublishAt` to keep the row
+  // visible — which destroyed both the takedown task's intent token (it then no-op'd) and
+  // the read scope's `unpublishAt > $now()` backstop, leaving the row world-readable
+  // permanently. The task converges to the state the schedule implies at drain time.
+  test("the publish TASK lands DOWN when the takedown instant has already passed", async () => {
     const d = await fresh();
     const enq: Row[] = [];
     const ctx = editorCtx(d, enq);
     const { id } = await create(ctx, { title: "T" });
-    await run(H.collectionSchedule, ctx, { collection: "talks", id, publishAt: Date.now() } as JsonValue);
-    // A takedown instant that has already come and gone by the time the task drains.
+    await run(H.collectionSchedule, ctx, { collection: "talks", id, publishAt: Date.now(), unpublishAt: Date.now() + 60_000 } as JsonValue);
+    // Both instants are in the past by the time the outbox actually drains.
     await (systemCtx(d).db as unknown as Db).update("talks", String(id), { unpublishAt: new Date(Date.now() - 1000).toISOString() });
 
     await TASKS[TASK_COLLECTION_PUBLISH](systemCtx(d), enq[0].payload);
-    expect((await rowOf(d, String(id))).unpublishAt).toBeNull();
-    expect((await publicCtx(d).find({ from: "talks", where: {} })) as Row[]).toHaveLength(1);
+    const row = await rowOf(d, String(id));
+    expect(row.status).toBe("draft");
+    expect(row.publishedAt).toBeNull();
+    // Both tokens spent, so neither task can fire against this schedule again.
+    expect(row.scheduledAt).toBeNull();
+    expect(row.unpublishAt).toBeNull();
+    expect((await publicCtx(d).find({ from: "talks", where: {} })) as Row[]).toHaveLength(0);
+
+    // …and a redelivery of the takedown task cannot change that either.
+    await TASKS[TASK_COLLECTION_UNPUBLISH](systemCtx(d), enq[1].payload);
+    expect((await publicCtx(d).find({ from: "talks", where: {} })) as Row[]).toHaveLength(0);
+  });
+
+  // The reverse drain order, and the retry case. The takedown task used to clear only
+  // status/publishedAt/unpublishAt, leaving `scheduledAt` — so the publish task (draining
+  // late, or retried after a throw) still matched its token and put the row back up, with
+  // no takedown left to bring it down again.
+  test("the unpublish TASK spends the pending publish token, so a late publish cannot republish", async () => {
+    const d = await fresh();
+    const enq: Row[] = [];
+    const ctx = editorCtx(d, enq);
+    const { id } = await create(ctx, { title: "T" });
+    await run(H.collectionSchedule, ctx, { collection: "talks", id, publishAt: Date.now(), unpublishAt: Date.now() + 60_000 } as JsonValue);
+    // The takedown drains FIRST (its instant has arrived; the publish task is still queued
+    // or being retried).
+    await (systemCtx(d).db as unknown as Db).update("talks", String(id), { status: "published", publishedAt: new Date().toISOString() });
+    await TASKS[TASK_COLLECTION_UNPUBLISH](systemCtx(d), enq[1].payload);
+    const down = await rowOf(d, String(id));
+    expect(down.status).toBe("draft");
+    expect(down.scheduledAt).toBeNull();
+
+    // The publish task now arrives. Its token no longer matches anything.
+    await TASKS[TASK_COLLECTION_PUBLISH](systemCtx(d), enq[0].payload);
+    expect((await rowOf(d, String(id))).status).toBe("draft");
+    expect((await publicCtx(d).find({ from: "talks", where: {} })) as Row[]).toHaveLength(0);
   });
 
   // The guard compared coalesced strings, so "no token" vs "no schedule" read as a match.
@@ -590,11 +659,17 @@ describe("scheduling", () => {
     expect((await rowOf(d, String(id))).status).toBe("draft");
   });
 
-  test("a task naming an unregistered collection is dropped, never run against a guessed table", async () => {
+  // The payload's `collection` is never used as a table name — it is resolved through the
+  // registry. An unknown slug THROWS rather than returning quietly: a slug the handlers
+  // accept but the tasks do not know is a wiring mistake (two different collection arrays),
+  // and swallowing it made the drain report success while the row stayed a draft forever.
+  test("a task naming an unregistered collection throws — it is never run against a guessed table", async () => {
     const d = await fresh();
     const ctx = editorCtx(d);
     const { id } = await create(ctx, { title: "T" });
-    await TASKS[TASK_COLLECTION_PUBLISH](systemCtx(d), { collection: "not_registered", id, token: null });
+    await expect(TASKS[TASK_COLLECTION_PUBLISH](systemCtx(d), { collection: "not_registered", id, token: null })).rejects.toThrow(
+      /no collection 'not_registered' in createCollectionTasks' registry/,
+    );
     expect((await rowOf(d, String(id))).status).toBe("draft");
   });
 
@@ -649,6 +724,54 @@ describe("scheduling", () => {
 
     await expect(run(H.collectionSchedule, roCtx, { collection: "talks", id, publishAt: Date.now() + 1000 } as JsonValue)).rejects.toThrow(/not found/);
     expect((await rowOf(d, String(id))).scheduledAt).toBeNull();
+  });
+
+  // The documented way to move a publish date is `collectionSchedule({ publishAt })` with
+  // `unpublishAt` omitted, which leaves an existing takedown standing. Comparing the two
+  // instants only WITHIN one call let a reschedule push the publish PAST that takedown: the
+  // takedown fired first and cleared itself, the publish fired after it, and the row was
+  // public forever with nothing left to bring it down. No stalled drain required.
+  test("a reschedule cannot move the publish date past a PENDING takedown", async () => {
+    const d = await fresh();
+    const enq: Row[] = [];
+    const ctx = editorCtx(d, enq);
+    const { id } = await create(ctx, { title: "T" });
+    const t1 = Date.now() + 60_000;
+    const t2 = Date.now() + 120_000;
+    await run(H.collectionSchedule, ctx, { collection: "talks", id, publishAt: t1, unpublishAt: t2 } as JsonValue);
+
+    await expect(run(H.collectionSchedule, ctx, { collection: "talks", id, publishAt: t2 + 60_000 } as JsonValue)).rejects.toThrow(
+      /at or after the scheduled takedown/,
+    );
+    // The stored schedule is untouched, and moving the takedown along with it is accepted.
+    expect((await rowOf(d, String(id))).scheduledAt).toBe(new Date(t1).toISOString());
+    await run(H.collectionSchedule, ctx, { collection: "talks", id, publishAt: t2 + 60_000, unpublishAt: t2 + 120_000 } as JsonValue);
+    expect((await rowOf(d, String(id))).scheduledAt).toBe(new Date(t2 + 60_000).toISOString());
+    // …as is cancelling it outright.
+    await run(H.collectionSchedule, ctx, { collection: "talks", id, publishAt: t2 + 300_000, unpublishAt: null } as JsonValue);
+    expect((await rowOf(d, String(id))).unpublishAt).toBeNull();
+  });
+
+  // `Number.isFinite` is not a bound. Above the max Date, `toISOString()` throws INSIDE the
+  // mutation (an opaque 500 for the common epoch-microseconds slip); from year 10000 up it
+  // mints an expanded-year string whose leading `+` sorts BEFORE every real timestamp,
+  // inverting every comparison the feature rests on.
+  test("a schedule epoch outside the sane Date range is a 400, not a 500 or a `+010000` token", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "T" });
+    const bad = (v: unknown) => run(H.collectionSchedule, ctx, { collection: "talks", id, publishAt: v } as JsonValue);
+    await expect(bad(1e16)).rejects.toThrow(/publishAt must be an epoch ms between/); // epoch µs
+    await expect(bad(8.64e15)).rejects.toThrow(/between/); // year 275760 — a valid Date, still absurd
+    await expect(bad(253402300800000)).rejects.toThrow(/between/); // year 10000 exactly
+    await expect(bad(-1)).rejects.toThrow(/between/);
+    await expect(bad(1.5)).rejects.toThrow(/whole number/);
+    await expect(
+      run(H.collectionSchedule, ctx, { collection: "talks", id, publishAt: Date.now(), unpublishAt: 253402300800000 } as JsonValue),
+    ).rejects.toThrow(/unpublishAt must be an epoch ms between/);
+    // The boundary itself is accepted, and stays a 4-digit year.
+    await run(H.collectionSchedule, ctx, { collection: "talks", id, publishAt: 253402300799999 } as JsonValue);
+    expect(String((await rowOf(d, String(id))).scheduledAt)).toMatch(/^9999-/);
   });
 
   test("unpublishAt must be after publishAt, and both must be finite", async () => {

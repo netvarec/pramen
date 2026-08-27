@@ -400,7 +400,7 @@ to:
 
 ```
 status = 'published'
-  AND publishedAt <= $now()
+  AND (publishedAt IS NULL OR publishedAt <= $now())
   AND (unpublishAt IS NULL OR unpublishAt > $now())
 ```
 
@@ -411,9 +411,21 @@ by the task — if `createCollectionTasks` was never wired or the outbox drain i
 row still stops being readable at its instant. That is the direction where failing open is
 worst.
 
-The grant is also restricted to **the declared fields plus the id**. An entity column that
-is not in `fields` — an `internalNote`, a `reviewerEmail`, or the managed workflow columns —
-stays private even on a published row, so adding one later doesn't quietly publish it.
+`publishedAt IS NULL` counts as published: a row seeded by `cmsBootstrap`, imported, or
+published while the collection was still `supports: ["drafts"]` has no stamp, and
+`NULL <= '2026-…'` is NULL — so requiring the comparison alone emptied a whole public site
+the moment `scheduling` was added to an existing collection. NULL cannot mean "scheduled for
+later": `publishedAt` is managed (never client-writable) and only ever takes *now* or null,
+while a row awaiting a scheduled publish is `status: 'draft'` with the instant in
+`scheduledAt`.
+
+The grant is restricted to **the declared fields, the id, `status`, and (with `scheduling`)
+`publishedAt`**. An entity column that is not in `fields` — an `internalNote`, a
+`reviewerEmail` — stays private even on a published row, so adding one later doesn't quietly
+publish it. `publishedAt` is in because a caller may not `orderBy` a column it cannot read,
+and "newest published first" is the public query: excluding it 403'd anonymous while working
+for an editor. The forward-looking `scheduledAt` / `unpublishAt` stay out — "this comes down
+on Friday" is not public.
 
 Your public read then stays an ordinary list — see `publicLectures` in `example/app.ts`.
 
@@ -482,10 +494,20 @@ on D1.
   unreachable through `collectionListRevisions` (it is purged on delete anyway).
 - **`collectionSchedule` patches the takedown, it doesn't reset it.** Omitting `unpublishAt`
   leaves an existing one standing (so moving a publish date doesn't silently revoke a
-  scheduled removal); pass `unpublishAt: null` to cancel one deliberately.
-- **Publishing clears a takedown instant that has already passed**, but leaves a future one
-  standing — publishing early is not a cancellation, yet a spent instant would otherwise
-  make the publish a silent no-op under the read scope.
+  scheduled removal); pass `unpublishAt: null` to cancel one deliberately. The new publish
+  instant is checked against the takedown *already stored*, not just one sent in the same
+  call — a reschedule cannot slide the publish past a pending takedown (which would fire
+  first, cancel itself, and leave the row public forever).
+- **A schedule converges, in any drain order.** The tasks are at-least-once and can drain
+  arbitrarily late. The publish task therefore resolves to the state the schedule implies at
+  drain time: if the takedown instant has also passed by then, the row lands **down**, with
+  both tokens spent — it does not publish and discard the takedown. The takedown task
+  likewise clears the pending publish token, so a retried or late publish cannot resurrect
+  the row.
+- **An interactive publish is different from the scheduled one**: `collectionPublish` clears
+  a takedown instant that has already passed and puts the row live, because a person with
+  publish rights is saying "live, now" about a takedown that has already been served. A
+  *future* takedown always stands.
 - **Scheduling a future publish does not take a live row down.** `collectionSchedule` sets
   `scheduledAt` and leaves `status`/`publishedAt` alone (parity with `schedulePage`), so
   scheduling a *published* row means it stays public until the task re-stamps it. Unpublish
