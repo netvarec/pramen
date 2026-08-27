@@ -6,6 +6,7 @@
 import { Button, Input } from "@podoba/react";
 import { createContext, use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Api, clearConfig, isTokenExpired, loadConfig, saveConfig, type Config } from "./api";
+import { BRAND, SETUP_TITLE, type BrandConfig } from "./brand";
 import type { CollectionMeta, JsonValue } from "./types";
 
 declare global {
@@ -20,6 +21,13 @@ declare global {
       /** Extra top-nav links to companion tools the host serves (e.g. a curation page).
        * Rendered as plain external `<a>` links after the built-in tabs. */
       extraNav?: { label: string; href: string }[];
+      /** The wordmark in the topbar, on the Setup screen, and in the browser tab.
+       *
+       * This editor ships as a package an agency deploys FOR ITS CLIENT, so the default
+       * put the framework's name where the client's belongs — someone logging into their
+       * own CMS was greeted by "pramen". Set `name` (and optionally `suffix`) to the
+       * deployment's own; `suffix: null` drops the "· cms" half entirely. */
+      brand?: BrandConfig;
     };
   }
 }
@@ -149,8 +157,10 @@ function Setup({ cfg, onSave }: { cfg: Config; onSave: (c: Config) => void }) {
   return (
     <div className="mx-auto mt-[14vh] w-full max-w-[520px] px-6">
       <div className="rounded-panel border border-border bg-surface-card px-10 py-8 shadow-[0_24px_60px_rgba(30,20,10,0.08)]">
+        {/* `SETUP_TITLE`, not `BRAND.title`: this screen has always read "… cms editor", and
+            the default has to render byte-identical to before the brand seam existed. */}
         <h1 className="mb-4 text-display text-fg">
-          pramen <span className="text-fg-subtle">· cms editor</span>
+          {BRAND.name} <span className="text-fg-subtle">{SETUP_TITLE}</span>
         </h1>
         <p className="mb-6 text-sm text-fg-muted">
           Point at your Worker and paste an editor/reviewer JWT. CORS must allow this origin (<code>CORS_ORIGINS</code>).

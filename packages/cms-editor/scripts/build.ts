@@ -20,7 +20,9 @@ const html = (jsName: string) => `<!doctype html>
     <link rel="stylesheet" href="/fonts.css" />
     <link rel="stylesheet" href="/app.css" />
     <!-- Runtime config, loaded before the app so window.PRAMEN_CMS_EDITOR is set at boot.
-         A default config.js ships in dist; a host overrides it to set e.g. signInUrl. -->
+         A default config.js ships in dist; a host overrides it to set e.g. signInUrl or
+         the wordmark. The <title> below is the pre-hydration fallback — the app re-applies
+         the configured brand on boot, since this file is baked before any config exists. -->
     <script src="/config.js"></script>
   </head>
   <body>
@@ -32,10 +34,20 @@ const html = (jsName: string) => `<!doctype html>
 
 // Default runtime config — hosts override /config.js to configure the editor (e.g. an
 // external sign-in URL). Shipped so the <script src="/config.js"> never 404s.
-const DEFAULT_CONFIG_JS = `// Runtime configuration for the pramen CMS editor. Override this file in your host app to
-// point unauthenticated / expired sessions at an external sign-in page instead of the
-// built-in Setup screen:
-//   window.PRAMEN_CMS_EDITOR = { signInUrl: "/signin/" };
+const DEFAULT_CONFIG_JS = `// Runtime configuration for the pramen CMS editor. Override this file in your host app —
+// no rebuild needed. Every field is optional:
+//
+//   window.PRAMEN_CMS_EDITOR = {
+//     // Send unauthenticated / expired sessions to your own sign-in page instead of the
+//     // built-in Setup screen (?setup=1 still forces Setup, to paste a first-admin JWT):
+//     signInUrl: "/signin/",
+//     // The wordmark in the topbar, on the Setup screen and in the browser tab. Set this
+//     // when you deploy the editor for a client — the default says "pramen", which is the
+//     // framework's name, not theirs. \`suffix: null\` drops the "· cms" half.
+//     brand: { name: "Acme", suffix: "cms" },
+//     hidePages: true,                                  // collections-only deployments
+//     extraNav: [{ label: "Curation", href: "/curate" }],
+//   };
 window.PRAMEN_CMS_EDITOR = window.PRAMEN_CMS_EDITOR || {};
 `;
 
@@ -73,8 +85,14 @@ async function build(): Promise<void> {
   if (!js) throw new Error("no js output");
   const jsName = js.path.split("/").pop()!;
   await writeFile(`${dist}/index.html`, html(jsName));
-  await writeFile(`${dist}/config.js`, DEFAULT_CONFIG_JS);
-  console.log(`built dist/${jsName} + index.html + config.js`);
+  // Written only when ABSENT. `dist/config.js` is the documented configuration surface — a
+  // host edits it in place, and in `--watch` this function re-runs on every save, so an
+  // unconditional write silently threw away the wordmark someone was in the middle of
+  // previewing. The `rm -rf dist` below still gives a clean build the default every time.
+  const configPath = `${dist}/config.js`;
+  const kept = await Bun.file(configPath).exists();
+  if (!kept) await writeFile(configPath, DEFAULT_CONFIG_JS);
+  console.log(`built dist/${jsName} + index.html${kept ? " (kept your config.js)" : " + config.js"}`);
 }
 
 await rm(dist, { recursive: true, force: true });

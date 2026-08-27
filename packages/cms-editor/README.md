@@ -43,6 +43,49 @@ rewrite to `/index.html` (Cloudflare Pages/`assets` handle this by default). The
 referenced by an **absolute** path (`/main.<hash>.js`), so it loads correctly from any route
 depth — don't rewrite it to a relative path.
 
+## Configure it (`/config.js`)
+
+`dist/config.js` is loaded before the app boots and sets `window.PRAMEN_CMS_EDITOR`. Override
+that one file on your host — no rebuild, no fork. Every field is optional, and the shipped
+file has them all commented out; **add them one at a time**:
+
+```js
+window.PRAMEN_CMS_EDITOR = {
+  brand: { name: "Acme", suffix: "cms" },            // the wordmark — see below
+  // signInUrl: "/signin/",                          // ONLY once that page exists — see the warning
+  // hidePages: true,                                // collections-only deployments
+  // extraNav: [{ label: "Curation", href: "/curate" }],
+};
+```
+
+> **`signInUrl` must be a page that exists, and same-origin needs care.** An unauthenticated
+> load calls it after clearing the stored session, so if the path 404s into this SPA's own
+> catch-all (which a same-origin extensionless path does — see the SPA-fallback note above),
+> the editor bounces between the redirect and itself with no session to recover from. Point
+> it at a page you have already deployed, and prefer a separate origin.
+
+**Set `brand` when you deploy this for a client.** The editor ships as a package an agency
+installs on someone else's behalf, so the default wordmark — `pramen · cms editor`, in the
+topbar, on the Setup screen and in the browser tab — puts the framework's name where the
+client's belongs. `name` replaces it; `suffix: null` drops the `· cms` half entirely. A
+configured brand replaces the whole string, including the word "editor", so nothing English
+is appended to a client's name. Configure nothing and every surface renders exactly as it
+did before this option existed.
+
+A malformed `brand` can never take the editor down: a non-string value is ignored rather
+than thrown on, and a `brand` that yields no usable name logs a console warning instead of
+silently shipping "pramen" to your client.
+
+The `<title>` in `index.html` is baked at build time, before any config exists, so the app
+re-applies the configured brand on boot; the static tag is the pre-hydration fallback, which
+means the default shows for the moment before the bundle runs.
+
+A clean build regenerates `config.js` when it is missing, but never overwrites one that is
+already there — including on every `dev` rebuild — so an edit you are previewing survives.
+
+Settings → About still reports `pramen · cms-editor`. That row names the *software* you are
+running, not the deployment, which is what an About panel is for.
+
 Routes are file-based: `src/routes/*` is scanned by the Bun plugin at build time, which
 (re)generates the checked-in `src/buzola.gen.ts`. After adding or renaming a route, run
 `bun run codegen` (the build does it automatically) so tsc sees the new route.

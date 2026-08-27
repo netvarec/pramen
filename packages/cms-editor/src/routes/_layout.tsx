@@ -6,6 +6,7 @@ import { Outlet, useNavigate, useRoute } from "@buzola/router";
 import { Button, Card, MoonIcon, SunIcon, Text, Topbar } from "@podoba/react";
 import { useEffect, useState } from "react";
 import { useApp } from "../app-context";
+import { BRAND } from "../brand";
 
 const THEME_KEY = "pramen.cms.theme";
 
@@ -57,11 +58,11 @@ export default function RootLayout() {
           <button
             type="button"
             onClick={guarded(() => navigate("home"))}
-            aria-label="pramen cms — home"
+            aria-label={`${BRAND.spoken} — home`}
             className="flex items-baseline gap-1 rounded-md px-1 py-0.5 transition-colors hover:bg-surface-muted"
           >
-            <span className="text-callout font-bold tracking-[0.01em] text-fg">pramen</span>
-            <span className="text-fg-subtle">· cms</span>
+            <span className="text-callout font-bold tracking-[0.01em] text-fg">{BRAND.name}</span>
+            {BRAND.suffix ? <span className="text-fg-subtle">· {BRAND.suffix}</span> : null}
           </button>
         </Topbar.Brand>
         <Topbar.Nav aria-label="Primary">
