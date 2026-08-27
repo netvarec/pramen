@@ -2736,6 +2736,12 @@ export const COLLECTION_REVISIONS_TABLE = "cms_collection_revisions";
 export const COLLECTION_DRAFT = "draft";
 export const COLLECTION_PUBLISHED = "published";
 
+/** `collectionList` page size when the caller names none, and the ceiling it is clamped to.
+ * The cap is the point: an unbounded list of a wide entity is the D1-over-RPC failure mode
+ * (GitHub #22), and `LIMIT -1` is SQLite for "no limit". */
+const DEFAULT_COLLECTION_LIST_LIMIT = 100;
+const MAX_COLLECTION_LIST_LIMIT = 500;
+
 /** An ISO-8601 UTC instant — the one format every managed collection timestamp is written
  * in, so it compares correctly against `$now()`. See the note above on why this is not
  * `nowStamp()`. */
@@ -2995,6 +3001,19 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
   };
   const idOf = (c: CollectionDef): string => c.idField ?? "id";
   const has = (c: CollectionDef, f: CollectionFeature): boolean => (c.supports ?? []).includes(f);
+  const columnsOf = (c: CollectionDef): Record<string, FieldDef> => ((opts.schema?.[c.entity]?.fields ?? {}) as Record<string, FieldDef>);
+  /** The list ordering, resolved ONCE against the entity. The documented default is
+   * `createdAt desc`, but that column is not guaranteed to exist — and an ORDER BY over a
+   * missing column does not fail: the dialect quotes the name, SQLite resolves the unknown
+   * quoted identifier to a string CONSTANT, every row sorts equal, and the list comes back
+   * in arbitrary storage order. Fall back to the PK, which always exists, so the order is at
+   * least stable and paging is coherent. (A DECLARED `orderBy` over a missing column is a
+   * boot error — see `validateCollections`.) */
+  const orderByOf = (c: CollectionDef): { column: string; dir: "asc" | "desc" } => {
+    if (c.orderBy) return { column: c.orderBy.column, dir: c.orderBy.dir ?? "desc" };
+    return { column: "createdAt" in columnsOf(c) ? "createdAt" : idOf(c), dir: "desc" };
+  };
+  const orderBys = new Map(collections.map((c) => [c.slug, orderByOf(c)] as const));
   /** 400 (not 500) when a caller invokes a workflow handler on a collection that never
    * opted into it — the handlers exist for every collection, the features do not. */
   const needs = (c: CollectionDef, f: CollectionFeature): void => {
@@ -3034,11 +3053,47 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
       createdAt: isoStamp(),
     });
   };
-  /** Shared input validator for the `{ collection, id }` workflow handlers. */
+  /** Shared input validator for the `{ collection, id }` handlers. */
   const rowInput = (raw: unknown): { collection: string; id: string } => {
     const o = asObj(raw);
     if (typeof o.collection !== "string" || o.collection === "") throw new BadRequest("collection is required");
     return { collection: o.collection, id: idInput(raw) };
+  };
+  const collectionInput = (raw: unknown): string => {
+    const o = asObj(raw);
+    if (typeof o.collection !== "string" || o.collection === "") throw new BadRequest("collection is required");
+    return o.collection;
+  };
+  /** `{ collection, values }` — the write handlers. `values` is validated against the field
+   * schema downstream (`toColumns`); this only rejects a non-object, so a string or an array
+   * cannot reach the field validator as a bag of index keys. */
+  const valuesInput = (raw: unknown): { collection: string; values: Record<string, unknown> } => {
+    const o = asObj(raw);
+    const values = o.values;
+    if (values === null || typeof values !== "object" || Array.isArray(values)) throw new BadRequest("values must be an object");
+    return { collection: collectionInput(raw), values: values as Record<string, unknown> };
+  };
+  const rowValuesInput = (raw: unknown): { collection: string; id: string; values: Record<string, unknown> } => ({
+    ...rowInput(raw),
+    values: valuesInput(raw).values,
+  });
+  /** `{ collection, limit?, offset? }`, both CLAMPED. `find` binds `limit` straight into
+   * `LIMIT ?`, and SQLite reads a negative limit as UNBOUNDED — so `limit: -1` dumps the
+   * whole table over RPC — while a fractional value reaches the driver as-is and 500s. */
+  const listInput = (raw: unknown): { collection: string; limit?: number; offset?: number } => {
+    const o = asObj(raw);
+    const num = (name: string, v: unknown): number | undefined => {
+      if (v === undefined || v === null) return undefined;
+      if (typeof v !== "number" || !Number.isFinite(v)) throw new BadRequest(`${name} must be a number`);
+      return Math.floor(v);
+    };
+    const limit = num("limit", o.limit);
+    const offset = num("offset", o.offset);
+    return {
+      collection: collectionInput(raw),
+      limit: limit === undefined ? undefined : Math.max(1, Math.min(limit, MAX_COLLECTION_LIST_LIMIT)),
+      offset: offset === undefined ? undefined : Math.max(0, offset),
+    };
   };
   // Validate against the field schema, sanitize richtext, then PROJECT to declared field
   // names only — the write whitelist. `requireRequired` is off for updates (partial patch);
@@ -3064,16 +3119,19 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
 
     collectionList: query((ctx, input: { collection: string; limit?: number; offset?: number }) => {
       const c = def(input.collection);
-      const limit = typeof input.limit === "number" ? input.limit : 100;
-      const offset = typeof input.offset === "number" ? input.offset : undefined;
-      return cdb(ctx).find({ from: c.entity, orderBy: c.orderBy ?? { column: "createdAt", dir: "desc" }, limit, offset });
-    }, editor),
+      return cdb(ctx).find({
+        from: c.entity,
+        orderBy: orderBys.get(c.slug) ?? orderByOf(c),
+        limit: input.limit ?? DEFAULT_COLLECTION_LIST_LIMIT,
+        offset: input.offset,
+      });
+    }, { ...editor, input: listInput }),
 
     collectionGet: query(async (ctx, input: { collection: string; id: string }) => {
       const c = def(input.collection);
       const rows = await cdb(ctx).find({ from: c.entity, where: { [idOf(c)]: input.id }, limit: 1 });
       return rows[0] ?? null;
-    }, editor),
+    }, { ...editor, input: rowInput }),
 
     collectionCreate: mutation((ctx, input: { collection: string; values: Record<string, unknown> }) => {
       const c = def(input.collection);
@@ -3089,7 +3147,7 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
         values.unpublishAt = null;
       }
       return cdb(ctx).insert(c.entity, values);
-    }, editor),
+    }, { ...editor, input: valuesInput }),
 
     collectionUpdate: mutation(async (ctx, input: { collection: string; id: string; values: Record<string, unknown> }) => {
       const c = def(input.collection);
@@ -3113,7 +3171,7 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
       const updated = await db.update(c.entity, input.id, toColumns(c, input.values, false, current));
       if (updated === undefined) throw notFound(c.label);
       return updated;
-    }, editor),
+    }, { ...editor, input: rowValuesInput }),
 
     collectionDelete: mutation(async (ctx, input: { collection: string; id: string }) => {
       const c = def(input.collection);

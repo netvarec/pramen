@@ -660,6 +660,72 @@ describe("scheduling", () => {
   });
 });
 
+describe("input validation (the CRUD handlers, not just the workflow ones)", () => {
+  // `collectionGet`/`Update`/`Create`/`List` had no boundary validator, so a caller-supplied
+  // OBJECT reached the where-compiler as an OPERATOR predicate: `{ id: { gt: "" } }`
+  // compiled to `WHERE id > '' LIMIT 1` and returned an ARBITRARY row.
+  test("an operator object where an id belongs is a 400, not an arbitrary row", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    await create(ctx, { title: "A" });
+    await create(ctx, { title: "B" });
+    await expect(run(H.collectionGet, ctx, { collection: "talks", id: { gt: "" } } as unknown as JsonValue)).rejects.toThrow(/id is required/);
+    await expect(
+      run(H.collectionUpdate, ctx, { collection: "talks", id: { gt: "" }, values: { title: "X" } } as unknown as JsonValue),
+    ).rejects.toThrow(/id is required/);
+    await expect(run(H.collectionDelete, ctx, { collection: "talks", id: { gt: "" } } as unknown as JsonValue)).rejects.toThrow(/id is required/);
+    // …and nothing was written on the way to the rejection.
+    expect(await d.exec("SELECT id FROM cms_collection_revisions", [])).toHaveLength(0);
+  });
+
+  test("a non-object `values` is a 400", async () => {
+    const ctx = editorCtx(await fresh());
+    await expect(run(H.collectionCreate, ctx, { collection: "talks", values: "title=x" } as unknown as JsonValue)).rejects.toThrow(/values must be an object/);
+    await expect(run(H.collectionCreate, ctx, { collection: "talks", values: ["title"] } as unknown as JsonValue)).rejects.toThrow(/values must be an object/);
+  });
+
+  test("a missing/blank collection is a 400 on every handler", async () => {
+    const ctx = editorCtx(await fresh());
+    await expect(run(H.collectionList, ctx, {} as JsonValue)).rejects.toThrow(/collection is required/);
+    await expect(run(H.collectionGet, ctx, { collection: "", id: "x" } as JsonValue)).rejects.toThrow(/collection is required/);
+  });
+
+  // SQLite reads a NEGATIVE limit as unbounded, and a fractional one reaches the driver
+  // as-is. Both are clamped rather than merely validated.
+  test("collectionList clamps limit and offset", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    for (const t of ["a", "b", "c"]) await create(ctx, { title: t });
+    expect(await run(H.collectionList, ctx, { collection: "talks", limit: -1 } as JsonValue)).toHaveLength(1);
+    expect(await run(H.collectionList, ctx, { collection: "talks", limit: 2.7 } as JsonValue)).toHaveLength(2);
+    expect(await run(H.collectionList, ctx, { collection: "talks", limit: 10_000 } as JsonValue)).toHaveLength(3);
+    expect(await run(H.collectionList, ctx, { collection: "talks", offset: -5 } as JsonValue)).toHaveLength(3);
+    await expect(run(H.collectionList, ctx, { collection: "talks", limit: "10" } as unknown as JsonValue)).rejects.toThrow(/limit must be a number/);
+  });
+
+  // The default ordering is `createdAt desc` — but that column is not guaranteed to exist,
+  // and an ORDER BY over a missing column does not fail: SQLite resolves the quoted
+  // identifier to a string constant and every row sorts equal.
+  test("a collection whose entity has no createdAt still orders deterministically", async () => {
+    const noCreated = defineSchema({
+      ...cmsSchema,
+      notes: Entity((t) => ({ id: primaryKey(generated(t.uuid())), title: t.text() })),
+    });
+    const notes = collection("notes", { entity: "notes", label: "Note", fields: [{ name: "title", type: "text" }] });
+    const NH = createCollectionHandlers([notes], { schema: noCreated });
+    const driver = bunSqliteDriver(new Database(":memory:"));
+    await migrate(driver, noCreated);
+    const ident: Identity = { userId: "ed", roles: ["editor"] };
+    const ctx = {
+      db: new Db(driver, { acl: compileAcl([role("editor", collectionPolicies([notes]))]), identity: ident, schema: noCreated, partition: undefined }, noCreated),
+      identity: ident,
+    } as unknown as HandlerContext;
+    await run(NH.collectionCreate, ctx, { collection: "notes", values: { title: "one" } } as JsonValue);
+    const rows = (await run(NH.collectionList, ctx, { collection: "notes" } as JsonValue)) as Row[];
+    expect(rows).toHaveLength(1);
+  });
+});
+
 describe("revisions", () => {
   test("an edit snapshots the PRIOR state, and restore reverses it", async () => {
     const d = await fresh();
