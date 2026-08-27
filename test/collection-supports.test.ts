@@ -23,6 +23,7 @@ import {
   createCollectionTasks,
   collectionPolicies,
   collectionPublicPolicies,
+  cmsPolicies,
   validateCollections,
   COLLECTION_REVISIONS_TABLE,
   COLLECTION_PREVIEW_PATH,
@@ -660,6 +661,46 @@ describe("scheduling", () => {
   });
 });
 
+describe("revision history is append-only in the ACL, not just by convention", () => {
+  // `collectionPolicies` grants read+create on the shared revisions table and says why. The
+  // block/page half used to list the SAME table in its full-CRUD loop, and every wiring in
+  // the README spreads both fragments — so the append-only guarantee held for nobody, since
+  // duplicate policies on one (role, entity, action) OR-merge and the wider grant wins.
+  test("cmsPolicies().editor does not grant update or delete on cms_collection_revisions", () => {
+    const acts = cmsPolicies()
+      .editor.filter((p) => p.entity === COLLECTION_REVISIONS_TABLE)
+      .map((p) => p.action);
+    expect(acts).toEqual([]);
+  });
+
+  test("collectionPolicies grants exactly read + create on it", () => {
+    const acts = collectionPolicies([talks])
+      .filter((p) => p.entity === COLLECTION_REVISIONS_TABLE)
+      .map((p) => p.action)
+      .sort();
+    expect(acts).toEqual(["create", "read"]);
+  });
+
+  // The wiring the README documents: both fragments in one role. History still cannot be
+  // rewritten or purged through it.
+  test("a role holding BOTH fragments still cannot rewrite or purge a revision", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "v1" });
+    await run(H.collectionUpdate, ctx, { collection: "talks", id, values: { title: "v2" } } as JsonValue);
+    const [rev] = (await d.exec("SELECT id FROM cms_collection_revisions WHERE rowId = ?", [String(id)])) as Array<{ id: string }>;
+
+    const both: Identity = { userId: "b", roles: ["both"] };
+    const db = new Db(
+      d,
+      { acl: compileAcl([role("both", [...cmsPolicies().editor, ...collectionPolicies([talks])])]), identity: both, schema, partition: undefined },
+      schema,
+    );
+    await expect(db.update(COLLECTION_REVISIONS_TABLE, rev.id, { snapshot: { title: "forged" } })).rejects.toThrow();
+    await expect(db.delete(COLLECTION_REVISIONS_TABLE, rev.id)).rejects.toThrow();
+  });
+});
+
 describe("input validation (the CRUD handlers, not just the workflow ones)", () => {
   // `collectionGet`/`Update`/`Create`/`List` had no boundary validator, so a caller-supplied
   // OBJECT reached the where-compiler as an OPERATOR predicate: `{ id: { gt: "" } }`
@@ -902,6 +943,133 @@ describe("revisions", () => {
   // A snapshot is built from an ACL-PROJECTED row, so a caller whose read scope excluded
   // every declared column stores `{}`. Db.update returns undefined for a zero-column patch,
   // which would surface as "not found" for a row loaded two lines earlier.
+  // FIELD-level read restrictions have to hold through history too. The row gate above is
+  // row-level, and `collectionPolicies` grants the shared revisions table a flat allow() —
+  // so a junior editor scoped to `fields: ["id","title","status"]` could read every withheld
+  // column straight out of the snapshot JSON, and write them back with a restore.
+  test("a snapshot is projected to the caller's readable FIELDS, not just the readable row", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "v1", speaker: "SECRET-SPEAKER" });
+    await run(H.collectionUpdate, ctx, { collection: "talks", id, values: { title: "v2", speaker: "SECRET-SPEAKER" } } as JsonValue);
+
+    // Read+update on the row, but only two of its columns.
+    const junior: Identity = { userId: "j", roles: ["junior"] };
+    const juniorRoles = [
+      role("junior", [
+        policy("j:read", "talks", "read", { fields: ["id", "title", "status"] }),
+        policy("j:update", "talks", "update", { fields: ["id", "title"] }),
+        ...collectionPolicies([talks]).filter((p) => p.entity === COLLECTION_REVISIONS_TABLE),
+      ]),
+    ];
+    const juniorCtx = {
+      db: new Db(d, { acl: compileAcl(juniorRoles), identity: junior, schema, partition: undefined }, schema),
+      identity: junior,
+    } as unknown as HandlerContext;
+
+    const revs = (await run(H.collectionListRevisions, juniorCtx, { collection: "talks", id } as JsonValue)) as Row[];
+    expect(revs).toHaveLength(1);
+    expect((revs[0].snapshot as Record<string, unknown>).title).toBe("v1");
+    expect(revs[0].snapshot).not.toHaveProperty("speaker"); // withheld by the field scope
+
+    // …and a restore writes back only what that caller could see.
+    await run(H.collectionRestoreRevision, juniorCtx, { collection: "talks", id, revisionId: String(revs[0].id) } as JsonValue);
+    const row = await rowOf(d, String(id));
+    expect(row.title).toBe("v1");
+    expect(row.speaker).toBe("SECRET-SPEAKER"); // untouched, not restored from an unseen value
+
+    // The stored snapshot itself is COMPLETE — history is an audit record, not a view. An
+    // editor with full read sees the whole thing.
+    const full = (await run(H.collectionListRevisions, ctx, { collection: "talks", id } as JsonValue)) as Row[];
+    expect((full.at(-1)!.snapshot as Record<string, unknown>).speaker).toBe("SECRET-SPEAKER");
+  });
+
+  // The snapshot is taken through the RAW path, so what it records does not depend on who
+  // made the edit — history was otherwise lossy as a function of the actor's field scope.
+  test("an edit by a field-restricted editor still snapshots the row's full prior state", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "v1", speaker: "Ada" });
+
+    const junior: Identity = { userId: "j", roles: ["junior"] };
+    const juniorRoles = [
+      role("junior", [
+        policy("j:read", "talks", "read", { fields: ["id", "title", "status"] }),
+        policy("j:update", "talks", "update", { fields: ["id", "title"] }),
+        ...collectionPolicies([talks]).filter((p) => p.entity === COLLECTION_REVISIONS_TABLE),
+      ]),
+    ];
+    const juniorCtx = {
+      db: new Db(d, { acl: compileAcl(juniorRoles), identity: junior, schema, partition: undefined }, schema),
+      identity: junior,
+    } as unknown as HandlerContext;
+    await run(H.collectionUpdate, juniorCtx, { collection: "talks", id, values: { title: "v2" } } as JsonValue);
+
+    const stored = (await d.exec("SELECT snapshot FROM cms_collection_revisions WHERE rowId = ?", [String(id)])) as Array<{ snapshot: string }>;
+    expect(JSON.parse(stored[0].snapshot) as Record<string, unknown>).toEqual({ title: "v1", speaker: "Ada" });
+  });
+
+  // On D1 `transaction` is a no-op, so a revision written BEFORE the patch was validated
+  // survived the rejected edit — a phantom entry recording no change, and a burnt value in
+  // the per-row revision counter.
+  test("a REJECTED edit writes no revision", async () => {
+    const d = await fresh();
+    const ctx = editorCtx(d);
+    const { id } = await create(ctx, { title: "v1" });
+    await expect(run(H.collectionUpdate, ctx, { collection: "talks", id, values: { title: 42 } } as JsonValue)).rejects.toThrow();
+    expect(await d.exec("SELECT id FROM cms_collection_revisions WHERE rowId = ?", [String(id)])).toHaveLength(0);
+  });
+
+  // The snapshot round-trip over the types that are NOT plain text: a json-backed document
+  // column (the raw read returns stored TEXT, not the parsed value) and a NULL column (the
+  // projected read simply omitted it before). Both have to come back out of history in the
+  // shape an ordinary write would take.
+  test("a document field and a NULL field survive snapshot -> restore", async () => {
+    const docSchema = defineSchema({
+      ...cmsSchema,
+      posts: Entity((t) => ({
+        id: primaryKey(generated(t.uuid())),
+        title: t.text(),
+        subtitle: t.text(), // nullable, never written
+        body: t.json(),
+        createdAt: defaultTo(t.text(), expr.now()),
+      })),
+    });
+    const posts = collection("posts", {
+      entity: "posts",
+      label: "Post",
+      supports: ["revisions"],
+      fields: [
+        { name: "title", type: "text" },
+        { name: "subtitle", type: "text" },
+        { name: "body", type: "richtext" },
+      ],
+    });
+    const PH = createCollectionHandlers([posts], { schema: docSchema });
+    const driver = bunSqliteDriver(new Database(":memory:"));
+    await migrate(driver, docSchema);
+    const ident: Identity = { userId: "ed", roles: ["editor"] };
+    const ctx = {
+      db: new Db(driver, { acl: compileAcl([role("editor", collectionPolicies([posts]))]), identity: ident, schema: docSchema, partition: undefined }, docSchema),
+      identity: ident,
+    } as unknown as HandlerContext;
+
+    const doc = { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "v1 prose" }] }] };
+    const made = (await run(PH.collectionCreate, ctx, { collection: "posts", values: { title: "v1", body: doc } } as JsonValue)) as Row;
+    await run(PH.collectionUpdate, ctx, { collection: "posts", id: made.id, values: { title: "v2" } } as JsonValue);
+
+    const revs = (await run(PH.collectionListRevisions, ctx, { collection: "posts", id: made.id } as JsonValue)) as Row[];
+    const snap = revs[0].snapshot as Record<string, unknown>;
+    expect(snap.title).toBe("v1");
+    expect(snap.subtitle).toBeNull(); // captured as NULL, not silently dropped
+    expect(snap.body).toEqual(doc); // decoded from the stored TEXT, not a JSON string
+
+    await run(PH.collectionRestoreRevision, ctx, { collection: "posts", id: made.id, revisionId: String(revs[0].id) } as JsonValue);
+    const back = (await run(PH.collectionGet, ctx, { collection: "posts", id: made.id } as JsonValue)) as Row;
+    expect(back.title).toBe("v1");
+    expect(back.body).toEqual(doc);
+  });
+
   test("restoring an EMPTY snapshot says what is wrong, not `not found`", async () => {
     const d = await fresh();
     const ctx = editorCtx(d);

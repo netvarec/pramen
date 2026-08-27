@@ -2526,7 +2526,13 @@ export interface CmsPolicyOpts {
  * `editor` grants full CRUD across every cms_ table. */
 export function cmsPolicies(opts: CmsPolicyOpts = {}): { public: Policy[]; editor: Policy[] } {
   const p = opts.prefix ?? "cms";
-  const tables = ["cms_content_types", "cms_block_types", "cms_blocks", "cms_pages", "cms_page_blocks", "cms_page_revisions", "cms_media", "cms_audit", "cms_collection_revisions"] as const;
+  // `cms_collection_revisions` is deliberately NOT here: it is append-only, and this loop
+  // grants update AND delete. Spreading both fragments (which every wiring in the README
+  // does) would otherwise hand every editor the ability to rewrite or purge history through
+  // any app handler, silently overriding the read+create grant `collectionPolicies` emits —
+  // duplicate policies on the same (role, entity, action) OR-merge, so the wider one wins.
+  // The collection half owns that table's grant; see `collectionPolicies`.
+  const tables = ["cms_content_types", "cms_block_types", "cms_blocks", "cms_pages", "cms_page_blocks", "cms_page_revisions", "cms_media", "cms_audit"] as const;
   // Soft-deleted rows are filtered in the ACL, not in each handler. A read scope is
   // AND-merged into every `ctx.db` read, so one policy hides a trashed row from the public
   // API, the editor, relation traversals and eager-loads at once — where a per-handler
@@ -2999,6 +3005,15 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
     if (!c) throw new BadRequest(`unknown collection: ${String(slug)}`);
     return c;
   };
+  /** Narrow a stored snapshot to the columns a caller may read on the collection's entity.
+   * Used by both the history read and the restore write, so "what you can see" and "what you
+   * can put back" are the same set. */
+  const projectSnapshot = (snapshot: unknown, readable: ReadonlySet<string>): Record<string, unknown> => {
+    const obj = snapshot && typeof snapshot === "object" && !Array.isArray(snapshot) ? (snapshot as Record<string, unknown>) : {};
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(obj)) if (readable.has(k)) out[k] = v;
+    return out;
+  };
   const idOf = (c: CollectionDef): string => c.idField ?? "id";
   const has = (c: CollectionDef, f: CollectionFeature): boolean => (c.supports ?? []).includes(f);
   const columnsOf = (c: CollectionDef): Record<string, FieldDef> => ((opts.schema?.[c.entity]?.fields ?? {}) as Record<string, FieldDef>);
@@ -3025,6 +3040,46 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
     if (!row) throw notFound(c.label);
     return row;
   };
+  /** Read a row's DECLARED FIELD columns unprojected, for the revision snapshot.
+   *
+   * `ctx.db.exec` is the documented raw escape hatch: it bypasses the row/field ACL, and it
+   * also bypasses the `Db` chokepoint's cell codec — so a json-backed column comes back as
+   * the stored TEXT and a boolean as 0/1. Both are decoded here from the entity's own column
+   * types (checked against the field types at boot), so a snapshot holds exactly what
+   * `db.find` would have returned for an unrestricted caller.
+   *
+   * Falls back to the ACL-projected row if the raw read comes back empty (a substrate quirk
+   * or a row deleted concurrently) — a partial snapshot beats no snapshot. */
+  const rawFieldValues = async (db: CmsDb, c: CollectionDef, rowId: string, projected: Record<string, unknown>): Promise<Record<string, unknown>> => {
+    const columns = columnsOf(c);
+    const names = c.fields.map((f) => f.name).filter((n) => n in columns);
+    if (names.length === 0) return {};
+    const cols = names.map((n) => `"${n}"`).join(", ");
+    // Identifiers, not values: `entity`, `idField` and every field name were checked against
+    // the schema at boot, so nothing caller-supplied is interpolated here. The id IS bound.
+    const rows = (await db.exec(`SELECT ${cols} FROM "${c.entity}" WHERE "${idOf(c)}" = ?`, rowId)) as Array<Record<string, unknown>>;
+    const raw = rows[0];
+    if (!raw) {
+      const fallback: Record<string, unknown> = {};
+      for (const f of c.fields) if (f.name in projected) fallback[f.name] = projected[f.name];
+      return fallback;
+    }
+    const values: Record<string, unknown> = {};
+    for (const name of names) {
+      const v = raw[name];
+      const type = columns[name]?.type;
+      if (v == null) values[name] = null;
+      else if ((type === "json" || type === "fileRef") && typeof v === "string") {
+        try {
+          values[name] = JSON.parse(v) as unknown;
+        } catch {
+          values[name] = v; // not JSON after all — keep the literal rather than losing it
+        }
+      } else if (type === "boolean") values[name] = typeof v === "boolean" ? v : v !== 0 && v !== 0n;
+      else values[name] = v;
+    }
+    return values;
+  };
   /** Snapshot a row's CURRENT (pre-write) state into `cms_collection_revisions`, so a
    * revision always reads as "what it was before this edit" and restoring one is a plain
    * reversal. Declared fields only — the snapshot is replayed through the same write
@@ -3032,9 +3087,15 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
    * No-op unless the collection supports `revisions`. */
   const snapshotRow = async (db: CmsDb, c: CollectionDef, row: Record<string, unknown>, ctx: HandlerContext, note: string): Promise<void> => {
     if (!has(c, "revisions")) return;
-    const values: Record<string, unknown> = {};
-    for (const f of c.fields) if (f.name in row) values[f.name] = row[f.name];
     const rowId = String(row[idOf(c)]);
+    // The row handed in came through the ACL, so it is projected to what THIS caller may
+    // read — which would make history a function of who happened to make the edit: an
+    // editor whose read scope excludes `salary` would silently drop it from the snapshot,
+    // and every later "restore to before that edit" would restore an incomplete row.
+    // History is an audit record, not a view, so capture the row's REAL pre-state through
+    // the raw escape hatch and let the READ path decide who may see which of its fields
+    // (`collectionListRevisions` projects it back down).
+    const values = await rawFieldValues(db, c, rowId, row);
     // Next in this row's sequence. Serialized by the DO's single writer; on D1 the composite
     // unique on (collection, rowId, revision) is the backstop — see the schema note.
     const [{ next = 1 } = {}] = (await db.exec(
@@ -3164,11 +3225,17 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
       } catch {
         current = undefined;
       }
-      // Snapshot BEFORE the write. `current` is undefined only when the pre-read above was
-      // denied (update-without-read grant), in which case there is nothing to snapshot —
-      // the revision is skipped rather than written empty.
+      // Validate + whitelist the patch BEFORE snapshotting. `toColumns` throws on an invalid
+      // patch, and on the DO that rollback is free (the mutation is one transaction) — but
+      // `D1Driver.transaction` is a no-op, so snapshotting first meant a REJECTED edit still
+      // committed a revision on D1: a phantom entry recording no change, and a burnt value
+      // in the per-row `revision` counter.
+      const patch = toColumns(c, input.values, false, current);
+      // `current` is undefined only when the pre-read above was denied (an
+      // update-without-read grant), in which case there is nothing to snapshot — the
+      // revision is skipped rather than written empty.
       if (current) await snapshotRow(db, c, current as Record<string, unknown>, ctx, "edit");
-      const updated = await db.update(c.entity, input.id, toColumns(c, input.values, false, current));
+      const updated = await db.update(c.entity, input.id, patch);
       if (updated === undefined) throw notFound(c.label);
       return updated;
     }, { ...editor, input: rowValuesInput }),
@@ -3329,14 +3396,25 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
       // a role holding narrower per-entity read policies could list the snapshots of a
       // collection it cannot read through `collectionGet`. `collectionRestoreRevision`
       // already had this via `loadRow`; the list path did not.
-      await loadRow(db, c, input.id);
-      return db.find({
+      const row = await loadRow(db, c, input.id);
+      const revs = await db.find({
         from: COLLECTION_REVISIONS_TABLE,
         where: { collection: c.slug, rowId: input.id },
         // By the monotonic counter, never by a timestamp — see the `revision` column.
         orderBy: { column: "revision", dir: "desc" },
         limit: input.limit ?? 50,
       });
+      // Project every snapshot to the fields THIS caller may read on the collection's own
+      // entity. The row check above is a ROW-level gate, and `collectionPolicies` grants the
+      // shared revisions table a flat allow() — so without this a caller holding a
+      // FIELD-restricted read policy (`fields: ["id", "title", "status"]`) reads back the
+      // columns that policy withholds, in full, out of the snapshot JSON. History must not
+      // be a way around the field scope that governs the row itself.
+      //
+      // `loadRow` came through the ACL, and reads are column-projected, so its keys ARE the
+      // caller's readable columns.
+      const readable = new Set(Object.keys(row));
+      return revs.map((r) => ({ ...r, snapshot: projectSnapshot(r.snapshot, readable) }));
     }, {
       ...editor,
       input: (raw): { collection: string; id: string; limit?: number } => {
@@ -3367,9 +3445,16 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
       // every declared column stored `{}`. `Db.update` returns undefined for a zero-column
       // patch, which would surface below as "not found" for a row loaded two lines earlier —
       // a misleading 404. Say what is actually wrong instead.
-      const restore = toColumns(c, rev.snapshot, false, current as FieldValues);
+      // Restore exactly the fields this caller can READ, for the same reason
+      // `collectionListRevisions` projects them: the snapshot is complete (it was captured
+      // through the raw path), and the shared revisions table is granted flat, so replaying
+      // it whole would let a field-restricted editor write back columns their own read
+      // policy withholds — restoring a value they cannot see, out of a version they cannot
+      // read. What you can see is what you can put back.
+      const visible = projectSnapshot(rev.snapshot, new Set(Object.keys(current)));
+      const restore = toColumns(c, visible, false, current as FieldValues);
       if (Object.keys(restore).length === 0) {
-        throw new BadRequest(`revision ${input.revisionId} has no restorable fields (it was captured with no readable columns)`);
+        throw new BadRequest(`revision ${input.revisionId} has no restorable fields (none of its columns are readable by this caller)`);
       }
       await snapshotRow(db, c, current, ctx, "restore");
       // Replay through the SAME validate + whitelist as an ordinary write: a snapshot taken
@@ -3698,12 +3783,21 @@ export function cmsRoutes(
      * from them with `viewerRolesOf`, so the two cannot drift. (`viewerRoles` overrides it
      * outright if you need to.) */
     handlers?: CmsHandlerOpts;
-    /** Explicit override for the roles the preview route presents to the DO. */
+    /** The SAME options you passed to `createCollectionHandlers`, if they differ from
+     * `handlers`. The COLLECTION preview route has its own gate — `getCollectionPreview` is
+     * built by `createCollectionHandlers`, so an app that passes different `editorRoles` /
+     * `reviewerRoles` to the two factories would have the route present the page half's
+     * roles to a handler gated on the collection half's, and every collection preview link
+     * would 404 uniformly (the response is deliberately indistinguishable from "not
+     * found"). Defaults to `handlers`, which is right whenever both got the same options. */
+    collectionHandlers?: CmsHandlerOpts;
+    /** Explicit override for the roles the preview routes present to the DO. */
     viewerRoles?: readonly string[];
   } = {},
 ): CmsRoute[] {
   const tenant = opts.tenant ?? "main";
   const previewRoles = opts.viewerRoles ?? viewerRolesOf(opts.handlers);
+  const collectionPreviewRoles = opts.viewerRoles ?? viewerRolesOf(opts.collectionHandlers ?? opts.handlers);
   return [
     {
       method: "GET",
@@ -3780,7 +3874,7 @@ export function cmsRoutes(
           name: "getCollectionPreview",
           input: { collection: payload.c, id: payload.r },
           tenant: payload.t, // from the SIGNED payload, never from the query string
-          roles: [...previewRoles],
+          roles: [...collectionPreviewRoles], // the COLLECTION handlers' gate — see `collectionHandlers`
         });
         const body = (await res.json().catch(() => ({}))) as { ok?: boolean; result?: JsonValue; error?: string; code?: string };
         if (body.ok !== true) {

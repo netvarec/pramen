@@ -423,8 +423,16 @@ closes the trap the old `publish` field type carried, where `publish` and `datet
 different formats into the same TEXT column and sorted against each other as if hours apart.
 
 Revisions snapshot the row's state **before** each content write — an edit, and a restore
-itself — projected to the declared fields, so a restore is a plain reversal that replays
-through the same whitelist rather than resurrecting a column the collection no longer owns.
+itself — so a restore is a plain reversal that replays through the same whitelist rather
+than resurrecting a column the collection no longer owns.
+
+The snapshot is taken through the raw path, so **history does not depend on who made the
+edit**: an editor whose read policy withholds a column would otherwise have silently dropped
+it from the snapshot, and every later "restore to before that edit" would restore an
+incomplete row. Reading history is projected the other way — `collectionListRevisions`
+narrows each snapshot to the fields *that* caller may read on the entity, and
+`collectionRestoreRevision` writes back exactly that set. Field-level read policies hold
+through history; what you can see is what you can put back.
 Publish and unpublish write **no** revision: they change no content, so the entry would be
 identical to the edit before it and restoring it would do nothing visible.
 
