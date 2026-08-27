@@ -759,8 +759,14 @@ export async function runCms(base: string): Promise<void> {
     "cms: a published collection row is readable by an authenticated non-editor too",
   );
   // The public projection is the declared fields + id — never an undeclared entity column.
-  const wfPublicRow = (wfAnonAfter.body.result as Array<Record<string, unknown>>).find((r) => r.id === wfRowId) ?? {};
-  assert(!("unpublishAt" in wfPublicRow) && !("scheduledAt" in wfPublicRow), "cms: the public projection excludes the managed workflow columns");
+  // `?? {}` here would make this assertion VACUOUS: a regression that both leaked the
+  // managed columns AND dropped the row from the public scope would still pass, because an
+  // empty object has none of them. Assert the row was actually found first.
+  const wfPublicRow = (wfAnonAfter.body.result as Array<Record<string, unknown>>).find((r) => r.id === wfRowId);
+  assert(wfPublicRow !== undefined, "cms: the published row is present in the public projection under test");
+  assert(!("unpublishAt" in wfPublicRow!) && !("scheduledAt" in wfPublicRow!), "cms: the public projection excludes the FORWARD-looking workflow columns");
+  assert("title" in wfPublicRow! && wfPublicRow!.publishedAt !== undefined, "cms: the public projection carries the declared fields + publishedAt");
+  assert(!("createdAt" in wfPublicRow!), "cms: the public projection excludes undeclared entity columns");
 
   // Revisions: the edit above snapshotted the pre-edit state.
   const wfRevs = await call("collectionListRevisions", { collection: "lectures", id: wfRowId }, admin);
@@ -778,6 +784,51 @@ export async function runCms(base: string): Promise<void> {
   );
   assert((await call("collectionSchedule", { collection: "lectures", id: wfRowId, publishAt: Date.now(), unpublishAt: Date.now() - 1000 }, admin)).status === 400,
     "cms: collectionSchedule rejects an unpublishAt before its publishAt (400)");
+  assert((await call("collectionSchedule", { collection: "lectures", id: wfRowId, publishAt: 1e16 }, admin)).status === 400,
+    "cms: collectionSchedule rejects an out-of-range epoch (400, not a 500 from toISOString)");
+
+  // …and DRAIN it. Without this the scheduled-publish TASK has no end-to-end coverage at
+  // all — `createCollectionTasks` could be deleted from example/app.ts and the whole suite
+  // would still pass, despite the README's "WITHOUT THIS WIRING A SCHEDULE NEVER FIRES".
+  // Schedule for NOW so the outbox row is due, then drain the tenant's outbox.
+  const dueAt = Date.now();
+  await call("collectionSchedule", { collection: "lectures", id: wfRowId, publishAt: dueAt }, admin);
+  const wfDrain = (await fetch(`${base}/admin/tasks/drain`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${admin}` },
+    body: JSON.stringify({ tenant: "main" }),
+  }).then((r) => r.json())) as { ok?: boolean };
+  assert(wfDrain.ok === true, "cms: the outbox drain runs the collection's scheduled-publish task");
+  const wfAfterDrain = await call("collectionGet", { collection: "lectures", id: wfRowId }, admin);
+  assert(wfAfterDrain.body.result.status === "published", "cms: the scheduled publish task moved the row live");
+  assert(wfAfterDrain.body.result.scheduledAt === null, "cms: the publish task spent its intent token");
+  const wfAnonDrained = await call("publicLectures", {});
+  assert(
+    (wfAnonDrained.body.result as Array<{ id: string }>).some((r) => r.id === wfRowId),
+    "cms: the row scheduled and drained is publicly readable",
+  );
+
+  // A scheduled TAKEDOWN, drained the same way, takes it back down — and spends BOTH
+  // tokens, so a redelivered publish task cannot put it back up.
+  await call("collectionSchedule", { collection: "lectures", id: wfRowId, publishAt: dueAt + 1, unpublishAt: dueAt + 2 }, admin);
+  await fetch(`${base}/admin/tasks/drain`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${admin}` },
+    body: JSON.stringify({ tenant: "main" }),
+  });
+  const wfTakenDown = await call("collectionGet", { collection: "lectures", id: wfRowId }, admin);
+  assert(wfTakenDown.body.result.status === "draft", "cms: the scheduled takedown task took the row back down");
+  assert(
+    wfTakenDown.body.result.unpublishAt === null && wfTakenDown.body.result.scheduledAt === null,
+    "cms: the takedown spends both schedule tokens, so nothing can republish the row",
+  );
+  const wfAnonDown = await call("publicLectures", {});
+  assert(
+    !(wfAnonDown.body.result as Array<{ id: string }>).some((r) => r.id === wfRowId),
+    "cms: the taken-down row is invisible to anonymous again",
+  );
+  // Deliberately left as a DRAFT here: the preview assertions below are about seeing a
+  // row's unpublished state through a signed link.
 
   // Preview: a signed, single-row link, wfRedeemed unauthenticated at the public route.
   const wfPreview = await call("signCollectionPreview", { collection: "lectures", id: wfRowId }, admin);
