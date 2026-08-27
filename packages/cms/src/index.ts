@@ -2709,12 +2709,21 @@ function collectionMeta(c: CollectionDef): CollectionMeta {
  * - `drafts` — a managed `status` column (`draft` | `published`) plus `collectionPublish` /
  *   `collectionUnpublish`. Pair with `collectionPublicPolicies` so anonymous reads see
  *   published rows only.
+ *
+ *   This gates VISIBILITY, not content. A collection is column-mapped — the public reads the
+ *   entity's own columns — so there is nowhere to stage an unpublished VERSION of a live
+ *   row: an edit (or a revision restore) on a published row is live immediately. That is the
+ *   one place collections do not reach page parity, where `getPage` serves a baked revision
+ *   snapshot. Unpublish first if an edit needs review.
  * - `scheduling` — managed `publishedAt` / `scheduledAt` / `unpublishAt`, `collectionSchedule`,
  *   and the deferred tasks from `createCollectionTasks`. Needs `drafts`.
  * - `revisions` — a snapshot of the row's prior state on every write, in
  *   `cms_collection_revisions`, with `collectionListRevisions` / `collectionRestoreRevision`.
  * - `preview` — signed, single-row preview links (`signCollectionPreview`), redeemed at
- *   `COLLECTION_PREVIEW_PATH` by the route `cmsRoutes()` serves. Needs `drafts`. */
+ *   `COLLECTION_PREVIEW_PATH` by the route `cmsRoutes()` serves. Needs `drafts`. It shows
+ *   the row's CURRENT state to whoever holds the link, which for a DRAFT is the unpublished
+ *   content and for a published row is what the public already sees (see `drafts` above:
+ *   there is no separate staged version to show). */
 export type CollectionFeature = "drafts" | "scheduling" | "revisions" | "preview";
 
 export const COLLECTION_FEATURES: readonly CollectionFeature[] = ["drafts", "scheduling", "revisions", "preview"];

@@ -295,7 +295,12 @@ log) for independent single-writer serialization and storage.
   are **whitelisted to declared fields** (a caller can't set an undeclared column like a
   `passwordHash`). The editor discovers collections at runtime (one generic editor, N
   collections, zero per-collection code) — nav + `/collections/:slug` list + `/collections/:slug/:id`
-  edit routes, all driven by `FieldForm`. See `example/app.ts` (the `lectures` collection).
+  edit routes, all driven by `FieldForm` — plus the `supports` controls (publish/unpublish,
+  schedule, preview link, revision restore) on a row. `supports` gates VISIBILITY, not
+  content: a collection is column-mapped, so an edit to a published row goes live at once
+  (no page-style staged snapshot). Scheduling converges in any drain order — a publish task
+  that drains after its own takedown instant lands the row DOWN rather than publishing and
+  discarding the takedown. See `example/app.ts` (the `lectures` collection).
 - Native queues: `ctx.queue.send(binding, body, { delaySeconds?, contentType? })` /
   `sendBatch(binding, msgs, opts?)` (`runtime/queue.ts`) — a facade + adapter seam (like
   `ctx.mail`) over **Cloudflare Queues**, distinct from `ctx.tasks` (NOT transactional with

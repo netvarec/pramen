@@ -5,7 +5,7 @@
 import { Button, Heading, Input, ModalDialog, ModalOverlay, ModalSurface, Textarea } from "@podoba/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Api, ApiError } from "./api";
-import { FieldForm, slugify } from "./fields";
+import { CONTROL, FieldForm, formatWhen, fromLocalInput, slugify, toLocalInput } from "./fields";
 import type { Config } from "./api";
 import type { Me } from "./app-context";
 import { isRichTextDoc, richTextToPlainText } from "./rich-text";
@@ -271,6 +271,185 @@ export function CollectionList({ api, def, onOpen, onNew, onError }: { api: Api;
   );
 }
 
+/** The workflow surface for a collection row — the UI half of the server's `supports`.
+ *
+ * Without this the feature is unreachable from the editor: `collectionCreate` always seeds
+ * `status: "draft"` and `collectionUpdate` strips `status` from the values bag (it is a
+ * MANAGED column, deliberately not in the write whitelist), so a row authored here could
+ * never be made public. Publishing has to be its own gated call, and this is where it is
+ * made. Every control is driven by `def.supports`, so a plain CRUD collection renders
+ * nothing at all.
+ *
+ * The row's managed columns come back on `collectionGet`/the write echoes, so the panel
+ * reads its state from the same `values` bag the form holds. */
+function CollectionWorkflow({
+  api,
+  def,
+  id,
+  values,
+  onChanged,
+  onError,
+}: {
+  api: Api;
+  def: CollectionMeta;
+  id: string;
+  values: FieldValues;
+  onChanged: (row: FieldValues) => void;
+  onError: (s: string) => void;
+}) {
+  const supports = def.supports ?? [];
+  const [busy, setBusy] = useState(false);
+  const [scheduling, setScheduling] = useState(false);
+  const [publishAt, setPublishAt] = useState("");
+  const [takedownAt, setTakedownAt] = useState("");
+  const [preview, setPreview] = useState<string | null>(null);
+  const [revisions, setRevisions] = useState<Array<{ id: string; revision: number; note: string | null; actor: string | null; createdAt: string }> | null>(null);
+
+  const status = typeof values.status === "string" ? values.status : "draft";
+  const published = status === "published";
+  const str = (k: string) => (typeof values[k] === "string" && values[k] !== "" ? (values[k] as string) : null);
+  const scheduledAt = str("scheduledAt");
+  const unpublishAt = str("unpublishAt");
+  const publishedAt = str("publishedAt");
+
+  if (supports.length === 0) return null;
+
+  const act = async (name: string, input: Record<string, unknown> = {}) => {
+    setBusy(true);
+    try {
+      const row = await api.call<FieldValues>(name, { collection: def.slug, id, ...input });
+      // The publish/unpublish handlers echo the persisted row; `collectionSchedule` returns
+      // `{ ok, scheduledAt, … }`, so re-read rather than merging a non-row shape in.
+      if (row && typeof row === "object" && def.idField in row) onChanged(row);
+      else {
+        const fresh = await api.call<FieldValues | null>("collectionGet", { collection: def.slug, id });
+        if (fresh) onChanged(fresh);
+      }
+      return true;
+    } catch (e) {
+      onError(errMsg(e));
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveSchedule = async () => {
+    const at = publishAt ? fromLocalInput(publishAt) : null;
+    if (!at) return onError("Pick a publication date and time first.");
+    const down = takedownAt ? fromLocalInput(takedownAt) : null;
+    if (takedownAt && !down) return onError("That takedown date is not a valid date and time.");
+    // `unpublishAt` is PATCH semantics server-side: omitted leaves an existing takedown
+    // standing, `null` cancels it. Send it explicitly whenever the scheduler is open, so
+    // what the editor sees in the two inputs is exactly what is stored.
+    const ok = await act("collectionSchedule", { publishAt: Date.parse(at), unpublishAt: down ? Date.parse(down) : null });
+    if (ok) setScheduling(false);
+  };
+
+  const openScheduler = () => {
+    setPublishAt(toLocalInput(scheduledAt ?? publishedAt ?? new Date().toISOString()));
+    setTakedownAt(unpublishAt ? toLocalInput(unpublishAt) : "");
+    setScheduling((v) => !v);
+  };
+
+  const mintPreview = async () => {
+    setBusy(true);
+    try {
+      const r = await api.call<{ url: string }>("signCollectionPreview", { collection: def.slug, id });
+      const url = api.resolve(r.url);
+      setPreview(url);
+      // Best-effort: the clipboard needs a secure context and a permission, and the link is
+      // rendered either way.
+      await navigator.clipboard?.writeText(url).catch(() => {});
+    } catch (e) {
+      onError(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const loadRevisions = async () => {
+    if (revisions) return setRevisions(null); // toggle closed
+    try {
+      setRevisions(await api.call<NonNullable<typeof revisions>>("collectionListRevisions", { collection: def.slug, id }));
+    } catch (e) {
+      onError(errMsg(e));
+    }
+  };
+
+  const restore = async (revisionId: string) => {
+    if (!confirm("Restore this version? The current content is snapshotted first, so this is itself undoable.")) return;
+    if (await act("collectionRestoreRevision", { revisionId })) setRevisions(null);
+  };
+
+  return (
+    <div className="flex flex-col gap-3 rounded-[14px] border border-border bg-surface-card px-[18px] py-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-fg-subtle">Status</span>
+        <Pill status={status}>{status}</Pill>
+        {publishedAt && published ? <span className="text-fg-subtle">since {formatWhen(publishedAt)}</span> : null}
+        {scheduledAt ? <span className="text-accent-strong">publishes {formatWhen(scheduledAt)}</span> : null}
+        {unpublishAt ? <span className="text-danger">comes down {formatWhen(unpublishAt)}</span> : null}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        {supports.includes("drafts") && !published ? (
+          <Button size="sm" isDisabled={busy} onPress={() => void act("collectionPublish")}>Publish now</Button>
+        ) : null}
+        {supports.includes("drafts") && published ? (
+          <Button variant="secondary" size="sm" isDisabled={busy} onPress={() => void act("collectionUnpublish")}>Unpublish</Button>
+        ) : null}
+        {supports.includes("scheduling") ? (
+          <Button variant="secondary" size="sm" isDisabled={busy} onPress={openScheduler}>{scheduledAt ? "Change schedule" : "Schedule…"}</Button>
+        ) : null}
+        {supports.includes("preview") ? (
+          <Button variant="ghost" size="sm" isDisabled={busy} onPress={() => void mintPreview()}>Preview link</Button>
+        ) : null}
+        {supports.includes("revisions") ? (
+          <Button variant="ghost" size="sm" isDisabled={busy} onPress={() => void loadRevisions()}>{revisions ? "Hide history" : "History"}</Button>
+        ) : null}
+      </div>
+      {scheduling ? (
+        <div className="flex flex-col gap-2 border-t border-border pt-3">
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="font-medium text-fg">Publish at</span>
+            <input className={CONTROL} type="datetime-local" value={publishAt} onChange={(e) => setPublishAt(e.target.value)} />
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="font-medium text-fg">Take down at (optional)</span>
+            <input className={CONTROL} type="datetime-local" value={takedownAt} onChange={(e) => setTakedownAt(e.target.value)} />
+          </label>
+          <p className="text-fg-subtle">
+            Scheduling does not take a live row down — it publishes at the first instant. A takedown must be after the publication time. Leave it empty to
+            cancel one.
+          </p>
+          <div className="flex gap-2">
+            <Button size="sm" isDisabled={busy} onPress={() => void saveSchedule()}>Save schedule</Button>
+            <Button variant="ghost" size="sm" onPress={() => setScheduling(false)}>Cancel</Button>
+          </div>
+        </div>
+      ) : null}
+      {preview ? (
+        <div className="border-t border-border pt-3 text-sm">
+          <span className="text-fg-subtle">Preview link (copied): </span>
+          <a className="break-all underline" href={preview} target="_blank" rel="noreferrer">{preview}</a>
+        </div>
+      ) : null}
+      {revisions ? (
+        <div className="flex flex-col gap-2 border-t border-border pt-3">
+          {revisions.map((r) => (
+            <div className={`${ROW} text-xs`} key={r.id}>
+              <span className="rounded-full bg-surface-muted px-2 py-0.5 font-mono text-xs text-fg-muted">#{r.revision}</span>
+              <span className="flex-1 truncate text-fg-subtle">{r.note ?? "edit"} · {r.actor ?? "system"} · {formatWhen(r.createdAt)}</span>
+              <Button variant="ghost" size="sm" isDisabled={busy} onPress={() => void restore(r.id)}>Restore</Button>
+            </div>
+          ))}
+          {revisions.length === 0 ? <p className="text-fg-subtle">No history yet.</p> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function CollectionEditor({ api, def, id, onSaved, onDeleted, onBack, onError }: { api: Api; def: CollectionMeta; id: string | null; onSaved: () => void; onDeleted: () => void; onBack: () => void; onError: (s: string) => void }) {
   const isNew = id === null;
   const [values, setValues] = useState<FieldValues>({});
@@ -339,6 +518,12 @@ export function CollectionEditor({ api, def, id, onSaved, onDeleted, onBack, onE
       ) : (
         <div className="flex max-w-[720px] flex-col gap-4">
           {ok ? <Banner ok>saved</Banner> : null}
+          {/* Publishing is a separate, separately-gated call — `status` is a managed column
+              the ordinary save cannot touch — so the workflow controls live outside the
+              form. Only on an existing row: there is nothing to publish until it exists. */}
+          {!isNew && id ? (
+            <CollectionWorkflow api={api} def={def} id={id} values={values} onChanged={setValues} onError={onError} />
+          ) : null}
           <FieldForm schema={def.fields} value={values} onChange={setValues} api={api} />
           <div className="mt-2 flex items-center gap-2">
             <Button onPress={save} isDisabled={busy}>{busy ? "Saving…" : isNew ? "Create" : "Save"}</Button>

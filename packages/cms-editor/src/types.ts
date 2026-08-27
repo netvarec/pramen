@@ -128,8 +128,9 @@ export interface CollectionMeta {
   orderBy?: { column: string; dir?: "asc" | "desc" };
   /** The workflow features the collection opted into server-side (`supports`), e.g.
    * `["drafts", "scheduling"]`. Carried here so this mirror stays faithful to
-   * `CollectionMeta`; the editor does not render affordances for them YET — publishing a
-   * collection row still means calling `collectionPublish` over the API. */
+   * `CollectionMeta`. The editor renders the matching affordances (publish/unpublish, a
+   * schedule picker, a preview link, a revision list) in `CollectionWorkflow`; an empty
+   * list renders none of them. */
   supports?: CollectionFeature[];
 }
 

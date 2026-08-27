@@ -328,6 +328,10 @@ CMS owns their values:
 | `revisions` | — (uses `cms_collection_revisions`) | `collectionListRevisions` / `collectionRestoreRevision` |
 | `preview` | — | `signCollectionPreview` (needs `drafts`) |
 
+The editor renders the matching controls on a collection row — Publish / Unpublish, a
+schedule picker, a preview link, and a restorable revision list — driven entirely by
+`supports`, so a plain CRUD collection shows none of them.
+
 ```ts
 talks: Entity((t) => ({
   id: primaryKey(generated(t.uuid())),
@@ -492,6 +496,14 @@ on D1.
   `cms_pages`-only.
 - **Listing revisions is gated by the row's read scope**, so a *deleted* row's history is
   unreachable through `collectionListRevisions` (it is purged on delete anyway).
+- **`drafts` gates VISIBILITY, not content.** A collection is column-mapped: the public
+  reads the entity's own columns, so there is nowhere to stage an unpublished *version* of a
+  live row. An edit to a published row — and a `collectionRestoreRevision` on one — goes
+  live immediately, and `preview` on a published row shows what the public already sees.
+  This is the one place collections do NOT reach page parity: `getPage` serves a baked
+  revision snapshot, which is what lets a page hold unreviewed edits back. Unpublish first
+  if an edit needs review. (Staging content would mean the public read stopped being a query
+  over your entity, which is the entire point of a collection.)
 - **`collectionSchedule` patches the takedown, it doesn't reset it.** Omitting `unpublishAt`
   leaves an existing one standing (so moving a publish date doesn't silently revoke a
   scheduled removal); pass `unpublishAt: null` to cancel one deliberately. The new publish
