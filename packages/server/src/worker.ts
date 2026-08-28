@@ -177,7 +177,26 @@ export async function callPrivileged(
 
 /** Build the Worker fetch handler for an app. State (the JWKS cache, the D1
  * compiled-ACL + one-time migration) is per-app, held in this closure. */
-export function makeWorker(app: PramenApp) {
+/** Options for the HTTP front door. */
+export interface WorkerOpts {
+  /** Mount every pramen route under this prefix, e.g. `"/_pramen"`.
+   *
+   * The routes are absolute by default (`/rpc/*`, `/live`, `/files/*`, `/media/*`,
+   * `/admin/*`, `/tenants`, plus `app.routes`), which is right for a Worker that is only
+   * pramen. It is wrong the moment pramen SHARES an origin with a site — an Astro app in
+   * the same script owns `/sitemap.xml`, and would find pramen had taken it.
+   *
+   * The prefix covers EVERYTHING pramen serves, `app.routes` included, so the embedding
+   * worker forwards exactly one pattern (`<basePath>/*`) and nothing can leak out of it.
+   * A route you want at the site root — a sitemap, say — is then the site's to serve,
+   * proxying this one if it wants pramen's answer. */
+  basePath?: string;
+}
+
+export function makeWorker(app: PramenApp, opts: WorkerOpts = {}) {
+  // Normalized once: no trailing slash, exactly one leading one. "" (the default) makes
+  // every comparison below identical to the unmounted behavior.
+  const basePath = opts.basePath ? `/${opts.basePath.replace(/^\/+|\/+$/g, "")}` : "";
   // JwksStrategy caches fetched public keys, so keep one instance per isolate (keyed
   // by URL) rather than rebuilding it per request. HmacStrategy is stateless.
   let jwks: JwksStrategy | undefined;
@@ -270,6 +289,19 @@ export function makeWorker(app: PramenApp) {
   return {
     async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+    // Strip the mount prefix before ANY matching, so every route below is written (and
+    // reasoned about) as though pramen owned the origin. A request outside the prefix is
+    // not ours: 404 rather than falling through to a route that accidentally matches the
+    // unprefixed path.
+    if (basePath) {
+      if (url.pathname !== basePath && !url.pathname.startsWith(`${basePath}/`)) {
+        return new Response(JSON.stringify({ ok: false, error: "not found", code: "not_found" }), {
+          status: 404,
+          headers: { "content-type": "application/json; charset=utf-8" },
+        });
+      }
+      url.pathname = url.pathname.slice(basePath.length) || "/";
+    }
 
     // File upload/download stream through the Worker (bytes never touch the DO),
     // authorized purely by the HMAC token in the url — no JWT/tenant routing.
@@ -306,7 +338,10 @@ export function makeWorker(app: PramenApp) {
 
     // Browser WebSockets can't set headers, so /live accepts the bearer token and
     // tenant via the query string; fold them into headers for the rest of the flow.
-    let req = request;
+    // Everything downstream — the DO included — must see the path WITHOUT the mount
+    // prefix. The DO parses `/rpc/<handler>` out of the url itself, so forwarding the
+    // original request made it look up a handler called "/_pramen/rpc/addNote".
+    let req = basePath ? new Request(url, request) : request;
     if (isWs) {
       const h = new Headers(request.headers);
       const qToken = url.searchParams.get("token");
@@ -317,7 +352,7 @@ export function makeWorker(app: PramenApp) {
       // accept it via ?partition= and default to the default partition.
       const qPartition = url.searchParams.get("partition");
       if (!h.get("x-pramen-partition")) h.set("x-pramen-partition", qPartition || DEFAULT_PARTITION);
-      req = new Request(request, { headers: h });
+      req = new Request(req, { headers: h });
     }
 
     const identity = await resolveIdentity(req, strategyFor(env));

@@ -5,5 +5,5 @@
 // runtime. A Worker's entry imports createPramen from here.
 
 export { createPramen, type PramenApp, type PublicRoute, type Env, type DoEnv } from "./pramen";
-export { makeWorker, callPrivileged } from "./worker";
+export { makeWorker, callPrivileged, type WorkerOpts } from "./worker";
 export { pramenDO, PramenDOBase } from "./durable-object";

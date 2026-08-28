@@ -319,7 +319,18 @@ log) for independent single-writer serialization and storage.
   `listPublicContentTypes` at `astro:config:setup` (build time has no editor session; slug +
   name only, never the regions/field schema) and FAILS the build if the CMS is unreachable —
   generating zero collections would deploy an empty site green. `createCmsClient`/`cmsLoader`
-  stay exported for hand-wired collections.
+  stay exported for hand-wired collections. `embed: { app, basePath? }` goes further: at
+  `astro:build:done` it writes `dist/_pramen-entry.mjs`, a Worker entrypoint that imports the
+  adapter's `dist/_worker.js/index.js` (a plain ES module — needs NOTHING from the adapter),
+  re-exports `PramenDO` beside it and routes `<basePath>/*` to pramen, everything else to
+  Astro — ONE worker, one origin, no CORS. Verified end-to-end on `wrangler dev`. It writes a
+  wrangler config only when none exists; an existing one is never edited (bindings are
+  logged). Pairs with `createPramen(app, { basePath })` — see below.
+- Worker `basePath` (`createPramen(app, { basePath: "/_pramen" })`): mounts EVERY pramen route
+  under a prefix, `app.routes` included, so pramen can share an origin with a site. The prefix
+  is stripped before any matching AND before the request is forwarded to the DO (the DO parses
+  `/rpc/<handler>` out of the url itself). A request outside the prefix is a 404, never a
+  fall-through to the unprefixed route. Default `""` = today's absolute routes, unchanged.
 - Native queues: `ctx.queue.send(binding, body, { delaySeconds?, contentType? })` /
   `sendBatch(binding, msgs, opts?)` (`runtime/queue.ts`) — a facade + adapter seam (like
   `ctx.mail`) over **Cloudflare Queues**, distinct from `ctx.tasks` (NOT transactional with
