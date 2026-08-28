@@ -110,3 +110,105 @@ describe("pramenCms()", () => {
     expect(injected[0]!.content).toContain('declare module "pramen:cms"');
   });
 });
+
+// --- embed: the CMS inside the site's own Worker -----------------------------------
+//
+// Astro's Cloudflare adapter writes `dist/_worker.js/index.js` as an ordinary ES module, so
+// a wrapper can import it, re-export the Durable Object and route by path — no adapter
+// support needed. These pin what the wrapper says, because it is a deploy artifact nobody
+// reads until it misbehaves.
+
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+/** Run `astro:build:done` in a throwaway project directory. */
+async function build(embed: NonNullable<Parameters<typeof pramenCms>[0]["embed"]>, opts: { wrangler?: string; app?: boolean } = {}) {
+  const root = mkdtempSync(join(tmpdir(), "pramen-embed-"));
+  mkdirSync(join(root, "src", "cms"), { recursive: true });
+  mkdirSync(join(root, "dist"), { recursive: true });
+  writeFileSync(join(root, "package.json"), JSON.stringify({ name: "my-site" }));
+  if (opts.app !== false) writeFileSync(join(root, "src/cms/app.ts"), "export default {};");
+  if (opts.wrangler) writeFileSync(join(root, opts.wrangler), "{}");
+  const logs: string[] = [];
+  const cwd = process.cwd();
+  process.chdir(root);
+  try {
+    await pramenCms({ backend: { url: "https://x.dev" }, collections: {}, embed }).hooks["astro:build:done"]!({
+      dir: new URL(`file://${root}/dist/`),
+      logger: { info: (m: string) => logs.push(`info:${m}`), warn: (m: string) => logs.push(`warn:${m}`) },
+    } as never);
+  } finally {
+    process.chdir(cwd);
+  }
+  const entryPath = join(root, embed.entry ?? "dist/_pramen-entry.mjs");
+  return { root, logs, entry: existsSync(entryPath) ? readFileSync(entryPath, "utf8") : "", hasWrangler: existsSync(join(root, "wrangler.jsonc")) };
+}
+
+describe("pramenCms({ embed })", () => {
+  test("does nothing at all unless `embed` is set", async () => {
+    const logs: string[] = [];
+    await pramenCms({ backend: { url: "https://x.dev" }, collections: {} }).hooks["astro:build:done"]!({
+      dir: new URL("file:///tmp/"), logger: { info: (m: string) => logs.push(m), warn: () => {} },
+    } as never);
+    expect(logs).toEqual([]);
+  });
+
+  test("writes an entrypoint that imports the adapter's worker and re-exports the DO", async () => {
+    const { entry } = await build({ app: "./src/cms/app.ts" });
+    expect(entry).toContain('import astro from "./_worker.js/index.js"');
+    expect(entry).toContain("export const PramenDO = pramen.PramenDO");
+    expect(entry).toContain('createPramen(app, { basePath: BASE })');
+    // The outbox drain and the queue consumer are pramen's; Astro has neither.
+    expect(entry).toContain("scheduled: pramen.scheduled");
+    expect(entry).toContain("queue: pramen.queue");
+  });
+
+  test("the app import is RELATIVE to the entry, not an absolute machine path", async () => {
+    const { entry, root } = await build({ app: "./src/cms/app.ts" });
+    expect(entry).toContain('import app from "../src/cms/app.ts"');
+    expect(entry).not.toContain(root); // no build machine baked into a committed artifact
+  });
+
+  test("the mount prefix defaults to /_pramen and is normalized", async () => {
+    expect((await build({ app: "./src/cms/app.ts" })).entry).toContain('const BASE = "/_pramen"');
+    expect((await build({ app: "./src/cms/app.ts", basePath: "cms/" })).entry).toContain('const BASE = "/cms"');
+  });
+
+  test("routes the prefix to pramen and everything else to Astro", async () => {
+    const { entry } = await build({ app: "./src/cms/app.ts" });
+    expect(entry).toContain('if (pathname === BASE || pathname.startsWith(BASE + "/")) return pramen.fetch');
+    expect(entry).toContain("return astro.fetch(request, env, ctx)");
+  });
+
+  test("a missing app module fails the build, naming what it looked for", async () => {
+    await expect(build({ app: "./src/cms/missing.ts" }, { app: false })).rejects.toThrow(/embed.app points at .*missing\.ts, which does not exist/);
+  });
+
+  test("writes a wrangler config when there is none, with the DO migration", async () => {
+    const { hasWrangler, logs, root } = await build({ app: "./src/cms/app.ts" });
+    expect(hasWrangler).toBe(true);
+    const cfg = readFileSync(join(root, "wrangler.jsonc"), "utf8");
+    expect(cfg).toContain('"new_sqlite_classes": ["PramenDO"]');
+    expect(cfg).toContain('"main": "dist/_pramen-entry.mjs"');
+    expect(cfg).toContain('"name": "my-site"'); // taken from package.json
+    expect(logs.join()).toContain("warn:wrote wrangler.jsonc");
+  });
+
+  // A deploy config is someone's checked-in artifact. Rewriting it from a build step is not
+  // something a build step gets to do.
+  test("NEVER edits an existing wrangler config — it prints what to add instead", async () => {
+    for (const name of ["wrangler.jsonc", "wrangler.json", "wrangler.toml"]) {
+      const { root, logs } = await build({ app: "./src/cms/app.ts" }, { wrangler: name });
+      expect(readFileSync(join(root, name), "utf8")).toBe("{}"); // untouched
+      expect(logs.join()).toContain(`${name} left untouched`);
+      expect(logs.join()).toContain("new_sqlite_classes");
+    }
+  });
+
+  test("`wrangler: false` writes no config even when none exists", async () => {
+    const { hasWrangler, entry } = await build({ app: "./src/cms/app.ts", wrangler: false });
+    expect(hasWrangler).toBe(false);
+    expect(entry).not.toBe(""); // the entrypoint is still written
+  });
+});

@@ -9,13 +9,12 @@
 //
 // Self-contained: no @pramen/server dependency — it just speaks the CMS's HTTP RPC.
 
+// RUNTIME ONLY — this module is bundled into the site (and into the Worker), so it must
+// never reach for a node builtin. The integration lives in `./integration.ts`, which does
+// (it writes files at build time); `./entry.ts` is what re-exports both for the package
+// root, and it is only ever loaded by astro.config.*.
 import type { Loader, LoaderContext } from "astro/loaders";
 
-// The integration — the front door (`pramenCms()`), re-exported so
-// `import pramenCms from "@pramen/cms-astro"` works. The kit of parts below stays exported:
-// a site that defines its own collections by hand still can.
-export { pramenCms, default } from "./integration.js";
-export type { CmsBackend, CollectionMap, PramenCmsOptions } from "./integration.js";
 
 /** Any JSON value — the wire form of everything the CMS stores. */
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };

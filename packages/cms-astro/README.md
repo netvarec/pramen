@@ -58,6 +58,35 @@ your deployment does need auth for reads, pass `backend: { token }`.
 the front door, not a replacement. A site that wants to define its own collections by hand
 still can.
 
+## One Worker instead of two (`embed`)
+
+By default the CMS is its own Cloudflare Worker and the site is another. It does not have to
+be:
+
+```ts
+pramenCms({
+  backend: { url: "https://my-site.example.com/_pramen" },
+  embed: { app: "./src/cms/app.ts" },   // your pramen app
+})
+```
+
+`astro build` then writes `dist/_pramen-entry.mjs` — a Worker entrypoint that imports the
+adapter's own worker, re-exports the Durable Object beside it, and routes `/_pramen/*` to the
+CMS and everything else to Astro. Point wrangler's `main` at it and deploy **one** Worker:
+one URL, no CORS, no second deployment. The site's pages read the CMS on their own origin.
+
+This needs nothing from the Cloudflare adapter: it writes `dist/_worker.js/index.js` as an
+ordinary ES module with a default export, so the generated entrypoint just imports it.
+
+Everything pramen serves moves under the prefix — `/rpc`, `/live`, `/files`, `/media`,
+`/admin`, and your `app.routes` — so `/sitemap.xml`, `/robots.txt` and every page path stay
+the site's. Change it with `embed.basePath`.
+
+If there is no wrangler config, one is written with the bindings the topology needs (DO +
+migration, KV, R2) and placeholders to fill in. **An existing config is never edited** — the
+bindings it needs are logged instead, because rewriting a checked-in deploy config is not
+something a build step should do.
+
 ## The kit of parts
 
 - **`createCmsClient({ baseUrl })`** — `getPage(slug, locale?)`, `listPublishedPages()`, and
