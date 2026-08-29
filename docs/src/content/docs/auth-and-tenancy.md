@@ -70,6 +70,63 @@ Token lifetime defaults to 1h; set `AUTH_SESSION_TTL_SECONDS` to tune it. Becaus
 `refreshSession` lets a client renew silently, a short TTL costs nothing in UX — see
 [Sessions & revocation](#sessions-revocation).
 
+### OIDC (Entra, Auth0/Okta, Google Workspace)
+
+`createOidcAuth()` adds the login flow — authorization code + PKCE — and exchanges it for a
+**pramen session**, exactly as the magic link does. The IdP proves who you are once; pramen
+owns the session from there, so `refreshSession`, the KV revocation denylist and role-based
+ACL all keep working unchanged.
+
+```ts
+import { authSchema, createOidcAuth, oidcHandlers } from "@pramen/auth";
+
+const oidc = createOidcAuth({
+  issuer: "https://login.microsoftonline.com/<tenant>/v2.0",  // discovery does the rest
+  clientId: "…",
+  clientSecret: "…",                       // omit for a public client (PKCE only)
+  redirectUri: "https://app.example.com/auth/oidc/callback",
+  successRedirect: "https://app.example.com/signed-in",
+});
+
+export const app = {
+  schema: defineSchema({ ...authSchema /* … */ }),
+  handlers: { ...authHandlers, ...oidcHandlers },
+  routes: [...oidc.routes],                // PRE-AUTH: a caller here has no session yet
+  acl,
+};
+```
+
+The browser hits `/auth/oidc/start`, comes back to `/auth/oidc/callback`, and lands on
+`successRedirect#token=<session>`. The token arrives in the URL **fragment**, which is never
+sent to a server — so it stays out of access logs, proxies and `Referer` headers.
+
+**Where roles come from** is the part that differs per provider, and the part that fails
+quietly if you get it wrong:
+
+| Provider | Roles in the ID token | What to configure |
+| --- | --- | --- |
+| Microsoft Entra | top-level `roles` | `mapRoles: (c) => c.roles as string[]` |
+| Auth0 / Okta | a namespaced claim | `mapRoles: (c) => c["https://acme.com/roles"] as string[]` |
+| Google Workspace | **none** | omit `mapRoles` — manage roles in pramen |
+
+With `mapRoles` the IdP is authoritative and its answer overwrites the stored roles on every
+login, including a removal. Without it, roles live on the user's row and a first login gets
+`defaultRoles`.
+
+**Accounts are keyed on the verified email** by default, so an OIDC login lands on the same
+row as a magic-link or password login for that address. A provider that does not assert
+`email_verified` is refused rather than trusted — otherwise an IdP allowing arbitrary
+addresses would be a takeover path into any existing account. Use `accountKey: "sub"` to key
+on the provider's opaque subject (namespaced by issuer) instead; that survives an email
+change but will not link up with accounts created another way.
+
+Deactivating a user in pramen still holds: `active = false` blocks the login even though the
+IdP knows nothing about that flag.
+
+If your frontend **already** holds an IdP token, you do not need any of this — set
+`JWKS_URL` (plus `AUTH_ISSUER` / `AUTH_AUDIENCE`) and the core verifies it directly. See
+[Verification strategies](#verification-strategies).
+
 ### Magic link (passwordless)
 
 `createMagicLinkAuth({ sendEmail })` adds a one-time, single-use, time-boxed email

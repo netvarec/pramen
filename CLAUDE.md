@@ -202,6 +202,22 @@ log) for independent single-writer serialization and storage.
   exported from `@pramen/server` for app-driven revocation. A live WebSocket also re-checks the
   token's `exp` per message (identity is fixed at upgrade), closing 4401 so a socket can't outlive
   its TTL.
+- OIDC login (`@pramen/auth`, opt-in): `createOidcAuth({ issuer, clientId, clientSecret?,
+  redirectUri, successRedirect })` → `{ routes }` (spread into `app.routes` — PRE-AUTH) plus
+  `oidcHandlers` (spread into handlers). Authorization code + PKCE S256, discovery via
+  `/.well-known/openid-configuration`, `state`+`nonce` in KV (single-use: read-and-DELETE
+  before the exchange), ID token verified by the same `JwksStrategy` the Worker uses
+  (signature/iss/aud/exp) plus a nonce match. Exchanges for a PRAMEN session, not a
+  passthrough of the IdP token — that keeps `refreshSession`, the KV denylist and
+  role-in-token ACL working. The session lands in the redirect's URL FRAGMENT (never sent to
+  a server). Roles: `mapRoles(claims)` when the IdP is authoritative (Entra `roles`,
+  Auth0/Okta namespaced claim) — it overwrites stored roles on every login, removals
+  included — else the row's stored roles (Google Workspace ships none), else `defaultRoles`.
+  Accounts key on the VERIFIED email by default (links with magic-link/password rows); an
+  unverified email is REFUSED, not silently keyed on `sub`. `accountKey: "sub"` namespaces by
+  issuer instead. `active = false` still blocks login. The write goes through
+  `callPrivileged` → `__oidcUpsertUser`, which is `auth: []` so no role can reach it over
+  /rpc. Verify-only (BYO-IdP via `JWKS_URL`) remains the zero-config path.
 - Password reset + email verification (`@pramen/auth`, opt-in): two one-time-email-token
   flows built on the magic-link machinery — mint a random token, store only its SHA-256
   **hash** + expiry in the shared `emailTokenSchema` table (`auth_email_tokens`, discriminated

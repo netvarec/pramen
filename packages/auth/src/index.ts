@@ -1069,3 +1069,6 @@ export function createEmailVerification(opts: EmailVerificationOptions): AuthMod
 
   return { handlers, tasks };
 }
+
+// --- OIDC (authorization code + PKCE) ---------------------------------------
+export { createOidcAuth, oidcHandlers, OIDC_UPSERT_HANDLER, type OidcOptions } from "./oidc.js";

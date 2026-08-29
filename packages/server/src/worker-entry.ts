@@ -4,6 +4,7 @@
 // (the CLI, tests, codegen) import from "@pramen/server" and never drag in the DO
 // runtime. A Worker's entry imports createPramen from here.
 
-export { createPramen, type PramenApp, type PublicRoute, type Env, type DoEnv } from "./pramen";
+export { createPramen, type PramenApp, type PublicRoute, type RouteContext, type Env, type DoEnv } from "./pramen";
 export { makeWorker, callPrivileged, type WorkerOpts } from "./worker";
+
 export { pramenDO, PramenDOBase } from "./durable-object";

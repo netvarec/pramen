@@ -87,6 +87,10 @@ export { R2Adapter, MemoryAdapter, createFiles, handleFileRequest } from "./runt
 // page-preview links. Exported so an app (or @pramen/cms) can mint its own capability url
 // without a second signing implementation.
 export { signToken, verifyToken, isUsableSecret, resolveSecret, MIN_TOKEN_SECRET_LEN } from "./runtime/token";
+// Verify strategies live on the AUTHORING entry, not `/worker`: they carry no
+// `cloudflare:workers` import, and @pramen/auth's OIDC flow verifies a provider's RS256 ID
+// token with the same JWKS cache (and its key-rotation handling) the Worker uses.
+export { HmacStrategy, JwksStrategy, type VerifyStrategy, type VerifyOptions } from "./auth";
 export type { ExpiringToken } from "./runtime/token";
 export type { StorageAdapter, PutResult, GetResult } from "./runtime/storage";
 
