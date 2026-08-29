@@ -123,6 +123,14 @@ change but will not link up with accounts created another way.
 Deactivating a user in pramen still holds: `active = false` blocks the login even though the
 IdP knows nothing about that flag.
 
+**The flow sets one cookie**, `pramen_oidc` — HttpOnly, SameSite=Lax, scoped to the callback
+path, cleared when the login completes. It binds the `state` to the browser that started the
+login, which is what stops login CSRF: an attacker holding a valid `state` + `code` from
+their own login can otherwise feed them to a victim's browser and sign that victim in **as
+the attacker**, so everything the victim then writes lands in the attacker's account. This
+is the only cookie pramen uses; sessions remain bearer tokens. `Secure` is set on https and
+omitted on plain http, so local dev still completes.
+
 If your frontend **already** holds an IdP token, you do not need any of this — set
 `JWKS_URL` (plus `AUTH_ISSUER` / `AUTH_AUDIENCE`) and the core verifies it directly. See
 [Verification strategies](#verification-strategies).

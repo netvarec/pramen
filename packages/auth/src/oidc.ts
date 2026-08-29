@@ -131,13 +131,53 @@ interface PendingLogin {
   verifier: string;
   nonce: string;
   returnTo?: string;
+  /** SHA-256 of the binder cookie handed to the browser that STARTED this login.
+   *
+   * Without it, `state` is just a random string an attacker can obtain by starting a login
+   * of their own: they then trick the victim's browser into loading the callback with their
+   * code+state, and the victim is silently signed in AS THE ATTACKER — everything the victim
+   * subsequently writes lands in the attacker's account. Requiring the cookie means the
+   * callback only completes in the browser the flow began in. */
+  binderHash: string;
 }
 
+const sha256Hex = async (v: string): Promise<string> =>
+  [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(v)))].map((b) => b.toString(16).padStart(2, "0")).join("");
+
+const BINDER_COOKIE = "pramen_oidc";
+
+function readCookie(request: Request, name: string): string | null {
+  const raw = request.headers.get("cookie");
+  if (!raw) return null;
+  for (const part of raw.split(";")) {
+    const [k, ...v] = part.trim().split("=");
+    if (k === name) return decodeURIComponent(v.join("="));
+  }
+  return null;
+}
+
+/** `SameSite=Lax` is what makes this work at all: the callback is a TOP-LEVEL GET navigation
+ * from the provider's origin, which Lax allows, while a cross-site POST or subresource would
+ * not carry it. `Secure` is set whenever the request is https — omitted on plain-http local
+ * dev, where the browser would otherwise drop the cookie entirely. */
+const binderCookie = (url: URL, path: string, value: string, maxAge: number): string =>
+  `${BINDER_COOKIE}=${encodeURIComponent(value)}; Path=${path}; Max-Age=${maxAge}; HttpOnly; SameSite=Lax${url.protocol === "https:" ? "; Secure" : ""}`;
+
+const ESCAPES: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+
+/** An error page. The message is ESCAPED here rather than at the call sites: this route is
+ * public, pre-auth, and reachable with arbitrary query parameters, so anything interpolated
+ * into it is attacker-controlled until proven otherwise. Escaping centrally means a future
+ * caller cannot reintroduce the hole by forgetting. */
 const html = (status: number, message: string): Response =>
-  new Response(`<!doctype html><meta charset="utf-8"><title>Sign-in</title><p>${message}</p>`, {
-    status,
-    headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
-  });
+  new Response(
+    `<!doctype html><meta charset="utf-8"><title>Sign-in</title><p>${message.replace(/[&<>"']/g, (c) => ESCAPES[c]!)}</p>`,
+    { status, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } },
+  );
+
+/** OAuth error codes are a constrained vocabulary (RFC 6749 §4.1.2.1). Anything outside it
+ * is not a provider error worth echoing — it is someone probing this endpoint. */
+const safeErrorCode = (raw: string): string => (/^[a-z_]{1,64}$/.test(raw) ? raw : "unspecified");
 
 /**
  * OIDC login for a pramen app. Spread the routes into `app.routes` (they are PRE-AUTH by
@@ -172,9 +212,11 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
       const doc = await discover(opts.issuer);
       const kv = new Kv((env as EnvBag & { KV: KVNamespace }).KV);
       const state = randomB64();
+      const binder = randomB64();
       const pending: PendingLogin = {
         verifier: randomB64(64),
         nonce: randomB64(),
+        binderHash: await sha256Hex(binder),
         // Where the user was going before they were bounced to sign in. Only ever a PATH:
         // an absolute URL here would make this an open redirect.
         returnTo: new URL(request.url).searchParams.get("returnTo") ?? undefined,
@@ -190,7 +232,14 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
       url.searchParams.set("nonce", pending.nonce);
       url.searchParams.set("code_challenge", await challengeFor(pending.verifier));
       url.searchParams.set("code_challenge_method", "S256");
-      return new Response(null, { status: 302, headers: { location: url.toString(), "cache-control": "no-store" } });
+      return new Response(null, {
+        status: 302,
+        headers: {
+          location: url.toString(),
+          "cache-control": "no-store",
+          "set-cookie": binderCookie(new URL(request.url), callbackPath, binder, stateTtl),
+        },
+      });
     },
   };
 
@@ -204,7 +253,7 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
       // A provider that refuses (consent declined, unauthorized client) redirects back with
       // `error` rather than `code`. Surface it instead of reporting "no code".
       const providerError = url.searchParams.get("error");
-      if (providerError) return html(400, `Sign-in was refused by the provider (${providerError}).`);
+      if (providerError) return html(400, `Sign-in was refused by the provider (${safeErrorCode(providerError)}).`);
 
       const state = url.searchParams.get("state");
       const code = url.searchParams.get("code");
@@ -215,6 +264,14 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
       const pending = (await kv.get(`oidc:${state}`, "json")) as PendingLogin | null;
       await kv.delete(`oidc:${state}`);
       if (!pending) return html(400, "Sign-in expired or was already used. Start again.");
+
+      // The state must belong to THIS browser. An attacker who starts their own login holds
+      // a perfectly valid state+code; without this check, feeding them to a victim's browser
+      // signs the victim in as the attacker.
+      const binder = readCookie(request, BINDER_COOKIE);
+      if (!binder || (await sha256Hex(binder)) !== pending.binderHash) {
+        return html(400, "This sign-in did not start in this browser. Start again.");
+      }
 
       const doc = await discover(opts.issuer);
       const body = new URLSearchParams({
@@ -283,7 +340,15 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
       // FRAGMENT, not query: a fragment is never sent to a server, so the session token
       // stays out of access logs, proxies and `Referer`.
       target.hash = `token=${encodeURIComponent(token)}`;
-      return new Response(null, { status: 302, headers: { location: target.toString(), "cache-control": "no-store" } });
+      return new Response(null, {
+        status: 302,
+        headers: {
+          location: target.toString(),
+          "cache-control": "no-store",
+          // The binder is spent with the state it protected.
+          "set-cookie": binderCookie(url, callbackPath, "", 0),
+        },
+      });
     },
   };
 

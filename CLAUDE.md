@@ -217,7 +217,13 @@ log) for independent single-writer serialization and storage.
   unverified email is REFUSED, not silently keyed on `sub`. `accountKey: "sub"` namespaces by
   issuer instead. `active = false` still blocks login. The write goes through
   `callPrivileged` → `__oidcUpsertUser`, which is `auth: []` so no role can reach it over
-  /rpc. Verify-only (BYO-IdP via `JWKS_URL`) remains the zero-config path.
+  /rpc. The callback sets ONE cookie (`pramen_oidc`, HttpOnly/SameSite=Lax/callback-path,
+  cleared on completion) binding `state` to the browser that started the login — without it
+  an attacker's valid state+code fed to a victim's browser signs the victim in AS THE
+  ATTACKER; sessions themselves stay bearer tokens. The error page escapes centrally and
+  echoes only RFC 6749-shaped codes: it is public, pre-auth and reachable with arbitrary
+  query params, so raw interpolation was a reflected XSS on the app's own origin.
+  Verify-only (BYO-IdP via `JWKS_URL`) remains the zero-config path.
 - Password reset + email verification (`@pramen/auth`, opt-in): two one-time-email-token
   flows built on the magic-link machinery — mint a random token, store only its SHA-256
   **hash** + expiry in the shared `emailTokenSchema` table (`auth_email_tokens`, discriminated

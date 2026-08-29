@@ -64,15 +64,23 @@ const upsert = (result: unknown = { roles: ["user"], active: true }) => ({ callP
 let active: { restore: () => void } | null = null;
 afterEach(() => { active?.restore(); active = null; });
 
-async function startThenCallback(h: ReturnType<typeof harness>, over: { state?: string; code?: string; ctx?: never } = {}) {
+/** The binder cookie the start leg handed the browser, as a browser would send it back. */
+function cookieFrom(res: Response): string {
+  const set = res.headers.get("set-cookie") ?? "";
+  return set.split(";")[0] ?? "";
+}
+
+async function startThenCallback(h: ReturnType<typeof harness>, over: { state?: string; code?: string; ctx?: never; cookie?: string | null } = {}) {
   const oidc = createOidcAuth(opts);
   const [start, callback] = oidc.routes;
   const started = await start!.handler(new Request("https://app.example.com/auth/oidc/start"), env(h.KV), {} as never);
   const authUrl = new URL(started.headers.get("location")!);
   h.asked.nonce = authUrl.searchParams.get("nonce")!;
   const state = over.state ?? authUrl.searchParams.get("state")!;
-  const cb = new Request(`https://app.example.com/auth/oidc/callback?state=${encodeURIComponent(state)}&code=${over.code ?? "auth-code"}`);
-  return { authUrl, res: await callback!.handler(cb, env(h.KV), over.ctx ?? upsert()) };
+  const cb = new Request(`https://app.example.com/auth/oidc/callback?state=${encodeURIComponent(state)}&code=${over.code ?? "auth-code"}`, {
+    headers: over.cookie === null ? {} : { cookie: over.cookie ?? cookieFrom(started) },
+  });
+  return { authUrl, started, res: await callback!.handler(cb, env(h.KV), over.ctx ?? upsert()) };
 }
 
 describe("createOidcAuth — the authorization request", () => {
@@ -136,7 +144,8 @@ describe("createOidcAuth — the callback", () => {
     const started = await start!.handler(new Request("https://app.example.com/auth/oidc/start"), env(h.KV), {} as never);
     h.asked.nonce = new URL(started.headers.get("location")!).searchParams.get("nonce")!;
     const state = new URL(started.headers.get("location")!).searchParams.get("state")!;
-    const cb = () => callback!.handler(new Request(`https://app.example.com/auth/oidc/callback?state=${state}&code=c`), env(h.KV), upsert());
+    const cookie = cookieFrom(started);
+    const cb = () => callback!.handler(new Request(`https://app.example.com/auth/oidc/callback?state=${state}&code=c`, { headers: { cookie } }), env(h.KV), upsert());
     expect((await cb()).status).toBe(302);
     expect((await cb()).status).toBe(400); // replayed
   });
@@ -196,7 +205,7 @@ describe("createOidcAuth — the callback", () => {
     const started = await start!.handler(new Request("https://app.example.com/auth/oidc/start"), env(h.KV), {} as never);
     h.asked.nonce = new URL(started.headers.get("location")!).searchParams.get("nonce")!;
     const state = new URL(started.headers.get("location")!).searchParams.get("state")!;
-    const res = await callback!.handler(new Request(`https://app.example.com/auth/oidc/callback?state=${state}&code=c`), env(h.KV), upsert());
+    const res = await callback!.handler(new Request(`https://app.example.com/auth/oidc/callback?state=${state}&code=c`, { headers: { cookie: cookieFrom(started) } }), env(h.KV), upsert());
     const token = decodeURIComponent(new URL(res.headers.get("location")!).hash.replace("#token=", ""));
     const claims = JSON.parse(atob(token.split(".")[1]!.replace(/-/g, "+").replace(/_/g, "/"))) as { sub: string };
     expect(claims.sub).toBe(`${ISSUER}#idp-sub-1`);
@@ -214,5 +223,69 @@ describe("createOidcAuth — the callback", () => {
 describe("the privileged upsert handler", () => {
   test("is unreachable over /rpc — no role satisfies it", () => {
     expect((oidcHandlers[OIDC_UPSERT_HANDLER] as { auth?: string[] }).auth).toEqual([]);
+  });
+});
+
+// --- what the security review caught ------------------------------------------------
+
+describe("the callback is a public, pre-auth endpoint anyone can craft a URL for", () => {
+  // `error` is entirely attacker-controlled and the response is text/html, so interpolating
+  // it raw was a reflected XSS on the app's own origin.
+  test("a provider error is escaped, and a non-conforming one is not echoed at all", async () => {
+    const h = harness(); active = h;
+    const [, callback] = createOidcAuth(opts).routes;
+    const hit = async (error: string) =>
+      (await callback!.handler(new Request(`https://app.example.com/auth/oidc/callback?error=${encodeURIComponent(error)}`), env(h.KV), upsert())).text();
+
+    const xss = await hit('<img src=x onerror="alert(1)">');
+    expect(xss).not.toContain("<img");
+    expect(xss).not.toContain("onerror");
+    expect(xss).toContain("unspecified"); // outside the RFC 6749 vocabulary — not echoed
+    // A legitimate code still reaches the user, because that is the point of showing it.
+    expect(await hit("access_denied")).toContain("access_denied");
+    // …and even a conforming-looking value cannot break out of the markup.
+    expect(await hit('access_denied"><script>')).toContain("unspecified");
+  });
+
+  // Login CSRF: an attacker holds a VALID state+code from their own login. Feeding them to
+  // a victim's browser used to sign the victim in as the attacker.
+  test("a state started in another browser cannot be completed in this one", async () => {
+    const h = harness(); active = h;
+    const { res } = await startThenCallback(h, { cookie: null }); // victim has no binder cookie
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain("did not start in this browser");
+  });
+
+  test("a WRONG binder cookie is refused too — presence alone is not enough", async () => {
+    const h = harness(); active = h;
+    const { res } = await startThenCallback(h, { cookie: "pramen_oidc=some-other-browsers-binder" });
+    expect(res.status).toBe(400);
+  });
+
+  test("the binder is HttpOnly + SameSite=Lax, scoped to the callback path", async () => {
+    const h = harness(); active = h;
+    const [start] = createOidcAuth(opts).routes;
+    const started = await start!.handler(new Request("https://app.example.com/auth/oidc/start"), env(h.KV), {} as never);
+    const cookie = started.headers.get("set-cookie")!;
+    expect(cookie).toContain("HttpOnly");
+    expect(cookie).toContain("SameSite=Lax"); // the callback IS a top-level cross-site GET
+    expect(cookie).toContain("Secure"); // https request
+    expect(cookie).toContain("Path=/auth/oidc/callback");
+  });
+
+  // Secure cookies are dropped by browsers on plain http, which would make local dev
+  // impossible to complete.
+  test("Secure is omitted on a plain-http origin so local dev still works", async () => {
+    const h = harness(); active = h;
+    const [start] = createOidcAuth(opts).routes;
+    const started = await start!.handler(new Request("http://localhost:8787/auth/oidc/start"), env(h.KV), {} as never);
+    expect(started.headers.get("set-cookie")).not.toContain("Secure");
+  });
+
+  test("a completed login clears the binder", async () => {
+    const h = harness(); active = h;
+    const { res } = await startThenCallback(h);
+    expect(res.status).toBe(302);
+    expect(res.headers.get("set-cookie")).toContain("Max-Age=0");
   });
 });
