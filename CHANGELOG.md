@@ -14,6 +14,10 @@ there are no backward-compatibility guarantees yet.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.0.53] — 2026-08-30
+
 ### Added
 
 - **The CMS editor is served by your Astro site (`@pramen/cms-astro`, `@pramen/cms-editor`).**
