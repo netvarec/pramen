@@ -13,8 +13,7 @@
   "type": "module",
   "sideEffects": false,
   "exports": {
-    ".": "./src/entry.ts",
-    "./runtime": "./src/index.ts",
+    ".": "./src/index.ts",
     "./integration": "./src/integration.ts",
     "./BlockRenderer.astro": "./src/BlockRenderer.astro",
     "./RichText.astro": "./src/RichText.astro",
