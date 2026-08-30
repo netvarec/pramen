@@ -7,12 +7,19 @@ import { Button, Input } from "@podoba/react";
 import { createContext, use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Api, clearConfig, isTokenExpired, loadConfig, saveConfig, type Config } from "./api";
 import { BRAND, SETUP_TITLE, type BrandConfig } from "./brand";
+import { readBackend, type BackendHost } from "./mount";
 import { DEFAULT_CAPABILITIES, type CmsCapabilities, type CollectionMeta, type JsonValue } from "./types";
 
 declare global {
   interface Window {
-    /** Runtime config set by the host's /config.js (see @pramen/cms-editor build). */
+    /** Runtime config written by the SHELL that served the editor — a server-rendered
+     * inline script, not a file anyone hand-edits (see `PramenAdmin.astro` in
+     * @pramen/cms-astro, and the dev preview in scripts/build.ts). */
     PRAMEN_CMS_EDITOR?: {
+      /** Which CMS Worker to call, and as which tenant. Declared by the shell because the
+       * server already knows — it is what makes the Setup screen a token field and
+       * nothing else. `url: ""` means the CMS is on this same origin. */
+      backend?: { url?: string; tenant?: string };
       signInUrl?: string;
       /** Hide the Pages tab for deployments that use collections only — no block/page
        * building. The tab is otherwise always shown and lands on an empty list, which
@@ -21,12 +28,6 @@ declare global {
       /** Extra top-nav links to companion tools the host serves (e.g. a curation page).
        * Rendered as plain external `<a>` links after the built-in tabs. */
       extraNav?: { label: string; href: string }[];
-      /** Mount the editor under a path prefix (e.g. "/admin"), for a host that serves it
-       * beside its own site so the two share one origin. Routes are authored from "/" and
-       * buzola's Router prepends this for navigation and strips it for matching; the host
-       * still decides where the assets live (and should point `signInUrl` inside the
-       * prefix too). Absent or "/" means mounted at the root, exactly as before. */
-      basePath?: string;
       /** The wordmark in the topbar, on the Setup screen, and in the browser tab.
        *
        * This editor ships as a package an agency deploys FOR ITS CLIENT, so the default
@@ -38,7 +39,11 @@ declare global {
   }
 }
 
-/** External sign-in URL, if the host configured one via /config.js. When set, an
+/** The backend the shell declared, or `undefined` when it declared none (the dev preview's
+ * standalone mode). Present ⇒ the Setup screen asks for a token and nothing else. */
+const BACKEND = readBackend(globalThis as BackendHost);
+
+/** External sign-in URL, if the host configured one. When set, an
  * unauthenticated OR expired session is redirected here instead of the built-in Setup
  * screen — for deployments whose auth (magic-link, SSO, …) lives on a separate page.
  *
@@ -94,14 +99,16 @@ export function useApp(): AppContextValue {
 }
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
-  const [cfg, setCfg] = useState<Config>(loadConfig());
+  const [cfg, setCfg] = useState<Config>(() => loadConfig(BACKEND));
   const [me, setMe] = useState<Me | null>(null);
   const [collections, setCollections] = useState<CollectionMeta[]>([]);
   const [cms, setCms] = useState<CmsCapabilities>(DEFAULT_CAPABILITIES);
   const [error, setError] = useState("");
-  // A usable session = a base URL + a token that is NOT expired. An expired token counts as
-  // no session: otherwise the editor mounts and every RPC 403s into an error banner.
-  const authValid = Boolean(cfg.baseUrl && cfg.token) && !isTokenExpired(cfg.token);
+  // A usable session = somewhere to call + a token that is NOT expired. An expired token
+  // counts as no session: otherwise the editor mounts and every RPC 403s into an error
+  // banner. "Somewhere to call" is satisfied by a declared backend even when its url is the
+  // empty string, which is the same-origin case and a perfectly good place to call.
+  const authValid = Boolean(BACKEND || cfg.baseUrl) && Boolean(cfg.token) && !isTokenExpired(cfg.token);
   const api = useMemo(() => new Api(cfg, SIGN_IN_URL ? redirectToSignIn : undefined), [cfg]);
 
   // Unsaved-changes guard for in-app navigation. A ref, not state: the guard is read at
@@ -177,14 +184,28 @@ function Setup({ cfg, onSave }: { cfg: Config; onSave: (c: Config) => void }) {
         <h1 className="mb-4 text-display text-fg">
           {BRAND.name} <span className="text-fg-subtle">{SETUP_TITLE}</span>
         </h1>
+        {/* Two screens, because there are two things a deployment can leave unanswered. When
+            the shell declared a backend there is nothing to point at — asking for a URL that
+            is already known invites someone to type the mount path instead of the origin and
+            get a stream of "non-JSON response" back. */}
         <p className="mb-6 text-sm text-fg-muted">
-          Point at your Worker and paste an editor/reviewer JWT. CORS must allow this origin (<code>CORS_ORIGINS</code>).
+          {BACKEND ? (
+            <>Paste an editor/reviewer JWT to sign in.</>
+          ) : (
+            <>
+              Point at your Worker and paste an editor/reviewer JWT. CORS must allow this origin (<code>CORS_ORIGINS</code>).
+            </>
+          )}
         </p>
         <div className="flex flex-col gap-4">
-          <Input label="Worker base URL" value={c.baseUrl} onChange={(baseUrl) => setC({ ...c, baseUrl })} placeholder="https://your-worker.workers.dev" />
-          <Input label="Tenant" value={c.tenant} onChange={(tenant) => setC({ ...c, tenant })} placeholder="main" />
+          {BACKEND ? null : (
+            <>
+              <Input label="Worker base URL" value={c.baseUrl} onChange={(baseUrl) => setC({ ...c, baseUrl })} placeholder="https://your-worker.workers.dev" />
+              <Input label="Tenant" value={c.tenant} onChange={(tenant) => setC({ ...c, tenant })} placeholder="main" />
+            </>
+          )}
           <Input label="Bearer token (editor or reviewer)" value={c.token} onChange={(token) => setC({ ...c, token })} placeholder="eyJ…" />
-          <Button className="mt-2 w-full" onPress={() => onSave(c)} isDisabled={!c.baseUrl || !c.token}>
+          <Button className="mt-2 w-full" onPress={() => onSave(c)} isDisabled={(!BACKEND && !c.baseUrl) || !c.token}>
             Connect
           </Button>
         </div>

@@ -25,6 +25,7 @@
     "test": "bun test"
   },
   "devDependencies": {
+    "@buzola/router": "^0.0.12",
     "@cloudflare/workers-types": "^4.20250101.0",
     "@oxlint/plugins": "1.79.0",
     "@pramen/admin": "workspace:*",

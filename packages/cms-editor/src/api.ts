@@ -36,14 +36,26 @@ export function isTokenExpired(token: string): boolean {
 }
 
 const LS = "pramen.cmsEditor";
-export function loadConfig(): Config {
+
+/**
+ * The session for this page load.
+ *
+ * A backend DECLARED by the shell (see `mount.ts`) wins over anything stored: the server
+ * that served the editor knows where its own API is, so there is nothing for a person to
+ * type and get wrong, and a stale url from an earlier deployment can't outlive it. Only
+ * the token is the browser's to remember.
+ */
+export function loadConfig(declared?: { url: string; tenant: string }): Config {
+  let stored: Partial<Config> = {};
   try {
     const raw = localStorage.getItem(LS);
-    if (raw) return JSON.parse(raw) as Config;
+    if (raw) stored = JSON.parse(raw) as Partial<Config>;
   } catch {
     /* ignore */
   }
-  return { baseUrl: "http://localhost:8787", token: "", tenant: "main" };
+  const token = typeof stored.token === "string" ? stored.token : "";
+  if (declared) return { baseUrl: declared.url, tenant: declared.tenant, token };
+  return { baseUrl: stored.baseUrl ?? "http://localhost:8787", tenant: stored.tenant ?? "main", token };
 }
 export function saveConfig(cfg: Config): void {
   localStorage.setItem(LS, JSON.stringify(cfg));

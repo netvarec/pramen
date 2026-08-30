@@ -11,6 +11,10 @@
   "homepage": "https://github.com/netvarec/pramen#readme",
   "bugs": "https://github.com/netvarec/pramen/issues",
   "type": "module",
+  "exports": {
+    "./editor.js": "./dist/editor.js",
+    "./editor.css": "./dist/editor.css"
+  },
   "files": [
     "dist",
     "src"
