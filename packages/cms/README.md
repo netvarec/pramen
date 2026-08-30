@@ -506,8 +506,16 @@ What you give up, and it is worth knowing before you pick:
   order is chosen so a failure leaves a benign state, but it is not a rollback.
 - **No live queries.** Those need the Durable Object's socket host. The editor does not use
   them, so this only matters if your own frontend subscribes.
-- **Scheduled publish needs a Cron trigger.** There is no DO alarm to self-drain the outbox
-  — see below.
+- **Scheduled publish needs a Cron trigger.** There is no DO alarm to self-drain the outbox,
+  so a delayed task runs only when a Cron trigger calls `createPramen().scheduled`:
+
+  ```jsonc
+  "triggers": { "crons": ["* * * * *"] }
+  ```
+
+  Forget it and a scheduled publish simply never fires. The Worker now notices — when a
+  request-tail drain leaves a task queued for the future and no Cron drain has ever run, it
+  logs once naming the fix, and stops as soon as a Cron drain is seen.
 - **One shared database, no tenant column.** A non-`main` tenant on D1 is refused unless you
   set `PRAMEN_D1_ALLOW_MULTITENANT=true`, because the rows would commingle.
 

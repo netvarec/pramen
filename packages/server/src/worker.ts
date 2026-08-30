@@ -100,6 +100,21 @@ export function useD1Store(opts: { storeHeader: string | null; isLive: boolean; 
   return opts.defaultStore === "d1";
 }
 
+/** Should we warn that no Cron trigger seems to be wired?
+ *
+ * The DO store self-drains via an alarm; the D1 store has none, so a DELAYED task — a
+ * scheduled publish, a retry backoff — runs only when a Cron trigger calls
+ * `createPramen().scheduled`. Forgetting that is silent: the row simply never goes live,
+ * and nothing anywhere says why.
+ *
+ * A request-tail drain that leaves something due in the FUTURE is exactly the situation
+ * that depends on the cron, so it is the moment to say so. Once a cron actually fires, the
+ * question is settled and we never warn again. Exported for tests — the decision is pure. */
+export function shouldWarnMissingCron(opts: { cronSeen: boolean; warned: boolean; nextRunAt: number | null; now: number }): boolean {
+  if (opts.cronSeen || opts.warned) return false;
+  return opts.nextRunAt != null && opts.nextRunAt > opts.now;
+}
+
 const json = (body: unknown, status = 200) => Response.json(body, { status });
 const forbidden = (what: string) => json({ ok: false, error: `access denied: ${what}`, code: "forbidden" }, 403);
 const badRequest = (msg: string) => json({ ok: false, error: msg, code: "bad_request" }, 400);
@@ -305,13 +320,30 @@ export function makeWorker(app: PramenApp) {
 
   /** Drain the D1 outbox in the Worker (no DO/alarm on this path) — called by the
    * /admin/tasks/drain route with `x-pramen-store: d1`, and by `scheduled()` (Cron). */
-  const drainD1 = async (env: Env): Promise<unknown> => {
+  // Whether a Cron trigger has ever driven a drain in this isolate, and whether we have
+  // already said it looks missing. See `shouldWarnMissingCron`.
+  let cronSeen = false;
+  let warnedNoCron = false;
+
+  const drainD1 = async (env: Env, source: "request" | "cron" | "admin" = "request"): Promise<unknown> => {
     if (!env.DB) throw new Error("D1 store is not configured");
+    if (source === "cron") cronSeen = true;
     // The drain reads due tasks then writes their status — pin the primary so it sees
     // and updates current outbox state (not a lagging replica).
     const driver = new D1Driver(env.DB, { start: "first-primary" });
     await ensureD1Migrated(driver, env.PRAMEN_ALLOW_DESTRUCTIVE === "true");
-    return drainOutbox(driver, bindTasks(app.tasks, d1TaskCtx(driver, env)), Date.now());
+    const result = await drainOutbox(driver, bindTasks(app.tasks, d1TaskCtx(driver, env)), Date.now());
+    if (source === "request" && shouldWarnMissingCron({ cronSeen, warned: warnedNoCron, nextRunAt: result.nextRunAt, now: Date.now() })) {
+      warnedNoCron = true;
+      const inSeconds = Math.round(((result.nextRunAt ?? 0) - Date.now()) / 1000);
+      console.warn(
+        `pramen: a task is queued on the D1 store to run in ~${inSeconds}s, but no Cron trigger has drained this Worker. ` +
+          `The D1 store has no Durable Object alarm, so a DELAYED task (a scheduled publish, a retry) runs ONLY when a Cron ` +
+          `trigger calls createPramen().scheduled. Add \`triggers: { crons: ["* * * * *"] }\` to your Worker config, or drain ` +
+          `manually via POST /admin/tasks/drain. This warning appears once per isolate and stops once a Cron drain is seen.`,
+      );
+    }
+    return result;
   };
 
   const listD1Tasks = async (env: Env, status?: string, limit?: number): Promise<unknown> => {
@@ -476,7 +508,7 @@ export function makeWorker(app: PramenApp) {
       if (!isAdmin(identity)) return forbidden("tasks");
       if (request.headers.get("x-pramen-store") === "d1") {
         try {
-          return withCors(json({ ok: true, result: await drainD1(env) }), cors);
+          return withCors(json({ ok: true, result: await drainD1(env, "admin") }), cors);
         } catch (err) {
           const { status, body } = toResponse(err);
           return withCors(json(body, status), cors);
@@ -644,7 +676,7 @@ export function makeWorker(app: PramenApp) {
     // Cron Trigger entry: drains the D1 outbox (the DO path self-drains via an alarm,
     // so it needs no cron). Wire a `[triggers] crons` in wrangler/oblaka to call this.
     async scheduled(_event: unknown, env: Env): Promise<void> {
-      if (env.DB) await drainD1(env);
+      if (env.DB) await drainD1(env, "cron");
     },
 
     // Cloudflare Queues consumer entry: routes a batch to the matching `app.queues`

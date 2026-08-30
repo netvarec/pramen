@@ -289,6 +289,9 @@ log) for independent single-writer serialization and storage.
   as the mutation (atomic), and `app.tasks[kind]` runs it after commit, off the write
   path — at-least-once with retry/backoff, dead-letter, and a `meta.id` idempotency key
   (`runtime/outbox.ts`). The DO self-drains via an alarm scheduled at the next due time;
+  the D1 store has NO alarm, so a DELAYED task runs only under a Cron trigger — the Worker
+  warns once per isolate when a request-tail drain leaves a future-due task and no Cron
+  drain has been seen (`shouldWarnMissingCron`), and stops once one fires;
   the D1/Worker store (no alarm) drains via a Cron Trigger (`createPramen().scheduled`)
   or `POST /admin/tasks/drain` (`x-pramen-store: d1`). Admin: `/admin/tasks/drain`,
   `/admin/tasks/list` (both stores). Concurrent drains claim disjoint batches.
