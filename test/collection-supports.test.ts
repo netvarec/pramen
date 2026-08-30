@@ -1251,12 +1251,17 @@ describe("preview", () => {
     await expect(run(H.signCollectionPreview, noSecret, { collection: "talks", id } as JsonValue)).rejects.toThrow(/not configured/);
   });
 
-  // Redemption always reaches a DO, so a D1-minted link would 404 forever.
-  test("minting is refused on the D1 store rather than handing out a dead link", async () => {
+  // Preview used to be refused on the D1 store, because redemption goes through
+  // `callPrivileged` and that only knew how to reach a Durable Object. It now dispatches
+  // locally on D1, so a link minted there is redeemable and minting must NOT refuse.
+  test("minting works on the D1 store — redemption no longer requires a Durable Object", async () => {
     const d = await fresh();
     const ctx = editorCtx(d);
     const { id } = await create(ctx, { title: "T" });
     const onD1 = { ...ctx, store: "d1" } as unknown as HandlerContext;
-    await expect(run(H.signCollectionPreview, onD1, { collection: "talks", id } as JsonValue)).rejects.toThrow(/not available on the D1 store/);
+    const res = (await run(H.signCollectionPreview, onD1, { collection: "talks", id } as JsonValue)) as { url: string; token: string };
+    expect(res.url.startsWith(COLLECTION_PREVIEW_PATH)).toBe(true);
+    const payload = await verifyToken<CollectionPreviewToken>(res.token, "a-sufficiently-long-test-secret");
+    expect(payload?.r).toBe(String(id));
   });
 });

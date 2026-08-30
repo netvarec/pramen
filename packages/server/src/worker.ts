@@ -16,7 +16,7 @@ import { migrate } from "./runtime/migrate";
 import { compileAcl } from "./runtime/acl";
 import { Db } from "./runtime/db";
 import { D1Driver, type D1SessionStart, type Driver } from "./runtime/driver";
-import { toResponse } from "./runtime/errors";
+import { BadRequest, Forbidden, toResponse } from "./runtime/errors";
 import { Kv, isSessionDenied } from "./runtime/kv";
 import { listDOs, partitionDoName } from "./runtime/registry";
 import { createFiles, handleFileRequest, handleMediaRequest, R2Adapter } from "./runtime/storage";
@@ -220,6 +220,43 @@ export function makeWorker(app: PramenApp) {
   };
 
   let d1Ready: Promise<void> | undefined;
+  /** Run one handler against the D1 store, in the Worker. The request path and the
+   * PRIVILEGED path (routes, which have no ctx.db) both come through here, so the two
+   * cannot drift on migration, bootstrap, the multi-tenant guard or the outbox drain.
+   *
+   * Returns the `{ ok, result }` envelope rather than a Response so each caller can add
+   * what only it needs — CORS and the session bookmark for a request, nothing for an
+   * internal call. */
+  const dispatchD1 = async (
+    env: Env,
+    ctx: ExecutionContext | undefined,
+    opts: { name: string; input: JsonValue; tenant: string; identity: Identity | null; start: D1SessionStart },
+  ): Promise<{ driver: D1Driver; result: JsonValue }> => {
+    if (!env.DB) throw new BadRequest("D1 store is not configured");
+    // Same COMMINGLING GUARD as the request path: shared D1 has no tenant column, so a
+    // non-`main` tenant would mix rows unless the operator opted in explicitly.
+    if (opts.tenant !== "main" && env.PRAMEN_D1_ALLOW_MULTITENANT !== "true") {
+      throw new Forbidden(`D1 store for tenant '${opts.tenant}' (shared D1 has no tenant isolation — set PRAMEN_D1_ALLOW_MULTITENANT=true to allow)`);
+    }
+    const driver = new D1Driver(env.DB, { start: opts.start });
+    const files = createFiles({ tenant: opts.tenant, secret: filesSecret(env), adapter: new R2Adapter(env.FILES) });
+    await ensureD1Migrated(driver, env.PRAMEN_ALLOW_DESTRUCTIVE === "true");
+    const { result, enqueued } = await dispatch(
+      app.handlers,
+      app.schema,
+      driver,
+      new Kv(env.KV),
+      files,
+      envBag(env),
+      { acl: d1Acl, identity: opts.identity, tenant: opts.tenant, store: "d1" },
+      opts.name,
+      opts.input,
+    );
+    // Drain in the request tail so an enqueued task does not wait for the next Cron tick.
+    if (enqueued > 0 && ctx) ctx.waitUntil(drainD1(env));
+    return { driver, result: result as JsonValue };
+  };
+
   const ensureD1Migrated = (driver: Driver, allowDestructive: boolean): Promise<void> => {
     if (!d1Ready) {
       d1Ready = migrate(driver, app.schema, { allowDestructive })
@@ -290,7 +327,33 @@ export function makeWorker(app: PramenApp) {
     // signature-authed webhook can live outside the JWT-gated /rpc surface.
     for (const r of app.routes ?? []) {
       if (request.method === r.method && url.pathname === r.path) {
-        const routeCtx = { callPrivileged: (opts: Parameters<typeof callPrivileged>[1]) => callPrivileged(env, opts) };
+        // A public route has no ctx.db, so it reaches a handler through here. On the D1
+        // store there is no Durable Object to forward to — the engine runs in THIS Worker
+        // — so dispatch locally instead. Without this, everything built on a pre-auth
+        // route (a signed preview link, the sitemap) was DO-only, and the CMS had to
+        // refuse to mint preview links on D1 rather than hand out a dead one.
+        const routeCtx = {
+          callPrivileged: async (opts: Parameters<typeof callPrivileged>[1]): Promise<Response> => {
+            const store = useD1Store({ storeHeader: request.headers.get("x-pramen-store"), isLive: false, defaultStore: env.PRAMEN_STORE });
+            if (!store) return callPrivileged(env, opts);
+            try {
+              const { result } = await dispatchD1(env, ctx, {
+                name: opts.name,
+                input: opts.input ?? null,
+                tenant: opts.tenant ?? "main",
+                // The same synthetic identity the DO path sends in `x-pramen-identity`.
+                identity: { roles: opts.roles ?? ["admin"] },
+                // A privileged call may write (a redeemed one-time token), so pin the
+                // primary rather than risk a read-modify-write off a lagging replica.
+                start: "first-primary",
+              });
+              return json({ ok: true, result });
+            } catch (err) {
+              const { status, body } = toResponse(err);
+              return json(body, status);
+            }
+          },
+        };
         return r.handler(request, envBag(env), routeCtx);
       }
     }
@@ -498,20 +561,10 @@ export function makeWorker(app: PramenApp) {
       else if (inboundBookmark) start = inboundBookmark;
       else start = "first-unconstrained";
 
-      const driver = new D1Driver(env.DB, { start });
-      const files = createFiles({ tenant, secret: filesSecret(env), adapter: new R2Adapter(env.FILES) });
-      const bag = envBag(env);
       try {
-        await ensureD1Migrated(driver, env.PRAMEN_ALLOW_DESTRUCTIVE === "true");
         // `tenant` matters here: a handler minting a tenant-scoped capability (a signed
         // preview link) would otherwise stamp it "main" while reading acme's rows.
-        const { result, enqueued } = await dispatch(app.handlers, app.schema, driver, new Kv(env.KV), files, bag, { acl: d1Acl, identity, tenant, store: "d1" }, name, input);
-        // Kick an immediate drain in the request tail when this handler enqueued tasks
-        // (e.g. sendMagicLinkEmail). Without this, tasks wait for the next Cron trigger
-        // — up to a full minute. `waitUntil` lets the response return now while the
-        // drain runs; the Cron trigger remains the safety net for delayed / retried
-        // tasks that no request happens to coincide with.
-        if (enqueued > 0) ctx.waitUntil(drainD1(env));
+        const { driver, result } = await dispatchD1(env, ctx, { name, input, tenant, identity, start });
         const res = json({ ok: true, result });
         // Thread the session's latest bookmark back so the client can read its own writes.
         const bookmark = driver.getBookmark();

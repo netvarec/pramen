@@ -170,7 +170,17 @@ log) for independent single-writer serialization and storage.
   so the column must hold `toISOString()` values — NOT `expr.now()`'s
   `'YYYY-MM-DD HH:MM:SS'`, which doesn't compare against the ISO form). Public,
   pre-auth routes go in `app.routes` (matched before auth; use `ctx.callPrivileged`
-  to forward a privileged mutation into the DO) — for signature-authed webhooks.
+  to run a privileged handler) — for signature-authed webhooks.
+- `ctx.callPrivileged` works on BOTH stores. It used to only forward to the DO, so
+  everything built on a pre-auth route (signed preview links, the sitemap) was DO-only and
+  the CMS REFUSED to mint preview links on D1 rather than hand out a dead one. On D1 the
+  engine runs in the Worker, so it now dispatches locally there — both paths share one
+  `dispatchD1`, so migration/bootstrap/the multi-tenant commingling guard/the outbox drain
+  cannot drift, and a privileged call pins `first-primary` because it may write. This is
+  what makes D1 a first-class CMS store, which matters because D1 is a BINDING: nothing
+  needs exporting from the worker entry, so the CMS can live inside an Astro site's Worker.
+  The store is per-REQUEST and a browser redeeming a link sends no `x-pramen-store`, so a
+  mixed deployment needs `PRAMEN_STORE=d1` (an embedded topology sets it anyway).
 - Per-handler call authorization (the ACL only gates `ctx.db`): `query(fn, { auth })` /
   `mutation(fn, { auth })` where `auth` is `"authenticated"` | `string[]` (one-of role) |
   `(identity) => boolean`, enforced in `runtime/dispatch.ts` BEFORE the handler runs

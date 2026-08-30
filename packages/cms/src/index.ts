@@ -2329,7 +2329,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       // has no notion of `x-pramen-store`. Minting on the D1 store therefore produces a
       // link that 404s forever while the editor reports success — refuse instead of
       // handing out a token that cannot work.
-      if (ctx.store === "d1") throw new PramenError("page preview is not available on the D1 store (redemption requires the Durable Object)", 503, "unavailable");
+
       const db = cdb(ctx);
       // Read the page through the ACL first: minting a link is granting access to it, so a
       // caller who cannot read the page must not be able to mint a link that can.
@@ -3576,12 +3576,6 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
       needs(c, "preview");
       const secret = previewSecret(ctx.env);
       if (!secret) throw previewUnconfigured(); // fail closed — never mint a forgeable link
-      // Redemption always reaches a Durable Object (callPrivileged -> PRAMEN.get) and has no
-      // notion of `x-pramen-store`, so a link minted on D1 would 404 forever while the
-      // editor reported success.
-      if (ctx.store === "d1") {
-        throw new PramenError("collection preview is not available on the D1 store (redemption requires the Durable Object)", 503, "unavailable");
-      }
       const row = await loadRow(cdb(ctx), c, input.id);
       const ttl = Math.max(60, Math.min(input.expiresIn ?? previewTtl, 30 * 24 * 3600));
       const exp = Math.floor(Date.now() / 1000) + ttl;

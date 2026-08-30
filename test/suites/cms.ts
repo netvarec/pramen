@@ -189,14 +189,32 @@ export async function runCms(base: string): Promise<void> {
   const editorRedeem = await fetch(`${base}${editorMint.body.result.url}`);
   assert(editorRedeem.status === 200, "cms: a link minted by a plain editor redeems (the route presents viewer roles, not admin)");
 
-  // Minting on the D1 store must REFUSE: redemption always reaches the Durable Object, so
-  // a link minted there could never be redeemed while the editor reported success.
-  const d1Mint = await fetch(`${base}/rpc/signPagePreview`, {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-pramen-tenant": TENANT, "x-pramen-store": "d1", authorization: `Bearer ${admin}` },
-    body: JSON.stringify({ pageId: pageRow.id }),
-  });
-  assert(d1Mint.status === 503, `cms: signPagePreview refuses on the D1 store (got ${d1Mint.status})`);
+  // The D1 store is the topology an Astro site embeds (no Durable Object to export), so
+  // preview has to work there too. `callPrivileged` now dispatches locally on D1 instead
+  // of only forwarding to a DO, which is what used to make a D1-minted link undeliverable.
+  // The store is chosen PER REQUEST, and the two stores hold different rows — so this runs
+  // the whole flow on D1: seed a page there, mint from there, redeem from there. (A real
+  // D1 deployment sets PRAMEN_STORE=d1 and never sends the header; the e2e app defaults to
+  // the DO, so every call below opts in explicitly.)
+  const onD1 = async (name: string, input: unknown) =>
+    fetch(`${base}/rpc/${name}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-pramen-tenant": TENANT, "x-pramen-store": "d1", authorization: `Bearer ${admin}` },
+      body: JSON.stringify(input),
+    }).then(async (r) => ({ status: r.status, body: (await r.json()) as { ok?: boolean; result?: Record<string, unknown> } }));
+
+  const d1Types = await onD1("listContentTypes", {});
+  const d1Ct = (d1Types.body.result as unknown as Array<{ id: string; slug: string }>).find((c) => c.slug === "seeded_doc");
+  assert(d1Ct !== undefined, "cms: the D1 store is bootstrapped with the seeded content type");
+  const d1Page = await onD1("createPage", { typeId: d1Ct!.id, title: "D1 preview", slug: "d1-preview" });
+  assert(d1Page.body.ok === true, `cms: a page can be created on the D1 store (${d1Page.status})`);
+  const d1Mint = await onD1("signPagePreview", { pageId: (d1Page.body.result as { id: string }).id });
+  assert(d1Mint.status === 200 && d1Mint.body.ok === true, `cms: signPagePreview mints on the D1 store (got ${d1Mint.status})`);
+  // …and the link REDEEMS there. This is what used to be impossible: redemption goes
+  // through callPrivileged, which only knew how to reach a Durable Object, so a D1-minted
+  // link was undeliverable — which is why minting used to refuse outright.
+  const d1Redeemed = await fetch(`${base}${(d1Mint.body.result as { url: string }).url}`, { headers: { "x-pramen-store": "d1" } });
+  assert(d1Redeemed.status === 200, `cms: a preview link minted on D1 redeems on D1 (got ${d1Redeemed.status})`);
 
   // Bad input is a 400, not a 500 or a link that can never be redeemed.
   assert((await call("signPagePreview", { pageId: pageRow.id, expiresIn: "3600" }, admin)).status === 400, "cms: a non-numeric expiresIn is rejected");
