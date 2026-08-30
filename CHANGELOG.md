@@ -1,14 +1,146 @@
 # Changelog
 
-All notable changes to the `@pramen/*` packages are recorded here. The five packages —
-`@pramen/server`, `@pramen/client`, `@pramen/react`, `@pramen/auth`, `@pramen/admin` —
-publish in lockstep under one shared version.
+All notable changes to the `@pramen/*` packages are recorded here. The eight packages —
+`@pramen/server`, `@pramen/client`, `@pramen/react`, `@pramen/auth`, `@pramen/cms`,
+`@pramen/cms-astro`, `@pramen/cms-editor`, `@pramen/admin` — publish in lockstep under one
+shared version.
+
+> **Gap in this file:** entries between 0.0.15 and 0.0.51 were not recorded. The `git log`
+> is the record for that range; this file resumes at 0.0.52 rather than reconstructing it.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/). This project is
 **pre-1.0 and under active development**: 0.0.x releases may include breaking changes —
 there are no backward-compatibility guarantees yet.
 
 ## [Unreleased]
+
+Nothing yet.
+
+## [0.0.52] — 2026-08-30
+
+### Added
+
+- **OIDC login (`@pramen/auth`).** `createOidcAuth({ issuer, clientId, clientSecret, redirectUri,
+  successRedirect })` adds the authorization-code + PKCE flow as pre-auth routes: discovery via
+  `/.well-known/openid-configuration`, `state` + `nonce` held in KV and consumed
+  read-and-delete, and the ID token verified through the same `JwksStrategy` the Worker uses,
+  plus a nonce match binding it to the request that started it.
+
+  It mints a **pramen session**, not a passthrough of the provider's token — that is what
+  keeps `refreshSession`, the KV revocation denylist and role-in-token ACL working, instead
+  of putting role resolution on every request's hot path. The session arrives in the
+  redirect's URL **fragment**, which is never sent to a server.
+
+  Roles differ per provider and getting them wrong fails silently as "everyone has no
+  roles": Entra puts them in a top-level `roles` claim, Auth0/Okta in a namespaced one,
+  Google Workspace ships none. So `mapRoles(claims)` makes the IdP authoritative where there
+  is something to read (removals included); otherwise roles live on the user's row.
+
+  Accounts key on the **verified** email by default, so an OIDC login lands on the same row
+  as a magic-link or password login. An unverified address is refused rather than trusted or
+  silently keyed on `sub` — a provider allowing arbitrary addresses would otherwise be a
+  takeover path into an existing account. `accountKey: "sub"` namespaces by issuer instead.
+
+  The verify-only path is unchanged: a frontend that already holds an IdP token still needs
+  only `JWKS_URL`.
+
+- **`ctx.callPrivileged` works on the D1 store.** A pre-auth route has no `ctx.db` and
+  reached handlers by forwarding to a Durable Object, so everything built on such a route —
+  signed preview links, the sitemap — was DO-only, and `@pramen/cms` had to refuse to mint
+  preview links on D1 rather than hand out one that could never be redeemed. On D1 the
+  engine runs in the Worker, so it now dispatches locally, through one shared `dispatchD1`
+  that the request path uses too (migration, bootstrap, the multi-tenant guard and the
+  outbox drain cannot drift between them).
+
+  This is what makes D1 a first-class CMS store — and D1 is the only store that can live
+  inside an Astro site's Worker, because it is a binding while a DO must be exported from
+  the worker entry.
+
+- **`pramenCms()` — an Astro integration for `@pramen/cms-astro`** (closes #35). One entry in
+  `integrations` configures the backend; a `pramen:cms` virtual module exports the client,
+  a bound `resolve()` and the generated collections, with types injected. `collections:
+  "auto"` reads the store's content types at config time via a new public
+  `listPublicContentTypes` (slug + name only) and **fails the build** if the CMS is
+  unreachable, because zero collections would deploy an empty site green.
+
+  Astro has no API for an integration to define content collections, so a site re-exports
+  once: `export { collections } from "pramen:cms"`.
+
+- **CMS locales are declared, not inferred.** `createCmsHandlers({ locales: ["cs", "en"] })`
+  and `listCmsCapabilities` — the pages-side counterpart to a collection's `supports: [...]`.
+  One locale means monolingual: no i18n chrome, and `locale` comes off the wire entirely so
+  nothing can overwrite a field the editor no longer shows. `locales[0]` is the default
+  stamp, derived rather than a second option that can disagree. Deliberately not inferred
+  from the data: `createTranslation` is reachable only from the panel that would be hidden,
+  so "show i18n once a second locale exists" could never become true.
+
+- **A host-configurable wordmark in `@pramen/cms-editor`.** The editor ships as a package an
+  agency installs for a client, so `brand: { name, suffix }` in `/config.js` replaces
+  "pramen · cms" in the topbar, on the Setup screen and in the browser tab. Configuring
+  nothing renders exactly as before.
+
+### Fixed
+
+- **A failed mutation on D1 now says it was partially applied.** D1 has no interactive
+  transactions, so `transaction(fn)` runs `fn` as-is and a mutation that throws midway keeps
+  what it wrote. That is unavoidable — pramen mutations interleave reads, writes, `RETURNING`
+  and trigger-into-outbox, and `batch()` cannot read mid-batch — but it used to be invisible:
+  a half-applied mutation looked exactly like an ordinary 500. The Worker now logs the
+  handler and how many statements had committed.
+
+- **A missing Cron trigger on the D1 store is no longer silent.** The DO self-drains via an
+  alarm; D1 has none, so a delayed task — a scheduled publish, a retry backoff — runs only
+  under a Cron trigger, and forgetting it meant the row simply never went live. The Worker
+  warns once per isolate when a request-tail drain leaves a future-due task and no Cron drain
+  has been seen, and stops once one fires.
+
+- **`@pramen/cms` collection workflow (`supports`), from a review of #42.** Scheduling now
+  converges in any drain order: a publish task draining after its own takedown instant lands
+  the row **down** instead of publishing and discarding the takedown, and the takedown task
+  spends the pending publish token so a late retry cannot resurrect the row. A reschedule can
+  no longer move the publish past a pending takedown. Schedule epochs are range-checked, so
+  an epoch-microseconds slip is a 400 rather than a `RangeError` 500, and a year-10000 value
+  can no longer mint a timestamp that sorts before every real one.
+
+  Revision history stopped leaking: `collectionListRevisions` projects each snapshot to the
+  caller's readable fields (it returned the raw JSON from a flatly-granted table), restore
+  writes back only that set, and `cmsPolicies` no longer grants update/delete on the
+  append-only revisions table. The generic CRUD handlers gained input validation — an
+  operator object where an id belongs returned an arbitrary row — and `collectionList` clamps
+  its limit.
+
+  `createCollectionHandlers` now requires your schema and validates the whole registry at
+  boot: managed columns are checked for type, nullability and `hidden()` rather than by name
+  alone; declared fields must be real columns that can hold their type; `orderBy` must name a
+  real column (SQLite resolves an unknown quoted name to a *constant*, so a typo sorted every
+  row equal, silently); the entity must be in the default partition; and two collections may
+  not share an entity, since the ACL OR-merges their policies and would widen the public
+  scope.
+
+  The public read scope treats `publishedAt IS NULL` as published, so rows seeded or imported
+  without a stamp no longer vanish the moment `scheduling` is enabled, and it grants
+  `publishedAt` so "newest published first" stops 403ing for anonymous.
+
+- **The collection editor can publish.** With `drafts` enabled there was no UI path at all —
+  `collectionCreate` seeds `status: "draft"` and `collectionUpdate` strips `status` — so a row
+  authored in the editor could never be made public. Adds publish/unpublish, a schedule
+  picker, a preview link and a restorable revision list, all driven by `supports`.
+
+### Removed
+
+- **`embed` for `@pramen/cms-astro` and the Worker's `basePath`,** both reverted before
+  release. `embed` generated a Worker entrypoint against a `dist/_worker.js` layout only
+  `@astrojs/cloudflare` v12 emits; v13/v14 hand the build to `@cloudflare/vite-plugin` and
+  emit no such file, so the generated entry could not resolve its first import. `basePath`
+  had no other consumer and four defects that only surface once something is mounted —
+  `/files` and `/media` were dead under a prefix, minted URLs did not know about it, and
+  `basePath: "/"` 404'd everything. Both will return built against the current adapter.
+
+## [Shipped, version unrecorded — between 0.0.15 and 0.0.51]
+
+These entries sat under "Unreleased" while the file went untended. The work SHIPPED; which
+release carried it was never recorded, so they are kept verbatim rather than assigned a
+version they might not belong to.
 
 ### Added
 

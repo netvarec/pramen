@@ -15,9 +15,18 @@ first-class alternate for read-heavy / globally-distributed reads.
 | Live queries (`/live`) | ✅ | ❌ DO-only |
 | Read replicas | — | ✅ Sessions API (read-your-writes) |
 | Atomic multi-statement mutation | ✅ (rolls back on throw) | ❌ (each statement auto-commits) |
+| Needs an export from the worker entry | ✅ the DO class | ❌ D1 is just a binding |
+| Pre-auth routes (`ctx.callPrivileged`) | ✅ | ✅ (dispatches locally in the Worker) |
 
 The DO remains the **write / atomic / live** database; D1 is the read-replica / no-DO
 path. Both share the R2 file store, KV, and the deferred-task outbox.
+
+**For a CMS behind a site, D1 is usually the right store** — and the only one that can live
+inside the site's own Worker. A Durable Object has to be exported from the worker entry
+(`export class PramenDO`), which means owning that entry; D1 is a binding and needs nothing.
+That is the whole difference between "add one integration" and "hand-write a worker
+entrypoint". Pick the DO when a mutation must be atomic, when you want live queries, or when
+tenants must be isolated by construction.
 
 ## Selecting the store
 
@@ -68,6 +77,11 @@ const bookmark = res.headers.get("x-pramen-d1-bookmark"); // carry it forward
   `transaction(fn) = fn()`: each statement auto-commits, and a **multi-statement mutation
   does not roll back on throw** the way it does on a DO. Single-statement mutations are
   atomic. Use the DO store when you need atomic mutations.
+
+  A failed mutation that had already written **says so**: the Worker logs the handler name
+  and how many statements had committed. Without that, a partially applied mutation is
+  indistinguishable from an ordinary 500 in the logs, which is the difference between "the
+  request failed" and "the request failed and the data is in a state no code path intended".
 - The reference setup uses **one shared D1 database across tenants** — a real product
   would add a tenant column or a per-tenant database. The ACL still scopes every row, so
   a shared bookmark only picks a consistency point, never widens access.
@@ -78,3 +92,21 @@ The DO store self-drains its [task outbox](/tasks) via an alarm. The D1 store ha
 alarm, so drain it with a **Cron Trigger** — `createPramen(app).scheduled`, wired to a
 `triggers.crons` entry in `oblaka.ts` — or on demand via `POST /admin/tasks/drain` with
 the `x-pramen-store: d1` header.
+
+A task enqueued with no delay is drained in the request tail, so it needs no cron. A
+**delayed** one — a scheduled publish, a retry backoff — runs only under the Cron trigger,
+and forgetting it fails silently: the task simply never runs. The Worker notices that exact
+shape (a request-tail drain leaving a future-due task, with no Cron drain ever seen) and
+logs it once per isolate, naming the config to add. Once a Cron drain fires, it stops.
+
+## Pre-auth routes on D1
+
+A route in `app.routes` runs before auth and has no `ctx.db`, so it reaches a handler
+through `ctx.callPrivileged`. That used to forward only to a Durable Object, which made
+everything built on a pre-auth route DO-only — signed preview links, the sitemap. On the D1
+store it now dispatches **locally in the Worker** instead, through the same code path a
+request takes.
+
+One thing to know: the store is chosen **per request**, and a browser opening a signed link
+sends no `x-pramen-store` header. A deployment that serves such links from D1 should set
+`PRAMEN_STORE=d1` so the default matches where the data is.
