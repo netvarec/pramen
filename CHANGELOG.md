@@ -14,7 +14,85 @@ there are no backward-compatibility guarantees yet.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **The CMS editor is served by your Astro site (`@pramen/cms-astro`, `@pramen/cms-editor`).**
+  `pramenCms({ backend, admin: true })` injects one catch-all route at `/_pramen/admin`, and
+  that route renders the editor's shell. The editor stops being something you deploy beside
+  the site and becomes part of it: no `dist/` to copy, no SPA-fallback rewrite to configure,
+  no second hostname for it, and no Setup screen asking for a URL the server already knows —
+  the shell declares the backend, so the first screen asks for a JWT and nothing else.
+  (It moves where the editor is served, not where the API is: RPC still goes to
+  `backend.url`, so a CMS on its own Worker still needs `CORS_ORIGINS`.)
+
+  This is the `basePath` idea from the previous commit, done at the level where it works.
+  The problem with a browser-side prefix alone was the shell: a baked `index.html` can only
+  reference `/editor.js` root-absolute, so the one deployment shape the option existed for
+  was the one shape it could not boot in. Handing the shell to the host solves the asset
+  paths (its bundler emits and fingerprints them), the deep links (every view is a real
+  server route) and the configuration (typed options rendered into the page) at once.
+
+  `admin` also carries the editor's own configuration — `brand`, `signInUrl`, `hidePages`,
+  `extraNav` — replacing the hand-edited `/config.js`. `@pramen/cms-editor` is an optional
+  peer dependency; omit `admin` and nothing is injected.
+
+- **An example Astro site (`example/site`), which is also the test.** It reads the example
+  CMS backend and serves its editor from the same origin — the whole wiring is one
+  `pramenCms()` call. `test/astro-site.test.ts` builds it against a stub CMS, boots the
+  output with `@astrojs/node` and asserts what only a real build can show: that the site's
+  bundler emitted `editor.js`/`editor.css` at URLs the shell reaches, that a deep link like
+  `/_pramen/admin/pages/abc` is served by the server rather than a rewrite, that the shell
+  carries the mount prefix and the declared backend, and that it is sent `private, no-store`.
+
+  It also runs **`astro check`** — the only thing in this repo that type-checks `.astro`
+  files. It lives in the test rather than in `bun run typecheck` because it syncs before it
+  checks, which runs the content loaders and so needs a reachable CMS.
+
+- **Navigation is scoped to the mount (`@pramen/cms-editor`).** `_404.tsx` registers the
+  catch-all `/:__notFound+`, so buzola's `Router.start()` matched — and intercepted — every
+  same-origin path. At the origin root that was right; co-hosted it was not, and a click on
+  the host site's own `/blog` would have been cancelled and rendered the editor's "Nothing
+  lives here" with the address bar still reading `/blog`. `scopeToBasePath` filters the
+  navigation adapter, so off-prefix navigations never reach the router and the browser
+  handles them. Containment is anchored at a segment boundary, so a prefix of `/cms` does
+  not claim the host's `/cmsmedia`.
+
+### Fixed
+
+- **`RichText.astro` could not be compiled by Astro (`@pramen/cms-astro`).** The heading case
+  computed its level inline in the template, and Astro's compiler scans a template expression
+  for markup — so `attrs.level <= 6` was read as the start of a tag and failed the build
+  outright (`Unable to assign attributes when using <> Fragment shorthand syntax`). The
+  comparison moved to the frontmatter, where it is plain TypeScript. Found by the new example
+  site, which is the first thing in this repo to put these components through `astro build`.
+
+### Changed
+
+- **`@pramen/cms-editor` builds two files, not a site.** `dist/editor.js` +
+  `dist/editor.css`, both stably named and exported from the package; `index.html`,
+  `config.js` and the separate `fonts.css` + `fonts/` are gone. The web font is inlined into
+  the stylesheet, so it is one self-contained asset wherever a host's bundler re-hosts it.
+  `bun run --cwd packages/cms-editor dev` still previews at <http://localhost:5175>, now from
+  a shell it synthesizes rather than a file it ships.
+- **The editor renders in NC Fontina.** Merging the two stylesheets settled an ordering bug:
+  `index.html` linked `fonts.css` *before* `app.css`, and both declare `--font-sans` on
+  `:root`, so the bundled font was downloaded and then never used. The font block now comes
+  last, which is what `@podoba/tokens/fonts.css` documents.
+- **A declared backend is not remembered by the browser.** With a shell that declares one,
+  `baseUrl`/`tenant` come from the server on every load and only the session token is read
+  from `localStorage` — a stale url from an earlier deployment can no longer outlive it.
+
+### Removed
+
+- **`window.PRAMEN_CMS_EDITOR.basePath`, reverted before release.** It landed after the
+  0.0.52 tag and is gone again here, so no released version ever carried it.
+
+  The idea survives; the level was wrong. A browser-side prefix cannot work while the editor
+  ships its own `index.html`, because that shell can only reference `/editor.js`
+  root-absolute — the one deployment shape the option existed for was the one shape it could
+  not boot in. The mount prefix is now the constant the route was injected at, stamped onto
+  the mount node by the same code that injected it, so a router mounted where the server
+  does not serve is not a state that can be reached.
 
 ## [0.0.52] — 2026-08-30
 

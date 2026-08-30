@@ -70,17 +70,55 @@ Block types are data-driven, but developers can get compile-time field typing:
 
 ## @pramen/cms-editor
 
-A standalone **React visual editor** — page list, a region canvas with allowed-type block
-palettes, schema-driven field forms (incl. a media picker, date/datetime pickers, repeaters,
-groups), and inspector
-panels for SEO / workflow / i18n / audit. It mutates through the semantic handlers (so all
-validation and gates apply). Build with `bun run --cwd packages/cms-editor build`, deploy the
-static `dist/`, and point it at your Worker (set `CORS_ORIGINS`) with an editor/reviewer JWT.
+A **React visual editor** — page list, a region canvas with allowed-type block palettes,
+schema-driven field forms (incl. a media picker, date/datetime pickers, repeaters, groups),
+and inspector panels for SEO / workflow / i18n / audit. It mutates through the semantic
+handlers (so all validation and gates apply).
+
+**Your Astro site serves it**, at `/_pramen/admin` — one line in the integration:
+
+```js
+pramenCms({ backend: { url: "https://cms.example.workers.dev" }, admin: true })
+```
+
+That injects a catch-all Astro route, so every view is a real server route on your own
+origin. There is no `dist/` to deploy, no second hostname for the editor, no SPA-fallback
+rewrite to configure, and nothing to point it at — the shell tells it which Worker and
+tenant to call, so the first screen asks for an editor/reviewer JWT and nothing else. The
+editor's two assets (`editor.js`, `editor.css`) go through your site's bundler like any
+other import, which is what makes the prefix mount work at all.
+
+This moves where the editor is SERVED, not where the API lives: it still calls
+`backend.url`, so a CMS on its own Worker remains cross-origin and still needs
+`CORS_ORIGINS` set to your site. Co-deploy the CMS into the site's Worker and that goes
+away too.
+
+`admin` also carries the editor's own configuration, replacing the old `/config.js`:
+
+```js
+admin: {
+  brand: { name: "Acme", suffix: "cms" },      // the wordmark — set it when you deploy for a client
+  signInUrl: "/signin/",                        // must be a page that EXISTS (see below)
+  hidePages: true,                              // collections-only deployments
+  extraNav: [{ label: "Curation", href: "/curate" }],
+}
+```
 
 Views are real, deep-linkable URLs — file-based routing via [`@buzola/router`](https://www.npmjs.com/package/@buzola/router)
-(`/`, `/media`, `/users`, `/settings`, `/pages/:pageId?tab=seo`), so Back/Forward and refresh
-behave. The host must serve `index.html` for unmatched extensionless paths (a standard SPA
-catch-all rewrite); the JS is referenced by an absolute path so it loads at any route depth.
+(`/`, `/media`, `/users`, `/settings`, `/pages/:pageId?tab=seo`, each under the mount
+prefix), so Back/Forward and refresh behave. Navigation is scoped to the mount: a click on
+one of your own site's pages leaves the editor instead of being swallowed by its catch-all
+route.
+
+> `signInUrl` must be a page that exists. An unauthenticated load calls it *after* clearing
+> the stored session, so a path that lands back inside the editor is a loop with nothing to
+> recover from. `?setup=1` always forces the built-in screen, for pasting a first-admin JWT.
+
+A working site is in `example/site` — content collections and the admin route in one
+`pramenCms()` call, against the example backend in `example/app.ts`.
+
+For local work on the editor itself, `bun run --cwd packages/cms-editor dev` serves it at
+the origin root on <http://localhost:5175> against whatever Worker you point it at.
 
 ### Users & settings
 

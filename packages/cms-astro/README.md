@@ -58,6 +58,65 @@ your deployment does need auth for reads, pass `backend: { token }`.
 the front door, not a replacement. A site that wants to define its own collections by hand
 still can.
 
+## Serving the editor: `admin`
+
+Add `admin: true` and this site also serves the [visual editor](../cms-editor), at
+`/_pramen/admin`:
+
+```ts
+integrations: [pramenCms({ backend: { url: "https://cms.example.workers.dev" }, admin: true })],
+```
+
+That injects **one catch-all Astro route**, so the editor is part of this site rather than
+something deployed beside it. What that buys, in order of how much time each used to cost:
+
+- **No `dist/` to deploy and no asset paths to get right.** The editor's `editor.js` /
+  `editor.css` are imported by the injected route and go through this site's bundler, which
+  emits and fingerprints them. A copied-in `index.html` could only ever reference them
+  root-absolute, so it worked at the origin root and nowhere else.
+- **No SPA-fallback rewrite.** `/_pramen/admin/pages/:id` is a real server route: a deep
+  link or a refresh is served like any other page.
+- **No second hostname for the editor** — it is a route on this site, not a separate
+  deploy pointed at a separate domain.
+- **CORS only if the CMS is elsewhere.** Serving the editor here does not move the API: it
+  still calls `backend.url`, so a CMS on its own Worker is still cross-origin and still
+  needs `CORS_ORIGINS` to allow this site. Co-deploy the CMS into this site's Worker (the
+  D1 store needs no `export`, so it can live in an Astro Worker) and `backend.url` becomes
+  same-origin — then there is genuinely no CORS.
+- **Nothing to point it at.** The shell tells the editor which Worker and tenant to call, so
+  the first screen asks for an editor/reviewer JWT and nothing else.
+
+The mount path is a constant, not an option: the same value is the injected route pattern
+*and* the prefix handed to the editor's router, so the two cannot drift into a router
+mounted where the server does not serve. `_pramen` is a reserved namespace — every ordinary
+path stays yours.
+
+Pass an object instead of `true` to configure the editor itself (this replaces its old
+`/config.js`, and is typed):
+
+```ts
+pramenCms({
+  backend: { url: "https://cms.example.workers.dev", tenant: "acme" },
+  admin: {
+    brand: { name: "Acme", suffix: "cms" },   // the wordmark; `suffix: null` drops the second half
+    signInUrl: "/signin/",                     // must be a page that EXISTS
+    hidePages: true,                           // collections-only deployments
+    extraNav: [{ label: "Curation", href: "/curate" }],
+  },
+})
+```
+
+`@pramen/cms-editor` is an **optional** peer dependency: install it only if you use `admin`.
+Omit the option and no route is injected and nothing is added to the site.
+
+A working site is in [`example/site`](../../example/site) — content collections and the admin
+route, wired in one `pramenCms()` call. It doubles as this package's end-to-end test
+(`test/astro-site.test.ts`).
+
+> `signInUrl` must be a page that already exists. An unauthenticated load calls it *after*
+> clearing the stored session, so a path that lands back inside the editor is a loop with
+> nothing to recover from. `?setup=1` always forces the built-in screen.
+
 ## The kit of parts
 
 - **`createCmsClient({ baseUrl })`** — `getPage(slug, locale?)`, `listPublishedPages()`, and
