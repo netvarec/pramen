@@ -489,6 +489,31 @@ become multilingual. `listCmsCapabilities` is what the editor reads; `listLocale
 DATA query (which locales are actually authored), and the two differ while a locale is
 declared but not yet used.
 
+### Which store: D1 or the Durable Object
+
+For a CMS behind a site, **D1 is usually the right store** — and it is the only one that
+lets the CMS live inside an Astro site's own Worker, because D1 is a binding while a
+Durable Object has to be exported from the worker entry.
+
+What you give up, and it is worth knowing before you pick:
+
+- **No atomic multi-statement mutations.** D1 has no interactive transactions, so
+  `transaction(fn)` runs `fn` as-is: a mutation that throws midway keeps what it already
+  wrote. Single-statement writes are still atomic. The Worker logs a specific error naming
+  the handler and how many statements had committed, so a partial write is diagnosable
+  rather than looking like an ordinary 500. Where the CMS does several writes in one
+  mutation — a revision plus the row it belongs to, a delete plus its revision purge — the
+  order is chosen so a failure leaves a benign state, but it is not a rollback.
+- **No live queries.** Those need the Durable Object's socket host. The editor does not use
+  them, so this only matters if your own frontend subscribes.
+- **Scheduled publish needs a Cron trigger.** There is no DO alarm to self-drain the outbox
+  — see below.
+- **One shared database, no tenant column.** A non-`main` tenant on D1 is refused unless you
+  set `PRAMEN_D1_ALLOW_MULTITENANT=true`, because the rows would commingle.
+
+Pick the Durable Object store when a mutation must be atomic, when you want live queries, or
+when tenants must be isolated by construction.
+
 ## Limitations
 
 - **Block `fields` are opaque JSON**, so pramen's row/cell-level ACL and relational queries

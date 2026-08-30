@@ -107,6 +107,10 @@ export class DoSqliteDriver implements Driver {
  * A bookmark always wins over a constraint when one is supplied. */
 export type D1SessionStart = "first-primary" | "first-unconstrained" | (string & {});
 
+/** Does this statement mutate? Used only to notice a partial write after a failed
+ * mutation — deliberately coarse: over-reporting a warning is harmless, missing one is not. */
+const WRITE_SQL = /^\s*(insert|update|delete|replace|create|drop|alter)\b/i;
+
 /** D1 — SQLite over RPC. Async by nature.
  *
  * Read replicas (Sessions API): every D1Driver opens ONE `db.withSession(start)` and
@@ -129,10 +133,23 @@ export class D1Driver implements Driver {
   }
 
   async exec(sql: string, params: CellValue[]): Promise<DriverRow[]> {
+    if (WRITE_SQL.test(sql)) this.writes++;
     const stmt = params.length ? this.session.prepare(sql).bind(...params) : this.session.prepare(sql);
     const { results } = await stmt.all<DriverRow>();
     return results ?? [];
   }
+
+  /** How many write statements this session has auto-committed.
+   *
+   * There is no rollback here (see the ATOMICITY LIMIT above), so a mutation that throws
+   * midway leaves whatever it had already written. Counting the writes lets the caller say
+   * so out loud instead of surfacing a half-applied mutation as an ordinary 500 — the
+   * difference between "the request failed" and "the request failed and your data is now
+   * in a state no code path intended". */
+  writtenCount(): number {
+    return this.writes;
+  }
+  private writes = 0;
 
   /** The session's latest bookmark (null before any query). Threaded back to the client
    * via the `x-pramen-d1-bookmark` response header so a subsequent request can anchor a

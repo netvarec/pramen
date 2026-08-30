@@ -241,17 +241,35 @@ export function makeWorker(app: PramenApp) {
     const driver = new D1Driver(env.DB, { start: opts.start });
     const files = createFiles({ tenant: opts.tenant, secret: filesSecret(env), adapter: new R2Adapter(env.FILES) });
     await ensureD1Migrated(driver, env.PRAMEN_ALLOW_DESTRUCTIVE === "true");
-    const { result, enqueued } = await dispatch(
-      app.handlers,
-      app.schema,
-      driver,
-      new Kv(env.KV),
-      files,
-      envBag(env),
-      { acl: d1Acl, identity: opts.identity, tenant: opts.tenant, store: "d1" },
-      opts.name,
-      opts.input,
-    );
+    let dispatched;
+    try {
+      dispatched = await dispatch(
+        app.handlers,
+        app.schema,
+        driver,
+        new Kv(env.KV),
+        files,
+        envBag(env),
+        { acl: d1Acl, identity: opts.identity, tenant: opts.tenant, store: "d1" },
+        opts.name,
+        opts.input,
+      );
+    } catch (err) {
+      // D1 has no interactive transactions, so `transaction(fn)` runs `fn` as-is and a
+      // mutation that throws midway keeps whatever it already wrote. Say so: a partially
+      // applied mutation looks exactly like an ordinary 500 in the logs, and the difference
+      // — data left in a state no code path intended — is the whole point.
+      const written = driver.writtenCount();
+      if (written > 0) {
+        console.error(
+          `pramen: '${opts.name}' failed on the D1 store AFTER ${written} write statement(s) had committed. ` +
+            `D1 has no interactive transactions, so this mutation is PARTIALLY APPLIED and will not roll back. ` +
+            `Use the Durable Object store if this mutation must be atomic.`,
+        );
+      }
+      throw err;
+    }
+    const { result, enqueued } = dispatched;
     // Drain in the request tail so an enqueued task does not wait for the next Cron tick.
     if (enqueued > 0 && ctx) ctx.waitUntil(drainD1(env));
     return { driver, result: result as JsonValue };
