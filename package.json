@@ -5,7 +5,8 @@
   "description": "Reactive backend runtime for TypeScript on Cloudflare — schema + handlers, deployed as Workers + Durable Objects.",
   "type": "module",
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "example/site"
   ],
   "bin": {
     "pramen": "scripts/cli.ts"

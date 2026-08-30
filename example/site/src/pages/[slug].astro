@@ -1,0 +1,49 @@
+---
+// One page per published article, prerendered. `BlockRenderer` maps each block's type slug
+// to one of the site's own components; an unmapped type renders a visible placeholder
+// rather than disappearing.
+import type { RenderedBlock } from "@pramen/cms-astro";
+import BlockRenderer from "@pramen/cms-astro/BlockRenderer.astro";
+import { getCollection } from "astro:content";
+import RichText from "../components/blocks/RichText.astro";
+
+/** What this site expects a published article to look like — the default `cmsLoader`
+ * transform flattens the page's own fields to the top level and adds these.
+ *
+ * Worth writing down: a generated collection has no Zod schema, so `entry.data` is `any`
+ * and every read below would otherwise go unchecked. Declaring `Props` is what gives
+ * `astro check` something to verify. It is a claim about the content, not a guarantee —
+ * enforcement would mean a schema on the collection. */
+interface Article {
+  title: string;
+  blocks: RenderedBlock[];
+  seo?: { metaDescription?: string } | null;
+}
+
+interface Props {
+  page: Article;
+}
+
+export async function getStaticPaths() {
+  const articles = await getCollection("articles");
+  return articles.map((a) => ({ params: { slug: a.id }, props: { page: a.data as Article } }));
+}
+
+const { page } = Astro.props;
+const components = { rich_text: RichText };
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{page.title}</title>
+    {page.seo?.metaDescription ? <meta name="description" content={page.seo.metaDescription} /> : null}
+  </head>
+  <body>
+    <h1>{page.title}</h1>
+    <BlockRenderer blocks={page.blocks} {components} />
+    <p><a href="/">Back</a></p>
+  </body>
+</html>

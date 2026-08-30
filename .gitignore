@@ -14,3 +14,6 @@ wrangler.jsonc
 
 # TypeScript incremental build cache
 *.tsbuildinfo
+
+# Astro generated types (example/site)
+.astro/

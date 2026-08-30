@@ -3,9 +3,15 @@
     "target": "es2022",
     "module": "esnext",
     "moduleResolution": "bundler",
-    "customConditions": ["development"],
-    "lib": ["es2022"],
-    "types": ["@cloudflare/workers-types"],
+    "customConditions": [
+      "development"
+    ],
+    "lib": [
+      "es2022"
+    ],
+    "types": [
+      "@cloudflare/workers-types"
+    ],
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
@@ -15,5 +21,10 @@
     "verbatimModuleSyntax": true,
     "noEmit": true
   },
-  "include": ["example"]
+  "include": [
+    "example"
+  ],
+  "exclude": [
+    "example/site"
+  ]
 }

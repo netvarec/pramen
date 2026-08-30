@@ -1,0 +1,26 @@
+---
+// Static, like the rest of the site: `cmsLoader` pulled every published page at BUILD time,
+// so this is an ordinary content-collection read with no request to the CMS.
+import { getCollection } from "astro:content";
+
+const articles = await getCollection("articles");
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>pramen example site</title>
+  </head>
+  <body>
+    <h1>pramen example site</h1>
+    <ul>
+      {articles.map((a) => <li><a href={`/${a.id}`}>{a.data.title}</a></li>)}
+    </ul>
+    <!-- The editor is part of THIS site, served from this origin — no second hostname and
+         nothing deployed beside it. (Its API calls still go to the CMS worker, which is why
+         that worker sets CORS_ORIGINS.) -->
+    <p><a href="/_pramen/admin">Edit this site</a></p>
+  </body>
+</html>
