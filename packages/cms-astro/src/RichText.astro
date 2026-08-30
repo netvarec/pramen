@@ -22,6 +22,18 @@ interface Props {
 
 const { value, nodes } = Astro.props;
 const list = nodes ?? value?.content ?? [];
+
+/** The element name for a heading node. Computed HERE, in the frontmatter, and not inline
+ * in the template below: Astro's compiler scans a template expression for markup, so a `<`
+ * comparison inside one is read as the start of a tag and fails the build outright
+ * ("Unable to assign attributes when using <> Fragment shorthand syntax"). Frontmatter is
+ * plain TypeScript, where `<=` means what it says.
+ *
+ * Integer-checked as well as ranged — `h2.5` is not an element name. */
+function headingTag(level: unknown): string {
+  const ok = typeof level === "number" && Number.isInteger(level) && level >= 1 && level <= 6;
+  return ok ? `h${level}` : "h2";
+}
 ---
 
 {
@@ -39,10 +51,7 @@ const list = nodes ?? value?.content ?? [];
           </p>
         );
       case "heading": {
-        // Integer too — `h2.5` is an invalid element name.
-        const level =
-          typeof attrs.level === "number" && Number.isInteger(attrs.level) && attrs.level >= 1 && attrs.level <= 6 ? attrs.level : 2;
-        const Tag = `h${level}`;
+        const Tag = headingTag(attrs.level);
         return (
           <Tag>
             <Self nodes={children} />
