@@ -12,7 +12,7 @@
 // constructs a DO with only (ctx, env). PramenApp is defined here and imported
 // type-only by worker.ts / durable-object.ts, so there is no runtime import cycle.
 
-import { makeWorker, type Env, type WorkerOpts } from "./worker";
+import { makeWorker, type Env } from "./worker";
 import { pramenDO, type DoEnv } from "./durable-object";
 import { validateTriggerTasks, type SchemaDef } from "./sdk/schema";
 import type { AppTaskMap, HandlerMap, BootstrapFn } from "./sdk/handlers";
@@ -66,13 +66,13 @@ export type { Env, DoEnv };
 /** Build the deployable pair for an app. `scheduled` is a Cron Trigger entry that
  * drains the D1 outbox (the DO path self-drains via an alarm) — wire it only if you
  * use the D1 store with deferred tasks. */
-export function createPramen(app: PramenApp, opts: WorkerOpts = {}): {
+export function createPramen(app: PramenApp): {
   fetch: (request: Request, env: Env, ctx: ExecutionContext) => Promise<Response>;
   scheduled: (event: unknown, env: Env) => Promise<void>;
   queue: (batch: QueueBatch, env: Env) => Promise<void>;
   PramenDO: ReturnType<typeof pramenDO>;
 } {
   validateTriggerTasks(app.schema, Object.keys(app.tasks ?? {})); // fail fast on a typo'd trigger task
-  const worker = makeWorker(app, opts);
+  const worker = makeWorker(app);
   return { fetch: worker.fetch, scheduled: worker.scheduled, queue: worker.queue, PramenDO: pramenDO(app) };
 }
