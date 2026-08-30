@@ -2,11 +2,12 @@
 // wrapped around every route via <Outlet />. Tab highlighting is derived from the
 // current path, so a deep link or refresh lands with the right tab lit.
 
-import { Outlet, useNavigate, useRoute } from "@buzola/router";
+import { Outlet, useNavigate, useRoute, useRouter } from "@buzola/router";
 import { Button, Card, MoonIcon, SunIcon, Text, Topbar } from "@podoba/react";
 import { useEffect, useState } from "react";
 import { useApp } from "../app-context";
 import { BRAND } from "../brand";
+import { isWithinBasePath } from "../mount";
 
 const THEME_KEY = "pramen.cms.theme";
 
@@ -46,6 +47,18 @@ export default function RootLayout() {
   const extraNav = typeof window !== "undefined" ? window.PRAMEN_CMS_EDITOR?.extraNav ?? [] : [];
   // Collections-only deployments hide the block/page builder entirely.
   const hidePages = typeof window !== "undefined" ? window.PRAMEN_CMS_EDITOR?.hidePages === true : false;
+
+  // See the extraNav comment below: `_self` is honoured only where it cannot strand the user
+  // on the in-app 404 — a mounted editor, and an href outside the mount.
+  const basePath = useRouter().basePath;
+  const opensInSameTab = (href: string, target?: string): boolean => {
+    if (target !== "_self" || !basePath) return false;
+    try {
+      return !isWithinBasePath(new URL(href, window.location.origin).pathname, basePath);
+    } catch {
+      return false;
+    }
+  };
 
   return (
     // Page-level surface so the whole viewport (not just the topbar + cards) flips
@@ -89,20 +102,27 @@ export default function RootLayout() {
             Settings
           </Button>
           {extraNav.map((l) => (
-            // Companion tools live OUTSIDE this SPA (a separate static page/worker route), so
-            // open them in a new tab. NOT a style choice, and `target: "_self"` alone would not
-            // fix it: `_404.tsx` registers the catch-all `/:__notFound+`, so buzola matches
-            // EVERY same-origin path and intercepts it — a same-tab click and `location.assign`
-            // both land on the in-app 404 (verified). Only a cross-origin url escapes on its own.
+            // Defaults to a new tab: a companion tool is normally a separate deployment, and
+            // `_404.tsx` registers the catch-all `/:__notFound+`, so an UNMOUNTED editor's
+            // router matches every same-origin path — a same-tab click would land on the
+            // in-app 404 rather than the tool. Only a cross-origin url escapes on its own.
             //
-            // The supported same-tab route is `router.leaveApp(href)` (@buzola/router >= 0.0.16),
-            // which releases one navigation to the browser. This package still pins ^0.0.12, so
-            // adopting it is a version bump plus a `target` option on the config item.
+            // `target: "_self"` is for the co-hosted case, where that no longer holds: a
+            // mounted editor filters navigation through `scopeToBasePath`, which only forwards
+            // paths INSIDE its prefix to the router, so an off-prefix path is left to the
+            // browser and arrives normally. There the new tab is pure clutter — the tool is
+            // just another page of the same admin.
+            //
+            // So `_self` is safe when this editor is mounted (`BASE_PATH` non-empty) and the
+            // href sits outside that prefix. Rather than trust the caller on both, it is
+            // honoured only when they hold; otherwise it degrades to the safe default instead
+            // of silently landing the user on a 404. (When @buzola/router moves past ^0.0.12
+            // here, `router.leaveApp(href)` releases one navigation to the browser and makes
+            // `_self` work for an unmounted editor too.)
             <a
               key={l.href}
               href={l.href}
-              target="_blank"
-              rel="noopener noreferrer"
+              {...(opensInSameTab(l.href, l.target) ? {} : { target: "_blank", rel: "noopener noreferrer" })}
               className="rounded-md px-2.5 py-1.5 text-small text-fg-muted transition-colors hover:bg-surface-muted hover:text-fg"
             >
               {l.label}

@@ -36,8 +36,14 @@ export interface AdminRuntimeConfig {
   signInUrl?: string;
   /** Hide the Pages tab, for deployments that use collections only. */
   hidePages?: boolean;
-  /** Extra top-nav links to companion tools the host serves. */
-  extraNav?: { label: string; href: string }[];
+  /** Extra top-nav links to companion tools the host serves.
+   *
+   * `target` defaults to `"_blank"`, because a companion tool is normally a separate
+   * deployment and the editor's catch-all route would otherwise swallow a same-tab click.
+   * Set `"_self"` when the tool is a page of the SAME site as a mounted editor: the mount
+   * scopes navigation to its own prefix, so an off-prefix path is left to the browser and
+   * a new tab is just clutter. */
+  extraNav?: { label: string; href: string; target?: "_blank" | "_self" }[];
 }
 
 /** Options for the injected admin route. `true` is "mount it with the integration's own

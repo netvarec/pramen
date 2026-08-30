@@ -27,7 +27,7 @@ declare global {
       hidePages?: boolean;
       /** Extra top-nav links to companion tools the host serves (e.g. a curation page).
        * Rendered as plain external `<a>` links after the built-in tabs. */
-      extraNav?: { label: string; href: string }[];
+      extraNav?: { label: string; href: string; target?: "_blank" | "_self" }[];
       /** The wordmark in the topbar, on the Setup screen, and in the browser tab.
        *
        * This editor ships as a package an agency deploys FOR ITS CLIENT, so the default
