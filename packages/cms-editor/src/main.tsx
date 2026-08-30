@@ -1,8 +1,9 @@
-import { BuzolaProvider } from "@buzola/router";
+import { BuzolaProvider, Router, createBrowserNavigationAdapter } from "@buzola/router";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { pageRegistry, routes } from "virtual:buzola/routes";
 import { AppProvider } from "./app-context";
+import { BASE_PATH } from "./base-path";
 import { DOCUMENT_TITLE } from "./brand";
 
 // Styling is podoba: @podoba/tokens/variables.css + the compiled Tailwind (podoba
@@ -17,12 +18,21 @@ import { DOCUMENT_TITLE } from "./brand";
 // tab, and `suffix: null` ("just our name") could never drop it.
 document.title = DOCUMENT_TITLE;
 
+// Built here rather than left to BuzolaProvider's `routes` form, which constructs the Router
+// internally and has nowhere to put a prefix.
+const router = new Router({
+  routes,
+  adapter: createBrowserNavigationAdapter(),
+  pageRegistry,
+  basePath: BASE_PATH,
+});
+
 const el = document.getElementById("app");
 if (el)
   createRoot(el).render(
     <StrictMode>
       <AppProvider>
-        <BuzolaProvider routes={routes} pageRegistry={pageRegistry} />
+        <BuzolaProvider router={router} />
       </AppProvider>
     </StrictMode>,
   );

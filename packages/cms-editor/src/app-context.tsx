@@ -21,6 +21,12 @@ declare global {
       /** Extra top-nav links to companion tools the host serves (e.g. a curation page).
        * Rendered as plain external `<a>` links after the built-in tabs. */
       extraNav?: { label: string; href: string }[];
+      /** Mount the editor under a path prefix (e.g. "/admin"), for a host that serves it
+       * beside its own site so the two share one origin. Routes are authored from "/" and
+       * buzola's Router prepends this for navigation and strips it for matching; the host
+       * still decides where the assets live (and should point `signInUrl` inside the
+       * prefix too). Absent or "/" means mounted at the root, exactly as before. */
+      basePath?: string;
       /** The wordmark in the topbar, on the Setup screen, and in the browser tab.
        *
        * This editor ships as a package an agency deploys FOR ITS CLIENT, so the default
