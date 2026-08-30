@@ -32,6 +32,8 @@
     "@pramen/auth": "workspace:*",
     "@pramen/client": "workspace:*",
     "@pramen/cms": "workspace:*",
+    "@pramen/cms-astro": "workspace:*",
+    "@pramen/cms-editor": "workspace:*",
     "@pramen/react": "workspace:*",
     "@pramen/server": "workspace:*",
     "@types/react": "^19.0.0",

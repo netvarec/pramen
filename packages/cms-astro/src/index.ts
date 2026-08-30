@@ -17,6 +17,10 @@ import type { Loader, LoaderContext } from "astro/loaders";
 export { pramenCms, default } from "./integration.js";
 export type { CmsBackend, CollectionMap, PramenCmsOptions } from "./integration.js";
 
+// The admin mount — the editor served as an injected route on this site (`admin: true`).
+export { ADMIN_BASE, ADMIN_ROUTE } from "./admin.js";
+export type { AdminOptions, AdminRuntimeConfig } from "./admin.js";
+
 /** Any JSON value — the wire form of everything the CMS stores. */
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 

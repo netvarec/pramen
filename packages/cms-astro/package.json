@@ -15,7 +15,9 @@
   "exports": {
     ".": "./src/index.ts",
     "./integration": "./src/integration.ts",
+    "./admin": "./src/admin.ts",
     "./BlockRenderer.astro": "./src/BlockRenderer.astro",
+    "./PramenAdmin.astro": "./src/PramenAdmin.astro",
     "./RichText.astro": "./src/RichText.astro",
     "./RichTextMarks.astro": "./src/RichTextMarks.astro"
   },
@@ -23,7 +25,16 @@
     "src"
   ],
   "peerDependencies": {
-    "astro": ">=4"
+    "astro": ">=4",
+    "@pramen/cms-editor": "^0.0.52"
+  },
+  "peerDependenciesMeta": {
+    "@pramen/cms-editor": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@pramen/cms-editor": "workspace:*"
   },
   "publishConfig": {
     "access": "public"
