@@ -17,7 +17,8 @@
 
 import type { BuzolaNavigateEvent, NavigationAdapter } from "@buzola/router";
 
-/** A mount path must be a chain of path segments rooted at the origin.
+/** A mount path must be a chain of non-empty path segments rooted at the origin, written
+ * only in characters that `URL.pathname` returns UNENCODED.
  *
  * Rooted, and required to say so: buzola prepends the base path to every href it builds, so
  * anything that is not already an absolute path resolves somewhere unintended. A leading
@@ -26,10 +27,14 @@ import type { BuzolaNavigateEvent, NavigationAdapter } from "@buzola/router";
  * mounted. `//cdn.example.com` is rejected for the same reason: protocol-relative, and the
  * natural product of `"/" + prefix` where the prefix already carried a slash.
  *
- * Segments only, too: a value carrying `?`, `#` or `\` is not a mount path, and each breaks
- * routing in its own silent way (a query swallows the rest of every href; a backslash
- * resolves off-site while looking local). */
-const MOUNT_PATH = /^\/[^/\\?#][^\\?#]*$/;
+ * The character set is not a style choice. Every comparison against a mount path in this
+ * file — and buzola's own `stripBasePath`, which we cannot change — is a raw `startsWith`
+ * against a `URL.pathname`, which is percent-ENCODED. Admit a character the parser encodes
+ * and the two sides can never match: a mount of `/správa` is compared against
+ * `/spr%C3%A1va/...` and EVERY in-prefix url reads as off-prefix. So the admitted set is
+ * derived from the parser rather than guessed — `"<>^`{}`, backslash, space and everything
+ * non-ASCII all encode, and are refused here. */
+const MOUNT_PATH = /^(?:\/[A-Za-z0-9!$%&'()*+,\-.:;=@[\]_|~]+)+$/;
 
 /**
  * Normalize the mount node's declared prefix to buzola's shape: `""` for the origin root,
@@ -43,12 +48,16 @@ const MOUNT_PATH = /^\/[^/\\?#][^\\?#]*$/;
  */
 export function resolveBasePath(raw?: string | null): string {
   const trimmed = (raw ?? "").trim();
-  if (trimmed === "" || trimmed === "/") return "";
-  if (!MOUNT_PATH.test(trimmed)) {
+  // Trailing slashes come off FIRST, so `MOUNT_PATH` only ever judges the canonical form
+  // and a value that is nothing but slashes collapses to the root rather than being warned
+  // about as malformed.
+  const canonical = trimmed.replace(/\/+$/, "");
+  if (canonical === "") return "";
+  if (!MOUNT_PATH.test(canonical)) {
     console.warn(`pramen/cms-editor: ignoring unusable mount path ${JSON.stringify(trimmed)} — mounting at the origin root.`);
     return "";
   }
-  return trimmed.replace(/\/+$/, "");
+  return canonical;
 }
 
 /** Read the prefix the shell stamped onto the mount node. */

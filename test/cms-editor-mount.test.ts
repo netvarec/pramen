@@ -68,6 +68,23 @@ describe("cms-editor mount path", () => {
     }
   });
 
+  // Every comparison against a mount path — here and in buzola's own `stripBasePath` — is a
+  // raw `startsWith` against a percent-ENCODED `URL.pathname`. A mount written in characters
+  // the parser encodes can therefore never match: `/správa` vs `/spr%C3%A1va/media`, and
+  // every in-prefix url reads as off-prefix.
+  test("a mount path that would not survive URL parsing is refused", () => {
+    for (const bad of ["/správa", "/admin panel", "/café", "/a^b", "/a{b}", "/a`b", '/a"b', "/a<b"]) {
+      expect(resolveBasePath(bad)).toBe("");
+    }
+    // The encoded form of the same mount is fine — it is what the pathname will look like.
+    expect(resolveBasePath("/spr%C3%A1va")).toBe("/spr%C3%A1va");
+  });
+
+  test("a value that is only slashes is the root, not a malformed path", () => {
+    expect(resolveBasePath("//")).toBe("");
+    expect(resolveBasePath("///")).toBe("");
+  });
+
   test("it reads the prefix off the mount node the shell rendered", () => {
     expect(readBasePath({ dataset: { basePath: `${BASE}/` } as DOMStringMap })).toBe(BASE);
     expect(readBasePath({ dataset: {} as DOMStringMap })).toBe("");
