@@ -14,7 +14,51 @@ there are no backward-compatibility guarantees yet.
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **`extraNav`'s `target: "_self"` decided on the wrong URL (`@pramen/cms-editor`).** The
+  check resolved the href against `window.location.origin`, but a browser resolves
+  `<a href>` against the current DOCUMENT — so a relative href like `curate` from
+  `/_pramen/admin/pages/abc` was judged off-prefix (same tab) while the browser navigated to
+  `/_pramen/admin/pages/curate`, which is IN-prefix, straight onto the in-app 404 the check
+  exists to prevent. `?tab=x` and `#top` failed the same way. The document URL is now a
+  parameter, so the decision is made about the navigation that will actually happen.
+
+- **`_self` no longer discards unsaved edits silently.** A same-tab link is a real
+  cross-document navigation, but the links were deliberately exempt from the topbar's
+  unsaved-changes guard on the reasoning that they "leave nothing behind" — true only while
+  they always opened a new tab. `CollectionEditor` registers no `beforeunload` either, so a
+  half-filled collection form was lost with no prompt of any kind. Same-tab links now run the
+  guard.
+
+- **`rel="noreferrer"` is kept on same-tab links.** Only `target` and `noopener` are
+  branch-specific; dropping `rel` entirely handed the destination the full admin deep-link
+  URL (`/_pramen/admin/pages/<id>`) as `Referer`.
+
+- **The scheme and the origin are checked, not just the path.** `new URL` parses
+  `javascript:` and `data:` happily, and their `pathname` fails any containment test, so they
+  took the same-tab branch and shed the `rel` that had confined them. A cross-origin href was
+  likewise judged only on its path.
+
+- **`_self` now works for a cross-origin tool on a root-mounted editor.** The old `!basePath`
+  test refused it, though the catch-all can only claim same-origin paths — so the one
+  configuration that is provably safe unmounted was the one denied.
+
+- **A mount path is restricted to characters that survive URL parsing.** Every comparison
+  against it — here and in buzola's own `stripBasePath` — is a raw `startsWith` against a
+  percent-ENCODED `pathname`, so a mount of `/správa` could never match `/spr%C3%A1va/…` and
+  every in-prefix URL read as off-prefix. The admitted set is now derived from the parser.
+
+### Changed
+
+- **`scopeToBasePath` spreads the adapter instead of listing its methods**, so a member added
+  by a future `@buzola/router` is forwarded rather than silently dropped — which matters for
+  the planned bump past `^0.0.12`. Adding the same handler twice is now a no-op instead of
+  orphaning a wrapper that could never be removed.
+- **`opensInSameTab` moved into `mount.ts`** and the test imports it. The test previously
+  re-implemented the predicate under a "mirrors" comment, and the copy carried the same
+  resolution bug — six green tests that said nothing about the shipped code.
+- **`target` is documented** in both READMEs and the CMS guide; it had appeared in none.
 
 ## [0.0.53] — 2026-08-30
 
