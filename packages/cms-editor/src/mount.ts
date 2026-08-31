@@ -130,6 +130,51 @@ export function scopeToBasePath(inner: NavigationAdapter, basePath: string): Nav
   };
 }
 
+/**
+ * Whether a host-configured nav link may navigate the CURRENT tab.
+ *
+ * The default for `extraNav` is a new tab, because `_404.tsx` registers the catch-all
+ * `/:__notFound+`: an unmounted editor's router matches every same-origin path, so a
+ * same-tab click would land on the in-app 404 instead of the tool. `target: "_self"` asks
+ * for the co-hosted case, and is honoured only where it cannot strand the user.
+ *
+ * Lives here, not in the layout, for two reasons: these are the same containment rules
+ * `scopeToBasePath` enforces and they belong beside them, and a predicate that decides
+ * whether a click escapes the SPA has to be testable without a DOM. `documentUrl` is a
+ * PARAMETER rather than a read of `window.location` for the same reason — and because it
+ * is the one input that must not be guessed:
+ *
+ *   - Resolve against `location.origin` and a relative href like `"curate"` is judged as
+ *     `/curate` while the browser navigates to `<current dir>/curate`. Off-prefix by the
+ *     check, in-prefix in fact, so the link lands on the very 404 this exists to avoid.
+ *     `?tab=x` and `#top` are the same mistake with an even wider gap.
+ *   - So the caller passes the document URL the browser will itself resolve against.
+ */
+export function opensInSameTab(href: string, target: string | undefined, basePath: string, documentUrl: string): boolean {
+  if (target !== "_self") return false;
+  let url: URL;
+  let docOrigin: string;
+  try {
+    url = new URL(href, documentUrl);
+    docOrigin = new URL(documentUrl).origin;
+  } catch {
+    return false;
+  }
+  // `new URL` happily parses `javascript:` and `data:`, and their `pathname` is an opaque
+  // string that trivially fails any containment test — so without this they would take the
+  // same-tab branch and shed the `rel` that used to confine them. A url with no hierarchical
+  // path cannot be reasoned about as "inside or outside the mount"; the answer is no.
+  if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+  // Cross-origin ALWAYS escapes on its own — the catch-all can only claim same-origin paths
+  // — so it is safe in the same tab whether or not this editor is mounted. That makes an
+  // external tool the one configuration that works at the origin root, which is the opposite
+  // of what a bare `basePath` check concludes.
+  if (url.origin !== docOrigin) return true;
+  // Same origin: safe only where the router will not claim it. At the root `isWithinBasePath`
+  // is true for everything, so this correctly refuses every same-origin `_self` there.
+  return !isWithinBasePath(url.pathname, basePath);
+}
+
 /** The backend the shell declared: which Worker to call, and as which tenant.
  *
  * When present these are NOT read from (or written to) localStorage — the server knows

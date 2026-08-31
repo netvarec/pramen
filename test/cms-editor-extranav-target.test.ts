@@ -1,59 +1,97 @@
-// @pramen/cms-editor — `extraNav[].target`.
+// @pramen/cms-editor — `target` on a host-configured extraNav link.
 //
-// The links default to a new tab because an UNMOUNTED editor's catch-all route
-// (`/:__notFound+`) matches every same-origin path, so a same-tab click would land on the
-// in-app 404 instead of the tool. A MOUNTED editor filters navigation through
-// `scopeToBasePath`, which forwards only in-prefix paths to the router — so an off-prefix
-// path reaches the browser normally and the new tab is just clutter.
+// The default is a new tab because `_404.tsx`'s catch-all makes the router match every
+// same-origin path, so a same-tab click would land on the in-app 404 instead of the tool.
+// `_self` asks for the co-hosted case and is honoured only where that cannot happen.
 //
-// These pin the two conditions under which `_self` is honoured, because getting either wrong
-// strands the user on a 404 rather than merely opening an extra tab.
+// These import the REAL predicate. The first version of this file re-implemented it under a
+// `Mirrors opensInSameTab in routes/_layout.tsx` comment, and the copy reproduced the
+// resolution bug it was supposed to catch — six green tests that said nothing about the code
+// that runs. That is why `opensInSameTab` lives in mount.ts and takes the document URL as a
+// parameter: so the thing under test is the thing that ships.
 
 import { describe, expect, test } from "bun:test";
-import { isWithinBasePath, resolveBasePath } from "../packages/cms-editor/src/mount";
-
-/** Mirrors `opensInSameTab` in routes/_layout.tsx. */
-const opensInSameTab = (href: string, target: string | undefined, basePath: string): boolean => {
-  if (target !== "_self" || !basePath) return false;
-  try {
-    return !isWithinBasePath(new URL(href, "https://site.example").pathname, basePath);
-  } catch {
-    return false;
-  }
-};
+import { opensInSameTab, resolveBasePath } from "../packages/cms-editor/src/mount";
 
 const MOUNT = resolveBasePath("/_pramen/admin");
+/** Where the editor happens to be when the link is clicked — several segments deep, which
+ * is exactly where resolving against the origin instead of the document goes wrong. */
+const DOC = `https://site.example${MOUNT}/pages/abc`;
+const ROOT_DOC = "https://site.example/";
 
-describe("cms-editor extraNav target", () => {
-  test("the default is unchanged — no target means a new tab", () => {
-    expect(opensInSameTab("/admin/venues", undefined, MOUNT)).toBe(false);
-    expect(opensInSameTab("/admin/venues", "_blank", MOUNT)).toBe(false);
+const sameTab = (href: string, target?: string, basePath = MOUNT, doc = DOC) => opensInSameTab(href, target, basePath, doc);
+
+describe("extraNav target", () => {
+  test("the default is a new tab, and only `_self` asks for anything else", () => {
+    expect(sameTab("/curate")).toBe(false);
+    expect(sameTab("/curate", undefined)).toBe(false);
+    expect(sameTab("/curate", "_blank")).toBe(false);
+    expect(sameTab("/curate", "_parent")).toBe(false);
   });
 
-  test("`_self` is honoured for an off-prefix path on a mounted editor", () => {
-    expect(opensInSameTab("/admin/venues", "_self", MOUNT)).toBe(true);
-    expect(opensInSameTab("https://site.example/admin/venues", "_self", MOUNT)).toBe(true);
+  test("a same-origin path outside the mount is left to the browser, so `_self` holds", () => {
+    expect(sameTab("/curate", "_self")).toBe(true);
+    expect(sameTab("https://site.example/curate", "_self")).toBe(true);
   });
 
-  // Unmounted, scopeToBasePath is a pass-through and the catch-all claims every same-origin
-  // path — the 404 case the default exists to avoid.
-  test("`_self` is ignored when the editor is not mounted", () => {
-    expect(opensInSameTab("/admin/venues", "_self", "")).toBe(false);
+  test("a url inside the mount is refused — the router would claim it", () => {
+    expect(sameTab(`${MOUNT}/media`, "_self")).toBe(false);
+    expect(sameTab(MOUNT, "_self")).toBe(false);
+    expect(sameTab(`https://site.example${MOUNT}/pages/x`, "_self")).toBe(false);
   });
 
-  // An in-prefix path IS the router's, so it must never be released to the browser.
-  test("`_self` is ignored for a path inside the mount", () => {
-    expect(opensInSameTab("/_pramen/admin/media", "_self", MOUNT)).toBe(false);
-    expect(opensInSameTab("/_pramen/admin", "_self", MOUNT)).toBe(false);
+  test("containment is anchored, so a path merely sharing the prefix is outside", () => {
+    expect(sameTab("/_pramen/adminate", "_self")).toBe(true);
   });
 
-  // Containment is anchored at a segment boundary, so a sibling that merely shares the
-  // prefix string is off-prefix and may open in the same tab.
-  test("a sibling path sharing the prefix string is not inside the mount", () => {
-    expect(opensInSameTab("/_pramen/adminate", "_self", MOUNT)).toBe(true);
+  // The bug the hand-copied predicate shared: `<a href>` is resolved by the browser against
+  // the DOCUMENT, so judging it against the origin decides on a different url than the one
+  // the click navigates to — off-prefix by the check, in-prefix in fact, straight to the 404.
+  test("a relative href is judged against the document, as the browser will resolve it", () => {
+    // Against the origin these read as /curate, /, / — all "outside the mount" and all wrong.
+    expect(sameTab("curate", "_self")).toBe(false);
+    expect(sameTab("../curate", "_self")).toBe(false);
+    expect(sameTab("?tab=x", "_self")).toBe(false);
+    expect(sameTab("#top", "_self")).toBe(false);
+    // And one that genuinely does escape the mount when resolved relatively.
+    expect(sameTab("../../../curate", "_self")).toBe(true);
   });
 
-  test("a malformed href degrades to the safe default", () => {
-    expect(opensInSameTab("http://[", "_self", MOUNT)).toBe(false);
+  // Cross-origin is the one case the catch-all cannot reach, so it is safe mounted OR not —
+  // the opposite of what a bare "are we mounted?" check concludes.
+  test("cross-origin is honoured even at the origin root", () => {
+    expect(sameTab("https://tools.acme.com/curate", "_self", "", ROOT_DOC)).toBe(true);
+    expect(sameTab("https://tools.acme.com/curate", "_self")).toBe(true);
+  });
+
+  test("at the origin root every same-origin url belongs to the router", () => {
+    expect(sameTab("/curate", "_self", "", ROOT_DOC)).toBe(false);
+    expect(sameTab("https://site.example/curate", "_self", "", ROOT_DOC)).toBe(false);
+  });
+
+  // `new URL` parses these happily and their `pathname` is an opaque string that fails any
+  // containment test, so without an explicit scheme check they would take the same-tab
+  // branch and shed the `rel` that used to confine them.
+  test("a non-http scheme is never same-tab", () => {
+    expect(sameTab("javascript:alert(1)", "_self")).toBe(false);
+    expect(sameTab("data:text/html,<h1>x", "_self")).toBe(false);
+    expect(sameTab("blob:https://site.example/abc", "_self")).toBe(false);
+    expect(sameTab("mailto:a@b.c", "_self")).toBe(false);
+  });
+
+  // Protocol-relative resolves to another origin, which IS the cross-origin case — safe in
+  // the same tab, and the `rel="noreferrer"` the layout keeps on both branches is what stops
+  // it learning the admin url.
+  test("protocol-relative is treated as the cross-origin url it is", () => {
+    expect(sameTab("//evil.example/x", "_self")).toBe(true);
+    expect(sameTab("//site.example/curate", "_self")).toBe(true);
+    expect(sameTab(`//site.example${MOUNT}/media`, "_self")).toBe(false);
+  });
+
+  test("an unparseable href degrades to the safe default", () => {
+    expect(sameTab("http://[", "_self")).toBe(false);
+    // No document URL at all (no `window`) makes every href unparseable — the layout relies
+    // on this rather than reading `window.location` unguarded during render.
+    expect(sameTab("/curate", "_self", MOUNT, "")).toBe(false);
   });
 });

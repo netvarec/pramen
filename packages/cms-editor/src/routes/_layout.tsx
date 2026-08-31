@@ -7,7 +7,7 @@ import { Button, Card, MoonIcon, SunIcon, Text, Topbar } from "@podoba/react";
 import { useEffect, useState } from "react";
 import { useApp } from "../app-context";
 import { BRAND } from "../brand";
-import { isWithinBasePath } from "../mount";
+import { opensInSameTab } from "../mount";
 
 const THEME_KEY = "pramen.cms.theme";
 
@@ -19,8 +19,11 @@ export default function RootLayout() {
   // Every chrome action here is a way OUT of the current screen, so it runs through that
   // screen's unsaved-changes guard first (the page editor registers one; with no guard
   // registered this is a pass-through). In-app navigation fires no `beforeunload`, so
-  // without this the topbar silently discards unsaved edits. The external `extraNav` links
-  // open in a new tab and leave nothing behind, so they stay unguarded.
+  // without this the topbar silently discards unsaved edits. An `extraNav` link that opens a
+  // NEW tab leaves this document alone and needs no guard; one honoured as `_self` is a real
+  // cross-document navigation, so it takes the guard too (below). `beforeunload` is not a
+  // fallback for it — only `PageEditor` registers one, so a dirty CollectionEditor form would
+  // otherwise be discarded with no prompt of any kind.
   const guarded = (go: () => void) => () => { if (confirmNavigation()) go(); };
 
   // Dark mode: podoba tokens flip under `[data-theme="dark"]` — no `dark:` prefixes.
@@ -48,17 +51,12 @@ export default function RootLayout() {
   // Collections-only deployments hide the block/page builder entirely.
   const hidePages = typeof window !== "undefined" ? window.PRAMEN_CMS_EDITOR?.hidePages === true : false;
 
-  // See the extraNav comment below: `_self` is honoured only where it cannot strand the user
-  // on the in-app 404 — a mounted editor, and an href outside the mount.
+  // See the extraNav comment below. The rules live in `mount.ts` beside the containment they
+  // depend on; what this supplies is the URL the BROWSER will resolve a relative href
+  // against — the current document, not the origin. Empty when there is no `window`, which
+  // makes every href unparseable and so degrades to the safe new-tab default.
   const basePath = useRouter().basePath;
-  const opensInSameTab = (href: string, target?: string): boolean => {
-    if (target !== "_self" || !basePath) return false;
-    try {
-      return !isWithinBasePath(new URL(href, window.location.origin).pathname, basePath);
-    } catch {
-      return false;
-    }
-  };
+  const documentUrl = typeof window !== "undefined" ? window.location.href : "";
 
   return (
     // Page-level surface so the whole viewport (not just the topbar + cards) flips
@@ -103,30 +101,20 @@ export default function RootLayout() {
           </Button>
           {extraNav.map((l) => (
             // Defaults to a new tab: a companion tool is normally a separate deployment, and
-            // `_404.tsx` registers the catch-all `/:__notFound+`, so an UNMOUNTED editor's
-            // router matches every same-origin path — a same-tab click would land on the
-            // in-app 404 rather than the tool. Only a cross-origin url escapes on its own.
+            // `_404.tsx` registers the catch-all `/:__notFound+`, so the router matches every
+            // SAME-ORIGIN path — a same-tab click would land on the in-app 404 rather than the
+            // tool. `target: "_self"` asks for the co-hosted case, and is honoured only where
+            // the router provably will not claim the url (`opensInSameTab` in mount.ts):
             //
-            // `target: "_self"` is for the co-hosted case, where that no longer holds: a
-            // mounted editor filters navigation through `scopeToBasePath`, which only forwards
-            // paths INSIDE its prefix to the router, so an off-prefix path is left to the
-            // browser and arrives normally. There the new tab is pure clutter — the tool is
-            // just another page of the same admin.
+            //   - cross-origin: always, mounted or not. The catch-all cannot reach another
+            //     origin, so this is the ONE case that also works at the origin root.
+            //   - same-origin: only outside the mount prefix, where `scopeToBasePath` leaves
+            //     the navigation to the browser. At the root there is no outside, so never.
             //
-            // So `_self` is safe when this editor is mounted (`BASE_PATH` non-empty) and the
-            // href sits outside that prefix. Rather than trust the caller on both, it is
-            // honoured only when they hold; otherwise it degrades to the safe default instead
-            // of silently landing the user on a 404. (When @buzola/router moves past ^0.0.12
-            // here, `router.leaveApp(href)` releases one navigation to the browser and makes
-            // `_self` work for an unmounted editor too.)
-            <a
-              key={l.href}
-              href={l.href}
-              {...(opensInSameTab(l.href, l.target) ? {} : { target: "_blank", rel: "noopener noreferrer" })}
-              className="rounded-md px-2.5 py-1.5 text-small text-fg-muted transition-colors hover:bg-surface-muted hover:text-fg"
-            >
-              {l.label}
-            </a>
+            // Anything else degrades to the new tab rather than stranding the user on a 404.
+            // (When @buzola/router moves past ^0.0.12 here, `router.leaveApp(href)` releases
+            // one navigation to the browser and makes same-origin `_self` work unmounted too.)
+            <NavLink key={`${l.href}|${l.label}`} link={l} sameTab={opensInSameTab(l.href, l.target, basePath, documentUrl)} confirm={confirmNavigation} />
           ))}
         </Topbar.Nav>
         <Topbar.Actions>
@@ -154,5 +142,31 @@ export default function RootLayout() {
       ) : null}
       <Outlet />
     </div>
+  );
+}
+
+/** One host-configured link to a companion tool.
+ *
+ * `rel="noreferrer"` is on BOTH branches. `noopener` is genuinely moot in the same tab (no
+ * new browsing context is created, so there is no `window.opener` to sever) but `noreferrer`
+ * is not: without it a click from `/_pramen/admin/pages/<id>` hands that full url to the
+ * destination as `Referer`, and `_self` is honoured for cross-origin destinations.
+ *
+ * The key pairs href with label, because two entries may legitimately point at the same href
+ * and differ only in label or target — keyed on href alone React reconciles them together
+ * and the rendered label can end up on the other one's anchor.
+ */
+function NavLink({ link, sameTab, confirm }: { link: { label: string; href: string; target?: string }; sameTab: boolean; confirm: () => boolean }) {
+  return (
+    <a
+      href={link.href}
+      rel={sameTab ? "noreferrer" : "noopener noreferrer"}
+      // Only the same-tab case unloads this document, so only it consults the guard.
+      onClick={sameTab ? (e) => { if (!confirm()) e.preventDefault(); } : undefined}
+      {...(sameTab ? {} : { target: "_blank" })}
+      className="rounded-md px-2.5 py-1.5 text-small text-fg-muted transition-colors hover:bg-surface-muted hover:text-fg"
+    >
+      {link.label}
+    </a>
   );
 }
