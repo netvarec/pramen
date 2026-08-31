@@ -100,9 +100,25 @@ admin: {
   brand: { name: "Acme", suffix: "cms" },      // the wordmark — set it when you deploy for a client
   signInUrl: "/signin/",                        // must be a page that EXISTS (see below)
   hidePages: true,                              // collections-only deployments
-  extraNav: [{ label: "Curation", href: "/curate" }],
+  extraNav: [{ label: "Curation", href: "/curate", target: "_self" }],
 }
 ```
+
+`extraNav` links open in a **new tab** by default, because the editor's catch-all route
+matches every same-origin path — a same-tab click would land on the editor's own 404 instead
+of your tool. Add `target: "_self"` to ask for a same-tab navigation; it is honoured only
+where the router provably will not claim the url:
+
+| Link | Editor mounted under a prefix | Editor at the origin root |
+| --- | --- | --- |
+| Another origin (`https://tools.acme.com/x`) | same tab | same tab |
+| Same origin, outside the mount (`/curate`) | same tab | new tab |
+| Same origin, inside the mount | new tab | new tab |
+
+Anything else — a relative href that resolves back inside the mount, a `javascript:` url, an
+unparseable one — degrades to a new tab rather than stranding the editor on its 404. A
+same-tab link runs the unsaved-changes guard first, so it cannot silently discard an edit in
+progress.
 
 Views are real, deep-linkable URLs — file-based routing via [`@buzola/router`](https://www.npmjs.com/package/@buzola/router)
 (`/`, `/media`, `/users`, `/settings`, `/pages/:pageId?tab=seo`, each under the mount
