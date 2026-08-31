@@ -95,13 +95,19 @@ export function scopeToBasePath(inner: NavigationAdapter, basePath: string): Nav
   // Keyed by the caller's handler so `removeEventListener` can find the wrapper it added;
   // without this the router's `start()` teardown would leave the listener attached.
   const wrappers = new Map<Handler, Handler>();
+  // Spread, not a hand-written list of the seven methods. Enumerating them forwards
+  // correctly today but only fails safe by luck: tsc catches a newly REQUIRED member of
+  // `NavigationAdapter`, while an OPTIONAL one is silently dropped — and the next planned
+  // buzola bump (past ^0.0.12, for `router.leaveApp`) is exactly where such a member would
+  // arrive. Overriding the two listener methods is the whole of what this wrapper does.
   return {
-    getCurrentURL: () => inner.getCurrentURL(),
-    navigate: (url, options) => inner.navigate(url, options),
-    back: () => inner.back(),
-    forward: () => inner.forward(),
-    getState: () => inner.getState(),
+    ...inner,
     addEventListener(type, handler) {
+      // Adding the same handler twice would attach two wrappers to the inner adapter while
+      // the map kept only the second, so the first could never be removed and would keep
+      // feeding a torn-down router. Nothing does this today (`Router.start()` mints a fresh
+      // closure per call), which is precisely why it should be closed while it is free.
+      if (wrappers.has(handler)) return;
       const wrapper: Handler = (event) => {
         // A malformed destination is not ours to claim.
         let pathname: string;

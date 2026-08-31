@@ -155,6 +155,33 @@ describe("cms-editor mounted under a prefix", () => {
     expect(seen).toHaveLength(1);
   });
 
+  // Adding the same handler twice would attach two wrappers while the map kept only the
+  // second, leaving the first permanently attached and feeding a torn-down router.
+  test("adding the same handler twice attaches it once", () => {
+    const inner = createMemoryNavigationAdapter({ initialURL: `http://host${BASE}/` });
+    const seen: string[] = [];
+    const handler = (e: { destination: { url: string } }) => seen.push(e.destination.url);
+    const scoped = scopeToBasePath(inner, BASE);
+    scoped.addEventListener("navigate", handler);
+    scoped.addEventListener("navigate", handler);
+    inner.navigate(`${BASE}/media`);
+    expect(seen).toHaveLength(1);
+    scoped.removeEventListener("navigate", handler);
+    inner.navigate(`${BASE}/users`);
+    expect(seen).toHaveLength(1);
+  });
+
+  // The wrapper spreads the inner adapter rather than listing its methods, so a member added
+  // by a future buzola release is forwarded instead of silently dropped.
+  test("every adapter member is forwarded, including ones this file never names", () => {
+    const inner = createMemoryNavigationAdapter({ initialURL: `http://host${BASE}/` });
+    const extended = { ...inner, futureHook: () => "forwarded" };
+    const scoped = scopeToBasePath(extended, BASE) as typeof extended;
+    expect(scoped.futureHook()).toBe("forwarded");
+    const members = ["getCurrentURL", "navigate", "back", "forward", "getState", "addEventListener", "removeEventListener"] as const;
+    for (const m of members) expect(scoped[m]).toBeInstanceOf(Function);
+  });
+
   test("an unprefixed mount is passed through untouched", () => {
     const inner = createMemoryNavigationAdapter({ initialURL: "http://host/" });
     expect(scopeToBasePath(inner, "")).toBe(inner);
