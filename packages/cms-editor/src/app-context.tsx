@@ -8,7 +8,7 @@ import { createContext, use, useCallback, useEffect, useMemo, useRef, useState }
 import { Api, clearConfig, isTokenExpired, loadConfig, saveConfig, type Config } from "./api";
 import { BRAND, SETUP_TITLE, type BrandConfig } from "./brand";
 import { readBackend, type BackendHost } from "./mount";
-import { DEFAULT_CAPABILITIES, type CmsCapabilities, type CollectionMeta, type JsonValue } from "./types";
+import { DEFAULT_CAPABILITIES, type CmsCapabilities, type CollectionMeta, type ContentType, type JsonValue } from "./types";
 
 declare global {
   interface Window {
@@ -72,6 +72,10 @@ interface AppContextValue {
   /** Collections registered on the server (from `listCollections`) — drives the nav + the
    * generic list/edit routes. Empty when the server registers none. */
   collections: CollectionMeta[];
+  /** Content types registered on the server (from `listContentTypes`). More than one ⇒ each
+   * gets its own nav tab and its own list route, instead of one pooled "Pages" list where a
+   * page and an article sit in the same column with nothing to tell them apart. */
+  contentTypes: ContentType[];
   /** What the SERVER says this deployment supports (from `listCmsCapabilities`) — today,
    * its declared locales. The editor renders its i18n surface off this rather than a local
    * flag, so the UI and the data can never disagree about whether the site is multilingual. */
@@ -102,6 +106,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [cfg, setCfg] = useState<Config>(() => loadConfig(BACKEND));
   const [me, setMe] = useState<Me | null>(null);
   const [collections, setCollections] = useState<CollectionMeta[]>([]);
+  const [contentTypes, setContentTypes] = useState<ContentType[]>([]);
   const [cms, setCms] = useState<CmsCapabilities>(DEFAULT_CAPABILITIES);
   const [error, setError] = useState("");
   // A usable session = somewhere to call + a token that is NOT expired. An expired token
@@ -144,6 +149,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // Collections drive the nav + list/edit routes. An app that registers none (or an older
     // server without the handler) just leaves the nav as-is — a failure is non-fatal.
     api.call<CollectionMeta[]>("listCollections").then(setCollections).catch(() => setCollections([]));
+    // Drives the per-type nav + list routes. A failure leaves it empty, which falls back to
+    // the single pooled "Pages" tab — the layout before types had tabs of their own.
+    api.listContentTypes().then(setContentTypes).catch(() => setContentTypes([]));
     // A server older than this handler leaves the monolingual default, which is the safe
     // way round: the i18n surface stays hidden rather than half-rendered.
     api.call<CmsCapabilities>("listCmsCapabilities").then(setCms).catch(() => setCms(DEFAULT_CAPABILITIES));
@@ -161,6 +169,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     me,
     isAdmin: (me?.roles ?? []).includes("admin"),
     collections,
+    contentTypes,
     cms,
     error,
     setError,

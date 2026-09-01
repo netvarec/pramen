@@ -1752,7 +1752,31 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     }),
 
     // ---- pages ----
-    listPages: query((ctx) => cdb(ctx).find({ from: "cms_pages", orderBy: { column: "createdAt", dir: "desc" }, limit: 100 })),
+    /** List pages, newest first. `contentType` (a content-type SLUG) narrows the list to one
+     * type — what an editor that gives each type its own tab needs, and the only way to stay
+     * correct once a deployment has more than `limit` entries in total: filtering the full
+     * list client-side would silently drop the tail of every type. Omitted ⇒ all types, the
+     * historical behaviour. An unknown slug returns nothing rather than everything, so a
+     * typo can never read as "here is the whole CMS". */
+    listPages: query(
+      async (ctx, input: { contentType?: string }) => {
+        const db = cdb(ctx);
+        const order = { column: "createdAt", dir: "desc" } as const;
+        if (!input?.contentType) return db.find({ from: "cms_pages", orderBy: order, limit: 100 });
+        const types = await db.find({ from: "cms_content_types", where: { slug: input.contentType }, limit: 1 });
+        const typeId = types[0]?.id;
+        if (typeId == null) return [];
+        return db.find({ from: "cms_pages", where: { typeId }, orderBy: order, limit: 100 });
+      },
+      {
+        input: (raw): { contentType?: string } => {
+          const o = asObj(raw);
+          if (o.contentType === undefined || o.contentType === null) return {};
+          if (typeof o.contentType !== "string") throw new BadRequest("contentType must be a string");
+          return { contentType: o.contentType };
+        },
+      },
+    ),
 
     /** Public: list published pages (slug, locale, updatedAt) for sitemap generation. The
      * anonymous ACL scopes cms_pages reads to status=published, so this is safe to expose. */

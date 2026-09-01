@@ -12,8 +12,9 @@ const Route3 = () => import('./routes/home').then(m => ({ default: m.default.com
 const Route4 = () => import('./routes/media').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
 const Route5 = () => import('./routes/page').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
 const Route6 = () => import('./routes/settings').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
-const Route7 = () => import('./routes/users').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
-const Route8 = () => import('./routes/_404').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
+const Route7 = () => import('./routes/type').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
+const Route8 = () => import('./routes/users').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
+const Route9 = () => import('./routes/_404').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
 
 // Module augmentation for type-safe page-centric routing
 declare module '@buzola/router' {
@@ -24,6 +25,7 @@ declare module '@buzola/router' {
     'media': {};
     'page': { pageId: string; tab?: string };
     'settings': {};
+    'type': { slug: string };
     'users': {};
   }
 }
@@ -36,6 +38,7 @@ export const pageRegistry: Record<string, string> = {
   'media': '/media',
   'page': '/pages/:pageId',
   'settings': '/settings',
+  'type': '/types/:slug',
   'users': '/users',
 };
 
@@ -80,14 +83,20 @@ const routeConfigs: RouteConfig[] = [
         preload: Route6,
       },
       {
-        path: '/users',
+        path: '/type',
+        matchPath: '/types/:slug',
         component: lazy(Route7),
         preload: Route7,
       },
       {
-        path: '/:__notFound+',
+        path: '/users',
         component: lazy(Route8),
         preload: Route8,
+      },
+      {
+        path: '/:__notFound+',
+        component: lazy(Route9),
+        preload: Route9,
       },
     ],
   },

@@ -132,7 +132,10 @@ export class Api {
   listBlockTypes = () => this.call<BlockType[]>("listBlockTypes");
   listContentTypes = () => this.call<ContentType[]>("listContentTypes");
   getContentType = (id: string) => this.call<ContentType | null>("getContentType", { id });
-  listPages = () => this.call<Page[]>("listPages");
+  /** All pages, or just one content type's (by SLUG). The server does the filtering — see
+   * `listPages` in @pramen/cms; it caps at 100 rows, so narrowing client-side would drop the
+   * tail of every type on a busy deployment. */
+  listPages = (contentType?: string) => this.call<Page[]>("listPages", contentType ? { contentType } : undefined);
   getPagePreview = (slug: string, locale?: string) => this.call<AssembledPage>("getPage", { slug, locale, preview: true });
   listPageAudit = (pageId: string) => this.call<AuditEntry[]>("listPageAudit", { pageId });
 

@@ -12,7 +12,7 @@ import { opensInSameTab } from "../mount";
 const THEME_KEY = "pramen.cms.theme";
 
 export default function RootLayout() {
-  const { isAdmin, collections, error, reconfigure, confirmNavigation } = useApp();
+  const { isAdmin, collections, contentTypes, error, reconfigure, confirmNavigation } = useApp();
   const navigate = useNavigate();
   const { pathname } = useRoute();
 
@@ -35,9 +35,15 @@ export default function RootLayout() {
 
   // The active collection slug, if we're under /collections/:slug(/...).
   const collectionSlug = pathname.startsWith("/collections/") ? pathname.split("/")[2] : undefined;
+  // …and the active content type, under /types/:slug.
+  const typeSlug = pathname.startsWith("/types/") ? pathname.split("/")[2] : undefined;
 
-  // "Pages" stays lit while editing a page (/pages/:id) too.
+  // "Pages" stays lit while editing a page (/pages/:id) too — but only on a deployment that
+  // still HAS a pooled Pages tab. Split by type, the page editor lights nothing: the route
+  // carries a page id and nothing else, so which type's tab to light isn't knowable here
+  // without fetching the page the editor is already fetching.
   const active = collectionSlug ? `col:${collectionSlug}`
+    : typeSlug ? `type:${typeSlug}`
     : pathname.startsWith("/pages") || pathname === "/" ? "pages"
     : pathname.startsWith("/media") ? "media"
     : pathname.startsWith("/users") ? "users"
@@ -77,7 +83,25 @@ export default function RootLayout() {
           </button>
         </Topbar.Brand>
         <Topbar.Nav aria-label="Primary">
-          {hidePages ? null : (
+          {/* One tab per content type once a deployment declares more than one: a CMS holding
+              pages AND articles pooled them into a single "Pages" list where the only thing
+              distinguishing a landing page from a news item was the slug. A single type keeps
+              the plain "Pages" tab — there is nothing there to separate, and splitting it
+              would put the deployment's own type name where a generic label reads better.
+              The label is the type's `name`, so a host that wants a plural tab writes one. */}
+          {hidePages ? null : contentTypes.length > 1 ? (
+            contentTypes.map((t) => (
+              <Button
+                key={t.slug}
+                variant="ghost"
+                size="sm"
+                className={tabCls(`type:${t.slug}`)}
+                onPress={guarded(() => navigate("type", { params: { slug: t.slug } }))}
+              >
+                {t.name}
+              </Button>
+            ))
+          ) : (
             <Button variant="ghost" size="sm" className={tabCls("pages")} onPress={guarded(() => navigate("home"))}>
               Pages
             </Button>

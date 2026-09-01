@@ -9,7 +9,7 @@ import type { BlockType, Page } from "../types";
 export default createPage()
   .route("/")
   .render(function Home() {
-    const { api, setError, collections } = useApp();
+    const { api, setError, collections, contentTypes } = useApp();
     const navigate = useNavigate();
     const [pages, setPages] = useState<Page[]>([]);
     const [blockTypes, setBlockTypes] = useState<BlockType[]>([]);
@@ -20,20 +20,28 @@ export default createPage()
     // deployment that never spread cmsSchema.
     const hidePages = typeof window !== "undefined" && window.PRAMEN_CMS_EDITOR?.hidePages === true;
     const firstCollection = collections[0]?.slug;
+    // With more than one content type each gets its own tab and its own list (`/types/:slug`),
+    // so the pooled list here has no tab of its own to be reached from and would just be a
+    // fourth way to see the same rows. Land on the first type instead. One type (or none, on a
+    // server too old to answer) keeps the pooled list — that IS the whole CMS there.
+    const splitByType = !hidePages && contentTypes.length > 1;
+    const firstType = contentTypes[0]?.slug;
 
     useEffect(() => {
       if (hidePages && firstCollection) navigate("collection", { params: { slug: firstCollection }, replace: true });
-    }, [hidePages, firstCollection, navigate]);
+      else if (splitByType && firstType) navigate("type", { params: { slug: firstType }, replace: true });
+    }, [hidePages, firstCollection, splitByType, firstType, navigate]);
 
     const refreshPages = () => api.listPages().then(setPages).catch((e) => setError(errMsg(e)));
     useEffect(() => {
-      if (hidePages) return;
+      if (hidePages || splitByType) return;
       refreshPages();
       api.listBlockTypes().then(setBlockTypes).catch((e) => setError(errMsg(e)));
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [api, hidePages]);
+    }, [api, hidePages, splitByType]);
 
     if (hidePages && firstCollection) return null;
+    if (splitByType) return null;
 
     return (
       <PageList

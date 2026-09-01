@@ -14,6 +14,26 @@ there are no backward-compatibility guarantees yet.
 
 ## [Unreleased]
 
+### Added
+
+- **Each content type gets its own tab and its own list (`@pramen/cms-editor`,
+  `@pramen/cms`).** A deployment declaring two content types — pages AND articles, say —
+  pooled both into a single "Pages" list: one column, one row shape, and nothing but the slug
+  to tell a landing page from a news item. With more than one type the topbar now shows a tab
+  per type (labelled with the type's own `name`) pointing at `/types/:slug`, `/` hands off to
+  the first of them, and the create modal opens on the type whose list you are standing in
+  instead of asking again. A deployment with a single type is untouched — it keeps the plain
+  "Pages" tab, because there is nothing there to separate.
+
+- **`listPages` takes an optional `contentType` slug (`@pramen/cms`).** The filtering has to
+  happen on the server: the handler caps at 100 rows, so an editor narrowing a pooled fetch
+  would be narrowing an already-truncated list and would quietly lose the tail of every type
+  past that cap. An unknown slug returns nothing rather than falling back to everything — a
+  renamed type must not make every article surface under a tab that no longer matches it.
+  Omitting the input is unchanged behaviour.
+
+## [0.0.54] — 2026-08-31
+
 ### Fixed
 
 - **`extraNav`'s `target: "_self"` decided on the wrong URL (`@pramen/cms-editor`).** The

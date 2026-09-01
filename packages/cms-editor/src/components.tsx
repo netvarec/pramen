@@ -108,13 +108,17 @@ const Dim = ({ children }: { children: ReactNode }) => <span className="text-fg-
 
 // --- pages list --------------------------------------------------------------
 
-export function PageList({ api, pages, blockTypes, onOpen, onCreated, onError }: { api: Api; pages: Page[]; blockTypes: BlockType[]; onOpen: (p: Page) => void; onCreated: () => void; onError: (s: string) => void }) {
+/** The page list. `type` scopes it to one content type — the list is already filtered by the
+ * caller, this is what makes the SCREEN say so: the heading is the type's name and the create
+ * modal opens on that type instead of asking again. Omitted ⇒ the pooled list over every type,
+ * which is what a single-type deployment should keep seeing. */
+export function PageList({ api, pages, blockTypes, type, onOpen, onCreated, onError }: { api: Api; pages: Page[]; blockTypes: BlockType[]; type?: ContentType; onOpen: (p: Page) => void; onCreated: () => void; onError: (s: string) => void }) {
   // From the SERVER (listCmsCapabilities), not a local flag — see `CmsCapabilities`.
   const { cms: { multilingual } } = useApp();
   const [creating, setCreating] = useState(false);
   return (
     <>
-      <Hero lead="Pages" em={pages.length === 0 ? "None yet" : pages.length === 1 ? "1 page total" : `${pages.length} pages total`}>
+      <Hero lead={type?.name ?? "Pages"} em={pages.length === 0 ? "None yet" : pages.length === 1 ? "1 entry total" : `${pages.length} entries total`}>
         <Cta text="Let's" em="create something">
           <Button className="shrink-0" onPress={() => setCreating(true)}>+ New page</Button>
         </Cta>
@@ -129,22 +133,26 @@ export function PageList({ api, pages, blockTypes, onOpen, onCreated, onError }:
               <Pill status={p.status}>{p.status}</Pill>
             </div>
           ))}
-          {pages.length === 0 ? <p className="text-fg-subtle">No pages yet. {blockTypes.length === 0 ? "Define block types + a content type first (via the API/admin)." : "Create one."}</p> : null}
+          {pages.length === 0 ? <p className="text-fg-subtle">No entries yet. {blockTypes.length === 0 ? "Define block types + a content type first (via the API/admin)." : "Create one."}</p> : null}
         </div>
       </div>
-      {creating ? <CreatePage api={api} onClose={() => setCreating(false)} onCreated={() => { setCreating(false); onCreated(); }} onError={onError} /> : null}
+      {creating ? <CreatePage api={api} type={type} onClose={() => setCreating(false)} onCreated={() => { setCreating(false); onCreated(); }} onError={onError} /> : null}
     </>
   );
 }
 
-function CreatePage({ api, onClose, onCreated, onError }: { api: Api; onClose: () => void; onCreated: () => void; onError: (s: string) => void }) {
+function CreatePage({ api, type, onClose, onCreated, onError }: { api: Api; type?: ContentType; onClose: () => void; onCreated: () => void; onError: (s: string) => void }) {
   const [cts, setCts] = useState<ContentType[]>([]);
-  const [typeId, setTypeId] = useState("");
+  const [typeId, setTypeId] = useState(type?.id ?? "");
   const [title, setTitle] = useState("");
   const [slug, setSlug] = useState("");
   useEffect(() => {
+    // On a type-scoped list the type is already decided by the screen you are on, so don't
+    // ask — and don't fetch the other types just to render a picker that must not move the
+    // entry out from under that screen.
+    if (type) return;
     api.listContentTypes().then((r) => { setCts(r); if (r[0]) setTypeId(r[0].id); }).catch((e) => onError(errMsg(e)));
-  }, [api, onError]);
+  }, [api, type, onError]);
   const create = async () => {
     try {
       await api.call("createPage", { typeId, title, slug: slug || slugify(title) });
@@ -157,7 +165,7 @@ function CreatePage({ api, onClose, onCreated, onError }: { api: Api; onClose: (
     <Modal onClose={onClose}>
       <ModalTitle>Create a <Dim>new page</Dim> and define the essentials<Dim>.</Dim></ModalTitle>
       <div className="flex flex-col gap-4">
-        <div className="flex w-full flex-col gap-2">
+        <div className={`w-full flex-col gap-2 ${type ? "hidden" : "flex"}`}>
           <span className="text-sm font-medium text-fg">Content type</span>
           {/* Visible cards, not a dropdown: the type is an easy-to-miss choice, and picking the
               wrong one puts the entry under a different route. Cards make the selection deliberate. */}
