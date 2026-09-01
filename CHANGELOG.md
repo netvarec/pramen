@@ -103,10 +103,40 @@ there are no backward-compatibility guarantees yet.
   link. The flag is read in one place now, shared by the nav, the landing redirect and this
   route.
 
+- **"A deployment with a single type is untouched" was not true (`@pramen/cms-editor`).** 0.0.55
+  said so, but the pooled list's own wording changed for everyone: "N pages total" became
+  "N entries total" and "No pages yet." became "No entries yet.", unscoped by the split. It also
+  put the collections vocabulary on a page screen, so a type-scoped list read "Article" /
+  "No entries yet" / "+ New page" / "Create a new page" — three vocabularies at once. The
+  wording is back to "pages" throughout; the type's `name` heads the screen and is never bent
+  into a noun phrase, since it is a label a host writes and is often already plural.
+
 - **"← all pages" from the editor landed in another type's list (`@pramen/cms-editor`).** Every
   way back targeted `/`, which on a split deployment redirects to whichever type sorts first by
   name — and `replace`s the history entry, so Back could not undo it. The page editor returns to
   its own page's type.
+
+### Added
+
+- **`listPages` takes `limit`/`offset` and `select` (`@pramen/cms`).** The handler caps its
+  result, so without paging a caller cannot tell a full first page from the whole table — and
+  the editor's header printed the cap as if it were the total. `limit`/`offset` page the list
+  (default 100, ceiling 500); `select` projects it to the columns a list screen actually
+  renders, instead of pulling the widest row in the CMS over RPC (the D1 shape from #22). The
+  `contentType` slug added in 0.0.55 is now resolved by traversing the `type` relation the
+  schema already declares — one query rather than two, no throw for a caller who may read
+  pages but not content types — and `cms_pages.typeId` is indexed to serve it.
+
+- **`listPublishedPages` takes `contentType` and `locale` (`@pramen/cms`).** Same argument, the
+  public half: `@pramen/cms-astro`'s `cmsLoader` passes them so each generated collection asks
+  the server for its own type instead of narrowing one capped fetch after the fact.
+
+- **`getPageById` (`@pramen/cms`).** One page, wide, by id — what the editor opens `/pages/:id`
+  with. Viewer-gated and row-ACL'd like every other read.
+
+## [0.0.56] — 2026-09-01
+
+### Fixed
 
 - **A token the server won't accept now ends the session (`@pramen/cms-editor`).** The editor
   decided it was signed in from the token's own `exp` claim, parsed client-side — which covers
@@ -123,6 +153,8 @@ there are no backward-compatibility guarantees yet.
   yet is a session, and stays in the editor with the access-denied banner rather than looping
   through sign-in.
 
+## [0.0.55] — 2026-09-01
+
 ### Added
 
 - **Each content type gets its own tab and its own list (`@pramen/cms-editor`,
@@ -132,29 +164,17 @@ there are no backward-compatibility guarantees yet.
   per type (labelled with the type's own `name`) pointing at `/types/:slug`, `/` hands off to
   the first of them, and the create modal opens on the type whose list you are standing in
   instead of asking again. A deployment with a single type is untouched — it keeps the plain
-  "Pages" tab, and the same wording on it, because there is nothing there to separate. The
-  split is gated on the server declaring `pagesByType` (see `listCmsCapabilities`), so an
-  editor pointed at an older CMS keeps the pooled list rather than rendering tabs it cannot
-  honour.
+  "Pages" tab, because there is nothing there to separate.
 
-- **`listPages` takes `contentType`, `limit`/`offset` and `select` (`@pramen/cms`).** The
-  filtering has to happen on the server: the handler caps its result, so an editor narrowing a
-  pooled fetch would be narrowing an already-truncated list and would quietly lose the tail of
-  every type past that cap. An unknown slug — or an empty one — returns nothing rather than
-  falling back to everything: a renamed type must not make every article surface under a tab
-  that no longer matches it. The slug is resolved by traversing the `type` relation the schema
-  already declares, so it costs one query rather than two and does not throw for a caller who
-  may read pages but not content types; `cms_pages.typeId` is indexed to serve it. `limit`/
-  `offset` page the list (default 100, ceiling 500) and `select` projects it to the columns a
-  list screen actually renders — a wide row per entry over RPC is the D1 shape from #22.
-  Omitting all of them is unchanged behaviour.
+  > The last sentence overstated it: the pooled list's own wording changed for every
+  > deployment, single-type ones included. Corrected in the next release.
 
-- **`listPublishedPages` takes `contentType` and `locale` (`@pramen/cms`).** Same argument, the
-  public half: `@pramen/cms-astro`'s `cmsLoader` passes them so each generated collection asks
-  the server for its own type instead of narrowing one capped fetch after the fact.
-
-- **`getPageById` (`@pramen/cms`).** One page, wide, by id — what the editor opens `/pages/:id`
-  with. Viewer-gated and row-ACL'd like every other read.
+- **`listPages` takes an optional `contentType` slug (`@pramen/cms`).** The filtering has to
+  happen on the server: the handler caps at 100 rows, so an editor narrowing a pooled fetch
+  would be narrowing an already-truncated list and would quietly lose the tail of every type
+  past that cap. An unknown slug returns nothing rather than falling back to everything — a
+  renamed type must not make every article surface under a tab that no longer matches it.
+  Omitting the input is unchanged behaviour.
 
 ## [0.0.54] — 2026-08-31
 
