@@ -37,6 +37,10 @@ export function isTokenExpired(token: string): boolean {
 
 const LS = "pramen.cmsEditor";
 
+/** The columns the page LIST renders — id (to open the row), title, slug, locale, status.
+ * `typeId` rides along so a caller can tell which type a row belongs to without a join. */
+export const PAGE_LIST_COLUMNS = ["id", "typeId", "title", "slug", "locale", "status"] as const;
+
 /**
  * The session for this page load.
  *
@@ -132,10 +136,19 @@ export class Api {
   listBlockTypes = () => this.call<BlockType[]>("listBlockTypes");
   listContentTypes = () => this.call<ContentType[]>("listContentTypes");
   getContentType = (id: string) => this.call<ContentType | null>("getContentType", { id });
-  /** All pages, or just one content type's (by SLUG). The server does the filtering — see
-   * `listPages` in @pramen/cms; it caps at 100 rows, so narrowing client-side would drop the
-   * tail of every type on a busy deployment. */
-  listPages = (contentType?: string) => this.call<Page[]>("listPages", contentType ? { contentType } : undefined);
+  /** All pages, or just one content type's (by SLUG), one page of them at a time. The server
+   * does the filtering AND the paging — see `listPages` in @pramen/cms; it caps its result,
+   * so narrowing or counting client-side would be narrowing an already-truncated list.
+   *
+   * `PAGE_LIST_COLUMNS` is the projection the list screen actually renders. The full page row
+   * carries every SEO column, the schedule stamps and the whole `fields` bag; asking for all
+   * of it to draw five columns is the D1-over-RPC shape that made lists hang (GitHub #22).
+   * The editor fetches a whole page by id (`getPageById`) when it needs the wide row. */
+  listPages = (opts: { contentType?: string; limit?: number; offset?: number } = {}) =>
+    this.call<Page[]>("listPages", { ...opts, select: [...PAGE_LIST_COLUMNS] });
+  /** One page, wide, by id — what the page editor opens. Resolving an id against `listPages`
+   * instead can miss: that list is capped, and the editor lists one content type per tab. */
+  getPageById = (pageId: string) => this.call<Page | null>("getPageById", { pageId });
   getPagePreview = (slug: string, locale?: string) => this.call<AssembledPage>("getPage", { slug, locale, preview: true });
   listPageAudit = (pageId: string) => this.call<AuditEntry[]>("listPageAudit", { pageId });
 

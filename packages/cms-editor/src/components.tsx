@@ -9,7 +9,7 @@ import { CONTROL, FieldForm, formatWhen, fromLocalInput, slugify, toLocalInput }
 import type { Config } from "./api";
 import { useApp, type Me } from "./app-context";
 import { isRichTextDoc, richTextToPlainText } from "./rich-text";
-import type { AssembledPage, AuditEntry, BlockType, CollectionMeta, ContentType, FieldDefinition, FieldValue, FieldValues, Media, Page, RegionDefinition, RenderedBlock } from "./types";
+import type { AssembledPage, AuditEntry, BlockType, CmsCapabilities, CollectionMeta, ContentType, FieldDefinition, FieldValue, FieldValues, Media, Page, RegionDefinition, RenderedBlock } from "./types";
 
 export type InspectorTab = "settings" | "seo" | "workflow" | "i18n" | "audit";
 export const INSPECTOR_TABS: InspectorTab[] = ["settings", "seo", "workflow", "i18n", "audit"];
@@ -19,6 +19,31 @@ export const INSPECTOR_TABS: InspectorTab[] = ["settings", "seo", "workflow", "i
  * "is i18n visible?" and could disagree. */
 export function visibleTabs(multilingual: boolean): InspectorTab[] {
   return multilingual ? INSPECTOR_TABS : INSPECTOR_TABS.filter((t) => t !== "i18n");
+}
+
+/** Collections-only deployments hide the block/page builder entirely. Read in one place so
+ * the nav, the landing redirect and the per-type route cannot disagree about it — a deep
+ * link to `/types/:slug` used to render the very builder this flag exists to hide. */
+export function pagesHidden(): boolean {
+  return typeof window !== "undefined" && window.PRAMEN_CMS_EDITOR?.hidePages === true;
+}
+
+/**
+ * Does this deployment get one tab and one list PER CONTENT TYPE?
+ *
+ * ONE definition, used by the tab bar, the landing redirect and the page editor's back
+ * target — the same reason `visibleTabs` exists. Three places re-deriving the whole nav
+ * shape is three places that can disagree about which screen `/` is.
+ *
+ * - `null` content types mean NOT ANSWERED YET, and answer `false` without committing: the
+ *   pooled list is what a single-type deployment keeps, so painting it before the count
+ *   arrives is a flash of the exact screen the split exists to retire.
+ * - `pagesByType` is the SERVER's declaration that `listPages` understands `contentType`
+ *   (see `CmsCapabilities`). Without it the split fails open: N tabs, each showing every
+ *   type's pages under a heading naming one.
+ */
+export function splitsByType(contentTypes: ContentType[] | null, cms: CmsCapabilities, hidePages = pagesHidden()): boolean {
+  return !hidePages && cms.pagesByType && contentTypes !== null && contentTypes.length > 1;
 }
 
 // --- presentational primitives (podoba tokens; replaces styles.ts classes) ---
@@ -106,19 +131,88 @@ function Banner({ ok, children }: { ok?: boolean; children: ReactNode }) {
 
 const Dim = ({ children }: { children: ReactNode }) => <span className="text-fg-subtle">{children}</span>;
 
+/** A one-line neutral panel with an optional way out — the loading / not-found / unknown-slug
+ * state every route needs before (or instead of) its real screen. Four routes had it written
+ * out verbatim; the copies had already drifted on which of them offered a way back. */
+export function Notice({ children, action }: { children: ReactNode; action?: ReactNode }) {
+  return (
+    <div className="mx-auto flex max-w-[1200px] items-center gap-2 px-7 pt-8">
+      <p className="text-fg-subtle">{children}</p>
+      {action}
+    </div>
+  );
+}
+
 // --- pages list --------------------------------------------------------------
 
-/** The page list. `type` scopes it to one content type — the list is already filtered by the
- * caller, this is what makes the SCREEN say so: the heading is the type's name and the create
- * modal opens on that type instead of asking again. Omitted ⇒ the pooled list over every type,
- * which is what a single-type deployment should keep seeing. */
-export function PageList({ api, pages, blockTypes, type, onOpen, onCreated, onError }: { api: Api; pages: Page[]; blockTypes: BlockType[]; type?: ContentType; onOpen: (p: Page) => void; onCreated: () => void; onError: (s: string) => void }) {
+/** Page size for the page list. `listPages` caps server-side, so a request without an
+ * explicit limit silently truncates — and the header then reports the truncated count as if
+ * it were the total, which reads as "that is all there is". Same reason, same answer, as
+ * `COLLECTION_PAGE_SIZE` below. */
+const PAGE_LIST_SIZE = 50;
+
+/** The page list, loading its own rows. `type` scopes it to one content type: the fetch asks
+ * the SERVER for that type (narrowing a capped list here would drop the tail of every type),
+ * the heading is the type's name, and the create modal opens on that type instead of asking
+ * again. Omitted ⇒ the pooled list over every type, which is what a single-type deployment
+ * should keep seeing — byte for byte, including the wording.
+ *
+ * It owns the fetching (like `CollectionList`) rather than taking rows as a prop, because
+ * the two things that go wrong when a route owns them both go wrong invisibly: rows left
+ * standing from the previous type while the heading has already flipped to the new one, and
+ * a count that is really the server's cap. */
+export function PageList({ api, type, onOpen, onError }: { api: Api; type?: ContentType; onOpen: (p: Page) => void; onError: (s: string) => void }) {
   // From the SERVER (listCmsCapabilities), not a local flag — see `CmsCapabilities`.
   const { cms: { multilingual } } = useApp();
+  const [pages, setPages] = useState<Page[]>([]);
+  const [offset, setOffset] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [blockTypes, setBlockTypes] = useState<BlockType[]>([]);
   const [creating, setCreating] = useState(false);
+  const contentType = type?.slug;
+
+  const load = useCallback(
+    (off: number) => {
+      setLoading(true);
+      return api
+        .listPages({ contentType, limit: PAGE_LIST_SIZE, offset: off })
+        .then((r) => {
+          setPages((prev) => (off === 0 ? r : [...prev, ...r]));
+          // A full page means there is probably more; a short one is definitely the end.
+          setHasMore(r.length === PAGE_LIST_SIZE);
+          setOffset(off + r.length);
+        })
+        .catch((e) => onError(errMsg(e)))
+        .finally(() => setLoading(false));
+    },
+    [api, contentType, onError],
+  );
+
+  // Clearing first is the point: buzola renders the same component instance across a
+  // params-only change (`/types/a` → `/types/b`), so without this the previous type's rows
+  // sit under the new type's heading until the fetch lands — and permanently if it fails.
+  useEffect(() => {
+    setPages([]);
+    setOffset(0);
+    setHasMore(false);
+    void load(0);
+  }, [load]);
+
+  // Only for the empty state's hint, and it is a GLOBAL list — keyed on `api` alone so
+  // switching type tabs doesn't refetch it.
+  useEffect(() => {
+    api.listBlockTypes().then(setBlockTypes).catch((e) => onError(errMsg(e)));
+  }, [api, onError]);
+
+  // "pages", not "entries": these are pages of a content type, and a single-type deployment
+  // must read exactly as it did before types had tabs. `type.name` is a label a host writes
+  // (often plural, it labels the tab), so it heads the screen and is never bent into a noun
+  // phrase — "+ New Articles" is what guessing at grammar produces.
+  const count = pages.length === 0 ? "None yet" : pages.length === 1 ? "1 page total" : `${pages.length}${hasMore ? "+" : ""} pages total`;
   return (
     <>
-      <Hero lead={type?.name ?? "Pages"} em={pages.length === 0 ? "None yet" : pages.length === 1 ? "1 entry total" : `${pages.length} entries total`}>
+      <Hero lead={type?.name ?? "Pages"} em={loading && pages.length === 0 ? "Loading…" : count}>
         <Cta text="Let's" em="create something">
           <Button className="shrink-0" onPress={() => setCreating(true)}>+ New page</Button>
         </Cta>
@@ -133,26 +227,37 @@ export function PageList({ api, pages, blockTypes, type, onOpen, onCreated, onEr
               <Pill status={p.status}>{p.status}</Pill>
             </div>
           ))}
-          {pages.length === 0 ? <p className="text-fg-subtle">No entries yet. {blockTypes.length === 0 ? "Define block types + a content type first (via the API/admin)." : "Create one."}</p> : null}
+          {!loading && pages.length === 0 ? <p className="text-fg-subtle">No pages yet. {blockTypes.length === 0 ? "Define block types + a content type first (via the API/admin)." : "Create one."}</p> : null}
         </div>
+        {hasMore ? (
+          <div className="mt-4 flex justify-center">
+            <Button variant="ghost" onPress={() => void load(offset)} isDisabled={loading}>{loading ? "Loading…" : "Load more"}</Button>
+          </div>
+        ) : null}
       </div>
-      {creating ? <CreatePage api={api} type={type} onClose={() => setCreating(false)} onCreated={() => { setCreating(false); onCreated(); }} onError={onError} /> : null}
+      {creating ? <CreatePage api={api} type={type} onClose={() => setCreating(false)} onCreated={() => { setCreating(false); void load(0); }} onError={onError} /> : null}
     </>
   );
 }
 
 function CreatePage({ api, type, onClose, onCreated, onError }: { api: Api; type?: ContentType; onClose: () => void; onCreated: () => void; onError: (s: string) => void }) {
-  const [cts, setCts] = useState<ContentType[]>([]);
+  // The app context already holds this list — a second fetch per modal open is a second
+  // cache of one list in one tree, with its own error policy.
+  const { contentTypes } = useApp();
+  const cts = contentTypes ?? [];
   const [typeId, setTypeId] = useState(type?.id ?? "");
   const [title, setTitle] = useState("");
   const [slug, setSlug] = useState("");
+  // Re-sync, not seed-once. On a type-scoped list the type is decided by the screen you are
+  // on — and that screen can change UNDER an open modal: history navigation isn't blocked by
+  // the overlay the way a topbar click is, and buzola keeps this component instance across
+  // it. Seeded once, the modal kept filing the new screen's page under the old screen's type,
+  // with the picker hidden so nothing on screen said so and `createPage` trusting the id.
   useEffect(() => {
-    // On a type-scoped list the type is already decided by the screen you are on, so don't
-    // ask — and don't fetch the other types just to render a picker that must not move the
-    // entry out from under that screen.
-    if (type) return;
-    api.listContentTypes().then((r) => { setCts(r); if (r[0]) setTypeId(r[0].id); }).catch((e) => onError(errMsg(e)));
-  }, [api, type, onError]);
+    if (type) { setTypeId(type.id); return; }
+    const list = contentTypes ?? [];
+    setTypeId((cur) => (cur && list.some((c) => c.id === cur) ? cur : list[0]?.id ?? ""));
+  }, [type, contentTypes]);
   const create = async () => {
     try {
       await api.call("createPage", { typeId, title, slug: slug || slugify(title) });
@@ -163,7 +268,13 @@ function CreatePage({ api, type, onClose, onCreated, onError }: { api: Api; type
   };
   return (
     <Modal onClose={onClose}>
-      <ModalTitle>Create a <Dim>new page</Dim> and define the essentials<Dim>.</Dim></ModalTitle>
+      {/* Name the type when the picker is hidden. Otherwise the whole modal says "page" and
+          nothing on it says WHICH type the page is being filed under — on a per-type list
+          that is the one fact the screen is supposed to be carrying. */}
+      <ModalTitle>
+        Create a <Dim>new page</Dim>
+        {type ? <> in <Dim>{type.name}</Dim></> : null} and define the essentials<Dim>.</Dim>
+      </ModalTitle>
       <div className="flex flex-col gap-4">
         <div className={`w-full flex-col gap-2 ${type ? "hidden" : "flex"}`}>
           <span className="text-sm font-medium text-fg">Content type</span>

@@ -146,12 +146,18 @@ export interface CmsCapabilities {
   defaultLocale: string;
   /** More than one declared locale. Gates the whole i18n surface. */
   multilingual: boolean;
+  /** The server's `listPages` understands `contentType` — the licence to give each content
+   * type its own tab and its own list. An older server ACCEPTS the argument and ignores it
+   * (an unknown input key is passed through, not rejected), answering with the pooled list:
+   * without this probe the editor renders N tabs that all show every type's pages under a
+   * heading claiming otherwise, and "New page" from any of them stamps that tab's type. */
+  pagesByType: boolean;
 }
 
 /** Used until `listCmsCapabilities` answers, and when it cannot (an older server). Assumes
  * MONOLINGUAL: a hidden i18n surface on a multilingual site is recoverable by reloading,
  * where a half-rendered one on a single-locale site is what this replaced. */
-export const DEFAULT_CAPABILITIES: CmsCapabilities = { locales: ["en"], defaultLocale: "en", multilingual: false };
+export const DEFAULT_CAPABILITIES: CmsCapabilities = { locales: ["en"], defaultLocale: "en", multilingual: false, pagesByType: false };
 
 /** Mirror of @pramen/cms `CollectionFeature`. */
 export type CollectionFeature = "drafts" | "scheduling" | "revisions" | "preview";

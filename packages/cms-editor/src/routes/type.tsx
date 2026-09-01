@@ -6,50 +6,43 @@
 
 import { createPage, useNavigate } from "@buzola/router";
 import { Button } from "@podoba/react";
-import { useEffect, useState } from "react";
 import { useApp } from "../app-context";
-import { PageList, errMsg } from "../components";
-import type { BlockType, Page } from "../types";
+import { Notice, PageList, pagesHidden } from "../components";
 
 export default createPage()
   .params({ slug: "string" })
   .route("/types/:slug")
   .render(function ContentTypeRoute({ params }) {
-    const { api, contentTypes, setError } = useApp();
+    const { contentTypes, contentTypesFailed, refreshContentTypes, api, setError } = useApp();
     const navigate = useNavigate();
-    const [pages, setPages] = useState<Page[]>([]);
-    const [blockTypes, setBlockTypes] = useState<BlockType[]>([]);
-    const type = contentTypes.find((t) => t.slug === params.slug);
+    const type = (contentTypes ?? []).find((t) => t.slug === params.slug);
+    const back = <Button variant="ghost" size="sm" onPress={() => navigate("home")}>← Back</Button>;
 
-    // Filtered SERVER-side (`listPages` takes the slug), so this stays correct past the
-    // handler's 100-row cap — narrowing a pooled fetch here would quietly drop the tail.
-    // Keyed on the slug, not on `type`: the fetch must not wait on listContentTypes.
-    const refreshPages = () => api.listPages(params.slug).then(setPages).catch((e) => setError(errMsg(e)));
-    useEffect(() => {
-      refreshPages();
-      api.listBlockTypes().then(setBlockTypes).catch((e) => setError(errMsg(e)));
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [api, params.slug]);
+    // This route IS the block/page builder, so a deployment that hides it hides this too —
+    // otherwise the flag is bypassed by typing the URL, or by a stale link.
+    if (pagesHidden()) return <Notice action={back}>The page builder is not enabled on this deployment.</Notice>;
 
-    // Content types load async; before they arrive (or for a bad slug) show a neutral state
-    // rather than an unlabelled list — mirrors the collection route.
-    if (!type) {
-      return (
-        <div className="mx-auto flex max-w-[1200px] items-center gap-2 px-7 pt-8">
-          <p className="text-fg-subtle">{contentTypes.length === 0 ? "Loading…" : `Unknown content type: ${params.slug}`}</p>
-          {contentTypes.length > 0 ? <Button variant="ghost" size="sm" onPress={() => navigate("home")}>← Back</Button> : null}
-        </div>
-      );
+    // `null` = listContentTypes has not answered yet; `failed` = it answered with an error and
+    // this screen cannot name its own type. The two used to collapse into an empty array, so a
+    // 5xx (or a session outside `editorRoles ∪ reviewerRoles`, which cannot call
+    // listContentTypes at all) sat on "Loading…" forever with the way back suppressed.
+    if (contentTypesFailed) {
+      return <Notice action={<Button variant="ghost" size="sm" onPress={refreshContentTypes}>Retry</Button>}>Couldn&apos;t load the content types.</Notice>;
     }
+    if (contentTypes === null) return <Notice>Loading…</Notice>;
+    // Nothing is fetched for a slug that is not a content type — the list would be empty and
+    // the heading unlabelled, and both round trips are wasted.
+    if (!type) return <Notice action={back}>Unknown content type: {params.slug}</Notice>;
 
     return (
       <PageList
         api={api}
-        pages={pages}
-        blockTypes={blockTypes}
+        // Keyed on the slug so switching tabs REMOUNTS the list: buzola renders the same
+        // component instance across a params-only change, and PageList holds the rows,
+        // the paging offset and any open create-modal — all of which belong to one type.
+        key={type.slug}
         type={type}
         onOpen={(p) => navigate("page", { params: { pageId: p.id } })}
-        onCreated={refreshPages}
         onError={setError}
       />
     );

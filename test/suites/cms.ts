@@ -161,7 +161,34 @@ export async function runCms(base: string): Promise<void> {
   // --- signed preview links: a capability, not a role ---
   // The point of preview is the stakeholder WITHOUT an account. An editor mints a signed,
   // self-expiring link naming one page; redeeming it needs no session at all.
-  const pageRow = (await call("listPages", {}, admin)).body.result.find((p: { slug: string }) => p.slug === slug) as { id: string };
+  // --- listing pages: viewer-gated, narrowed BY THE SERVER, and addressable by id ---
+  // The rows are full page records (schedule stamps, revision pointer, every SEO column,
+  // the whole `fields` bag) — the editing surface, not the published one.
+  assert((await call("listPages", {})).status === 403, "cms: listPages is viewer-gated (anonymous 403)");
+  assert((await call("getPageById", { pageId })).status === 403, "cms: getPageById is viewer-gated (anonymous 403)");
+
+  const byId = await call("getPageById", { pageId }, admin);
+  assert(byId.body.ok && byId.body.result?.id === pageId, "cms: getPageById opens a page directly, without resolving it against a capped list");
+  assert((await call("getPageById", { pageId: "00000000-0000-4000-8000-000000000000" }, admin)).body.result === null, "cms: getPageById answers null for an unknown id");
+
+  const allPages = (await call("listPages", {}, admin)).body.result as Array<{ id: string; slug: string }>;
+  const byType = (await call("listPages", { contentType: "article" }, admin)).body.result as Array<{ id: string; slug: string }>;
+  assert(byType.some((p) => p.slug === slug), "cms: listPages({ contentType }) returns that type's pages");
+  assert(byType.length <= allPages.length, "cms: the type-scoped list is a subset of the pooled one");
+  const otherType = (await call("listPages", { contentType: "seeded_doc" }, admin)).body.result as Array<{ slug: string }>;
+  assert(!otherType.some((p) => p.slug === slug), "cms: another type's list does not carry this page");
+  // An unknown slug — and an EMPTY one, which a falsy check read as "no filter" — must
+  // return nothing rather than every type's pages under a tab naming one.
+  assert(((await call("listPages", { contentType: "no-such-type" }, admin)).body.result as unknown[]).length === 0, "cms: an unknown content-type slug lists nothing, not everything");
+  assert(((await call("listPages", { contentType: "" }, admin)).body.result as unknown[]).length === 0, "cms: an empty content-type slug lists nothing, not everything");
+  // Paged, so the caller can tell a full first page from the whole table.
+  const firstOnly = (await call("listPages", { limit: 1 }, admin)).body.result as unknown[];
+  assert(firstOnly.length === 1, "cms: listPages honours an explicit limit");
+  // Projection: only the named columns come back (the D1-over-RPC shape — see GitHub #22).
+  const projected = (await call("listPages", { limit: 1, select: ["id", "title"] }, admin)).body.result as Array<Record<string, unknown>>;
+  assert(projected[0] && "title" in projected[0] && !("fields" in projected[0]) && !("metaTitle" in projected[0]), "cms: listPages({ select }) projects to the named columns");
+
+  const pageRow = allPages.find((p) => p.slug === slug) as { id: string };
   const minted = await call("signPagePreview", { pageId: pageRow.id }, admin);
   assert(minted.body.ok && typeof minted.body.result.token === "string", "cms: signPagePreview mints a token for an editor");
   assert(String(minted.body.result.url).startsWith("/cms/preview?token="), "cms: the minted preview url is relative, like a signed file url");
@@ -256,6 +283,16 @@ export async function runCms(base: string): Promise<void> {
     pubList.body.ok && (pubList.body.result as Array<{ slug: string; contentType: string | null }>).some((p) => p.slug === slug && p.contentType === "article"),
     "cms: listPublishedPages carries the content-type slug for type-filtered collections",
   );
+  // …and narrows BY THE SERVER. The result is capped, so a build filtering the answer would
+  // be filtering an already-truncated list — with `collections: "auto"` generating one
+  // collection per type, every one of them loses its own tail past the cap, build still green.
+  const pubArticles = await call("listPublishedPages", { contentType: "article" });
+  assert(
+    pubArticles.body.ok && (pubArticles.body.result as Array<{ slug: string; contentType: string | null }>).every((p) => p.contentType === "article"),
+    "cms: listPublishedPages({ contentType }) narrows server-side",
+  );
+  assert((pubArticles.body.result as unknown[]).length > 0, "cms: …and still finds the published article");
+  assert(((await call("listPublishedPages", { contentType: "no-such-type" })).body.result as unknown[]).length === 0, "cms: an unknown type lists no published pages, not all of them");
 
   // --- reordering a region ---
   const placements = pub.body.result.regions.content.map((b: { id: string }) => b.id);

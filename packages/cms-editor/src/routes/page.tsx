@@ -6,14 +6,14 @@ import { createPage, useNavigate } from "@buzola/router";
 import { Button } from "@podoba/react";
 import { useEffect, useState } from "react";
 import { useApp } from "../app-context";
-import { PageEditor, errMsg, visibleTabs, type InspectorTab } from "../components";
+import { Notice, PageEditor, errMsg, splitsByType, visibleTabs, type InspectorTab } from "../components";
 import type { BlockType, Page } from "../types";
 
 export default createPage()
   .params({ pageId: "string", tab: "?string" })
   .route("/pages/:pageId")
   .render(function PageEditorRoute({ params }) {
-    const { api, cms, setError, setNavGuard } = useApp();
+    const { api, cms, contentTypes, setError, setNavGuard } = useApp();
     const navigate = useNavigate();
     const [page, setPage] = useState<Page | null>(null);
     const [blockTypes, setBlockTypes] = useState<BlockType[]>([]);
@@ -22,18 +22,30 @@ export default createPage()
     useEffect(() => {
       let live = true;
       setMissing(false);
-      // No get-page-by-id handler; resolve the id against the page list.
-      api.listPages()
-        .then((rows) => {
+      // By id. Resolving it against `listPages` instead meant the editor could not open a row
+      // the list had just shown it: that list is capped, and since the editor lists ONE type
+      // per tab it isn't even the same list — 150 newer pages of another type were enough to
+      // push an article out of the pooled fetch and turn a click into "Page not found."
+      api.getPageById(params.pageId)
+        .then((found) => {
           if (!live) return;
-          const found = rows.find((p) => p.id === params.pageId) ?? null;
-          setPage(found);
+          setPage(found ?? null);
           setMissing(!found);
         })
         .catch((e) => setError(errMsg(e)));
       api.listBlockTypes().then((r) => live && setBlockTypes(r)).catch((e) => setError(errMsg(e)));
       return () => { live = false; };
     }, [api, params.pageId, setError]);
+
+    // Back goes to the list this page actually belongs to. `home` redirects to whichever type
+    // sorts FIRST BY NAME on a split deployment, so "← all pages" from an article landed the
+    // editor in some other type's list — with the `replace` overwriting `/`, so Back could not
+    // undo it either. Falls back to `home` when the type is unknown (not loaded, or gone).
+    const ownType = (contentTypes ?? []).find((t) => t.id === page?.typeId);
+    const backToList = () => {
+      if (splitsByType(contentTypes, cms) && ownType) navigate("type", { params: { slug: ownType.slug } });
+      else navigate("home");
+    };
 
     // The visible set comes from the server (`visibleTabs`), so a deep link to `?tab=i18n`
     // on a single-locale deployment falls back to settings — and the URL is REWRITTEN to
@@ -48,14 +60,10 @@ export default createPage()
     }, [params.tab, tab]);
 
     if (missing) {
-      return (
-        <div className="mx-auto flex max-w-[1200px] items-center gap-2 px-7 pt-8">
-          <p className="text-fg-subtle">Page not found.</p>
-          <Button variant="ghost" size="sm" onPress={() => navigate("home")}>← all pages</Button>
-        </div>
-      );
+      // No page ⇒ no type to go back to; `home` lands on the first list either way.
+      return <Notice action={<Button variant="ghost" size="sm" onPress={() => navigate("home")}>← all pages</Button>}>Page not found.</Notice>;
     }
-    if (!page) return <div className="mx-auto max-w-[1200px] px-7 pt-8"><p className="text-fg-subtle">Loading…</p></div>;
+    if (!page) return <Notice>Loading…</Notice>;
 
     return (
       <PageEditor
@@ -64,7 +72,7 @@ export default createPage()
         blockTypes={blockTypes}
         tab={tab}
         onTab={setTab}
-        onBack={() => navigate("home")}
+        onBack={backToList}
         onChange={setPage}
         registerGuard={setNavGuard}
       />

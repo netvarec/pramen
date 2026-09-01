@@ -7,12 +7,35 @@ import { Button, Card, MoonIcon, SunIcon, Text, Topbar } from "@podoba/react";
 import { useEffect, useState } from "react";
 import { useApp } from "../app-context";
 import { BRAND } from "../brand";
+import { pagesHidden, splitsByType } from "../components";
 import { opensInSameTab } from "../mount";
 
 const THEME_KEY = "pramen.cms.theme";
 
+/**
+ * The slug segment under `prefix`, DECODED.
+ *
+ * `useRoute().pathname` comes off a `URL`, so it is percent-encoded; the slugs it is compared
+ * against are the raw values the server stored. buzola encodes when it builds an href and
+ * decodes into `params` when it matches, so routing is unaffected — only this comparison was,
+ * and a content type called `články` navigated correctly to a tab bar with nothing lit.
+ *
+ * A malformed sequence (`%zz`) throws in `decodeURIComponent`; that cannot match any slug
+ * either way, so it degrades to no highlight rather than tearing down the chrome.
+ */
+export function segmentAt(pathname: string, prefix: string): string | undefined {
+  if (!pathname.startsWith(prefix)) return undefined;
+  const raw = pathname.slice(prefix.length).split("/")[0];
+  if (!raw) return undefined;
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
 export default function RootLayout() {
-  const { isAdmin, collections, contentTypes, error, reconfigure, confirmNavigation } = useApp();
+  const { isAdmin, collections, contentTypes, cms, error, reconfigure, confirmNavigation } = useApp();
   const navigate = useNavigate();
   const { pathname } = useRoute();
 
@@ -34,9 +57,9 @@ export default function RootLayout() {
   }, [theme]);
 
   // The active collection slug, if we're under /collections/:slug(/...).
-  const collectionSlug = pathname.startsWith("/collections/") ? pathname.split("/")[2] : undefined;
+  const collectionSlug = segmentAt(pathname, "/collections/");
   // …and the active content type, under /types/:slug.
-  const typeSlug = pathname.startsWith("/types/") ? pathname.split("/")[2] : undefined;
+  const typeSlug = segmentAt(pathname, "/types/");
 
   // "Pages" stays lit while editing a page (/pages/:id) too — but only on a deployment that
   // still HAS a pooled Pages tab. Split by type, the page editor lights nothing: the route
@@ -50,12 +73,20 @@ export default function RootLayout() {
     : pathname.startsWith("/settings") ? "settings"
     : "";
 
-  const tabCls = (key: string) => (active === key ? "bg-surface-muted text-fg" : "text-fg-muted");
+  // `aria-current` alongside the class: split by type the nav is N mutually-exclusive tabs
+  // whose only "you are here" cue is a background tint, which is invisible to a screen reader
+  // and marginal for anyone who cannot see the tint.
+  const tabProps = (key: string) => ({
+    className: active === key ? "bg-surface-muted text-fg" : "text-fg-muted",
+    ...(active === key ? { "aria-current": "page" as const } : {}),
+  });
 
   // Host-configured links to companion tools (e.g. a curation page), from /config.js.
   const extraNav = typeof window !== "undefined" ? window.PRAMEN_CMS_EDITOR?.extraNav ?? [] : [];
   // Collections-only deployments hide the block/page builder entirely.
-  const hidePages = typeof window !== "undefined" ? window.PRAMEN_CMS_EDITOR?.hidePages === true : false;
+  const hidePages = pagesHidden();
+  // Same rule as the landing redirect and the page editor's back target — see `splitsByType`.
+  const splitByType = splitsByType(contentTypes, cms, hidePages);
 
   // See the extraNav comment below. The rules live in `mount.ts` beside the containment they
   // depend on; what this supplies is the URL the BROWSER will resolve a relative href
@@ -89,38 +120,38 @@ export default function RootLayout() {
               the plain "Pages" tab — there is nothing there to separate, and splitting it
               would put the deployment's own type name where a generic label reads better.
               The label is the type's `name`, so a host that wants a plural tab writes one. */}
-          {hidePages ? null : contentTypes.length > 1 ? (
-            contentTypes.map((t) => (
+          {hidePages ? null : splitByType ? (
+            (contentTypes ?? []).map((t) => (
               <Button
                 key={t.slug}
                 variant="ghost"
                 size="sm"
-                className={tabCls(`type:${t.slug}`)}
+                {...tabProps(`type:${t.slug}`)}
                 onPress={guarded(() => navigate("type", { params: { slug: t.slug } }))}
               >
                 {t.name}
               </Button>
             ))
           ) : (
-            <Button variant="ghost" size="sm" className={tabCls("pages")} onPress={guarded(() => navigate("home"))}>
+            <Button variant="ghost" size="sm" {...tabProps("pages")} onPress={guarded(() => navigate("home"))}>
               Pages
             </Button>
           )}
           {collections.map((c) => (
-            <Button key={c.slug} variant="ghost" size="sm" className={tabCls(`col:${c.slug}`)} onPress={guarded(() => navigate("collection", { params: { slug: c.slug } }))}>
+            <Button key={c.slug} variant="ghost" size="sm" {...tabProps(`col:${c.slug}`)} onPress={guarded(() => navigate("collection", { params: { slug: c.slug } }))}>
               {c.icon ? `${c.icon} ` : ""}
               {c.pluralLabel}
             </Button>
           ))}
-          <Button variant="ghost" size="sm" className={tabCls("media")} onPress={guarded(() => navigate("media"))}>
+          <Button variant="ghost" size="sm" {...tabProps("media")} onPress={guarded(() => navigate("media"))}>
             Media
           </Button>
           {isAdmin ? (
-            <Button variant="ghost" size="sm" className={tabCls("users")} onPress={guarded(() => navigate("users"))}>
+            <Button variant="ghost" size="sm" {...tabProps("users")} onPress={guarded(() => navigate("users"))}>
               Users
             </Button>
           ) : null}
-          <Button variant="ghost" size="sm" className={tabCls("settings")} onPress={guarded(() => navigate("settings"))}>
+          <Button variant="ghost" size="sm" {...tabProps("settings")} onPress={guarded(() => navigate("settings"))}>
             Settings
           </Button>
           {extraNav.map((l) => (

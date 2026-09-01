@@ -9,26 +9,32 @@
 
 import { describe, expect, test } from "bun:test";
 import { createCmsHandlers } from "../packages/cms/src/index";
-import { visibleTabs, INSPECTOR_TABS } from "../packages/cms-editor/src/components";
+import { splitsByType, visibleTabs, INSPECTOR_TABS } from "../packages/cms-editor/src/components";
 import { DEFAULT_CAPABILITIES } from "../packages/cms-editor/src/types";
+import type { ContentType } from "../packages/cms-editor/src/types";
 import type { HandlerContext } from "@pramen/server";
 
+const TWO_TYPES: ContentType[] = [
+  { id: "t-page", name: "Pages", slug: "page" },
+  { id: "t-article", name: "Articles", slug: "article" },
+];
+
 const caps = (opts?: { locales?: readonly string[] }) => {
-  const h = createCmsHandlers(opts) as unknown as { listCmsCapabilities: { run: (c: HandlerContext) => { locales: string[]; defaultLocale: string; multilingual: boolean } } };
+  const h = createCmsHandlers(opts) as unknown as { listCmsCapabilities: { run: (c: HandlerContext) => { locales: string[]; defaultLocale: string; multilingual: boolean; pagesByType: boolean } } };
   return h.listCmsCapabilities.run({} as HandlerContext);
 };
 
 describe("declared locales", () => {
   test("a deployment that declares nothing is monolingual `en` — the previous default", () => {
-    expect(caps()).toEqual({ locales: ["en"], defaultLocale: "en", multilingual: false });
+    expect(caps()).toEqual({ locales: ["en"], defaultLocale: "en", multilingual: false, pagesByType: true });
   });
 
   test("one declared locale is still monolingual — no i18n surface for a single-locale site", () => {
-    expect(caps({ locales: ["cs"] })).toEqual({ locales: ["cs"], defaultLocale: "cs", multilingual: false });
+    expect(caps({ locales: ["cs"] })).toEqual({ locales: ["cs"], defaultLocale: "cs", multilingual: false, pagesByType: true });
   });
 
   test("two or more is multilingual, and the FIRST is the default a page is stamped with", () => {
-    expect(caps({ locales: ["cs", "en"] })).toEqual({ locales: ["cs", "en"], defaultLocale: "cs", multilingual: true });
+    expect(caps({ locales: ["cs", "en"] })).toEqual({ locales: ["cs", "en"], defaultLocale: "cs", multilingual: true, pagesByType: true });
   });
 
   // The bug the old flag's doc comment papered over: a Czech-only site that hid the i18n
@@ -40,7 +46,7 @@ describe("declared locales", () => {
   });
 
   test("an empty declaration falls back rather than leaving a page with no locale", () => {
-    expect(caps({ locales: [] })).toEqual({ locales: ["en"], defaultLocale: "en", multilingual: false });
+    expect(caps({ locales: [] })).toEqual({ locales: ["en"], defaultLocale: "en", multilingual: false, pagesByType: true });
   });
 });
 
@@ -62,5 +68,36 @@ describe("the editor's visible inspector tabs", () => {
   test("the pre-answer default is monolingual", () => {
     expect(DEFAULT_CAPABILITIES.multilingual).toBe(false);
     expect(visibleTabs(DEFAULT_CAPABILITIES.multilingual)).not.toContain("i18n");
+  });
+
+  // Same argument, the other capability: an older server ACCEPTS `listPages({ contentType })`
+  // and ignores it, answering with the pooled list. An editor that assumed the feature would
+  // render one tab per type, each showing every type's pages under a heading naming one — and
+  // "New page" from any of them stamping that tab's type. So the default is off.
+  test("per-type lists are off until the server declares them", () => {
+    expect(DEFAULT_CAPABILITIES.pagesByType).toBe(false);
+    expect(splitsByType(TWO_TYPES, DEFAULT_CAPABILITIES, false)).toBe(false);
+  });
+});
+
+describe("the nav shape", () => {
+  const cms = { ...DEFAULT_CAPABILITIES, pagesByType: true };
+
+  test("two or more declared types get a tab (and a list) each", () => {
+    expect(splitsByType(TWO_TYPES, cms, false)).toBe(true);
+  });
+
+  test("one type keeps the pooled `Pages` list — there is nothing there to separate", () => {
+    expect(splitsByType([TWO_TYPES[0]], cms, false)).toBe(false);
+  });
+
+  // `null` is NOT ANSWERED YET, and answering `true` for it would paint (and fetch) the very
+  // pooled list the split exists to retire, then redirect away from it a round trip later.
+  test("an unanswered list commits to nothing", () => {
+    expect(splitsByType(null, cms, false)).toBe(false);
+  });
+
+  test("a deployment with no page builder at all never splits", () => {
+    expect(splitsByType(TWO_TYPES, cms, true)).toBe(false);
   });
 });

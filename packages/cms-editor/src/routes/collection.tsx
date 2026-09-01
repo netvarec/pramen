@@ -5,7 +5,7 @@
 import { createPage, useNavigate } from "@buzola/router";
 import { Button } from "@podoba/react";
 import { useApp } from "../app-context";
-import { CollectionList } from "../components";
+import { CollectionList, Notice } from "../components";
 
 export default createPage()
   .params({ slug: "string" })
@@ -18,10 +18,9 @@ export default createPage()
     if (!def) {
       // Collections load async; before they arrive (or for a bad slug) show a neutral state.
       return (
-        <div className="mx-auto flex max-w-[1200px] items-center gap-2 px-7 pt-8">
-          <p className="text-fg-subtle">{collections.length === 0 ? "Loading…" : `Unknown collection: ${params.slug}`}</p>
-          {collections.length > 0 ? <Button variant="ghost" size="sm" onPress={() => navigate("home")}>← Pages</Button> : null}
-        </div>
+        <Notice action={collections.length > 0 ? <Button variant="ghost" size="sm" onPress={() => navigate("home")}>← Pages</Button> : undefined}>
+          {collections.length === 0 ? "Loading…" : `Unknown collection: ${params.slug}`}
+        </Notice>
       );
     }
     return (

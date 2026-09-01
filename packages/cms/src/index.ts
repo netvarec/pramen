@@ -484,7 +484,13 @@ export const cmsSchema = {
   cms_pages: Entity(
     (t) => ({
       id: primaryKey(generated(t.uuid())),
-      typeId: notNull(t.uuid()),
+      // Indexed because the editor lists pages ONE TYPE AT A TIME (`listPages({ contentType })`,
+      // a tab per type): without it every tab load scans all of cms_pages before sorting, and
+      // on the D1 store that scan is paid over RPC. Relation columns are never auto-indexed
+      // (index DDL comes only from `unique()`/`indexed()` and composite uniques), and the
+      // `["slug","locale"]` composite is leftmost-`slug` so it cannot serve this predicate.
+      // The `createdAt` sort of the narrowed set remains — single-column indexes only.
+      typeId: indexed(notNull(t.uuid())),
       title: notNull(t.text()),
       // A slug is unique PER LOCALE (`/en/about` + `/cs/about`) — enforced by the entity's
       // composite `unique: [["slug","locale"]]` (below). createPage/updatePage/createTranslation
@@ -1136,6 +1142,9 @@ interface CmsDb {
     limit?: number;
     offset?: number;
     with?: Record<string, unknown>;
+    /** Column projection. Each name is ACL-checked by `Db` (an unreadable or `hidden()`
+     * column is a 403), so it is safe to build one from caller input. */
+    select?: readonly string[];
   }): Promise<Array<Record<string, unknown>>>;
   insert(table: string, values: Record<string, unknown>): Promise<Record<string, unknown>>;
   update(table: string, id: string, patch: Record<string, unknown>): Promise<Record<string, unknown> | undefined>;
@@ -1373,6 +1382,13 @@ export const PREVIEW_PATH = "/cms/preview";
  * a link pasted into a public channel stops working the same afternoon. */
 export const DEFAULT_PREVIEW_TTL_SECONDS = 3600;
 
+/** `listPages` page size when the caller names none — the historical cap, kept so a client
+ * that never learned to paginate sees exactly what it always did. */
+export const PAGE_LIST_LIMIT = 100;
+/** …and the ceiling on what a caller may ask for. A list screen pages; nobody needs the
+ * whole table in one full-row response. */
+export const PAGE_LIST_MAX_LIMIT = 500;
+
 export interface CmsHandlerOpts {
   /** Roles permitted to call the editor mutations (also enforced by the ACL). Default
    * `["editor", "admin"]`. */
@@ -1491,20 +1507,28 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
   };
 
   // (slug, locale) uniqueness is enforced here because pramen's unique() is single-column.
+  //
+  // Slugs are global across content types — the constraint is (slug, locale), NOT
+  // (slug, locale, typeId) — so the colliding page is very often one the caller cannot see:
+  // the editor lists ONE type per tab, and "already exists" naming only slug + locale leaves
+  // them staring at a list that visibly contains no such row. Both messages name the owning
+  // type, the way the trash variant already named the trash.
   const assertSlugFree = async (db: CmsDb, slug: string, locale: string, exceptId?: string): Promise<void> => {
     const rows = await db.exec(
-      "SELECT id, deletedAt FROM cms_pages WHERE slug = ? AND locale = ? LIMIT 1",
+      "SELECT id, deletedAt, typeId FROM cms_pages WHERE slug = ? AND locale = ? LIMIT 1",
       slug,
       locale,
     );
     if (rows[0] && String(rows[0].id) !== exceptId) {
+      const typeSlug = await contentTypeSlug(db, rows[0].typeId).catch(() => null);
+      const under = typeSlug ? ` under content type '${typeSlug}'` : "";
       // A trashed page keeps its slug until purged (the (slug, locale) unique index is a
       // DB constraint, not advisory). Say so, rather than leave the caller hunting for a
       // page they cannot see.
       if (rows[0].deletedAt != null) {
-        throw new BadRequest(`slug '${slug}' is held by a page in the trash for locale '${locale}' — restore or purge it first`);
+        throw new BadRequest(`slug '${slug}' is held by a page in the trash for locale '${locale}'${under} — restore or purge it first`);
       }
-      throw new BadRequest(`slug '${slug}' already exists for locale '${locale}'`);
+      throw new BadRequest(`slug '${slug}' already exists for locale '${locale}'${under} — slugs are unique across all content types`);
     }
   };
 
@@ -1546,6 +1570,11 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       input: (raw): { name: string; slug: string; regions: RegionDefinition[]; fieldsSchema?: FieldDefinition[]; defaultBlocks?: DefaultBlockDefinition[] } => {
         const o = asObj(raw);
         if (typeof o.name !== "string" || typeof o.slug !== "string") throw new BadRequest("name and slug are required");
+        // Non-EMPTY, not merely a string: a content type's slug is a URL segment in the
+        // editor (`/types/:slug`) and the key `listPages({ contentType })` resolves. An
+        // empty one builds `/types/` — a path the router drops the empty segment from, so
+        // the type gets a tab that cannot be reached and a list that cannot be addressed.
+        if (o.name.trim() === "" || o.slug.trim() === "") throw new BadRequest("name and slug must not be empty");
         if (!Array.isArray(o.regions) || o.regions.length === 0) throw new BadRequest("at least one region is required");
         return o as never;
       },
@@ -1591,6 +1620,8 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       input: (raw): { id?: string; slug?: string; name?: string; regions?: RegionDefinition[]; fieldsSchema?: FieldDefinition[]; defaultBlocks?: DefaultBlockDefinition[] } => {
         const o = asObj(raw);
         if (typeof o.id !== "string" && typeof o.slug !== "string") throw new BadRequest("id or slug is required");
+        // `name` is the editor's tab label; blanking it leaves an unlabelled tab.
+        if (typeof o.name === "string" && o.name.trim() === "") throw new BadRequest("name must not be empty");
         return o as never;
       },
     }),
@@ -1752,43 +1783,105 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     }),
 
     // ---- pages ----
-    /** List pages, newest first. `contentType` (a content-type SLUG) narrows the list to one
-     * type — what an editor that gives each type its own tab needs, and the only way to stay
-     * correct once a deployment has more than `limit` entries in total: filtering the full
-     * list client-side would silently drop the tail of every type. Omitted ⇒ all types, the
-     * historical behaviour. An unknown slug returns nothing rather than everything, so a
-     * typo can never read as "here is the whole CMS". */
+    /** List pages, newest first. Viewer-gated: the rows are FULL page records (schedule
+     * timestamps, revision pointer, the whole `fields` bag, every SEO column), which is the
+     * editing surface, not the published one — `listPublishedPages` is this file's deliberate
+     * public projection and stays narrow.
+     *
+     * `contentType` (a content-type SLUG) narrows the list to one type — what an editor that
+     * gives each type its own tab needs, and the only way to stay correct once a deployment
+     * has more than `limit` entries in total: filtering the full list client-side would
+     * silently drop the tail of every type. Omitted ⇒ all types, the historical behaviour. An
+     * unknown slug returns nothing rather than everything, so a typo can never read as "here
+     * is the whole CMS" — and neither can an EMPTY one, which is why the check below is
+     * `=== undefined` and not a falsy test.
+     *
+     * `limit`/`offset` page the list. Without them the caller cannot tell a full first page
+     * from the whole table, and the editor's header reports the cap as if it were the total.
+     * `select` narrows the projection: a list screen needs five columns, not the widest row
+     * in the CMS, and on the D1 store every unasked-for column crosses RPC. */
     listPages: query(
-      async (ctx, input: { contentType?: string }) => {
-        const db = cdb(ctx);
-        const order = { column: "createdAt", dir: "desc" } as const;
-        if (!input?.contentType) return db.find({ from: "cms_pages", orderBy: order, limit: 100 });
-        const types = await db.find({ from: "cms_content_types", where: { slug: input.contentType }, limit: 1 });
-        const typeId = types[0]?.id;
-        if (typeId == null) return [];
-        return db.find({ from: "cms_pages", where: { typeId }, orderBy: order, limit: 100 });
+      async (ctx, input: { contentType?: string; limit?: number; offset?: number; select?: string[] }) => {
+        // ONE query, not two: `where` traverses the `type` belongsTo the schema already
+        // declares, so the slug is resolved by a subquery. That also gives the unknown-slug
+        // invariant for free (an empty subquery matches nothing) and, unlike a hand-rolled
+        // lookup in cms_content_types, does not THROW for a policy set that grants cms_pages
+        // but not the types table.
+        const where = input?.contentType === undefined ? undefined : { type: { slug: input.contentType } };
+        return cdb(ctx).find({
+          from: "cms_pages",
+          where,
+          orderBy: { column: "createdAt", dir: "desc" },
+          limit: Math.min(input?.limit ?? PAGE_LIST_LIMIT, PAGE_LIST_MAX_LIMIT),
+          offset: input?.offset ?? 0,
+          select: input?.select,
+        });
       },
       {
-        input: (raw): { contentType?: string } => {
+        ...viewer,
+        // The parsed value is what the ACL sees (`dispatch` hands it to `Db` for `$input()`
+        // resolution), so this SPREADS the raw object rather than rebuilding one from the
+        // keys it knows: a host scoping cms_pages with `$input("someKey")` had its marker
+        // resolving against `{}` — the scope collapsing to nothing — the moment this handler
+        // grew a parser.
+        input: (raw): { contentType?: string; limit?: number; offset?: number; select?: string[] } => {
           const o = asObj(raw);
-          if (o.contentType === undefined || o.contentType === null) return {};
-          if (typeof o.contentType !== "string") throw new BadRequest("contentType must be a string");
-          return { contentType: o.contentType };
+          const out: Record<string, unknown> = { ...o };
+          if (o.contentType === undefined || o.contentType === null) delete out.contentType;
+          else if (typeof o.contentType !== "string") throw new BadRequest("contentType must be a string");
+          for (const k of ["limit", "offset"] as const) {
+            if (o[k] === undefined || o[k] === null) { delete out[k]; continue; }
+            if (typeof o[k] !== "number" || !Number.isInteger(o[k]) || (o[k] as number) < 0) throw new BadRequest(`${k} must be a non-negative integer`);
+          }
+          if (o.select === undefined || o.select === null) delete out.select;
+          else if (!Array.isArray(o.select) || o.select.some((c) => typeof c !== "string")) throw new BadRequest("select must be an array of column names");
+          return out as never;
         },
       },
     ),
 
+    /** One page by id, for the editor opening `/pages/:id` directly. Resolving that id
+     * against `listPages` instead means a deep link (or a row clicked in a type's own tab)
+     * can miss: that list is capped and, since the editor lists per type, is not even the
+     * list the row came from. Viewer-gated + row-ACL'd like every other read. */
+    getPageById: query(async (ctx, input: { pageId: string }) => {
+      const rows = await cdb(ctx).find({ from: "cms_pages", where: { id: input.pageId }, limit: 1 });
+      return rows[0] ?? null;
+    }, { ...viewer, ...pageIdInput }),
+
     /** Public: list published pages (slug, locale, updatedAt) for sitemap generation. The
-     * anonymous ACL scopes cms_pages reads to status=published, so this is safe to expose. */
-    listPublishedPages: query(async (ctx) => {
+     * anonymous ACL scopes cms_pages reads to status=published, so this is safe to expose.
+     *
+     * `contentType` / `locale` narrow the list HERE, for the same reason `listPages` does:
+     * the result is capped, so a caller filtering it afterwards is filtering an already
+     * truncated list and loses the tail of every type. `@pramen/cms-astro`'s `collections:
+     * "auto"` builds one collection per content type, each calling this — un-narrowed, all
+     * of them fetch the same 5000 rows and everything past the cap vanishes from the built
+     * site with a green build. An unknown slug returns nothing, never everything. */
+    listPublishedPages: query(async (ctx, input: { contentType?: string; locale?: string }) => {
       const db = cdb(ctx);
-      const rows = await db.find({ from: "cms_pages", where: { status: "published" }, orderBy: { column: "updatedAt", dir: "desc" }, limit: 5000 });
+      const where: Record<string, unknown> = { status: "published" };
+      if (input?.contentType !== undefined) where.type = { slug: input.contentType };
+      if (input?.locale !== undefined) where.locale = input.locale;
+      const rows = await db.find({ from: "cms_pages", where, orderBy: { column: "updatedAt", dir: "desc" }, limit: 5000 });
       // Join typeId → content-type slug so a frontend can route/filter by type (e.g. articles
       // vs pages) without a second round-trip.
       const typeIds = [...new Set(rows.map((r) => r.typeId).filter((v): v is string => typeof v === "string"))];
       const types = typeIds.length ? await db.find({ from: "cms_content_types", where: { id: { in: typeIds } } }) : [];
       const slugById = new Map(types.map((t) => [String(t.id), String(t.slug)]));
       return rows.map((r) => ({ slug: String(r.slug), locale: String(r.locale ?? "en"), contentType: slugById.get(String(r.typeId)) ?? null, updatedAt: String(r.updatedAt ?? r.createdAt ?? "") }));
+    }, {
+      // Spreads the raw object for the same reason `listPages` does — the parsed value is
+      // what `$input()` policy markers resolve against.
+      input: (raw): { contentType?: string; locale?: string } => {
+        const o = asObj(raw);
+        const out: Record<string, unknown> = { ...o };
+        for (const k of ["contentType", "locale"] as const) {
+          if (o[k] === undefined || o[k] === null) { delete out[k]; continue; }
+          if (typeof o[k] !== "string") throw new BadRequest(`${k} must be a string`);
+        }
+        return out as never;
+      },
     }),
 
     /** Update a page's SEO fields (meta/canonical/robots/OpenGraph/JSON-LD). Editor-gated. */
@@ -1990,7 +2083,13 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
      * a client flag can hide a control but cannot make the data right, and the two drift
      * the moment someone adds a locale. `multilingual` is the derived answer to the only
      * question the UI actually asks, so each surface doesn't re-derive it from the list. */
-    listCmsCapabilities: query(() => ({ locales, defaultLocale, multilingual: locales.length > 1 }), viewer),
+    /** What this deployment supports. `pagesByType` is the editor's licence to give each
+     * content type its own tab and its own list: an OLDER server ignores the `contentType`
+     * argument entirely and answers with the pooled list, so an editor that assumed the
+     * feature would render N tabs all showing every type's pages under a heading claiming
+     * otherwise — and "New page" from any of them would stamp that tab's type. Declared, not
+     * inferred: fail closed on the pooled list rather than open on N lying ones. */
+    listCmsCapabilities: query(() => ({ locales, defaultLocale, multilingual: locales.length > 1, pagesByType: true as const }), viewer),
 
     /** Distinct locales present across all pages. NOTE: a DATA query — what is in the
      * store — not configuration. `listCmsCapabilities().locales` is what the deployment

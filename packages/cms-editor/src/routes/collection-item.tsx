@@ -5,7 +5,7 @@
 import { createPage, useNavigate } from "@buzola/router";
 import { Button } from "@podoba/react";
 import { useApp } from "../app-context";
-import { CollectionEditor } from "../components";
+import { CollectionEditor, Notice } from "../components";
 
 export default createPage()
   .params({ slug: "string", id: "string" })
@@ -18,10 +18,9 @@ export default createPage()
 
     if (!def) {
       return (
-        <div className="mx-auto flex max-w-[1200px] items-center gap-2 px-7 pt-8">
-          <p className="text-fg-subtle">{collections.length === 0 ? "Loading…" : `Unknown collection: ${params.slug}`}</p>
-          {collections.length > 0 ? <Button variant="ghost" size="sm" onPress={() => navigate("home")}>← Pages</Button> : null}
-        </div>
+        <Notice action={collections.length > 0 ? <Button variant="ghost" size="sm" onPress={() => navigate("home")}>← Pages</Button> : undefined}>
+          {collections.length === 0 ? "Loading…" : `Unknown collection: ${params.slug}`}
+        </Notice>
       );
     }
     return (

@@ -95,8 +95,21 @@ interface AppContextValue {
   collections: CollectionMeta[];
   /** Content types registered on the server (from `listContentTypes`). More than one ⇒ each
    * gets its own nav tab and its own list route, instead of one pooled "Pages" list where a
-   * page and an article sit in the same column with nothing to tell them apart. */
-  contentTypes: ContentType[];
+   * page and an article sit in the same column with nothing to tell them apart.
+   *
+   * `null` means NOT ANSWERED YET, which is a different thing from "this deployment has
+   * none" and has to be told apart from it: the whole nav shape is decided by the count, so
+   * an empty array standing in for "still loading" makes every screen paint the single-type
+   * layout first and correct itself a round trip later. It also swallowed failure — a 5xx,
+   * or a session whose role cannot call `listContentTypes` — into the same value, leaving a
+   * type route showing "Loading…" over data it already had, forever. */
+  contentTypes: ContentType[] | null;
+  /** The `listContentTypes` call FAILED (as opposed to answering with none). Screens that
+   * cannot render without it say so and offer `refreshContentTypes` rather than pretending
+   * to still be loading. */
+  contentTypesFailed: boolean;
+  /** Retry `listContentTypes` — wired to the retry button on those screens. */
+  refreshContentTypes: () => void;
   /** What the SERVER says this deployment supports (from `listCmsCapabilities`) — today,
    * its declared locales. The editor renders its i18n surface off this rather than a local
    * flag, so the UI and the data can never disagree about whether the site is multilingual. */
@@ -127,7 +140,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [cfg, setCfg] = useState<Config>(() => loadConfig(BACKEND));
   const [me, setMe] = useState<Me | null>(null);
   const [collections, setCollections] = useState<CollectionMeta[]>([]);
-  const [contentTypes, setContentTypes] = useState<ContentType[]>([]);
+  const [contentTypes, setContentTypes] = useState<ContentType[] | null>(null);
+  const [contentTypesFailed, setContentTypesFailed] = useState(false);
+  const [contentTypesNonce, setContentTypesNonce] = useState(0);
+  const refreshContentTypes = useCallback(() => setContentTypesNonce((n) => n + 1), []);
   const [cms, setCms] = useState<CmsCapabilities>(DEFAULT_CAPABILITIES);
   const [error, setError] = useState("");
   // A usable session = somewhere to call + a token that is NOT expired. An expired token
@@ -185,13 +201,30 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // Collections drive the nav + list/edit routes. An app that registers none (or an older
     // server without the handler) just leaves the nav as-is — a failure is non-fatal.
     api.call<CollectionMeta[]>("listCollections").then(setCollections).catch(() => setCollections([]));
-    // Drives the per-type nav + list routes. A failure leaves it empty, which falls back to
-    // the single pooled "Pages" tab — the layout before types had tabs of their own.
-    api.listContentTypes().then(setContentTypes).catch(() => setContentTypes([]));
     // A server older than this handler leaves the monolingual default, which is the safe
-    // way round: the i18n surface stays hidden rather than half-rendered.
-    api.call<CmsCapabilities>("listCmsCapabilities").then(setCms).catch(() => setCms(DEFAULT_CAPABILITIES));
+    // way round: the i18n surface stays hidden rather than half-rendered. Merged OVER the
+    // defaults, not substituted for them, so a capability the server does not know about
+    // reads as its (closed) default rather than `undefined`.
+    api
+      .call<Partial<CmsCapabilities>>("listCmsCapabilities")
+      .then((r) => setCms({ ...DEFAULT_CAPABILITIES, ...r }))
+      .catch(() => setCms(DEFAULT_CAPABILITIES));
   }, [api, authValid]);
+
+  // Drives the per-type nav + list routes. A failure falls back to the single pooled "Pages"
+  // tab — the layout before types had tabs of their own — but is RECORDED, so a screen that
+  // genuinely cannot render without the list (the per-type route) can say the call failed and
+  // offer a retry instead of claiming to still be loading. Its own effect so that retry
+  // re-runs THIS call and not `me`/`listCollections`/the capability probe alongside it.
+  useEffect(() => {
+    if (!authValid) return;
+    let live = true;
+    api
+      .listContentTypes()
+      .then((r) => { if (live) { setContentTypes(r); setContentTypesFailed(false); } })
+      .catch(() => { if (live) { setContentTypes([]); setContentTypesFailed(true); } });
+    return () => { live = false; };
+  }, [api, authValid, contentTypesNonce]);
 
   if (!authValid) {
     // Configured external sign-in → hand off (the boot effect above navigates). Otherwise
@@ -206,6 +239,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     isAdmin: (me?.roles ?? []).includes("admin"),
     collections,
     contentTypes,
+    contentTypesFailed,
+    refreshContentTypes,
     cms,
     error,
     setError,

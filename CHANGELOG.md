@@ -16,6 +16,98 @@ there are no backward-compatibility guarantees yet.
 
 ### Fixed
 
+- **An EMPTY `contentType` slug listed every type's pages (`@pramen/cms`).** The narrowing
+  branch was picked with a falsy check while the validator three lines below deliberately let
+  `""` through — the exact inverse of the rule the handler documents, and reachable, because
+  a content type's slug is caller-supplied and nothing rejected an empty one. An empty slug is
+  now an ordinary unmatchable slug (nothing), and `createContentType`/`updateContentType`
+  refuse an empty `slug`/`name` outright: a type with an empty slug also got a tab that could
+  not be reached (`/types/` drops the empty segment and matches no route) and, sorting first,
+  could leave `/` permanently blank.
+
+- **`listPages` was open to anonymous callers (`@pramen/cms`).** It is now viewer-gated, like
+  every comparable read in the same factory. The rows are full page records — schedule stamps,
+  the revision pointer, the whole `fields` bag, every SEO column — which is the editing
+  surface; `listPublishedPages` remains this file's deliberate public projection and is still
+  anonymous. (Pre-existing: the handler had no options object at all before it grew one.)
+
+- **The page editor could not open a page its own list had just shown (`@pramen/cms`,
+  `@pramen/cms-editor`).** `/pages/:id` resolved the id against a pooled, capped `listPages`,
+  so once another type had enough newer pages to fill that page of results, clicking a row in
+  a type's tab landed on "Page not found." There is now a `getPageById` handler (viewer-gated,
+  row-ACL'd) and the editor uses it.
+
+- **The create modal kept filing pages under the previous tab's type (`@pramen/cms-editor`).**
+  Its `typeId` was seeded from the screen once at mount and never re-synced, and the picker is
+  hidden on a type-scoped list — so opening "+ New page" on one type's tab and navigating to
+  another's (history navigation is not blocked by the modal overlay, and the component instance
+  survives it) filed the page under the type you left, with nothing on screen saying so. It
+  re-syncs now, and the modal names the type it is filing under.
+
+- **A content type whose slug needs URL encoding never lit its tab (`@pramen/cms-editor`).**
+  The active slug was read from the percent-ENCODED pathname and compared against the raw slug,
+  so `články` routed correctly to a tab bar with nothing lit. The segment is decoded before
+  comparison. Routing itself was never affected.
+
+- **`/` painted the pooled list before redirecting away from it (`@pramen/cms-editor`).** The
+  split was derived from a content-type list that starts empty and arrives async, so every cold
+  load of the landing route (and of the wordmark) fetched and rendered the exact screen the
+  split exists to retire, then flipped. "Not answered yet" is now distinct from "this
+  deployment has one type", and the redirect and the render bail are gated on one condition
+  rather than two that could disagree and leave `/` blank.
+
+- **A failed `listContentTypes` showed "Loading…" forever (`@pramen/cms-editor`).** A 5xx — or
+  a session whose role cannot call it at all — was swallowed into the same empty array as "not
+  loaded yet", so `/types/:slug` sat on a loading state over data it already had, with the way
+  back suppressed for the same reason. The failure is recorded and the screen offers a retry.
+
+- **Rows from the previous type sat under the new type's heading (`@pramen/cms-editor`).** The
+  per-type fetch neither cleared the list nor cancelled in flight, and the router renders the
+  same component instance across a params-only change — so switching tabs showed the old type's
+  pages under the new type's name until the fetch landed, and permanently if it failed.
+
+- **The page list reported the server's cap as a total (`@pramen/cms`, `@pramen/cms-editor`).**
+  `listPages` capped at 100 with no way to ask for more, and the header printed that count as
+  "N total" — a deployment with 400 articles read as having 100, with the other 300 unreachable
+  from the editor. The handler takes `limit`/`offset` (default 100, ceiling 500) and the list
+  pages with a "Load more" button and an `N+` count, exactly as collection lists already did.
+
+- **An older CMS made every type tab show every type's pages (`@pramen/cms`,
+  `@pramen/cms-editor`).** An unknown input key is passed through, not rejected, so a
+  pre-`contentType` server accepted the argument and answered with the pooled list — N tabs each
+  claiming one type and showing all of them, with "New page" from any of them stamping that
+  tab's type. `listCmsCapabilities` now declares `pagesByType`, and the editor renders the split
+  only when the server says so — the same declared-not-inferred rule as `locales`.
+
+- **`cmsLoader` filtered an already-truncated list in JS (`@pramen/cms-astro`, `@pramen/cms`).**
+  It fetched every published page (capped at 5000) and narrowed by content type and locale
+  client-side — the very pattern the per-type page list exists to avoid. With
+  `collections: "auto"` generating one collection per type, each re-fetched the same capped
+  rows and silently lost the tail of its own type past the cap, build still green.
+  `listPublishedPages` now takes `contentType`/`locale` and narrows server-side.
+
+- **A slug collision never named the type holding the slug (`@pramen/cms`).** Slugs are unique
+  per locale ACROSS content types, so with the editor listing one type per tab the colliding
+  page is usually one the caller cannot see: "slug 'about' already exists for locale 'en'",
+  raised against a list visibly containing no such row. Both the live and the trashed variant
+  now name the owning content type and say the constraint is global.
+
+- **Adding an input parser to `listPages` narrowed what the ACL saw (`@pramen/cms`).** Dispatch
+  hands the PARSED input to `Db` as the value `$input("path")` policy markers resolve against,
+  and the parser rebuilt a fresh object holding only the keys it knew — so a host scoping
+  `cms_pages` with a capability key had that scope silently collapse to nothing. Both page
+  listings now spread the raw input rather than rebuilding it.
+
+- **`/types/:slug` ignored `hidePages` (`@pramen/cms-editor`).** A deployment that hides the
+  block/page builder entirely still served it to anyone who typed the URL or followed a stale
+  link. The flag is read in one place now, shared by the nav, the landing redirect and this
+  route.
+
+- **"← all pages" from the editor landed in another type's list (`@pramen/cms-editor`).** Every
+  way back targeted `/`, which on a split deployment redirects to whichever type sorts first by
+  name — and `replace`s the history entry, so Back could not undo it. The page editor returns to
+  its own page's type.
+
 - **A token the server won't accept now ends the session (`@pramen/cms-editor`).** The editor
   decided it was signed in from the token's own `exp` claim, parsed client-side — which covers
   exactly one way to stop being signed in. Every other way (the signing secret rotated, the
@@ -40,14 +132,29 @@ there are no backward-compatibility guarantees yet.
   per type (labelled with the type's own `name`) pointing at `/types/:slug`, `/` hands off to
   the first of them, and the create modal opens on the type whose list you are standing in
   instead of asking again. A deployment with a single type is untouched — it keeps the plain
-  "Pages" tab, because there is nothing there to separate.
+  "Pages" tab, and the same wording on it, because there is nothing there to separate. The
+  split is gated on the server declaring `pagesByType` (see `listCmsCapabilities`), so an
+  editor pointed at an older CMS keeps the pooled list rather than rendering tabs it cannot
+  honour.
 
-- **`listPages` takes an optional `contentType` slug (`@pramen/cms`).** The filtering has to
-  happen on the server: the handler caps at 100 rows, so an editor narrowing a pooled fetch
-  would be narrowing an already-truncated list and would quietly lose the tail of every type
-  past that cap. An unknown slug returns nothing rather than falling back to everything — a
-  renamed type must not make every article surface under a tab that no longer matches it.
-  Omitting the input is unchanged behaviour.
+- **`listPages` takes `contentType`, `limit`/`offset` and `select` (`@pramen/cms`).** The
+  filtering has to happen on the server: the handler caps its result, so an editor narrowing a
+  pooled fetch would be narrowing an already-truncated list and would quietly lose the tail of
+  every type past that cap. An unknown slug — or an empty one — returns nothing rather than
+  falling back to everything: a renamed type must not make every article surface under a tab
+  that no longer matches it. The slug is resolved by traversing the `type` relation the schema
+  already declares, so it costs one query rather than two and does not throw for a caller who
+  may read pages but not content types; `cms_pages.typeId` is indexed to serve it. `limit`/
+  `offset` page the list (default 100, ceiling 500) and `select` projects it to the columns a
+  list screen actually renders — a wide row per entry over RPC is the D1 shape from #22.
+  Omitting all of them is unchanged behaviour.
+
+- **`listPublishedPages` takes `contentType` and `locale` (`@pramen/cms`).** Same argument, the
+  public half: `@pramen/cms-astro`'s `cmsLoader` passes them so each generated collection asks
+  the server for its own type instead of narrowing one capped fetch after the fact.
+
+- **`getPageById` (`@pramen/cms`).** One page, wide, by id — what the editor opens `/pages/:id`
+  with. Viewer-gated and row-ACL'd like every other read.
 
 ## [0.0.54] — 2026-08-31
 

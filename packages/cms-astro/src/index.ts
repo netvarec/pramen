@@ -134,7 +134,10 @@ export interface CmsClient {
   /** Redeem a signed preview link. The token names one page and carries its own expiry,
    * so this needs no session — pass through whatever arrived in the request's query. */
   getPreview(token: string): Promise<AssembledPage | null>;
-  listPublishedPages(): Promise<PublishedPageRef[]>;
+  /** Published page refs, optionally narrowed to one content type and/or locale. The
+   * narrowing is done by the SERVER: the handler caps its result, so filtering the answer
+   * afterwards filters an already-truncated list and loses the tail of every type. */
+  listPublishedPages(filter?: { contentType?: string; locale?: string }): Promise<PublishedPageRef[]>;
   /** Absolute URL for a relative CMS path (e.g. a media `/media/...` url). */
   resolve(path: string): string;
   readonly baseUrl: string;
@@ -176,7 +179,7 @@ export function createCmsClient(opts: CmsClientOptions): CmsClient {
       const body = (await res.json().catch(() => ({}))) as { error?: string; code?: string };
       throw new Error(`@pramen/cms-astro: preview failed (HTTP ${res.status}${body.code ? `, ${body.code}` : ""}${body.error ? `: ${body.error}` : ""})`);
     },
-    listPublishedPages: async () => (await call<PublishedPageRef[]>("listPublishedPages", {})) ?? [],
+    listPublishedPages: async (filter) => (await call<PublishedPageRef[]>("listPublishedPages", filter ?? {})) ?? [],
     resolve: (path) => (path.startsWith("http") ? path : `${base}${path}`),
   };
 }
@@ -222,7 +225,14 @@ export function cmsLoader(opts: CmsLoaderOptions): Loader {
   return {
     name: "@pramen/cms",
     async load({ store, logger, parseData, generateDigest }: LoaderContext): Promise<void> {
-      const refs = await opts.client.listPublishedPages();
+      // Narrowed SERVER-side. `listPublishedPages` caps its result, so filtering the answer
+      // here would be filtering an already-truncated list: with `collections: "auto"` every
+      // generated collection asks for the same capped page of rows and each one silently
+      // loses the tail of its own type — with a green build. The client-side pass below is
+      // kept as a belt: a CMS older than the `contentType`/`locale` inputs ignores them and
+      // answers with the pooled list, and a collection quietly full of another type's pages
+      // is worse than one that is merely short.
+      const refs = await opts.client.listPublishedPages({ contentType: opts.type, locale: opts.locale });
       const wanted = refs.filter((r) => (opts.locale ? r.locale === opts.locale : true) && (opts.type ? r.contentType === opts.type : true));
       store.clear();
       let loaded = 0;
