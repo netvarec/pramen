@@ -64,6 +64,27 @@ export interface Me {
   [k: string]: JsonValue | undefined;
 }
 
+/**
+ * Whether the SERVER accepted this session — the answer to `me`, which is the identity it
+ * resolved the bearer token to, or `null` when it resolved none.
+ *
+ * The editor used to decide it was signed in from the token's own `exp` claim alone, read
+ * client-side. That covers exactly one way to stop being signed in. Every other way — the
+ * signing secret rotated, the account deleted or deactivated, the token revoked onto the
+ * denylist, a stored token from an older deployment — leaves an unexpired `exp` on a token
+ * the server treats as ANONYMOUS. And anonymous is not an error here: pramen's ACL answers
+ * it, so the editor mounted and rendered a shell that looked signed in and was empty.
+ * `listContentTypes` and `listBlockTypes` 403 into swallowed catches, `me` comes back null,
+ * so the tabs collapse to the pre-types default and the page list shows only what the public
+ * can read — no error, no way back, nothing to click.
+ *
+ * `userId`, not truthiness of the object: `me` for an anonymous caller is `null` today, but
+ * an identity carrying no subject is the same non-answer and must not read as a session.
+ */
+export function hasIdentity(me: Me | null | undefined): boolean {
+  return typeof me?.userId === "string" && me.userId !== "";
+}
+
 interface AppContextValue {
   api: Api;
   cfg: Config;
@@ -145,7 +166,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!authValid) return;
     // `me` gates the Users tab + drives Settings — a failing call is fine (leaves it {}).
-    api.call<Me>("me").then(setMe).catch(() => setMe({}));
+    //
+    // It is also the only thing that asks the server whether this session is real, so a token
+    // it will not accept ends the session HERE rather than rendering an empty editor around it
+    // (see `hasIdentity`). A THROWN call is not that answer — a network blip or a deployment
+    // without auth handlers must not sign anyone out — only a successful call that resolves to
+    // no identity is.
+    api
+      .call<Me>("me")
+      .then((identity) => {
+        if (hasIdentity(identity)) { setMe(identity); return; }
+        // Same handoff the expiry poll makes: to the sign-in page when the host configured
+        // one, otherwise drop the token so the built-in Setup screen comes back.
+        if (SIGN_IN_URL) redirectToSignIn();
+        else { clearConfig(); setCfg((c) => ({ ...c, token: "" })); }
+      })
+      .catch(() => setMe({}));
     // Collections drive the nav + list/edit routes. An app that registers none (or an older
     // server without the handler) just leaves the nav as-is — a failure is non-fatal.
     api.call<CollectionMeta[]>("listCollections").then(setCollections).catch(() => setCollections([]));

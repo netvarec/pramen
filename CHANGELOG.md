@@ -14,6 +14,23 @@ there are no backward-compatibility guarantees yet.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A token the server won't accept now ends the session (`@pramen/cms-editor`).** The editor
+  decided it was signed in from the token's own `exp` claim, parsed client-side — which covers
+  exactly one way to stop being signed in. Every other way (the signing secret rotated, the
+  account deleted or deactivated, the token revoked onto the denylist, a stored token from an
+  older deployment) leaves an unexpired `exp` on a token the server resolves to nobody. And
+  anonymous is not an error in pramen — the ACL answers it — so the editor mounted and rendered
+  a shell that looked signed in and was empty: `listContentTypes` and `listBlockTypes` 403 into
+  swallowed catches, so the tabs collapsed to the pre-types default and the Users tab vanished,
+  and the page list showed only what the public can read. No error banner, nothing to click, no
+  way back to sign-in. `me` — the one call that asks the server who it thinks you are — now
+  hands off to the sign-in page (or the Setup screen) when it resolves to no identity. A call
+  that THROWS does not: a network blip must not sign anyone out. A signed-in user with no roles
+  yet is a session, and stays in the editor with the access-denied banner rather than looping
+  through sign-in.
+
 ### Added
 
 - **Each content type gets its own tab and its own list (`@pramen/cms-editor`,
