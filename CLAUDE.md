@@ -370,10 +370,14 @@ log) for independent single-writer serialization and storage.
   resolve / retry on throw; an unrouted batch is retried whole, never silently acked
   (`runtime/queue-consumer.ts`).
 - Email: `ctx.mail.send({ to, subject, text/html, from?, replyTo? })` (`runtime/mail.ts`)
-  — a facade + adapter seam (like `ctx.files`). Transport from env: `EMAIL` binding +
-  `MAIL_FROM` → Cloudflare Email Sending (no API keys); `MAIL_CAPTURE=true` → capture to
-  KV (`mail:<to>`, dev inbox); else `send` FAILS CLOSED (throws) so a misconfigured prod
-  doesn't silently stash security emails. Built in dispatch + the task-drain contexts.
+  — a facade + adapter seam (like `ctx.files`). Transport from env, in this order:
+  `MAILGUN_API_KEY` + `MAILGUN_DOMAIN` + `MAIL_FROM` → **Mailgun** (`MAILGUN_API_BASE`
+  for the EU region); `EMAIL` binding + `MAIL_FROM` → Cloudflare Email Sending (no API
+  keys); `MAIL_CAPTURE=true` → capture to KV (`mail:<to>`, dev inbox); else `send` FAILS
+  CLOSED (throws) so a misconfigured prod doesn't silently stash security emails. Built
+  in dispatch + the task-drain contexts. **Reach for Mailgun when the recipients are
+  real users:** Cloudflare only sends FROM a zone in the same account, and some accounts
+  refuse any recipient not verified in Email Routing.
 - `ctx.env` is the Worker/DO environment (bindings + vars + secrets), loosely typed —
   use it to call external services from handlers (`ctx.env.STRIPE_SECRET_KEY as string`).
 - No raw SQL in handlers — go through `ctx.db` (`find` is compiled by

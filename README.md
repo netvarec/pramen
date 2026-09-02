@@ -560,9 +560,16 @@ idempotency key. The DO store **self-drains via an alarm**; the D1 store drains 
 Cron Trigger (`createPramen().scheduled`) or `POST /admin/tasks/drain`.
 
 **Email** goes through `ctx.mail.send({ to, subject, text/html })` — a facade over an
-adapter seam. With the `EMAIL` binding + `MAIL_FROM` it's **Cloudflare Email Sending**
-(no API keys); `MAIL_CAPTURE=true` captures to a dev inbox; otherwise it **fails closed**
-(a send throws) so a misconfigured prod never silently stashes a security email.
+adapter seam. `MAILGUN_API_KEY` + `MAILGUN_DOMAIN` + `MAIL_FROM` gives you **Mailgun**
+(add `MAILGUN_API_BASE=https://api.eu.mailgun.net` for an EU account); the `EMAIL`
+binding + `MAIL_FROM` gives you **Cloudflare Email Sending** (no API keys);
+`MAIL_CAPTURE=true` captures to a dev inbox; otherwise it **fails closed** (a send
+throws) so a misconfigured prod never silently stashes a security email.
+
+Mailgun wins when both are configured, and it is what you want as soon as the recipients
+are real users: Cloudflare can only send FROM a domain that is a zone in the same
+account, and some accounts also refuse any recipient that is not a verified destination
+in Email Routing.
 
 Or declare it once on the entity — a **trigger** auto-enqueues a task on a matching
 write (still in the write's transaction), no `ctx.tasks.enqueue` in the handler:

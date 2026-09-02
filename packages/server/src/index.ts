@@ -95,7 +95,7 @@ export type { ExpiringToken } from "./runtime/token";
 export type { StorageAdapter, PutResult, GetResult } from "./runtime/storage";
 
 // --- mail (ctx.mail) ---
-export { Mail, CloudflareEmailAdapter, KvMailAdapter, MemoryMailAdapter, UnconfiguredMailAdapter, createMail } from "./runtime/mail";
+export { Mail, CloudflareEmailAdapter, MailgunAdapter, KvMailAdapter, MemoryMailAdapter, UnconfiguredMailAdapter, createMail } from "./runtime/mail";
 export type { MailMessage, MailAddress, MailAdapter, SendEmailBinding } from "./runtime/mail";
 
 // --- queue (ctx.queue — Cloudflare Queues) ---
