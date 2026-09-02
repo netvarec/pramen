@@ -14,6 +14,8 @@ there are no backward-compatibility guarantees yet.
 
 ## [Unreleased]
 
+## [0.0.58] — 2026-09-02
+
 ### Fixed
 
 - **Live subscriptions died when the Durable Object hibernated (`@pramen/server`).** The DO
@@ -32,6 +34,10 @@ there are no backward-compatibility guarantees yet.
   does the rest. Verified against a live app on workerd: after a 20 s idle the socket
   closed 4410 and an unmodified `@pramen/client` reconnected and received the push it
   would otherwise never have seen.
+
+## [Shipped in 0.0.57, recorded late]
+
+### Fixed
 
 - **An EMPTY `contentType` slug listed every type's pages (`@pramen/cms`).** The narrowing
   branch was picked with a falsy check while the validator three lines below deliberately let
