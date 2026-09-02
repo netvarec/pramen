@@ -25,6 +25,7 @@ import { runRelWhere } from "./suites/relwhere";
 import { runResolver } from "./suites/resolver";
 import { runRelation } from "./suites/relation";
 import { runLive } from "./suites/live";
+import { runLiveHibernation } from "./suites/live-hibernation";
 import { runQuery } from "./suites/query";
 import { runPagination } from "./suites/pagination";
 import { runAggregate } from "./suites/aggregate";
@@ -104,6 +105,8 @@ describe("pramen e2e", () => {
   test("ctx.kv (global cross-tenant config)", () => runKv(BASE), 30_000);
   test("@pramen/client (typed RPC + live subscription)", () => runClient(BASE), 30_000);
   test("live queries + row-level invalidation", () => runLive(BASE, WS), 30_000);
+  // Slow on purpose: it idles past the DO's hibernation threshold, which is the bug.
+  test("live subscriptions survive DO hibernation", () => runLiveHibernation(BASE, WS), 60_000);
   test("hardening: input validation + safe errors", () => runHardening(BASE), 30_000);
   test("uuid field type (generated PK + non-PK, write validation)", () => runUuid(BASE), 30_000);
   test("DO partitions (isolation + per-partition admin/reactivity)", () => runPartitions(BASE, WS), 30_000);

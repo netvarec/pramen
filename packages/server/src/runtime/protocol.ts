@@ -36,7 +36,10 @@ export type ServerMsg =
   | { type: "result"; id: string; result: unknown }
   | { type: "error"; id: string; error: string };
 
-/** A live subscription, persisted on the socket so it survives DO hibernation. */
+/** A live subscription. Held in the DO's memory, NOT on the socket — the attachment is
+ * capped at ~2 KB and a full set of these blows past it. Only a one-bit `subscribed`
+ * marker rides the attachment, which is enough for the DO to notice the loss and close
+ * the socket so the client replays. */
 export interface Subscription {
   id: string;
   name: string;

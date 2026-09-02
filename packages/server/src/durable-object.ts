@@ -48,6 +48,11 @@ interface SocketAttachment {
   /** Partition fixed at connect time (read from x-pramen-partition at upgrade);
    * survives hibernation via the attachment, like `tenant`. */
   partition: string;
+  /** Whether this socket had any live subscription. One bit, not the list — the list is
+   * far too big for the attachment, but this is enough to tell "subscribed to nothing"
+   * apart from "subscriptions lost to hibernation", which otherwise look identical and
+   * silently kill every push on the socket. See `subsFor`. */
+  subscribed?: boolean;
 }
 
 export interface DoEnv {
@@ -70,6 +75,10 @@ const MAX_SUBSCRIPTIONS = 64;
 /** WebSocket close code for an auth failure (RFC 6455 leaves 4000-4999 to the app;
  * 4401 mirrors HTTP 401). Sent when a socket's token has expired since upgrade. */
 const WS_CLOSE_UNAUTHORIZED = 4401;
+
+/** Application close code for "this socket's subscriptions did not survive hibernation".
+ * Sent so the client reconnects and replays them — which it already does on any close. */
+const WS_CLOSE_RESUBSCRIBE = 4410;
 
 export class PramenDOBase extends DurableObject<DoEnv> {
   private readonly app: PramenApp;
@@ -96,10 +105,11 @@ export class PramenDOBase extends DurableObject<DoEnv> {
   /** Live subscriptions per socket — held IN MEMORY, not in the WS attachment. The
    * attachment is capped at ~2 KB by workerd, and 64 subs (each with arbitrary input
    * JSON + a read-set + digest) blow past that well before MAX_SUBSCRIPTIONS. The
-   * tradeoff: this map is lost on DO hibernation/eviction, so a woken socket has no
-   * entry and is treated as having no active subscriptions — acceptable because the
-   * client replays its subscriptions on (re)connect. Keyed by the WebSocket object;
-   * cleaned up in webSocketClose. */
+   * tradeoff: this map is lost on DO hibernation/eviction. That is NOT self-healing —
+   * a hibernated socket stays OPEN, so the client sees no close, never replays, and
+   * every push to it is silently dropped forever. `subscribed` on the attachment is the
+   * one bit that survives to detect it; `subsFor` turns that into a close, and the close
+   * into a replay. Keyed by the WebSocket object; cleaned up in webSocketClose. */
   private readonly subsBySocket = new Map<WebSocket, Subscription[]>();
 
   constructor(ctx: DurableObjectState, env: DoEnv, app: PramenApp) {
@@ -355,6 +365,21 @@ export class PramenDOBase extends DurableObject<DoEnv> {
     // frame and close 4401 so the client re-auths. Synthetic identities carry no exp.
     if (this.isExpired(att.identity)) return this.rejectExpired(ws, msg.id);
 
+    // A woken socket whose subscriptions the map lost cannot be repaired one frame at a
+    // time: every id an `unsubscribe` or a re-`subscribe` names refers to a subscription
+    // this instance has never seen, and letting one through would repopulate the map —
+    // making the socket look healthy while the rest of its subscriptions stay zombies.
+    // Close it instead and let the client replay the whole set. A one-shot `call`
+    // depends on none of that, so it is answered normally.
+    if (msg.type !== "call" && att.subscribed && !this.subsBySocket.has(ws)) {
+      try {
+        ws.close(WS_CLOSE_RESUBSCRIBE, "resubscribe");
+      } catch {
+        /* already closing */
+      }
+      return;
+    }
+
     await this.ensureMigrated();
 
     switch (msg.type) {
@@ -445,7 +470,19 @@ export class PramenDOBase extends DurableObject<DoEnv> {
           this.subsBySocket.delete(ws);
           continue;
         }
-        const subs = this.getSubs(ws);
+        const subs = this.subsFor(ws, att);
+        // Lost to hibernation. Closing is the fix, not a fallback: the client replays
+        // every subscription on `open`, and re-running them there returns the state this
+        // broadcast was carrying anyway. Pushing on would push to nobody.
+        if (subs === null) {
+          try {
+            ws.close(WS_CLOSE_RESUBSCRIBE, "resubscribe");
+          } catch {
+            /* already closing */
+          }
+          this.subsBySocket.delete(ws);
+          continue;
+        }
         let dirty = false;
         for (const sub of subs) {
           if (!sub.tables.some((t) => written.has(t))) continue;
@@ -680,6 +717,26 @@ export class PramenDOBase extends DurableObject<DoEnv> {
 
   private setSubs(ws: WebSocket, subs: Subscription[]): void {
     this.subsBySocket.set(ws, subs);
+    // Keep the durable marker in step, and only when it actually flips — an attachment
+    // write per subscription update would be churn for nothing.
+    const att = this.getAttachment(ws);
+    const subscribed = subs.length > 0;
+    if ((att.subscribed ?? false) !== subscribed) this.setAttachment(ws, { ...att, subscribed });
+  }
+
+  /** This socket's subscriptions, or `null` if they were lost to hibernation.
+   *
+   * The two states the in-memory map cannot tell apart: a socket that has subscribed to
+   * nothing, and a socket whose subscriptions the map lost. Both read as an empty list;
+   * only the first is harmless. The attachment's `subscribed` bit is what survives
+   * hibernation, so it is what separates them. */
+  private subsFor(ws: WebSocket, att: SocketAttachment): Subscription[] | null {
+    const subs = this.subsBySocket.get(ws);
+    // An ABSENT entry is the signal, not an empty one: the upgrade seeds every socket
+    // with `[]`, so "no entry" can only mean this instance never saw this socket — it
+    // was accepted by an instance that has since been evicted.
+    if (subs) return subs;
+    return att.subscribed ? null : [];
   }
 
   private send(ws: WebSocket, msg: ServerMsg): void {

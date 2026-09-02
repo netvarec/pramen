@@ -16,6 +16,23 @@ there are no backward-compatibility guarantees yet.
 
 ### Fixed
 
+- **Live subscriptions died when the Durable Object hibernated (`@pramen/server`).** The DO
+  holds subscriptions in memory, keyed by socket, because the WS attachment is capped at
+  ~2 KB and a full set does not fit. Hibernation dropped that map — but left the socket
+  OPEN. So the client saw no close, never replayed, and the DO went on broadcasting to a
+  socket it no longer believed was subscribed to anything: every push silently dropped,
+  for the life of the tab, with the connection reading healthy the whole time. Only a
+  reload brought updates back. `protocol.ts` even described a `Subscription` as "persisted
+  on the socket so it survives DO hibernation", which was the intent and never the code.
+
+  The map still lives in memory, but a one-bit `subscribed` marker now rides the
+  attachment — the one thing that survives — so a woken DO can tell "subscribed to
+  nothing" apart from "subscriptions lost", which until now read identically. On noticing
+  the loss the DO closes the socket (4410), and the client's existing reconnect-and-replay
+  does the rest. Verified against a live app on workerd: after a 20 s idle the socket
+  closed 4410 and an unmodified `@pramen/client` reconnected and received the push it
+  would otherwise never have seen.
+
 - **An EMPTY `contentType` slug listed every type's pages (`@pramen/cms`).** The narrowing
   branch was picked with a falsy check while the validator three lines below deliberately let
   `""` through — the exact inverse of the rule the handler documents, and reachable, because

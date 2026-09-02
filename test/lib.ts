@@ -41,6 +41,8 @@ export function wsClient(url: string, headers: Record<string, string>) {
   });
 
   const ready = new Promise<void>((res) => ws.addEventListener("open", () => res()));
+  let closeCode: number | null = null;
+  ws.addEventListener("close", (e) => (closeCode = (e as CloseEvent).code));
 
   function next(pred: (m: any) => boolean, label: string, ms = 5000): Promise<any> {
     return Promise.race([
@@ -66,6 +68,13 @@ export function wsClient(url: string, headers: Record<string, string>) {
       inbox.length = 0;
     },
     has: (pred: (m: any) => boolean) => inbox.some(pred),
+    /** The code the SERVER closed with, waited for. A suite that asserts on a close has
+     * to be able to see one. */
+    closed: async (ms = 5000): Promise<number | null> => {
+      const deadline = Date.now() + ms;
+      while (closeCode === null && Date.now() < deadline) await sleep(50);
+      return closeCode;
+    },
     close: () => ws.close(),
   };
 }
