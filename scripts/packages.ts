@@ -27,7 +27,11 @@ export async function assertNoPackageDrift(): Promise<void> {
   const listed = new Set(PUBLISH_PKGS);
   const missing: string[] = [];
   for await (const manifest of new Glob("packages/*/package.json").scan(".")) {
-    const dir = manifest.replace(/\/package\.json$/, "");
+    // Glob.scan yields the platform separator, so on Windows this arrives as
+    // `packages\server\package.json` and a forward-slash-only strip left the full path
+    // in `dir` — which matched nothing in PUBLISH_PKGS and reported every package as
+    // missing, refusing every bump and publish on that platform.
+    const dir = manifest.replaceAll("\\", "/").replace(/\/package\.json$/, "");
     const pkg = JSON.parse(await Bun.file(manifest).text());
     if (pkg.private) continue;
     if (!listed.has(dir)) missing.push(`${pkg.name} (${dir})`);
