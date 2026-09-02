@@ -1,0 +1,16 @@
+---
+// One block component: the site maps a CMS block type to a component, and the component
+// renders that type's fields. A `richtext` field is a document TREE, not an HTML string, so
+// it walks into real elements — nothing on this path uses `set:html`.
+import type { RichTextDoc } from "@pramen/cms-astro";
+import RichText from "@pramen/cms-astro/RichText.astro";
+
+interface Props {
+  /** The block's resolved content, handed over by `BlockRenderer`. */
+  fields: { body?: RichTextDoc | null };
+}
+
+const { fields } = Astro.props;
+---
+
+<RichText value={fields.body} />
