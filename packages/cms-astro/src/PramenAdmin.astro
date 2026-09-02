@@ -1,0 +1,51 @@
+---
+/**
+ * The CMS editor's shell — injected at `/_pramen/admin/[...path]` by
+ * `pramenCms({ admin: … })`. See `admin.ts` for why this is a route and not an index.html.
+ *
+ * Everything the SPA needs to boot, and nothing it could get wrong:
+ *
+ *  - The two assets are imported with `?url`, so the SITE's bundler emits, fingerprints and
+ *    serves them. There is no root-absolute path to break under a prefix and nothing for a
+ *    host to copy into the right directory.
+ *  - The mount node carries the prefix this route was injected at. Same constant, so the
+ *    router can never be mounted somewhere the server does not serve.
+ *  - The runtime config is an inline script written from typed integration options, ahead
+ *    of the module script that reads it.
+ *
+ * A catch-all pattern, so `/_pramen/admin/pages/:id` is a real server route: a deep link or
+ * a refresh is served like any other page, with no SPA-fallback rewrite for the host to
+ * configure (and to get wrong for its own 404s).
+ */
+import editorSrc from "@pramen/cms-editor/editor.js?url";
+import editorCss from "@pramen/cms-editor/editor.css?url";
+import { adminBasePath, adminConfigScript, adminTitle } from "pramen:cms/admin";
+
+// The editor is a client-side app against a live API — there is nothing to prerender, and
+// prerendering would bake one deployment's config into a static file.
+export const prerender = false;
+
+// Never store this in a shared cache. Without an explicit directive, caches fall back to
+// heuristic freshness (Cloudflare's Workers Cache keeps a header-less 200 for hours), and
+// this document carries the deployment's runtime config inline.
+Astro.response.headers.set("cache-control", "private, no-store");
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    {/* The pre-hydration fallback only. The bundle re-applies the configured wordmark on
+        boot, so this deliberately does not try to reproduce that string here — one place
+        builds it, and it is the one that owns the brand rules. */}
+    <title>{adminTitle}</title>
+    <link rel="stylesheet" href={editorCss} />
+    <script is:inline set:html={adminConfigScript} />
+  </head>
+  <body>
+    <div id="app" data-base-path={adminBasePath}></div>
+    <script is:inline type="module" src={editorSrc}></script>
+  </body>
+</html>

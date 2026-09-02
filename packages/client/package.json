@@ -1,0 +1,33 @@
+{
+  "name": "@pramen/client",
+  "version": "0.0.58",
+  "description": "Typed client for a pramen backend — RPC over HTTP + live queries over WebSocket.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/netvarec/pramen.git",
+    "directory": "packages/client"
+  },
+  "homepage": "https://github.com/netvarec/pramen#readme",
+  "bugs": "https://github.com/netvarec/pramen/issues",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "development": "./src/index.ts",
+      "bun": "./src/index.ts",
+      "workerd": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": ["dist", "src"],
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
