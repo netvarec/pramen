@@ -14,6 +14,8 @@ there are no backward-compatibility guarantees yet.
 
 ## [Unreleased]
 
+## [0.0.59] — 2026-09-02
+
 ### Added
 
 - **Mailgun as a `ctx.mail` transport (`@pramen/server`).** Cloudflare Email Sending
