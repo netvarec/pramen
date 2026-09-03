@@ -15,7 +15,8 @@
 import { makeWorker, type Env } from "./worker";
 import { pramenDO, type DoEnv } from "./durable-object";
 import { validateTriggerTasks, type SchemaDef } from "./sdk/schema";
-import type { AppTaskMap, HandlerMap, BootstrapFn } from "./sdk/handlers";
+import { validateMigrations } from "./runtime/data-migrations";
+import type { AppTaskMap, HandlerMap, BootstrapFn, DataMigration } from "./sdk/handlers";
 import type { AppQueueMap, QueueBatch } from "./runtime/queue-consumer";
 import type { Role } from "./sdk/acl";
 import type { EnvBag } from "./sdk/handlers";
@@ -59,6 +60,12 @@ export interface PramenApp {
    * code-defined reference data into the store (see `BootstrapFn`). Each runs with a
    * privileged system Db; failures are logged, never fatal. */
   bootstrap?: readonly BootstrapFn[];
+  /** Imperative DATA migrations — backfills, splits, normalizations — run in declaration
+   * order after `migrate()` and before `bootstrap`, each recorded ONCE per (id, partition)
+   * in `_pramen_migrations` (see `DataMigration`). The declarative migrator diffs shapes
+   * and so can only enact structure; this is the transformation half. Unlike `bootstrap`,
+   * a failure is NOT swallowed — it fails the boot closed and retries next fetch. */
+  migrations?: readonly DataMigration[];
 }
 
 export type { Env, DoEnv };
@@ -73,6 +80,7 @@ export function createPramen(app: PramenApp): {
   PramenDO: ReturnType<typeof pramenDO>;
 } {
   validateTriggerTasks(app.schema, Object.keys(app.tasks ?? {})); // fail fast on a typo'd trigger task
+  validateMigrations(app.schema, app.migrations); // fail fast on a duplicate/empty id or an unknown partition
   const worker = makeWorker(app);
   return { fetch: worker.fetch, scheduled: worker.scheduled, queue: worker.queue, PramenDO: pramenDO(app) };
 }

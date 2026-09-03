@@ -36,6 +36,20 @@ describe("pramen cli", () => {
     expect(tok.split(".").length).toBe(3);
   });
 
+  test("help lists the migrations commands", () => {
+    const { out } = run("help");
+    expect(out).toContain("migrations list");
+    expect(out).toContain("migrations status");
+  });
+
+  test("migrations list prints the example app's declared ids, in order", () => {
+    const { out, code } = run("migrations", "list", "--app", "example/app.ts");
+    expect(code).toBe(0);
+    const ids = out.trim().split("\n").map((l) => l.split("  ")[0]);
+    expect(ids).toEqual(["2026-09-03-backfill-note-meta", "2026-09-03-normalize-signup-status"]);
+    expect(out).toContain("(partition: default)");
+  });
+
   test("the runtime CLI carries no CMS command", () => {
     // @pramen/cms is optional, so its codegen lives in its own `pramen-cms` bin.
     const { out } = run("help");

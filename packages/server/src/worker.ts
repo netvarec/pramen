@@ -9,6 +9,7 @@ import { dispatch, tasksFacade, bindTasks } from "./runtime/dispatch";
 import type { EnvBag } from "./sdk/handlers";
 import type { JsonValue } from "./sdk/infer";
 import { ensureOutbox, drainOutbox, listTasks } from "./runtime/outbox";
+import { appliedMigrations, runDataMigrations } from "./runtime/data-migrations";
 import { createMail } from "./runtime/mail";
 import { createQueue, type QueueProducerBinding } from "./runtime/queue";
 import { dispatchQueueBatch, type QueueBatch, type QueueContext } from "./runtime/queue-consumer";
@@ -234,6 +235,43 @@ export function makeWorker(app: PramenApp) {
     }
   };
 
+  // The mirror of the DO's runDataMigrations() for the D1 store, run once per isolate after
+  // migration. It diverges in one deliberate way: it runs EVERY declared migration whatever
+  // partition it names, because D1 is ONE shared database with no partition split — every
+  // entity's table lives in it, so a migration declared for "audit" has real rows to touch
+  // here and would otherwise be permanently unrunnable on this store. Each is still recorded
+  // under its OWN declared partition key, so a ledger read is comparable across stores.
+  //
+  // Errors are NOT swallowed (unlike runBootstrapD1): the .catch in ensureD1Migrated clears
+  // `d1Ready`, so a failed migration fails this request and is retried on the next one —
+  // the same fail-closed contract as the DO path.
+  //
+  // ATOMICITY CAVEAT: D1's `transaction(fn)` is `fn()` (no interactive transactions), so
+  // here the claim and the work do NOT commit together. The runner claims the ledger row
+  // before running (which is what keeps two cold isolates from both applying the same
+  // backfill — `d1Ready` is per-isolate and there is no single writer) and releases it on a
+  // throw, so a failed migration leaves partial writes and re-runs. Write SQL that tolerates
+  // that (`WHERE col IS NULL`) when the D1 store is in play.
+  const runDataMigrationsD1 = async (driver: Driver): Promise<void> => {
+    const migrations = app.migrations;
+    if (!migrations?.length) return;
+    const db = new Db(driver, { acl: d1Acl, identity: { roles: ["admin"] }, system: true, schema: app.schema, suppressTriggers: true }, app.schema);
+    await runDataMigrations(driver, migrations, {
+      // No `partition` — see the "runs every declared migration" note above.
+      makeContext: (partition) => ({ db, driver, schema: app.schema, partition }),
+    });
+  };
+
+  /** Partitions an admin route may address: the schema's, the default (always addressable),
+   * and any a data migration declares. Computed once — the app is static. */
+  let knownPartitionsCache: Set<string> | undefined;
+  const knownPartitions = (): Set<string> => {
+    if (!knownPartitionsCache) {
+      knownPartitionsCache = new Set([DEFAULT_PARTITION, ...partitionsOf(app.schema), ...(app.migrations ?? []).map((m) => m.partition ?? DEFAULT_PARTITION)]);
+    }
+    return knownPartitionsCache;
+  };
+
   let d1Ready: Promise<void> | undefined;
   /** Run one handler against the D1 store, in the Worker. The request path and the
    * PRIVILEGED path (routes, which have no ctx.db) both come through here, so the two
@@ -293,6 +331,7 @@ export function makeWorker(app: PramenApp) {
   const ensureD1Migrated = (driver: Driver, allowDestructive: boolean): Promise<void> => {
     if (!d1Ready) {
       d1Ready = migrate(driver, app.schema, { allowDestructive })
+        .then(() => runDataMigrationsD1(driver)) // imperative, recorded backfills (fail closed)
         .then(() => ensureOutbox(driver)) // the deferred-tasks table also lives in D1
         .then(() => runBootstrapD1(driver)) // converge code-defined reference data
         .then(() => undefined)
@@ -352,6 +391,26 @@ export function makeWorker(app: PramenApp) {
     const driver = new D1Driver(env.DB, { start: "first-primary" });
     await ensureD1Migrated(driver, env.PRAMEN_ALLOW_DESTRUCTIVE === "true");
     return listTasks(driver, { status, limit });
+  };
+
+  /** Read the data-migration ledger straight from D1 in the Worker (there is no DO on this
+   * path), shaped exactly like the DO's /__migrations answer so the CLI can't tell them
+   * apart. The D1 ledger holds every partition's rows; filter to the one asked for.
+   *
+   * Strictly READ-ONLY: deliberately NOT ensureD1Migrated / ensureMigrationsTable. Booting
+   * the store here would apply every pending backfill as a side effect of asking about them,
+   * so `migrations status` could never report PENDING — which is the only question the
+   * command exists to answer. An absent ledger table is simply "none applied". */
+  const listD1Migrations = async (env: Env, tenant: string, partition: string): Promise<unknown> => {
+    if (!env.DB) throw new BadRequest("D1 store is not configured");
+    // The same COMMINGLING GUARD as every other D1 entry point: one shared database with no
+    // tenant column, so reporting it as some specific tenant's ledger requires the opt-in.
+    if (tenant !== "main" && env.PRAMEN_D1_ALLOW_MULTITENANT !== "true") {
+      throw new Forbidden(`D1 store for tenant '${tenant}' (shared D1 has no tenant isolation — set PRAMEN_D1_ALLOW_MULTITENANT=true to allow)`);
+    }
+    const driver = new D1Driver(env.DB, { start: "first-primary" });
+    const rows = await appliedMigrations(driver, partition).catch(() => []);
+    return { partition, applied: rows.map((r) => ({ id: r.id, appliedAt: r.appliedAt })) };
   };
 
   return {
@@ -482,6 +541,35 @@ export function makeWorker(app: PramenApp) {
       return withCors(res, cors);
     }
 
+    // --- admin: which data migrations a tenant has applied. The fleet-wide "is it safe to
+    // prune this id?" signal — a cold tenant is unmigrated until touched, so nothing else
+    // can answer it. `x-pramen-store: d1` reads the Worker's shared ledger instead. ---
+    if (url.pathname === "/admin/migrations") {
+      if (!isAdmin(identity)) return withCors(forbidden("migrations"), cors);
+      const partition = url.searchParams.get("partition") || DEFAULT_PARTITION;
+      const tenant = url.searchParams.get("tenant") ?? "main";
+      // `partition` is caller-supplied and reaches partitionStubFor, which INSTANTIATES a
+      // DO — the same reason /live validates it: without this an admin typo mints a junk DO
+      // and a permanent registry key for a partition nothing lives in. A migration may
+      // declare a partition of its own, so accept those too.
+      if (!knownPartitions().has(partition)) return withCors(badRequest(`unknown partition '${partition}'`), cors);
+      try {
+        if (request.headers.get("x-pramen-store") === "d1") {
+          return withCors(json({ ok: true, result: await listD1Migrations(env, tenant, partition) }), cors);
+        }
+        const stub = partitionStubFor(env, tenant, partition);
+        const res = await stub.fetch(
+          new Request("https://do/__migrations", { headers: { "x-pramen-tenant": tenant, "x-pramen-partition": partition } }),
+        );
+        return withCors(res, cors);
+      } catch (err) {
+        // The DO branch throws a plain Error on a D1-ONLY deployment (no PRAMEN binding).
+        // Uncaught that is an opaque 500; surfaced, it's the actionable "pin the D1 store".
+        const { status, body } = toResponse(err);
+        return withCors(json(body, status), cors);
+      }
+    }
+
     // --- admin: generic data ops over a tenant's tables (browse/edit any row).
     // Body: { tenant, table, op: list|get|create|update|delete|count, ... }. Runs
     // in the DO under SYSTEM scope (ACL bypassed) — gated to admins here. ---
@@ -564,7 +652,7 @@ export function makeWorker(app: PramenApp) {
           "Header X-Pramen-Tenant selects the store (default: main). " +
           "Admin (optional partition selects the partition DO, default: " + DEFAULT_PARTITION + "): " +
           "GET /tenants, POST /admin/recover {tenant,timestamp,partition?}, GET /admin/schema?tenant=&partition=, " +
-          "POST /admin/data {tenant,table,op,partition?}.\n",
+          "GET /admin/migrations?tenant=&partition=, POST /admin/data {tenant,table,op,partition?}.\n",
         { headers: { "content-type": "text/plain" } },
       );
     }

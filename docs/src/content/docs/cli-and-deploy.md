@@ -14,7 +14,14 @@ bun run pramen schema sql                         # CREATE TABLE for the schema
 bun run pramen schema snapshot                    # baseline in .pramen/schema.json
 bun run pramen schema diff                        # additive vs destructive changes
 bun run pramen schema status --tenant acme        # is a deployed tenant caught up?
+bun run pramen migrations list                    # declared data migration ids, in order
+bun run pramen migrations status --tenant acme    # applied vs pending data migrations
+bun run pramen migrations status --all-tenants    # the whole fleet (fans out over /tenants)
 ```
+
+`migrations status` is the "is it safe to delete this migration?" answer: migration is
+lazy and per-DO, so an untouched tenant is still unmigrated and no local artifact knows
+it. See [Migrations](/docs/migrations#data-migrations).
 
 ## Configuration: oblaka
 

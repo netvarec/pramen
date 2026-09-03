@@ -37,6 +37,7 @@ import { runClient } from "./suites/client";
 import { runHardening } from "./suites/hardening";
 import { runUuid } from "./suites/uuid";
 import { runPartitions } from "./suites/partitions";
+import { runMigrations } from "./suites/migrations";
 
 const ROOT = join(import.meta.dir, "..");
 const PORT = 8788;
@@ -110,5 +111,6 @@ describe("pramen e2e", () => {
   test("hardening: input validation + safe errors", () => runHardening(BASE), 30_000);
   test("uuid field type (generated PK + non-PK, write validation)", () => runUuid(BASE), 30_000);
   test("DO partitions (isolation + per-partition admin/reactivity)", () => runPartitions(BASE, WS), 30_000);
+  test("data migrations (app.migrations run on boot + the ledger endpoint)", () => runMigrations(BASE), 30_000);
   test("@pramen/cms (block/page builder: regions, publish, content API)", () => runCms(BASE), 30_000);
 });
