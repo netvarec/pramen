@@ -19,9 +19,9 @@ import { Button, Heading } from "@podoba/react";
 import { useCallback, useEffect, useState } from "react";
 import type { Api } from "./api";
 import { CONTROL } from "./fields";
+import { WRAP } from "./chrome";
 import type { AdminBlock, AdminElement, AdminInput, AdminPageResponse, JsonValue } from "./types";
 
-const WRAP = "mx-auto max-w-[1200px] px-7 pb-8 pt-2";
 
 /** Values held for the inputs of one block, keyed by `action_id`. */
 type BlockValues = Record<string, JsonValue>;

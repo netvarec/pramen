@@ -788,10 +788,14 @@ function asReferenceResult(raw: unknown): ReferenceResult {
 function useReferenceLabels(api: Api, from: string | undefined, ids: readonly string[]): Map<string, ReferenceOption> {
   const [known, setKnown] = useState<Map<string, ReferenceOption>>(() => new Map());
   // The ids, as a stable primitive — an array literal is a new identity every render.
-  const key = ids.join(" ");
+  //
+  // JSON, not `join(" ")`: an id here is OPAQUE, which is the whole premise of the field, so
+  // it may contain a space. Splitting on one turned a single external id into two ids that
+  // resolve to nothing, and the control showed "Loading..." forever.
+  const key = JSON.stringify(ids);
   useEffect(() => {
     if (!from) return;
-    const wanted = key === "" ? [] : key.split(" ");
+    const wanted = JSON.parse(key) as string[];
     const missing = wanted.filter((id) => !known.has(id));
     if (missing.length === 0) return;
     let alive = true;

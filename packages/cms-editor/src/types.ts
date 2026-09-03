@@ -324,6 +324,9 @@ export interface Menu {
   name: string;
   label: string;
   items?: MenuItem[] | null;
+  /** Optimistic-concurrency counter — send it back as `expectedVersion` so a second
+   * editor's whole-tree overwrite is a 409 rather than a silent replacement. */
+  version?: number;
 }
 
 /** Mirror of `MAX_MENU_DEPTH` in @pramen/cms — the editor refuses to nest deeper rather
@@ -382,6 +385,8 @@ export interface WidgetArea {
   label: string;
   description?: string | null;
   widgets?: Widget[] | null;
+  /** See {@link Menu.version}. */
+  version?: number;
 }
 
 // --- Block Kit: custom admin pages (mirrors @pramen/cms `./blockkit`) ----------------

@@ -43,7 +43,9 @@ export interface AdminRuntimeConfig {
    * Set `"_self"` when the tool is a page of the SAME site as a mounted editor: the mount
    * scopes navigation to its own prefix, so an off-prefix path is left to the browser and
    * a new tab is just clutter. */
-  extraNav?: { label: string; href: string; target?: "_blank" | "_self" }[];
+  /** `order` places a link against `NAV_ORDER` (from @pramen/cms) instead of leaving it
+   * after Settings — the documented example did not typecheck without it. */
+  extraNav?: { label: string; href: string; target?: "_blank" | "_self"; order?: number }[];
 }
 
 /** Options for the injected admin route. `true` is "mount it with the integration's own

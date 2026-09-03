@@ -14,11 +14,10 @@ import { useCallback, useEffect, useState } from "react";
 import { useUnsavedGuard } from "./app-context";
 import type { Api } from "./api";
 import { CONTROL, RichText, slugify } from "./fields";
+import { ROW, WRAP } from "./chrome";
 import type { CollectionMeta, Menu, MenuItem, MenuItemKind, Page, Redirect, RichTextDoc, Taxonomy, Term, Widget, WidgetArea } from "./types";
 import { MAX_MENU_DEPTH, REDIRECT_STATUSES } from "./types";
 
-const WRAP = "mx-auto max-w-[1200px] px-7 pb-8 pt-2";
-const ROW = "flex items-center gap-3 rounded-[14px] border border-transparent bg-surface-card px-[18px] py-3.5";
 
 export function errText(e: unknown): string {
   return String((e as Error)?.message ?? e);
@@ -173,6 +172,9 @@ export function MenuEditor({ api, name, collections, onBack, onDeleted, onError,
   // registered a guard.
   const [baseline, setBaseline] = useState("");
   useUnsavedGuard(menu !== null && JSON.stringify({ label, items }) !== baseline);
+  // The version this screen loaded. Sent back on save, so a second editor's whole-tree
+  // overwrite is a 409 the person can act on rather than a silent replacement.
+  const [version, setVersion] = useState<number | undefined>(undefined);
   const [missing, setMissing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [ok, setOk] = useState(false);
@@ -192,15 +194,18 @@ export function MenuEditor({ api, name, collections, onBack, onDeleted, onError,
         const m = all.find((x) => x.name === name);
         if (!m) { setMissing(true); return; }
         setMenu(m); setLabel(m.label); setItems(m.items ?? []);
+        setVersion(m.version);
         setBaseline(JSON.stringify({ label: m.label, items: m.items ?? [] }));
       })
       .catch((e) => onError(errText(e)));
     api.listPages({ limit: 200 }).then((r) => live && setPages(r)).catch(() => setPages([]));
     api.listTaxonomies()
       .then(async (taxa) => {
+        // One request per vocabulary, in PARALLEL — the picker cannot render until the last
+        // of them lands either way, so serializing them only added latency.
+        const trees = await Promise.all(taxa.map(async (t) => [t, await api.getTermTree(t.slug).catch(() => [] as Term[])] as const));
         const all: Array<{ id: string; label: string; taxonomy: string }> = [];
-        for (const t of taxa) {
-          const tree = await api.getTermTree(t.slug).catch(() => [] as Term[]);
+        for (const [t, tree] of trees) {
           const walk = (list: Term[], prefix: string) => {
             for (const term of list) {
               all.push({ id: term.id, label: `${prefix}${term.label}`, taxonomy: t.label });
@@ -219,7 +224,8 @@ export function MenuEditor({ api, name, collections, onBack, onDeleted, onError,
     if (!menu) return;
     setBusy(true);
     try {
-      await api.updateMenu(menu.id, { label, items });
+      const saved = await api.updateMenu(menu.id, { label, items, expectedVersion: version });
+      setVersion(saved.version);
       setBaseline(JSON.stringify({ label, items }));
       setOk(true); setTimeout(() => setOk(false), 1200);
     } catch (e) { onError(errText(e)); } finally { setBusy(false); }
@@ -748,6 +754,7 @@ export function WidgetAreaEditor({ api, name, onBack, onDeleted, onError, canEdi
   const [menus, setMenus] = useState<Menu[]>([]);
   const [baseline, setBaseline] = useState("");
   useUnsavedGuard(area !== null && JSON.stringify({ label, widgets }) !== baseline);
+  const [version, setVersion] = useState<number | undefined>(undefined);
   const [missing, setMissing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [ok, setOk] = useState(false);
@@ -760,6 +767,7 @@ export function WidgetAreaEditor({ api, name, onBack, onDeleted, onError, canEdi
         const a = all.find((x) => x.name === name);
         if (!a) { setMissing(true); return; }
         setArea(a); setLabel(a.label); setWidgets(a.widgets ?? []);
+        setVersion(a.version);
         setBaseline(JSON.stringify({ label: a.label, widgets: a.widgets ?? [] }));
       })
       .catch((e) => onError(errText(e)));
@@ -771,7 +779,8 @@ export function WidgetAreaEditor({ api, name, onBack, onDeleted, onError, canEdi
     if (!area) return;
     setBusy(true);
     try {
-      await api.updateWidgetArea(area.id, { label, widgets });
+      const saved = await api.updateWidgetArea(area.id, { label, widgets, expectedVersion: version });
+      setVersion(saved.version);
       setBaseline(JSON.stringify({ label, widgets }));
       setOk(true); setTimeout(() => setOk(false), 1200);
     } catch (e) { onError(errText(e)); } finally { setBusy(false); }

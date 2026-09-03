@@ -441,6 +441,107 @@ describe("an authored handler name cannot traverse a path", () => {
   });
 });
 
+describe("whole-document writes conflict instead of clobbering", () => {
+  // `updateMenu`/`updateWidgetArea` replace the ENTIRE `items`/`widgets` document, so two
+  // editors on one menu meant the second silently discarded the first's whole tree — a
+  // sharper failure than a page edit, which at least conflicts field by field.
+  const menuStore = () => ({ cms_menus: [{ id: "m1", name: "primary", label: "P", items: [], version: 3 }] });
+
+  test("a stale expectedVersion is a 409 naming both versions", async () => {
+    const h = H();
+    const { ctx } = stubCtx(menuStore());
+    await expect(call(h, "updateMenu", { id: "m1", label: "New", expectedVersion: 2 }, ctx)).rejects.toThrow(/changed by someone else/);
+  });
+
+  test("the current version is accepted and bumped", async () => {
+    const h = H();
+    const { ctx, store } = stubCtx(menuStore());
+    await call(h, "updateMenu", { id: "m1", label: "New", expectedVersion: 3 }, ctx);
+    expect(store.cms_menus![0]!.version).toBe(4);
+  });
+
+  test("omitting it still works — the guard is opt-in per caller", async () => {
+    // A script that has no version to send is not forced to read one first; what it gives
+    // up is the protection, not the ability to write.
+    const h = H();
+    const { ctx, store } = stubCtx(menuStore());
+    await call(h, "updateMenu", { id: "m1", label: "New" }, ctx);
+    expect(store.cms_menus![0]!.version).toBe(4);
+  });
+
+  test("widget areas take the same guard", async () => {
+    const h = H();
+    const { ctx } = stubCtx({ cms_widget_areas: [{ id: "w1", name: "sidebar", label: "S", widgets: [], version: 2 }] });
+    await expect(call(h, "updateWidgetArea", { id: "w1", label: "New", expectedVersion: 1 }, ctx)).rejects.toThrow(/changed by someone else/);
+  });
+});
+
+describe("a taken key is a 409, not a constraint error", () => {
+  test("createMenu and createWidgetArea pre-check like their five siblings", async () => {
+    // Both went straight to INSERT, so a taken key surfaced as the UNIQUE constraint's own
+    // 500. The e2e only asserts "not 200", so it could not tell the two apart.
+    const h = H();
+    const { ctx } = stubCtx({
+      cms_menus: [{ id: "m1", name: "primary", label: "P" }],
+      cms_widget_areas: [{ id: "w1", name: "sidebar", label: "S" }],
+    });
+    await expect(call(h, "createMenu", { name: "primary", label: "Dup" }, ctx)).rejects.toThrow(/already exists/);
+    await expect(call(h, "createWidgetArea", { name: "sidebar", label: "Dup" }, ctx)).rejects.toThrow(/already exists/);
+  });
+});
+
+describe("term nesting is capped at the level the cap names", () => {
+  /** A vocabulary holding a straight chain of `n` terms, t1 -> t2 -> … */
+  const chain = (n: number) => ({
+    cms_taxonomies: [{ id: "tx1", slug: "category", label: "C", hierarchical: true }],
+    cms_terms: Array.from({ length: n }, (_, i) => ({
+      id: `t${i + 1}`, taxonomyId: "tx1", slug: `s${i + 1}`, label: `L${i + 1}`,
+      parentId: i === 0 ? null : `t${i}`, position: 0,
+    })),
+  });
+
+  test("a new term may sit at exactly MAX_TERM_DEPTH, and no deeper", async () => {
+    const h = H();
+    // 4 ancestors -> the new term is level 5, which the cap allows.
+    await expect(call(h, "createTerm", { taxonomy: "category", slug: "x", label: "X", parentId: "t4" }, stubCtx(chain(4)).ctx)).resolves.toBeTruthy();
+    // 5 ancestors -> level 6. This used to be ADMITTED: the loop counted ancestors rather
+    // than the level the new term would occupy.
+    await expect(call(h, "createTerm", { taxonomy: "category", slug: "x", label: "X", parentId: "t5" }, stubCtx(chain(5)).ctx)).rejects.toThrow(/at most 5 levels/);
+  });
+
+  test("moving a term carries its SUBTREE's height into the check", async () => {
+    // t1 -> t2 -> t3 is a 3-level subtree. Grafting t1 under t3 of another chain would put
+    // its leaf at level 6; counting only the ancestors of the moved node missed that.
+    const h = H();
+    const store = {
+      cms_taxonomies: [{ id: "tx1", slug: "category", label: "C", hierarchical: true }],
+      cms_terms: [
+        { id: "t1", taxonomyId: "tx1", slug: "a", label: "A", parentId: null, position: 0 },
+        { id: "t2", taxonomyId: "tx1", slug: "b", label: "B", parentId: "t1", position: 0 },
+        { id: "t3", taxonomyId: "tx1", slug: "c", label: "C", parentId: "t2", position: 0 },
+        { id: "d1", taxonomyId: "tx1", slug: "d", label: "D", parentId: null, position: 0 },
+        { id: "d2", taxonomyId: "tx1", slug: "e", label: "E", parentId: "d1", position: 0 },
+        { id: "d3", taxonomyId: "tx1", slug: "f", label: "F", parentId: "d2", position: 0 },
+      ],
+    };
+    await expect(call(H(), "updateTerm", { id: "t1", parentId: "d3" }, stubCtx(store).ctx)).rejects.toThrow(/at most 5 levels/);
+    // A LEAF moved to the same place is fine — it adds one level, not three.
+    await expect(call(h, "updateTerm", { id: "t3", parentId: "d3" }, stubCtx(store).ctx)).resolves.toBeTruthy();
+  });
+});
+
+describe("who counts as an editor", () => {
+  test("the UNION of `role` and `roles`, matching the dispatcher", async () => {
+    // `authorizeHandler` (which enforces a handler's own `auth`) takes the union; the local
+    // copy took one or the other, so an identity carrying both saw only `roles` — and
+    // `canEdit` disagreed with what the caller could actually call.
+    const caps = (ctx: HandlerContext) => (H() as unknown as { listCmsCapabilities: { run: (c: HandlerContext) => { canEdit: boolean } } }).listCmsCapabilities.run(ctx);
+    expect(caps({ identity: { role: "admin", roles: ["viewer"] } } as unknown as HandlerContext).canEdit).toBe(true);
+    expect(caps({ identity: { roles: ["editor"] } } as unknown as HandlerContext).canEdit).toBe(true);
+    expect(caps({ identity: { role: "viewer", roles: ["viewer"] } } as unknown as HandlerContext).canEdit).toBe(false);
+  });
+});
+
 // --- gating ----------------------------------------------------------------------------
 
 describe("who may call what", () => {

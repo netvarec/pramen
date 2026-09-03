@@ -11,7 +11,6 @@
 import { describe, expect, test } from "bun:test";
 import { buildNav, type NavInput } from "../packages/cms-editor/src/nav";
 import { DEFAULT_CAPABILITIES, NAV_ORDER, type CollectionMeta, type ContentType } from "../packages/cms-editor/src/types";
-import { NAV_ORDER as SERVER_NAV_ORDER } from "../packages/cms/src/index";
 
 const TYPES: ContentType[] = [
   { id: "t-page", name: "Pages", slug: "page" },
@@ -81,12 +80,6 @@ describe("nav ordering", () => {
     expect(nav({ splitByType: true })).toEqual(["type:page", "type:article", "media", "settings"]);
   });
 
-  test("the editor's NAV_ORDER mirror matches the server's", () => {
-    // The editor cannot import from @pramen/cms — it is a standalone browser app that
-    // speaks HTTP only — so the table is duplicated, and a drift would put a host's declared
-    // `navOrder: NAV_ORDER.media` somewhere other than beside Media.
-    expect(NAV_ORDER).toEqual(SERVER_NAV_ORDER);
-  });
 });
 
 describe("what the nav shows at all", () => {

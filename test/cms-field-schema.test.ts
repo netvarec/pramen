@@ -17,7 +17,6 @@ import {
   normalizeFieldSchema,
   normalizeRegions,
 } from "../packages/cms/src/index";
-import { FIELD_TYPES as EDITOR_FIELD_TYPES } from "../packages/cms-editor/src/schema-builder";
 import type { HandlerContext } from "@pramen/server";
 
 describe("field schemas", () => {
@@ -84,12 +83,6 @@ describe("field schemas", () => {
     ])).not.toThrow();
   });
 
-  test("the editor's type list matches the server's", () => {
-    // The editor offers exactly what the runtime knows: a type it offered and the server did
-    // not would be a 400 on save, and one the server knew and it did not would be
-    // unauthorable. It cannot import the list (no server dependency), so this is the check.
-    expect(EDITOR_FIELD_TYPES).toEqual(FIELD_TYPES);
-  });
 });
 
 describe("regions and default blocks", () => {

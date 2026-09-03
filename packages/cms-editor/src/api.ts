@@ -199,7 +199,7 @@ export class Api {
   // --- site furniture ---
   listMenus = () => this.call<Menu[]>("listMenus");
   createMenu = (name: string, label: string) => this.call<Menu>("createMenu", { name, label, items: [] });
-  updateMenu = (id: string, patch: { label?: string; items?: MenuItem[] }) => this.call<Menu>("updateMenu", { id, ...patch } as unknown as RpcInput);
+  updateMenu = (id: string, patch: { label?: string; items?: MenuItem[]; expectedVersion?: number }) => this.call<Menu>("updateMenu", { id, ...patch } as unknown as RpcInput);
   deleteMenu = (id: string) => this.call<{ ok: true }>("deleteMenu", { id });
 
   listRedirects = (limit = 200, offset = 0) => this.call<Redirect[]>("listRedirects", { limit, offset });
@@ -238,7 +238,7 @@ export class Api {
 
   listWidgetAreas = () => this.call<WidgetArea[]>("listWidgetAreas");
   createWidgetArea = (name: string, label: string, description?: string) => this.call<WidgetArea>("createWidgetArea", { name, label, description, widgets: [] });
-  updateWidgetArea = (id: string, patch: { label?: string; description?: string | null; widgets?: Widget[] }) =>
+  updateWidgetArea = (id: string, patch: { label?: string; description?: string | null; widgets?: Widget[]; expectedVersion?: number }) =>
     this.call<WidgetArea>("updateWidgetArea", { id, ...patch } as unknown as RpcInput);
   deleteWidgetArea = (id: string) => this.call<{ ok: true }>("deleteWidgetArea", { id });
 

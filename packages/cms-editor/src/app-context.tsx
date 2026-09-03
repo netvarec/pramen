@@ -26,8 +26,9 @@ declare global {
        * reads as "the CMS is broken" rather than "this site has no pages". */
       hidePages?: boolean;
       /** Extra top-nav links to companion tools the host serves (e.g. a curation page).
-       * Rendered as plain external `<a>` links after the built-in tabs. */
-      extraNav?: { label: string; href: string; target?: "_blank" | "_self" }[];
+       * Rendered as plain external `<a>` links, positioned by `order` (see `NAV_ORDER`) and
+       * defaulting to after the built-in tabs. */
+      extraNav?: { label: string; href: string; target?: "_blank" | "_self"; order?: number }[];
       /** The wordmark in the topbar, on the Setup screen, and in the browser tab.
        *
        * This editor ships as a package an agency deploys FOR ITS CLIENT, so the default

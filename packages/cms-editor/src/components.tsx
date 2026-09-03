@@ -6,6 +6,7 @@ import { Button, Heading, Input, ModalDialog, ModalOverlay, ModalSurface, Textar
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Api, ApiError } from "./api";
 import { CONTROL, FieldForm, formatWhen, fromLocalInput, slugify, toLocalInput } from "./fields";
+import { ROW, WRAP } from "./chrome";
 import type { Config } from "./api";
 import { useApp, type Me } from "./app-context";
 import { isRichTextDoc, richTextToPlainText } from "./rich-text";
@@ -54,8 +55,6 @@ export function splitsByType(contentTypes: ContentType[] | null, cms: CmsCapabil
 
 // --- presentational primitives (podoba tokens; replaces styles.ts classes) ---
 
-const ROW = "flex items-center gap-3 rounded-[14px] border border-transparent bg-surface-card px-[18px] py-3.5";
-const WRAP = "mx-auto max-w-[1200px] px-7 pb-8 pt-2";
 
 function Hero({ lead, em, children }: { lead: string; em: string; children?: ReactNode }) {
   return (
@@ -1432,11 +1431,16 @@ function PageTerms({ api, pageId, canEdit, onError }: { api: Api; pageId: string
         const list = await api.listTaxonomies();
         if (!live) return;
         setTaxa(list);
-        const byTax: Record<string, Term[]> = {};
-        for (const t of list) byTax[t.slug] = flattenTerms(await api.getTermTree(t.slug)).map((f) => f.term);
+        // In parallel, and alongside the page's own assignments. Awaiting one vocabulary at
+        // a time made the panel's open cost N+1 serial round trips for data that has no
+        // ordering dependency between the calls.
+        const [trees, assigned] = await Promise.all([
+          Promise.all(list.map(async (t) => [t.slug, flattenTerms(await api.getTermTree(t.slug)).map((f) => f.term)] as const)),
+          api.listPageTerms(pageId),
+        ]);
         if (!live) return;
-        setTerms(byTax);
-        setSelected(new Set((await api.listPageTerms(pageId)).map((t) => t.id)));
+        setTerms(Object.fromEntries(trees));
+        setSelected(new Set(assigned.map((t) => t.id)));
       } catch (e) {
         if (live) onError(errMsg(e));
       }

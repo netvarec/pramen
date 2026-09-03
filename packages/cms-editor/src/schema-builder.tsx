@@ -16,6 +16,7 @@ import { useEffect, useRef, useState } from "react";
 import { useUnsavedGuard } from "./app-context";
 import type { Api, BlockTypeInput, ContentTypeInput } from "./api";
 import { CONTROL, slugify } from "./fields";
+import { WRAP } from "./chrome";
 import type { BlockType, ContentType, DefaultBlockDefinition, FieldDefinition, FieldType, RegionDefinition } from "./types";
 
 /** Every field type the CMS knows — the editor's mirror of `FIELD_TYPES` in @pramen/cms.
@@ -39,7 +40,6 @@ const NESTING: readonly FieldType[] = ["group", "repeater"];
 /** The text-ish types a `slug` may follow — same list the server checks. */
 const SLUG_SOURCES: readonly FieldType[] = ["text", "textarea", "select", "url"];
 
-const WRAP = "mx-auto max-w-[1200px] px-7 pb-8 pt-2";
 
 /** A field name: an object key in a `fields` bag and a property name in generated TS. */
 const FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;

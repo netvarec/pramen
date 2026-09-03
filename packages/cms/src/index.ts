@@ -48,6 +48,7 @@ import {
   signToken,
   verifyToken,
   resolveSecret,
+  authorizeHandler,
 } from "@pramen/server";
 import type { HandlerContext, Policy, FileRef, BootstrapFn, JsonValue, SchemaDef, FieldDef, FieldType } from "@pramen/server";
 import type { EnvBag } from "@pramen/server";
@@ -811,6 +812,11 @@ export const cmsSchema = {
     name: unique(notNull(t.text())),
     label: notNull(t.text()),
     items: t.json(), // MenuItem[]
+    // Optimistic concurrency, as on cms_pages/cms_blocks. It matters MORE here, not less:
+    // `updateMenu` writes the whole `items` document, so two editors on one menu meant the
+    // second silently replaced the first's entire tree — where a page edit at least
+    // conflicts per field.
+    version: defaultTo(t.int(), 1),
     createdAt: defaultTo(t.text(), expr.now()),
     updatedAt: defaultTo(t.text(), expr.now()),
   })),
@@ -916,6 +922,8 @@ export const cmsSchema = {
     label: notNull(t.text()),
     description: t.text(),
     widgets: t.json(), // Widget[]
+    // Same argument as cms_menus.version — `updateWidgetArea` replaces the whole list.
+    version: defaultTo(t.int(), 1),
     createdAt: defaultTo(t.text(), expr.now()),
     updatedAt: defaultTo(t.text(), expr.now()),
   })),
@@ -1686,10 +1694,14 @@ const asObj = (v: unknown): FieldValues => (v && typeof v === "object" ? (v as F
 // "YYYY-MM-DD HH:MM:SS", UTC, second precision) so a column's insert-default and its
 // handler-written updates stay lexically comparable (an ISO `T`/`Z` string sorts wrong).
 const nowStamp = (): string => new Date().toISOString().slice(0, 19).replace("T", " ");
-const isEditor = (ctx: HandlerContext, roles: readonly string[]): boolean => {
-  const held = ctx.identity?.roles ?? (ctx.identity?.role ? [ctx.identity.role] : []);
-  return (held as string[]).some((r) => roles.includes(r));
-};
+/** Does the caller hold one of these roles?
+ *
+ * Delegates to `authorizeHandler`, which is what the dispatcher uses to enforce a handler's
+ * own `auth` — so "may call this handler" and "counts as an editor here" cannot answer
+ * differently. The local copy took `roles` OR `role`, where the framework takes the UNION,
+ * so an identity carrying both saw only one of them. */
+const isEditor = (ctx: HandlerContext, roles: readonly string[]): boolean =>
+  authorizeHandler([...roles], ctx.identity ?? null);
 
 /** Assemble a page LIVE from its placements/blocks/types, grouped by region and ordered
  * by position, merging each shared placement's `overrides` over its block's fields. */
@@ -2170,9 +2182,18 @@ async function assertTermParent(db: CmsDb, tax: { id: string; hierarchical: bool
   if (parentId === null) return;
   if (!tax.hierarchical) throw new BadRequest("this vocabulary is flat — its terms cannot have a parent");
   if (termId !== null && parentId === termId) throw new BadRequest("a term cannot be its own parent");
+  // How many levels the MOVED term itself occupies. A leaf is 1; a term with children takes
+  // its subtree with it, and a cap that ignored that admitted a 5-level tree grafted under a
+  // 4-level parent. Zero cost on the create path, where there is no subtree yet.
+  const moving = termId === null ? 1 : await subtreeHeight(db, tax.id, termId);
   let cursor: string | null = parentId;
+  // `depth` counts ANCESTORS walked. The moved term sits at `ancestors + moving` levels, and
+  // that is what the cap governs — counting ancestors alone admitted one level too many
+  // (a chain of 5 put the new term at level 6 under a cap of 5).
   for (let depth = 0; cursor !== null; depth++) {
-    if (depth >= MAX_TERM_DEPTH) throw new BadRequest(`terms may nest at most ${MAX_TERM_DEPTH} levels deep`);
+    // About to walk ancestor number `depth + 1`. The moved term would then sit at
+    // `(depth + 1) + moving` levels, and THAT is what the cap governs.
+    if (depth + 1 + moving > MAX_TERM_DEPTH) throw new BadRequest(`terms may nest at most ${MAX_TERM_DEPTH} levels deep`);
     const rows: Array<Record<string, unknown>> = await db.find({ from: "cms_terms", where: { id: cursor }, select: ["id", "taxonomyId", "parentId"], limit: 1 });
     const row = rows[0];
     if (!row) throw new BadRequest("parent term not found");
@@ -2182,6 +2203,36 @@ async function assertTermParent(db: CmsDb, tax: { id: string; hierarchical: bool
     if (termId !== null && String(row.id) === termId) throw new BadRequest("a term cannot be moved under one of its own descendants");
     cursor = row.parentId == null ? null : String(row.parentId);
   }
+}
+
+/** How many levels a term's own subtree occupies (a leaf is 1).
+ *
+ * One query for the whole vocabulary rather than a walk per level: a vocabulary is already
+ * read whole by `listTerms`/`getTermTree` and capped at `MAX_TERMS`, so this is the same
+ * bounded read those make, not a new unbounded one. */
+async function subtreeHeight(db: CmsDb, taxonomyId: string, rootId: string): Promise<number> {
+  const rows = await db.find({ from: "cms_terms", where: { taxonomyId }, select: ["id", "parentId"], limit: MAX_TERMS });
+  const children = new Map<string, string[]>();
+  for (const r of rows) {
+    const parent = r.parentId == null ? null : String(r.parentId);
+    if (parent) children.set(parent, [...(children.get(parent) ?? []), String(r.id)]);
+  }
+  // Iterative, and bounded by MAX_TERMS: a cycle already in the store (written before the
+  // check that now prevents one) must not spin here.
+  let level = 0;
+  let frontier = [rootId];
+  const seen = new Set<string>();
+  while (frontier.length > 0 && level <= MAX_TERM_DEPTH + 1) {
+    level++;
+    const next: string[] = [];
+    for (const id of frontier) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      next.push(...(children.get(id) ?? []));
+    }
+    frontier = next;
+  }
+  return level;
 }
 
 /**
@@ -2666,11 +2717,22 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       input: (raw): { name: string } => ({ name: assertKey(asObj(raw).name, "menu name") }),
     }),
 
-    /** Every menu, RAW (references unresolved) — the editor's list. */
-    listMenus: query((ctx) => cdb(ctx).find({ from: "cms_menus", orderBy: { column: "label" } }), viewer),
+    /** Every menu, RAW (references unresolved) — the editor's list.
+     *
+     * Capped like every other list here. A site-furniture table is small by nature, which is
+     * an argument for the cap being generous, not for its absence: an unbounded SELECT of a
+     * wide row over RPC is the D1 failure shape from GitHub #22, and "small by nature" is
+     * not a property the query planner knows about. */
+    listMenus: query((ctx) => cdb(ctx).find({ from: "cms_menus", orderBy: { column: "label" }, limit: PAGE_LIST_MAX_LIMIT }), viewer),
 
-    createMenu: mutation((ctx, input: { name: string; label: string; items?: MenuItem[] }) => {
-      return cdb(ctx).insert("cms_menus", { name: input.name, label: input.label, items: input.items ?? [] });
+    createMenu: mutation(async (ctx, input: { name: string; label: string; items?: MenuItem[] }) => {
+      const db = cdb(ctx);
+      // A clean 409, as every sibling create handler gives. Without it a taken key surfaced
+      // as the UNIQUE constraint's own 500 — and the e2e only asserts "not 200", so it
+      // could not tell the two apart.
+      const clash = await db.find({ from: "cms_menus", where: { name: input.name }, select: ["id"], limit: 1 });
+      if (clash[0]) throw new Conflict(`menu '${input.name}' already exists`);
+      return db.insert("cms_menus", { name: input.name, label: input.label, items: input.items ?? [] });
     }, {
       ...editor,
       input: (raw): { name: string; label: string; items?: MenuItem[] } => {
@@ -2681,25 +2743,26 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
 
     /** Patch a menu found by `id` or `name`. `name` is the key layout code resolves and is
      * NOT mutable — retitling is what `label` is for. */
-    updateMenu: mutation(async (ctx, input: { id?: string; name?: string; label?: string; items?: MenuItem[] }) => {
+    updateMenu: mutation(async (ctx, input: { id?: string; name?: string; label?: string; items?: MenuItem[]; expectedVersion?: number }) => {
       const db = cdb(ctx);
       const rows = await db.find({ from: "cms_menus", where: input.id ? { id: input.id } : { name: input.name }, limit: 1 });
       const row = rows[0];
       if (!row) throw notFound("menu");
-      const patch: Record<string, unknown> = { updatedAt: nowStamp() };
+      const patch: Record<string, unknown> = { updatedAt: nowStamp(), version: nextVersion(row, input.expectedVersion, "this menu") };
       if (input.label !== undefined) patch.label = input.label;
       if (input.items !== undefined) patch.items = input.items;
       return db.update("cms_menus", String(row.id), patch);
     }, {
       ...editor,
-      input: (raw): { id?: string; name?: string; label?: string; items?: MenuItem[] } => {
+      input: (raw): { id?: string; name?: string; label?: string; items?: MenuItem[]; expectedVersion?: number } => {
         const o = asObj(raw);
-        const out: { id?: string; name?: string; label?: string; items?: MenuItem[] } = {};
+        const out: { id?: string; name?: string; label?: string; items?: MenuItem[]; expectedVersion?: number } = {};
         if (typeof o.id === "string") out.id = o.id;
         else if (typeof o.name === "string") out.name = assertKey(o.name, "menu name");
         else throw new BadRequest("id or name is required");
         if (o.label !== undefined) out.label = assertLabel(o.label, "menu label");
         if (o.items !== undefined) out.items = normalizeMenuItems(o.items);
+        if (typeof o.expectedVersion === "number") out.expectedVersion = o.expectedVersion;
         return out;
       },
     }),
@@ -2806,7 +2869,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
 
     /** Every vocabulary. PUBLIC — like content types, a taxonomy's slug is structural (it
      * is a URL segment) and a front end routes on it. */
-    listTaxonomies: query((ctx) => cdb(ctx).find({ from: "cms_taxonomies", orderBy: { column: "label" } })),
+    listTaxonomies: query((ctx) => cdb(ctx).find({ from: "cms_taxonomies", orderBy: { column: "label" }, limit: PAGE_LIST_MAX_LIMIT })),
 
     createTaxonomy: mutation(async (ctx, input: { slug: string; label: string; pluralLabel?: string; description?: string; hierarchical?: boolean }) => {
       const db = cdb(ctx);
@@ -3122,10 +3185,13 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       input: (raw): { name: string } => ({ name: assertKey(asObj(raw).name, "widget area name") }),
     }),
 
-    listWidgetAreas: query((ctx) => cdb(ctx).find({ from: "cms_widget_areas", orderBy: { column: "label" } }), viewer),
+    listWidgetAreas: query((ctx) => cdb(ctx).find({ from: "cms_widget_areas", orderBy: { column: "label" }, limit: PAGE_LIST_MAX_LIMIT }), viewer),
 
-    createWidgetArea: mutation((ctx, input: { name: string; label: string; description?: string; widgets?: Widget[] }) => {
-      return cdb(ctx).insert("cms_widget_areas", {
+    createWidgetArea: mutation(async (ctx, input: { name: string; label: string; description?: string; widgets?: Widget[] }) => {
+      const db = cdb(ctx);
+      const clash = await db.find({ from: "cms_widget_areas", where: { name: input.name }, select: ["id"], limit: 1 });
+      if (clash[0]) throw new Conflict(`widget area '${input.name}' already exists`);
+      return db.insert("cms_widget_areas", {
         name: input.name,
         label: input.label,
         description: input.description ?? null,
@@ -3144,27 +3210,28 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       },
     }),
 
-    updateWidgetArea: mutation(async (ctx, input: { id?: string; name?: string; label?: string; description?: string | null; widgets?: Widget[] }) => {
+    updateWidgetArea: mutation(async (ctx, input: { id?: string; name?: string; label?: string; description?: string | null; widgets?: Widget[]; expectedVersion?: number }) => {
       const db = cdb(ctx);
       const rows = await db.find({ from: "cms_widget_areas", where: input.id ? { id: input.id } : { name: input.name }, limit: 1 });
       const row = rows[0];
       if (!row) throw notFound("widget area");
-      const patch: Record<string, unknown> = { updatedAt: nowStamp() };
+      const patch: Record<string, unknown> = { updatedAt: nowStamp(), version: nextVersion(row, input.expectedVersion, "this widget area") };
       for (const k of ["label", "description", "widgets"] as const) {
         if (input[k] !== undefined) patch[k] = input[k];
       }
       return db.update("cms_widget_areas", String(row.id), patch);
     }, {
       ...editor,
-      input: (raw): { id?: string; name?: string; label?: string; description?: string | null; widgets?: Widget[] } => {
+      input: (raw): { id?: string; name?: string; label?: string; description?: string | null; widgets?: Widget[]; expectedVersion?: number } => {
         const o = asObj(raw);
-        const out: { id?: string; name?: string; label?: string; description?: string | null; widgets?: Widget[] } = {};
+        const out: { id?: string; name?: string; label?: string; description?: string | null; widgets?: Widget[]; expectedVersion?: number } = {};
         if (typeof o.id === "string") out.id = o.id;
         else if (typeof o.name === "string") out.name = assertKey(o.name, "widget area name");
         else throw new BadRequest("id or name is required");
         if (o.label !== undefined) out.label = assertLabel(o.label, "widget area label");
         if (o.description !== undefined) out.description = typeof o.description === "string" ? o.description : null;
         if (o.widgets !== undefined) out.widgets = normalizeWidgets(o.widgets, rtSchema);
+        if (typeof o.expectedVersion === "number") out.expectedVersion = o.expectedVersion;
         return out;
       },
     }),
