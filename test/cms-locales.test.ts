@@ -19,10 +19,27 @@ const TWO_TYPES: ContentType[] = [
   { id: "t-article", name: "Articles", slug: "article" },
 ];
 
-const caps = (opts?: { locales?: readonly string[] }) => {
-  const h = createCmsHandlers(opts) as unknown as { listCmsCapabilities: { run: (c: HandlerContext) => { locales: string[]; defaultLocale: string; multilingual: boolean; pagesByType: boolean } } };
-  return h.listCmsCapabilities.run({} as HandlerContext);
+interface Caps {
+  locales: string[];
+  defaultLocale: string;
+  multilingual: boolean;
+  pagesByType: boolean;
+  canEdit: boolean;
+}
+
+const rawCaps = (opts?: { locales?: readonly string[]; editorRoles?: readonly string[] }, ctx: HandlerContext = {} as HandlerContext): Caps => {
+  const h = createCmsHandlers(opts) as unknown as { listCmsCapabilities: { run: (c: HandlerContext) => Caps } };
+  return h.listCmsCapabilities.run(ctx);
 };
+
+/** The DECLARED half — everything except `canEdit`, which is per-caller and asserted
+ * separately below. */
+const caps = (opts?: { locales?: readonly string[] }): Omit<Caps, "canEdit"> => {
+  const { canEdit: _canEdit, ...declared } = rawCaps(opts);
+  return declared;
+};
+
+const asRole = (...roles: string[]): HandlerContext => ({ identity: { roles } }) as unknown as HandlerContext;
 
 describe("declared locales", () => {
   test("a deployment that declares nothing is monolingual `en` — the previous default", () => {
@@ -47,6 +64,28 @@ describe("declared locales", () => {
 
   test("an empty declaration falls back rather than leaving a page with no locale", () => {
     expect(caps({ locales: [] })).toEqual({ locales: ["en"], defaultLocale: "en", multilingual: false, pagesByType: true });
+  });
+});
+
+// `canEdit` is the one per-CALLER answer in the capability probe. `viewer` is
+// `editorRoles ∪ reviewerRoles`, so a reviewer-only session reaches this handler and every
+// read handler while every WRITE stays editor-gated — and the editor cannot work that out
+// for itself, because it knows the caller's roles but not which roles this deployment
+// configured as `editorRoles`. Without it the authoring surfaces render for a reviewer and
+// each one 403s on its first save.
+describe("canEdit", () => {
+  test("an editor may author", () => {
+    expect(rawCaps(undefined, asRole("editor")).canEdit).toBe(true);
+    expect(rawCaps(undefined, asRole("admin")).canEdit).toBe(true);
+  });
+
+  test("a reviewer-only session may read but not author", () => {
+    expect(rawCaps(undefined, asRole("reviewer")).canEdit).toBe(false);
+  });
+
+  test("it follows the deployment's OWN editorRoles, not a hardcoded name", () => {
+    expect(rawCaps({ editorRoles: ["redaktor"] }, asRole("redaktor")).canEdit).toBe(true);
+    expect(rawCaps({ editorRoles: ["redaktor"] }, asRole("editor")).canEdit).toBe(false);
   });
 });
 
