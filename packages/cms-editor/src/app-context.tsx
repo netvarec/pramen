@@ -138,6 +138,31 @@ interface AppContextValue {
 
 const AppContext = createContext<AppContextValue | null>(null);
 
+/**
+ * Register this screen's unsaved-changes guard for as long as `dirty` is true.
+ *
+ * The five authoring screens added alongside the CMS work each hold a whole unsaved
+ * document in local state — a field schema, a menu tree, a widget list — and none of them
+ * registered a guard, so any topbar click discarded the work with no prompt. `PageEditor`
+ * had one; nothing made that reusable, so it stayed the only screen with one.
+ *
+ * `beforeunload` too, for the refresh/close half — in-app navigation fires neither, which
+ * is why both halves are needed and why the context guard exists at all.
+ */
+export function useUnsavedGuard(dirty: boolean, message = "You have unsaved changes. Leave anyway?"): void {
+  const { setNavGuard } = useApp();
+  useEffect(() => {
+    if (!dirty) return;
+    setNavGuard(() => confirm(message));
+    const onUnload = (e: BeforeUnloadEvent) => { e.preventDefault(); };
+    window.addEventListener("beforeunload", onUnload);
+    return () => {
+      setNavGuard(null);
+      window.removeEventListener("beforeunload", onUnload);
+    };
+  }, [dirty, message, setNavGuard]);
+}
+
 export function useApp(): AppContextValue {
   const v = use(AppContext);
   if (!v) throw new Error("useApp must be used within <AppProvider>");

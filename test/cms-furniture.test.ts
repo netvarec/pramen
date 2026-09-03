@@ -7,7 +7,7 @@
 // input the front end renders straight into the page.
 
 import { describe, expect, test } from "bun:test";
-import { createCmsHandlers, cmsPolicies, MAX_MENU_DEPTH, normalizeRedirectPath } from "../packages/cms/src/index";
+import { createCmsHandlers, cmsPolicies, MAX_MENU_DEPTH, MAX_MENU_ITEMS, normalizeRedirectPath } from "../packages/cms/src/index";
 import type { HandlerContext } from "@pramen/server";
 
 type Row = Record<string, unknown>;
@@ -91,7 +91,7 @@ describe("menus", () => {
   test("a reference item needs a ref, and a custom item needs a url", async () => {
     const h = H();
     const { ctx } = stubCtx();
-    await expect(call(h, "createMenu", { name: "m", label: "M", items: [{ label: "x", kind: "page" }] }, ctx)).rejects.toThrow(/needs a `ref`/);
+    await expect(call(h, "createMenu", { name: "m", label: "M", items: [{ label: "x", kind: "page" }] }, ctx)).rejects.toThrow(/must be an id or slug/);
     await expect(call(h, "createMenu", { name: "m", label: "M", items: [{ label: "x", kind: "custom" }] }, ctx)).rejects.toThrow(/valid url/);
   });
 
@@ -187,10 +187,18 @@ describe("redirects", () => {
     const h = H();
     const { ctx } = stubCtx();
     await expect(call(h, "createRedirect", { fromPath: "/a", toPath: "/a" }, ctx)).rejects.toThrow(/point at itself/);
-    // …but a TRAILING-SLASH redirect is not a loop, it is the canonicalization everyone
-    // eventually writes — which is why only `fromPath` is slash-canonicalized, not `toPath`.
-    await expect(call(h, "createRedirect", { fromPath: "/a", toPath: "/a/" }, ctx)).resolves.toBeTruthy();
+    // A TRAILING-SLASH redirect is a loop here, which this test previously asserted was
+    // fine. The reasoning was that `/a` -> `/a/` is the canonicalization everyone eventually
+    // writes — true in general, and false for THIS lookup, because `resolveRedirect`
+    // canonicalizes the slash away again: the visitor is sent to `/a/`, whose 404 handler
+    // normalizes it back to `/a` and matches the same row. Both sides go through
+    // `normalizeRedirectPath` now.
+    await expect(call(h, "createRedirect", { fromPath: "/a", toPath: "/a/" }, ctx)).rejects.toThrow(/point at itself/);
+    await expect(call(h, "createRedirect", { fromPath: "/a", toPath: "/b" }, ctx)).resolves.toBeTruthy();
     await expect(call(h, "createRedirect", { fromPath: "/a", toPath: "/c" }, ctx)).rejects.toThrow(/already exists/);
+    // An ABSOLUTE destination names an origin, and `resolveRedirect` is only handed paths —
+    // so it can never be a loop with a rooted source.
+    await expect(call(h, "createRedirect", { fromPath: "/d", toPath: "https://elsewhere.example/d" }, ctx)).resolves.toBeTruthy();
   });
 
   test("resolveRedirect answers with the destination, and is a READ", async () => {
@@ -313,6 +321,123 @@ describe("widget areas", () => {
     // A menu that no longer exists leaves an EMPTY widget rather than being dropped: unlike
     // a menu item, an empty widget is a visible hole an editor can see and fix.
     expect(area.widgets[1]!.menu).toBeNull();
+  });
+});
+
+// --- what the review turned up -----------------------------------------------------------
+
+describe("a reference is not an href (menu items)", () => {
+  test("a ref that starts with a slash cannot mint a protocol-relative url", async () => {
+    // `menuHref` interpolates a ref into a path, so `/evil.example` became `//evil.example/`
+    // — off-origin, in the site's primary nav on every page — while the sibling `custom`
+    // branch three lines away ran its string through `isSafeHref`.
+    const h = H();
+    const { ctx } = stubCtx();
+    for (const ref of ["/evil.example", "//evil.example", "a/b", "https://evil.example", ".."]) {
+      await expect(call(h, "createMenu", { name: "m", label: "M", items: [{ label: "x", kind: "collection", ref }] }, ctx), ref).rejects.toThrow(/must be an id or slug/);
+    }
+    await expect(call(h, "createMenu", { name: "m", label: "M", items: [{ label: "x", kind: "collection", ref: "lectures" }] }, ctx)).resolves.toBeTruthy();
+  });
+
+  test("the MINTED url is allow-listed too, because menuHref is host-supplied", async () => {
+    // A deployment's own mapping can build an unsafe href out of a perfectly safe ref, and
+    // the write-side check cannot see it.
+    const h = H({ menuHref: () => "javascript:alert(1)" });
+    const { ctx } = stubCtx({
+      cms_menus: [{ id: "m1", name: "primary", label: "P", items: [{ id: "a", label: "A", kind: "collection", ref: "lectures" }] }],
+    });
+    const menu = await call(h, "getMenu", { name: "primary" }, ctx) as { items: unknown[] };
+    expect(menu.items).toEqual([]);
+  });
+
+  test("a menu is bounded by ITEM COUNT, not only by depth", async () => {
+    // A flat 800-item menu is legal under MAX_MENU_DEPTH and turns every anonymous getMenu —
+    // the read on every page render — into one unchunked `IN (?×800)`.
+    const h = H();
+    const { ctx } = stubCtx();
+    const flat = Array.from({ length: MAX_MENU_ITEMS + 1 }, (_, i) => ({ label: `i${i}`, url: "/" }));
+    await expect(call(h, "createMenu", { name: "m", label: "M", items: flat }, ctx)).rejects.toThrow(/at most 200 items/);
+    // Counted across the whole TREE, not per level.
+    const nested = [{ label: "root", url: "/", children: Array.from({ length: MAX_MENU_ITEMS }, (_, i) => ({ label: `c${i}`, url: "/" })) }];
+    await expect(call(h, "createMenu", { name: "m", label: "M", items: nested }, ctx)).rejects.toThrow(/at most 200 items/);
+  });
+});
+
+describe("a widget area embeds a RESOLVED menu", () => {
+  test("a menu widget goes through the same resolution getMenu does", async () => {
+    // It used to embed the raw stored items: a `page` item came back with no `url` (the
+    // layout renders `href=undefined`) and an UNPUBLISHED page's label and id were served to
+    // anonymous callers — the exact leak the drop in `getMenu` prevents.
+    const h = H();
+    const { ctx } = stubCtx({
+      cms_widget_areas: [{ id: "w1", name: "sidebar", label: "S", description: null, widgets: [{ id: "x", type: "menu", menuName: "primary" }] }],
+      cms_menus: [{
+        id: "m1", name: "primary", label: "P",
+        items: [
+          { id: "ok", label: "About", kind: "page", ref: "p1" },
+          { id: "gone", label: "Secret draft", kind: "page", ref: "unpublished" },
+        ],
+      }],
+      // Only the published page is visible to this caller's scope.
+      cms_pages: [{ id: "p1", slug: "about", locale: "en" }],
+    });
+    const area = await call(h, "getWidgetArea", { name: "sidebar" }, ctx) as { widgets: Array<{ menu: { items: Array<{ id: string; url: string }> } }> };
+    const items = area.widgets[0]!.menu.items;
+    expect(items.map((i) => i.id)).toEqual(["ok"]);
+    expect(items[0]!.url).toBe("/about");
+    expect(JSON.stringify(area)).not.toContain("Secret draft");
+  });
+});
+
+describe("a page's terms follow the page's own visibility", () => {
+  test("an unpublished page's classification is not public", async () => {
+    // The handler never read cms_pages, and the public grants on the junction and on terms
+    // are unscoped allow() — so a page id was enough to confirm the page exists and read its
+    // editorial classification. `listPagesByTerm` was already safe for the opposite reason.
+    const h = H();
+    const visible = stubCtx({
+      cms_pages: [{ id: "p1" }],
+      cms_page_terms: [{ id: "l1", pageId: "p1", termId: "t1" }],
+      cms_terms: [{ id: "t1", taxonomyId: "tx", slug: "news", label: "News", position: 0 }],
+    });
+    expect(await call(h, "listPageTerms", { pageId: "p1" }, visible.ctx)).toHaveLength(1);
+
+    // Same store, but the caller's scope does not include the page (what an anonymous
+    // policy does for a draft).
+    const hidden = stubCtx({
+      cms_pages: [],
+      cms_page_terms: [{ id: "l1", pageId: "p1", termId: "t1" }],
+      cms_terms: [{ id: "t1", taxonomyId: "tx", slug: "news", label: "News", position: 0 }],
+    });
+    expect(await call(h, "listPageTerms", { pageId: "p1" }, hidden.ctx)).toEqual([]);
+  });
+});
+
+describe("redirect paths are stored as a request will present them", () => {
+  test("a non-ASCII path is percent-encoded, so the exact-match lookup can hit it", () => {
+    // An editor typing /o-nás stored a string the lookup could never be handed: the request
+    // arrives as url.pathname, which the parser has already encoded.
+    expect(normalizeRedirectPath("/o-nás")).toBe(new URL("https://x/o-nás").pathname);
+    expect(normalizeRedirectPath("/a b")).toBe("/a%20b");
+  });
+
+  test("…and encoding it is idempotent, so an already-encoded path is untouched", () => {
+    expect(normalizeRedirectPath("/o-n%C3%A1s")).toBe("/o-n%C3%A1s");
+    expect(normalizeRedirectPath(normalizeRedirectPath("/o-nás"))).toBe(normalizeRedirectPath("/o-nás"));
+  });
+});
+
+describe("an authored handler name cannot traverse a path", () => {
+  test("referenceFrom / optionsFrom are identifiers, not arbitrary strings", () => {
+    // The editor interpolates these into `fetch(`${base}/rpc/${name}`)`, and "../admin/data"
+    // normalizes to /admin/data — an editor-authored string becoming a same-origin
+    // authenticated POST fired by whoever opens the block, including an admin.
+    const h = H();
+    const parse = (schema: unknown) => h.createBlockType.input!({ name: "B", slug: "b", fieldsSchema: schema });
+    expect(() => parse([{ name: "p", type: "reference", referenceFrom: "../admin/data" }])).toThrow(/must be a handler name/);
+    expect(() => parse([{ name: "p", type: "select", optionsFrom: "../admin/data" }])).toThrow(/must be a handler name/);
+    expect(() => parse([{ name: "p", type: "reference", referenceFrom: "look/up" }])).toThrow(/must be a handler name/);
+    expect(parse([{ name: "p", type: "reference", referenceFrom: "lookupCampaigns" }])).toBeTruthy();
   });
 });
 

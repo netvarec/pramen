@@ -12,7 +12,8 @@
 // of the server's own list, which is what keeps that true.
 
 import { Button, Heading, Input, Textarea } from "@podoba/react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useUnsavedGuard } from "./app-context";
 import type { Api, BlockTypeInput, ContentTypeInput } from "./api";
 import { CONTROL, slugify } from "./fields";
 import type { BlockType, ContentType, DefaultBlockDefinition, FieldDefinition, FieldType, RegionDefinition } from "./types";
@@ -96,6 +97,7 @@ export function FieldSchemaEditor({ schema, onChange, depth = 0 }: { schema: Fie
           key={i}
           def={f}
           siblings={names}
+          siblingFields={schema}
           index={i}
           count={schema.length}
           depth={depth}
@@ -113,9 +115,10 @@ export function FieldSchemaEditor({ schema, onChange, depth = 0 }: { schema: Fie
   );
 }
 
-function FieldRow({ def, siblings, index, count, depth, onChange, onMove, onDelete }: {
+function FieldRow({ def, siblings, siblingFields, index, count, depth, onChange, onMove, onDelete }: {
   def: FieldDefinition;
   siblings: string[];
+  siblingFields: FieldDefinition[];
   index: number;
   count: number;
   depth: number;
@@ -195,7 +198,7 @@ function FieldRow({ def, siblings, index, count, depth, onChange, onMove, onDele
 
         {def.type === "select" ? <SelectExtras def={def} patch={patch} /> : null}
         {def.type === "reference" ? <ReferenceExtras def={def} patch={patch} /> : null}
-        {def.type === "slug" ? <SlugExtras def={def} siblings={siblings} patch={patch} /> : null}
+        {def.type === "slug" ? <SlugExtras def={def} siblingFields={siblingFields} patch={patch} /> : null}
         {def.type === "repeater" ? <RepeaterExtras def={def} patch={patch} /> : null}
 
         {NESTING.includes(def.type) ? (
@@ -230,16 +233,47 @@ function SelectExtras({ def, patch }: { def: FieldDefinition; patch: (p: Partial
           <input className={CONTROL} value={def.optionsFrom ?? ""} onChange={(e) => patch({ optionsFrom: e.target.value.trim() })} />
         </label>
       ) : (
-        <label className="flex flex-col gap-1.5">
-          <span className="text-caption text-fg-subtle">Options, one per line</span>
-          <textarea
-            className={`${CONTROL} h-auto min-h-20 py-2.5`}
-            value={(def.options ?? []).join("\n")}
-            onChange={(e) => patch({ options: e.target.value.split("\n").map((s) => s.trim()).filter(Boolean) })}
-          />
-        </label>
+        <OptionsTextarea options={def.options ?? []} onChange={(options) => patch({ options })} />
       )}
     </div>
+  );
+}
+
+/**
+ * The `select` options list, edited as one-per-line text.
+ *
+ * The text lives in LOCAL state and the parsed array goes upward. Deriving the textarea's
+ * value from the parsed array instead — `options.join("\n")` — made the field unusable:
+ * the parse trims and drops empties on every keystroke, so typing a space gave back the
+ * same array, the value prop never changed, and React restored the DOM. Space and Enter
+ * were erased as typed, which meant no multi-word option and no second option. A `select`
+ * could not be authored at all in the builder that introduces it.
+ *
+ * Re-seeded only when the incoming array is not the one this last emitted — i.e. the form
+ * switched to a different field, not our own change coming back around. Same rule the
+ * rich-text control uses, for the same reason.
+ */
+function OptionsTextarea({ options, onChange }: { options: readonly string[]; onChange: (v: string[]) => void }) {
+  const [text, setText] = useState(() => options.join("\n"));
+  const emitted = useRef<readonly string[] | null>(null);
+  useEffect(() => {
+    if (options === emitted.current) return;
+    setText(options.join("\n"));
+  }, [options]);
+  return (
+    <label className="flex flex-col gap-1.5">
+      <span className="text-caption text-fg-subtle">Options, one per line</span>
+      <textarea
+        className={`${CONTROL} h-auto min-h-20 py-2.5`}
+        value={text}
+        onChange={(e) => {
+          setText(e.target.value);
+          const parsed = e.target.value.split("\n").map((v) => v.trim()).filter(Boolean);
+          emitted.current = parsed;
+          onChange(parsed);
+        }}
+      />
+    </label>
   );
 }
 
@@ -261,15 +295,22 @@ function ReferenceExtras({ def, patch }: { def: FieldDefinition; patch: (p: Part
   );
 }
 
-function SlugExtras({ def, siblings, patch }: { def: FieldDefinition; siblings: string[]; patch: (p: Partial<FieldDefinition>) => void }) {
+function SlugExtras({ def, siblingFields, patch }: { def: FieldDefinition; siblingFields: FieldDefinition[]; patch: (p: Partial<FieldDefinition>) => void }) {
+  const sources = siblingFields.filter((f) => f.name !== def.name && SLUG_SOURCES.includes(f.type));
   return (
     <label className="flex flex-col gap-1.5">
       <span className="text-caption text-fg-subtle">Derived from (a text field beside it — optional)</span>
       <select className={CONTROL} value={def.from ?? ""} onChange={(e) => patch({ from: e.target.value || undefined })}>
         <option value="">— typed by hand —</option>
-        {siblings.filter((n) => n !== def.name).map((n) => <option key={n} value={n}>{n}</option>)}
+        {/* Only fields the server will ACCEPT as a source. `SLUG_SOURCES` was declared for
+            this check and then used only in the hint below, so the dropdown offered every
+            sibling — including a `number` or a `media` — and picking one made the whole type
+            unsavable with an error naming a field the author had just been offered. */}
+        {sources.map((f) => <option key={f.name} value={f.name}>{f.label ?? f.name}</option>)}
       </select>
-      <span className="text-caption text-fg-subtle">The source must be a {SLUG_SOURCES.join(" / ")} field.</span>
+      <span className="text-caption text-fg-subtle">
+        {sources.length > 0 ? `The source must be a ${SLUG_SOURCES.join(" / ")} field.` : `No ${SLUG_SOURCES.join(" / ")} field stands beside this one yet.`}
+      </span>
     </label>
   );
 }
@@ -405,6 +446,10 @@ export function BlockTypeEditor({ api, slug, onSaved, onBack, onError }: {
   // slug is a registry key a front end maps to a component, and the server refuses to
   // change it anyway.
   const [slugFollows, setSlugFollows] = useState(isNew);
+  // The draft as it was loaded (or empty, for a new type). Dirty is a comparison against
+  // this rather than a flag every mutation has to remember to set.
+  const [baseline, setBaseline] = useState<string>(() => JSON.stringify({ name: "", slug: "", fieldsSchema: [] }));
+  useUnsavedGuard(JSON.stringify(draft) !== baseline);
 
   useEffect(() => {
     if (isNew) return;
@@ -417,14 +462,16 @@ export function BlockTypeEditor({ api, slug, onSaved, onBack, onError }: {
         const bt = all.find((b) => b.slug === slug);
         if (!bt) { setMissing(true); return; }
         setId(bt.id);
-        setDraft({
+        const loaded: BlockTypeInput = {
           name: bt.name,
           slug: bt.slug,
           description: bt.description ?? null,
           icon: bt.icon ?? null,
           category: bt.category ?? null,
           fieldsSchema: bt.fieldsSchema ?? [],
-        });
+        };
+        setDraft(loaded);
+        setBaseline(JSON.stringify(loaded));
       })
       .catch((e: Error) => onError(String(e.message ?? e)))
       .finally(() => { if (live) setLoading(false); });
@@ -441,6 +488,7 @@ export function BlockTypeEditor({ api, slug, onSaved, onBack, onError }: {
         // `slug` is deliberately not sent: it is the stable key, and the server ignores it
         // on an update. Sending it would suggest to a reader that renaming works.
         await api.updateBlockType(id!, { name: draft.name, description: draft.description, icon: draft.icon, category: draft.category, fieldsSchema: draft.fieldsSchema });
+        setBaseline(JSON.stringify(draft)); // saved — the guard stands down
         setOk(true);
         setTimeout(() => setOk(false), 1200);
       }
@@ -532,6 +580,8 @@ export function ContentTypeEditor({ api, slug, onSaved, onBack, onError }: {
   const [busy, setBusy] = useState(false);
   const [ok, setOk] = useState(false);
   const [slugFollows, setSlugFollows] = useState(isNew);
+  const [baseline, setBaseline] = useState<string>(() => JSON.stringify({ name: "", slug: "", regions: [{ name: "content", label: "Content", allowedTypes: null }], fieldsSchema: [], defaultBlocks: [] }));
+  useUnsavedGuard(JSON.stringify(draft) !== baseline);
 
   useEffect(() => {
     let live = true;
@@ -550,13 +600,15 @@ export function ContentTypeEditor({ api, slug, onSaved, onBack, onError }: {
         const ct = all.find((c) => c.slug === slug);
         if (!ct) { setMissing(true); return; }
         setId(ct.id);
-        setDraft({
+        const loaded: ContentTypeInput = {
           name: ct.name,
           slug: ct.slug,
           regions: ct.regions ?? [],
           fieldsSchema: ct.fieldsSchema ?? [],
           defaultBlocks: ct.defaultBlocks ?? [],
-        });
+        };
+        setDraft(loaded);
+        setBaseline(JSON.stringify(loaded));
       })
       .catch((e: Error) => onError(String(e.message ?? e)))
       .finally(() => { if (live) setLoading(false); });
@@ -564,6 +616,16 @@ export function ContentTypeEditor({ api, slug, onSaved, onBack, onError }: {
   }, [api, slug, isNew, onError]);
 
   const save = async () => {
+    // A rename leaves default blocks pointing at the old name. Reconciled HERE, once, rather
+    // than on every keystroke: the server refuses an unmatched region, so this is the last
+    // moment it can be fixed without the author losing work they can still see on screen.
+    const orphaned = (draft.defaultBlocks ?? []).filter((b) => !regions.some((r) => r.name === b.region));
+    if (orphaned.length > 0) {
+      const names = [...new Set(orphaned.map((b) => b.region))].join(", ");
+      if (!confirm(`${orphaned.length} default block(s) point at a region that no longer exists (${names}). Remove them and save?`)) return;
+      setDraft((d) => ({ ...d, defaultBlocks: (d.defaultBlocks ?? []).filter((b) => regions.some((r) => r.name === b.region)) }));
+      return; // The author saves again against the cleaned draft — nothing is dropped unseen.
+    }
     setBusy(true);
     try {
       if (isNew) {
@@ -571,6 +633,7 @@ export function ContentTypeEditor({ api, slug, onSaved, onBack, onError }: {
         onSaved(created.slug);
       } else {
         await api.updateContentType(id!, { name: draft.name, regions: draft.regions, fieldsSchema: draft.fieldsSchema, defaultBlocks: draft.defaultBlocks });
+        setBaseline(JSON.stringify(draft));
         setOk(true);
         setTimeout(() => setOk(false), 1200);
       }
@@ -621,13 +684,15 @@ export function ContentTypeEditor({ api, slug, onSaved, onBack, onError }: {
           <RegionsEditor
             regions={regions}
             blockTypes={blockTypes}
-            onChange={(next) => setDraft((d) => ({
+            onChange={(next) => setDraft((d) => ({ ...d, regions: next }))}
+            // Pruning happens on REMOVE only, never on an arbitrary change. It used to run
+            // on every `onChange` — and the region-name input fires that per keystroke, so
+            // typing the first character of a rename made every default block in that region
+            // point at a name that no longer existed and deleted them all. They never came
+            // back when the rename finished, and saving persisted the loss with no warning.
+            onRegionRemoved={(name) => setDraft((d) => ({
               ...d,
-              regions: next,
-              // A default block into a region that no longer exists is refused by the server,
-              // so it is dropped HERE rather than left to fail the save with a message about
-              // a region the author has just deleted on purpose.
-              defaultBlocks: (d.defaultBlocks ?? []).filter((b) => next.some((r) => r.name === b.region)),
+              defaultBlocks: (d.defaultBlocks ?? []).filter((b) => b.region !== name),
             }))}
           />
         </div>
@@ -664,7 +729,15 @@ export function ContentTypeEditor({ api, slug, onSaved, onBack, onError }: {
   );
 }
 
-function RegionsEditor({ regions, blockTypes, onChange }: { regions: RegionDefinition[]; blockTypes: BlockType[]; onChange: (r: RegionDefinition[]) => void }) {
+function RegionsEditor({ regions, blockTypes, onChange, onRegionRemoved }: {
+  regions: RegionDefinition[];
+  blockTypes: BlockType[];
+  onChange: (r: RegionDefinition[]) => void;
+  /** Fired when a region is DELETED, so the caller can drop its default blocks. Deliberately
+   * separate from `onChange`: a rename is not a removal, and treating it as one is what
+   * deleted an author's default blocks one keystroke into editing a name. */
+  onRegionRemoved: (name: string) => void;
+}) {
   const set = (i: number, r: RegionDefinition) => onChange(regions.map((x, j) => (j === i ? r : x)));
   const add = () => {
     let n = regions.length + 1;
@@ -693,7 +766,12 @@ function RegionsEditor({ regions, blockTypes, onChange }: { regions: RegionDefin
               <span className="text-caption text-fg-subtle">Label</span>
               <input className={CONTROL} value={r.label ?? ""} placeholder={r.name} onChange={(e) => set(i, { ...r, label: e.target.value || undefined })} />
             </label>
-            <button type="button" className="px-2 py-2 text-fg-subtle hover:text-danger" title="Remove region" onClick={() => onChange(regions.filter((_, j) => j !== i))}>✕</button>
+            <button
+              type="button"
+              className="px-2 py-2 text-fg-subtle hover:text-danger"
+              title="Remove region"
+              onClick={() => { onChange(regions.filter((_, j) => j !== i)); onRegionRemoved(r.name); }}
+            >✕</button>
           </div>
           <p className="mb-1.5 text-caption text-fg-subtle">
             Allowed block types {r.allowedTypes === null || r.allowedTypes === undefined ? <span className="text-fg">— any</span> : null}

@@ -37,6 +37,22 @@ interface Fired {
 
 export function AdminPageView({ api, slug, label, onError }: { api: Api; slug: string; label: string; onError: (s: string) => void }) {
   const [res, setRes] = useState<AdminPageResponse | null>(null);
+  /**
+   * Every input on the page, keyed by `action_id`, held HERE rather than per block.
+   *
+   * A block's inputs used to be local to it, so an interaction carried only the pressed
+   * block's own values — and the shipped `lecture-desk` example is built the way any such
+   * page is: a search box in one `actions` block, per-row buttons in another. Pressing a
+   * row button sent `values: {}`, the page recomputed its filter as empty, and the table
+   * came back UNFILTERED while the search box still showed the term. The three row buttons
+   * then addressed three different records than the ones on screen when the user confirmed
+   * a destructive action.
+   *
+   * `action_id` is unique per page by contract (it is what `render` switches on), so one
+   * map is the shape the server already assumes. Re-seeded from every response, because the
+   * server re-renders the whole page and its `initial_value`s are the authority.
+   */
+  const [values, setValues] = useState<BlockValues>({});
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
   const [toast, setToast] = useState<AdminPageResponse["toast"] | null>(null);
@@ -48,6 +64,7 @@ export function AdminPageView({ api, slug, label, onError }: { api: Api; slug: s
       try {
         const next = await api.adminPageInteract({ page: slug, type: fired?.type ?? "page_load", ...(fired ?? {}) });
         setRes(next);
+        setValues(seedValues(next.blocks));
         setToast(next.toast ?? null);
       } catch (e) {
         // A failed LOAD leaves nothing to render, so it says so here. A failed action leaves
@@ -87,21 +104,48 @@ export function AdminPageView({ api, slug, label, onError }: { api: Api; slug: s
       {res === null ? (
         <p className="text-fg-subtle">{failed ? "This screen could not be loaded." : "Loading…"}</p>
       ) : (
-        <BlockList blocks={res.blocks} disabled={busy} onFire={(f) => void send(f)} />
+        <BlockList
+          blocks={res.blocks}
+          values={values}
+          setValue={(id, v) => setValues((s) => ({ ...s, [id]: v }))}
+          disabled={busy}
+          // The WHOLE page's inputs ride on every interaction, which is what makes a filter
+          // in one block reach a button in another.
+          onFire={(f) => void send({ ...f, values })}
+        />
       )}
     </div>
   );
 }
 
-export function BlockList({ blocks, disabled, onFire }: { blocks: AdminBlock[]; disabled: boolean; onFire: (f: Fired) => void }) {
+interface ValueBag {
+  values: BlockValues;
+  setValue: (actionId: string, v: JsonValue) => void;
+}
+
+export function BlockList({ blocks, values, setValue, disabled, onFire }: { blocks: AdminBlock[]; disabled: boolean; onFire: (f: Fired) => void } & ValueBag) {
   return (
     <div className="flex flex-col gap-4">
-      {blocks.map((block, i) => <BlockView key={i} block={block} disabled={disabled} onFire={onFire} />)}
+      {/* Keyed by the block's OWN identity where it has one, not by index. `FormBlock`'s
+          comment claims a `block_id` key is what re-seeds its inputs from the server's
+          fresh `initial_value`s — and it was right about the requirement and wrong about
+          the code, because this line keyed on `i`. A wizard whose step 2 put a different
+          form at the same index kept step 1's `values`: every field rendered empty while
+          `missing` blocked submit forever, and a typed `secret_input` survived into a later
+          interaction. Blocks without an id keep the index; they hold no state. */}
+      {blocks.map((block, i) => <BlockView key={blockKey(block, i)} block={block} values={values} setValue={setValue} disabled={disabled} onFire={onFire} />)}
     </div>
   );
 }
 
-function BlockView({ block, disabled, onFire }: { block: AdminBlock; disabled: boolean; onFire: (f: Fired) => void }) {
+/** A stable React key for a block. `form` carries a required `block_id`; `actions` may.
+ * Prefixed so a block_id can never collide with a bare index from a sibling. */
+function blockKey(block: AdminBlock, i: number): string {
+  const id = block.type === "form" ? block.block_id : block.type === "actions" ? block.block_id : undefined;
+  return id ? `id:${id}` : `${block.type}:${i}`;
+}
+
+function BlockView({ block, values, setValue, disabled, onFire }: { block: AdminBlock; disabled: boolean; onFire: (f: Fired) => void } & ValueBag) {
   switch (block.type) {
     case "header":
       return <Heading level={block.level === 3 ? "3" : block.level === 2 ? "2" : "1"} className="font-normal">{block.text}</Heading>;
@@ -155,7 +199,7 @@ function BlockView({ block, disabled, onFire }: { block: AdminBlock; disabled: b
     case "columns":
       return (
         <div className="grid gap-4 max-[820px]:grid-cols-1" style={{ gridTemplateColumns: `repeat(${block.columns.length}, minmax(0, 1fr))` }}>
-          {block.columns.map((col, i) => <BlockList key={i} blocks={col} disabled={disabled} onFire={onFire} />)}
+          {block.columns.map((col, i) => <BlockList key={i} blocks={col} values={values} setValue={setValue} disabled={disabled} onFire={onFire} />)}
         </div>
       );
     case "accordion":
@@ -163,14 +207,14 @@ function BlockView({ block, disabled, onFire }: { block: AdminBlock; disabled: b
         <details className="rounded-lg border border-border bg-surface-card px-4 py-3" open={block.open}>
           <summary className="cursor-pointer text-sm font-medium text-fg">{block.title}</summary>
           <div className="mt-3">
-            <BlockList blocks={block.blocks} disabled={disabled} onFire={onFire} />
+            <BlockList blocks={block.blocks} values={values} setValue={setValue} disabled={disabled} onFire={onFire} />
           </div>
         </details>
       );
     case "actions":
-      return <ActionsBlock block={block} disabled={disabled} onFire={onFire} />;
+      return <ActionsBlock block={block} values={values} setValue={setValue} disabled={disabled} onFire={onFire} />;
     case "form":
-      return <FormBlock block={block} disabled={disabled} onFire={onFire} />;
+      return <FormBlock block={block} values={values} setValue={setValue} disabled={disabled} onFire={onFire} />;
     default:
       // An unknown block type comes from a server newer than this editor. Named rather than
       // skipped: a page whose one meaningful block silently vanished looks like missing data.
@@ -211,10 +255,9 @@ function cell(v: string | number | boolean | null | undefined): string {
   return String(v);
 }
 
-function ActionsBlock({ block, disabled, onFire }: { block: Extract<AdminBlock, { type: "actions" }>; disabled: boolean; onFire: (f: Fired) => void }) {
-  // An actions row may carry inputs alongside its buttons; they ride along on whichever
-  // button is pressed, which is what makes a "filter" row work without a form.
-  const [values, setValues] = useState<BlockValues>(() => initialValues(block.elements.filter(isInput)));
+function ActionsBlock({ block, values, setValue, disabled, onFire }: { block: Extract<AdminBlock, { type: "actions" }>; disabled: boolean; onFire: (f: Fired) => void } & ValueBag) {
+  // Inputs read and write the PAGE's value bag, not a local one — see `AdminPageView`.
+  // `onFire` attaches the whole bag, so a filter in this block reaches a button in another.
   return (
     <div className="flex flex-wrap items-end gap-3">
       {block.elements.map((el, i) =>
@@ -226,25 +269,24 @@ function ActionsBlock({ block, disabled, onFire }: { block: Extract<AdminBlock, 
             isDisabled={disabled}
             onPress={() => {
               if (el.confirm && !confirm(el.confirm)) return;
-              onFire({ type: "block_action", action_id: el.action_id, block_id: block.block_id, value: el.value ?? null, values });
+              onFire({ type: "block_action", action_id: el.action_id, block_id: block.block_id, value: el.value ?? null });
             }}
           >
             {el.label}
           </Button>
         ) : (
-          <InputView key={i} input={el} value={values[el.action_id]} onChange={(v) => setValues((s) => ({ ...s, [el.action_id]: v }))} disabled={disabled} />
+          <InputView key={el.action_id} input={el} value={values[el.action_id]} onChange={(v) => setValue(el.action_id, v)} disabled={disabled} />
         ),
       )}
     </div>
   );
 }
 
-function FormBlock({ block, disabled, onFire }: { block: Extract<AdminBlock, { type: "form" }>; disabled: boolean; onFire: (f: Fired) => void }) {
-  // Keyed on `block_id`: the server re-renders the WHOLE page on every interaction, so this
-  // component is remounted with fresh `initial_value`s each time. Without the key React
-  // reconciles it as the same instance and the local state survives — which would silently
-  // discard the values a submit just wrote back.
-  const [values, setValues] = useState<BlockValues>(() => initialValues(block.fields));
+function FormBlock({ block, values, setValue, disabled, onFire }: { block: Extract<AdminBlock, { type: "form" }>; disabled: boolean; onFire: (f: Fired) => void } & ValueBag) {
+  // No local state: the page owns the bag and re-seeds it from every response, so a form
+  // cannot keep values the server has since replaced. (The `block_id` key in `BlockList` is
+  // still what keeps two forms from sharing a React identity.)
+  //
   // A toggle is never "missing" — false is an answer.
   const missing = block.fields.filter((f) => f.type !== "toggle" && f.required && isEmpty(values[f.action_id]));
   return (
@@ -253,11 +295,11 @@ function FormBlock({ block, disabled, onFire }: { block: Extract<AdminBlock, { t
       onSubmit={(e) => {
         e.preventDefault();
         if (missing.length > 0 || disabled) return;
-        onFire({ type: "form_submit", action_id: block.submit.action_id, block_id: block.block_id, values });
+        onFire({ type: "form_submit", action_id: block.submit.action_id, block_id: block.block_id });
       }}
     >
       {block.fields.map((f) => (
-        <InputView key={f.action_id} input={f} value={values[f.action_id]} onChange={(v) => setValues((s) => ({ ...s, [f.action_id]: v }))} disabled={disabled} />
+        <InputView key={f.action_id} input={f} value={values[f.action_id]} onChange={(v) => setValue(f.action_id, v)} disabled={disabled} />
       ))}
       <div className="mt-1">
         <Button type="submit" isDisabled={disabled || missing.length > 0}>{block.submit.label}</Button>
@@ -270,6 +312,23 @@ function FormBlock({ block, disabled, onFire }: { block: Extract<AdminBlock, { t
 }
 
 const isInput = (el: AdminElement): el is AdminInput => el.type !== "button";
+
+/** Every input on a page, in declaration order, including those nested in `columns` and
+ * `accordion`. The page seeds its whole value bag from this on every response. */
+function collectInputs(blocks: readonly AdminBlock[], out: AdminInput[] = []): AdminInput[] {
+  for (const b of blocks) {
+    if (b.type === "form") out.push(...b.fields);
+    else if (b.type === "actions") out.push(...b.elements.filter(isInput));
+    else if (b.type === "columns") for (const col of b.columns) collectInputs(col, out);
+    else if (b.type === "accordion") collectInputs(b.blocks, out);
+  }
+  return out;
+}
+
+/** The page's value bag as a fresh response describes it. */
+function seedValues(blocks: readonly AdminBlock[]): BlockValues {
+  return initialValues(collectInputs(blocks));
+}
 
 function initialValues(inputs: readonly AdminInput[]): BlockValues {
   const out: BlockValues = {};

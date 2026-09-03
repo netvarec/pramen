@@ -281,7 +281,18 @@ export function cmsLoader(opts: CmsLoaderOptions): Loader {
  */
 export async function redirectResponse(client: CmsClient, url: URL | string): Promise<Response | null> {
   const path = typeof url === "string" ? url : url.pathname;
-  const hit = await client.resolveRedirect(path);
+  // Every failure degrades to "no redirect", because this runs ON THE 404 PATH: a throw
+  // here turns every miss on the site into a 500. And there are several — `//pricing`
+  // (doubled slash) is refused by the server's own path rule, a backend predating
+  // `resolveRedirect` answers 400, and an anonymous role predating the `cms_redirects`
+  // grant is denied. None of those is a reason to stop rendering a 404. `getPage` already
+  // degrades this way; this did not.
+  let hit: { to: string; status: number } | null = null;
+  try {
+    hit = await client.resolveRedirect(path);
+  } catch {
+    return null;
+  }
   if (!hit) return null;
   const to = normalizeHref(hit.to);
   const ok = /^https?:\/\//i.test(to) || (to.startsWith("/") && !to.startsWith("//") && !to.startsWith("/\\"));

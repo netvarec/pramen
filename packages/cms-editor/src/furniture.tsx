@@ -11,6 +11,7 @@
 
 import { Button, Heading, Input } from "@podoba/react";
 import { useCallback, useEffect, useState } from "react";
+import { useUnsavedGuard } from "./app-context";
 import type { Api } from "./api";
 import { CONTROL, RichText, slugify } from "./fields";
 import type { CollectionMeta, Menu, MenuItem, MenuItemKind, Page, Redirect, RichTextDoc, Taxonomy, Term, Widget, WidgetArea } from "./types";
@@ -167,6 +168,11 @@ export function MenuEditor({ api, name, collections, onBack, onDeleted, onError,
   const [menu, setMenu] = useState<Menu | null>(null);
   const [items, setItems] = useState<MenuItem[]>([]);
   const [label, setLabel] = useState("");
+  // The whole tree is edited locally and written only by "Save menu", so leaving the screen
+  // discards it. Nothing prompted before this — `PageEditor` was the only screen that ever
+  // registered a guard.
+  const [baseline, setBaseline] = useState("");
+  useUnsavedGuard(menu !== null && JSON.stringify({ label, items }) !== baseline);
   const [missing, setMissing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [ok, setOk] = useState(false);
@@ -186,6 +192,7 @@ export function MenuEditor({ api, name, collections, onBack, onDeleted, onError,
         const m = all.find((x) => x.name === name);
         if (!m) { setMissing(true); return; }
         setMenu(m); setLabel(m.label); setItems(m.items ?? []);
+        setBaseline(JSON.stringify({ label: m.label, items: m.items ?? [] }));
       })
       .catch((e) => onError(errText(e)));
     api.listPages({ limit: 200 }).then((r) => live && setPages(r)).catch(() => setPages([]));
@@ -213,6 +220,7 @@ export function MenuEditor({ api, name, collections, onBack, onDeleted, onError,
     setBusy(true);
     try {
       await api.updateMenu(menu.id, { label, items });
+      setBaseline(JSON.stringify({ label, items }));
       setOk(true); setTimeout(() => setOk(false), 1200);
     } catch (e) { onError(errText(e)); } finally { setBusy(false); }
   };
@@ -738,6 +746,8 @@ export function WidgetAreaEditor({ api, name, onBack, onDeleted, onError, canEdi
   const [label, setLabel] = useState("");
   const [widgets, setWidgets] = useState<Widget[]>([]);
   const [menus, setMenus] = useState<Menu[]>([]);
+  const [baseline, setBaseline] = useState("");
+  useUnsavedGuard(area !== null && JSON.stringify({ label, widgets }) !== baseline);
   const [missing, setMissing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [ok, setOk] = useState(false);
@@ -750,6 +760,7 @@ export function WidgetAreaEditor({ api, name, onBack, onDeleted, onError, canEdi
         const a = all.find((x) => x.name === name);
         if (!a) { setMissing(true); return; }
         setArea(a); setLabel(a.label); setWidgets(a.widgets ?? []);
+        setBaseline(JSON.stringify({ label: a.label, widgets: a.widgets ?? [] }));
       })
       .catch((e) => onError(errText(e)));
     api.listMenus().then((r) => live && setMenus(r)).catch(() => setMenus([]));
@@ -761,6 +772,7 @@ export function WidgetAreaEditor({ api, name, onBack, onDeleted, onError, canEdi
     setBusy(true);
     try {
       await api.updateWidgetArea(area.id, { label, widgets });
+      setBaseline(JSON.stringify({ label, widgets }));
       setOk(true); setTimeout(() => setOk(false), 1200);
     } catch (e) { onError(errText(e)); } finally { setBusy(false); }
   };

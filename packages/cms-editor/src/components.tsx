@@ -672,7 +672,7 @@ export function CollectionEditor({ api, def, id, onSaved, onDeleted, onBack, onE
 // --- page editor -------------------------------------------------------------
 
 export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange, registerGuard }: { api: Api; page: Page; blockTypes: BlockType[]; tab: InspectorTab; onTab: (t: InspectorTab) => void; onBack: () => void; onChange: (p: Page) => void; registerGuard: (fn: (() => boolean) | null) => void }) {
-  const { cms: { multilingual, siteFurniture } } = useApp();
+  const { cms: { multilingual, siteFurniture, canEdit } } = useApp();
   const [ct, setCt] = useState<ContentType | null>(null);
   const [assembled, setAssembled] = useState<AssembledPage | null>(null);
   const [err, setErr] = useState("");
@@ -919,7 +919,7 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
         {tab === "seo" ? <SeoPanel api={api} page={page} onError={setErr} /> : null}
         {tab === "workflow" ? <Workflow api={api} page={page} onChanged={(p) => { onChange(p); }} onError={setErr} /> : null}
         {tab === "i18n" && multilingual ? <I18n api={api} page={page} onError={setErr} /> : null}
-        {tab === "terms" ? <PageTerms api={api} pageId={page.id} onError={setErr} /> : null}
+        {tab === "terms" ? <PageTerms api={api} pageId={page.id} canEdit={canEdit} onError={setErr} /> : null}
         {tab === "audit" ? <AuditLog api={api} pageId={page.id} onError={setErr} /> : null}
       </div>
     </div>
@@ -1418,7 +1418,7 @@ function I18n({ api, page, onError }: { api: Api; page: Page; onError: (s: strin
  * time, so the panel holds the selection and saves it as a unit. Two calls each patching
  * one end of it race into a state neither asked for.
  */
-function PageTerms({ api, pageId, onError }: { api: Api; pageId: string; onError: (s: string) => void }) {
+function PageTerms({ api, pageId, canEdit, onError }: { api: Api; pageId: string; canEdit: boolean; onError: (s: string) => void }) {
   const [taxa, setTaxa] = useState<Taxonomy[] | null>(null);
   const [terms, setTerms] = useState<Record<string, Term[]>>({});
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
@@ -1474,14 +1474,17 @@ function PageTerms({ api, pageId, onError }: { api: Api; pageId: string; onError
             {(terms[t.slug] ?? []).length === 0 ? <span className="text-caption text-fg-subtle">No terms yet.</span> : null}
             {(terms[t.slug] ?? []).map((term) => (
               <label key={term.id} className="flex items-center gap-2">
-                <input type="checkbox" checked={selected.has(term.id)} onChange={() => toggle(term.id)} />
+                {/* `setPageTerms` is editor-gated, so a reviewer got live checkboxes and a
+                    Save button that 403s — the one new write surface that did not take
+                    `canEdit`. */}
+                <input type="checkbox" disabled={!canEdit} checked={selected.has(term.id)} onChange={() => toggle(term.id)} />
                 <span className="text-sm text-fg">{term.label}</span>
               </label>
             ))}
           </div>
         </div>
       ))}
-      <Button size="sm" className="self-start" onPress={save} isDisabled={busy}>{busy ? "Saving…" : "Save terms"}</Button>
+      {canEdit ? <Button size="sm" className="self-start" onPress={save} isDisabled={busy}>{busy ? "Saving…" : "Save terms"}</Button> : null}
     </div>
   );
 }

@@ -540,6 +540,15 @@ export interface Menu {
  * navigation is more than three levels anyway. */
 export const MAX_MENU_DEPTH = 5;
 
+/** How many items one menu may hold, at every level combined.
+ *
+ * Depth alone is not a bound: a FLAT list of 800 `page` items is legal under
+ * `MAX_MENU_DEPTH` and turns every anonymous `getMenu` — the read on every page render of
+ * the site — into a single `WHERE id IN (?×800)`, which the read engine emits with no
+ * chunking. Every other read added alongside this one is bounded (`MAX_TERMS`,
+ * `clampLimit`); this one was not, and it is the one on the hot path. */
+export const MAX_MENU_ITEMS = 200;
+
 /** A classification vocabulary — `category`, `tag`, `region`, whatever the site sorts by. */
 export interface Taxonomy {
   id: string;
@@ -1172,7 +1181,7 @@ export function validateFieldSchema(raw: unknown, path = "fieldsSchema", depth =
       // `optionsFrom` takes precedence at render time, so requiring options alongside it
       // would reject the live-data case the option exists for.
       if (typeof o.optionsFrom === "string" && o.optionsFrom.trim() !== "") {
-        f.optionsFrom = o.optionsFrom.trim();
+        f.optionsFrom = assertHandlerName(o.optionsFrom, `${at}.optionsFrom`);
       } else {
         const options = Array.isArray(o.options) ? o.options.map((v) => String(v).trim()).filter((v) => v !== "") : [];
         if (options.length === 0) throw new BadRequest(`${at} is a 'select' and needs either \`options\` or an \`optionsFrom\` handler`);
@@ -1184,9 +1193,10 @@ export function validateFieldSchema(raw: unknown, path = "fieldsSchema", depth =
       // not there is a control that silently never follows anything.
       if (typeof o.from === "string" && o.from.trim() !== "") f.from = o.from.trim();
     } else if (type === "reference") {
-      const from = typeof o.referenceFrom === "string" ? o.referenceFrom.trim() : "";
-      if (!from) throw new BadRequest(`${at} is a 'reference' and needs a \`referenceFrom\` query handler`);
-      f.referenceFrom = from;
+      if (typeof o.referenceFrom !== "string" || o.referenceFrom.trim() === "") {
+        throw new BadRequest(`${at} is a 'reference' and needs a \`referenceFrom\` query handler`);
+      }
+      f.referenceFrom = assertHandlerName(o.referenceFrom, `${at}.referenceFrom`);
       if (o.multiple === true) f.multiple = true;
     }
     return f;
@@ -1878,6 +1888,41 @@ function assertRegistryKey(v: unknown, what: string): string {
   return str;
 }
 
+/**
+ * An RPC handler name, as an authored field schema may name one (`optionsFrom`,
+ * `referenceFrom`).
+ *
+ * Shape-checked rather than merely non-empty, because the editor interpolates it straight
+ * into a request path — `fetch(\`${base}/rpc/${name}\`)`. `"../admin/data"` normalizes to
+ * `/admin/data`, so a stored string an EDITOR authored became an arbitrary same-origin
+ * authenticated POST fired by whoever opened the block — including an admin, whose token
+ * passes the `/admin/*` gate the editor role cannot. A handler name is an identifier;
+ * nothing that can traverse a path is one.
+ */
+function assertHandlerName(v: unknown, what: string): string {
+  const str = typeof v === "string" ? v.trim() : "";
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(str) || str.length > 80) {
+    throw new BadRequest(`${what} must be a handler name (a letter or underscore, then letters/digits/underscores), got ${JSON.stringify(v)}`);
+  }
+  return str;
+}
+
+/**
+ * A menu item's `ref` for a non-`custom` kind.
+ *
+ * `menuHref` interpolates this into a path, so a ref starting with `/` produced
+ * `//evil.example/` — protocol-relative, off-origin, in the site's primary nav on every
+ * page — while the sibling `custom` branch three lines away ran the same string through
+ * `isSafeHref`. A reference is an id or a slug: no slashes, no scheme, no dots.
+ */
+function assertRef(v: unknown, label: string, kind: MenuItemKind): string {
+  const str = typeof v === "string" ? v.trim() : "";
+  if (!/^[A-Za-z0-9_-]{1,200}$/.test(str)) {
+    throw new BadRequest(`menu item '${label}' is a '${kind}' item, so its \`ref\` must be an id or slug (letters, digits, hyphens, underscores), got ${JSON.stringify(v)}`);
+  }
+  return str;
+}
+
 function assertLabel(v: unknown, what: string): string {
   const s = typeof v === "string" ? v.trim() : "";
   if (!s) throw new BadRequest(`${what} must not be empty`);
@@ -1891,13 +1936,16 @@ function assertLabel(v: unknown, what: string): string {
  * so anything in the posted object would be stored verbatim and handed to a layout that
  * renders it. Rebuilding is what makes the stored document exactly the declared shape.
  */
-function normalizeMenuItems(raw: unknown, depth = 0): MenuItem[] {
+function normalizeMenuItems(raw: unknown, depth = 0, budget = { left: MAX_MENU_ITEMS }): MenuItem[] {
   if (!Array.isArray(raw)) {
     if (raw == null) return [];
     throw new BadRequest("menu items must be a list");
   }
   if (depth >= MAX_MENU_DEPTH) throw new BadRequest(`menu items may nest at most ${MAX_MENU_DEPTH} levels deep`);
   return raw.map((entry, i) => {
+    // Counted across the WHOLE tree, not per level — the budget is threaded through the
+    // recursion for that reason.
+    if (--budget.left < 0) throw new BadRequest(`a menu may hold at most ${MAX_MENU_ITEMS} items`);
     const o = asObj(entry) as Record<string, unknown>;
     const label = assertLabel(o.label, `menu item [${i}] label`);
     const kind = (typeof o.kind === "string" ? o.kind : "custom") as MenuItemKind;
@@ -1915,9 +1963,7 @@ function normalizeMenuItems(raw: unknown, depth = 0): MenuItem[] {
       if (!isSafeHref(url)) throw new BadRequest(`menu item '${label}' needs a valid url (http(s), mailto:, tel:, a rooted path, or #anchor)`);
       item.url = url;
     } else {
-      const ref = typeof o.ref === "string" ? o.ref.trim() : "";
-      if (!ref) throw new BadRequest(`menu item '${label}' is a '${kind}' item, so it needs a \`ref\``);
-      item.ref = ref;
+      item.ref = assertRef(o.ref, label, kind);
     }
     // `target` is written into an anchor; anything but the four browsing-context keywords
     // is a named window, which is a way to reuse a tab the site does not own.
@@ -1927,7 +1973,7 @@ function normalizeMenuItems(raw: unknown, depth = 0): MenuItem[] {
     }
     if (typeof o.titleAttr === "string" && o.titleAttr !== "") item.titleAttr = o.titleAttr;
     if (typeof o.cssClasses === "string" && o.cssClasses !== "") item.cssClasses = o.cssClasses;
-    const children = normalizeMenuItems(o.children, depth + 1);
+    const children = normalizeMenuItems(o.children, depth + 1, budget);
     if (children.length > 0) item.children = children;
     return item;
   });
@@ -1971,7 +2017,41 @@ export function normalizeRedirectPath(raw: unknown): string {
     throw new BadRequest(`redirect path must be a rooted path like /old-url, got ${JSON.stringify(raw)}`);
   }
   const path = s.split("#")[0]!.split("?")[0]!;
-  return path.length > 1 ? path.replace(/\/+$/, "") || "/" : "/";
+  const trimmed = path.length > 1 ? path.replace(/\/+$/, "") || "/" : "/";
+  // PERCENT-ENCODED, through the same parser the request goes through. A visitor's path
+  // reaches `resolveRedirect` as `url.pathname`, which the WHATWG parser has already
+  // encoded — so an editor typing `/o-nás` stored a string that the exact-match lookup
+  // could never be handed, and the redirect silently never fired. On precisely the
+  // non-English sites where slug changes are most common. Idempotent: an already-encoded
+  // path parses back to itself.
+  try {
+    return new URL(trimmed, "https://pramen.invalid").pathname;
+  } catch {
+    throw new BadRequest(`redirect path is not a usable path: ${JSON.stringify(raw)}`);
+  }
+}
+
+/**
+ * Is this redirect a loop — does its destination resolve back to its own source?
+ *
+ * Compared through `normalizeRedirectPath` on BOTH sides, which a raw `from === to` did
+ * not do: `from: "/old", to: "/old/"` differ as strings, so the guard passed — and then a
+ * visitor hitting `/old` was sent to `/old/`, whose 404 handler canonicalizes the trailing
+ * slash back to `/old` and matches the same row. An infinite redirect, from the one pair
+ * the guard exists to catch. (A test here even asserted this pair was fine, on the reading
+ * that a trailing-slash redirect is a normal canonicalization — true in general, and not
+ * true when the lookup canonicalizes the slash away again.)
+ *
+ * An absolute destination is never a loop with a rooted source: it names an origin, and
+ * `resolveRedirect` is only ever handed a path.
+ */
+function isSelfRedirect(fromPath: string, toPath: string): boolean {
+  if (/^https?:\/\//i.test(toPath)) return false;
+  try {
+    return normalizeRedirectPath(toPath) === fromPath;
+  } catch {
+    return false;
+  }
 }
 
 /** A redirect's destination: a rooted path or an absolute http(s) url. `mailto:`/`tel:` are
@@ -2346,6 +2426,77 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     }
   };
 
+    /**
+     * One stored menu row, with its references resolved to hrefs.
+     *
+     * Shared by `getMenu` and `getWidgetArea` rather than inlined in the first: a `menu`
+     * widget embeds a menu, and returning its RAW items there skipped every rule this
+     * function exists to apply — a `page` item came back with no `url` at all (the layout
+     * renders `href=undefined`) and an UNPUBLISHED page's label and id were served to
+     * anonymous callers, which is precisely what the drop below prevents on the other path.
+     */
+    const resolveMenuRow = async (db: CmsDb, row: Record<string, unknown>): Promise<Menu> => {
+      const items = Array.isArray(row.items) ? (row.items as MenuItem[]) : [];
+
+      // Two lookups for the whole tree, not one per item. Both go through `ctx.db`, so the
+      // caller's own read scope applies: for an anonymous visitor that is the public policy
+      // (published, not trashed), which is precisely the filter a menu needs — a link to a
+      // page that has been unpublished must not render.
+      const pageIds = new Set<string>();
+      const termIds = new Set<string>();
+      collectMenuRefs(items, pageIds, termIds);
+      const pages = new Map<string, { slug: string; locale: string }>();
+      if (pageIds.size > 0) {
+        const found = await db.find({ from: "cms_pages", where: { id: { in: [...pageIds] } }, select: ["id", "slug", "locale"], limit: pageIds.size });
+        for (const p of found) pages.set(String(p.id), { slug: String(p.slug), locale: String(p.locale ?? defaultLocale) });
+      }
+      const terms = new Map<string, { slug: string; taxonomy: string }>();
+      if (termIds.size > 0) {
+        const found = await db.find({ from: "cms_terms", where: { id: { in: [...termIds] } }, select: ["id", "slug", "taxonomyId"], limit: termIds.size });
+        const taxIds = [...new Set(found.map((t) => String(t.taxonomyId)))];
+        const taxa = taxIds.length > 0 ? await db.find({ from: "cms_taxonomies", where: { id: { in: taxIds } }, select: ["id", "slug"], limit: taxIds.length }) : [];
+        const taxSlug = new Map(taxa.map((t) => [String(t.id), String(t.slug)]));
+        for (const t of found) {
+          const tax = taxSlug.get(String(t.taxonomyId));
+          if (tax) terms.set(String(t.id), { slug: String(t.slug), taxonomy: tax });
+        }
+      }
+
+      // An item whose target no longer resolves is DROPPED, together with its subtree. A
+      // nav entry that renders no href is a dead link on every page of the site, and
+      // hoisting orphaned children would silently promote a third-level item into the top
+      // bar. The editor's own `listMenus` returns the raw tree, so nothing is lost there.
+      const resolve = (list: readonly MenuItem[]): MenuItem[] => {
+        const out: MenuItem[] = [];
+        for (const item of list) {
+          let url = item.url;
+          if (item.kind === "page") {
+            const page = item.ref ? pages.get(item.ref) : undefined;
+            if (!page) continue;
+            url = menuHref({ kind: "page", slug: page.slug, locale: page.locale });
+          } else if (item.kind === "term") {
+            const term = item.ref ? terms.get(item.ref) : undefined;
+            if (!term) continue;
+            url = menuHref({ kind: "term", taxonomy: term.taxonomy, slug: term.slug });
+          } else if (item.kind === "collection") {
+            if (!item.ref) continue;
+            url = menuHref({ kind: "collection", slug: item.ref });
+          }
+          // The MINTED url goes through the same allow-list the `custom` branch enforces on
+          // write. A reference is interpolated into a path (`/${slug}/`), and a `ref` that
+          // began with a slash produced `//evil.example/` — protocol-relative, off-origin,
+          // in the site's primary nav on every page. `assertRef` refuses that shape on
+          // write; this is the second half, because `menuHref` is host-supplied and a
+          // deployment's own mapping can build an unsafe href out of a safe ref.
+          if (!url || !isSafeHref(url)) continue;
+          const children = item.children ? resolve(item.children) : [];
+          out.push({ ...item, url, ...(children.length > 0 ? { children } : { children: undefined }) });
+        }
+        return out;
+      };
+      return { id: String(row.id), name: String(row.name), label: String(row.label), items: resolve(items) };
+    };
+
   const TASK_PUBLISH = "cms:publish";
   const TASK_UNPUBLISH = "cms:unpublish";
 
@@ -2494,63 +2645,10 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
      * menu it has not created yet is the normal state of a site being built, and a thrown
      * error there takes down every page instead of rendering no nav. */
     getMenu: query(async (ctx, input: { name: string }): Promise<Menu | null> => {
-      const db = cdb(ctx);
-      const rows = await db.find({ from: "cms_menus", where: { name: input.name }, limit: 1 });
+      const rows = await cdb(ctx).find({ from: "cms_menus", where: { name: input.name }, limit: 1 });
       const row = rows[0];
       if (!row) return null;
-      const items = Array.isArray(row.items) ? (row.items as MenuItem[]) : [];
-
-      // Two lookups for the whole tree, not one per item. Both go through `ctx.db`, so the
-      // caller's own read scope applies: for an anonymous visitor that is the public policy
-      // (published, not trashed), which is precisely the filter a menu needs — a link to a
-      // page that has been unpublished must not render.
-      const pageIds = new Set<string>();
-      const termIds = new Set<string>();
-      collectMenuRefs(items, pageIds, termIds);
-      const pages = new Map<string, { slug: string; locale: string }>();
-      if (pageIds.size > 0) {
-        const found = await db.find({ from: "cms_pages", where: { id: { in: [...pageIds] } }, select: ["id", "slug", "locale"], limit: pageIds.size });
-        for (const p of found) pages.set(String(p.id), { slug: String(p.slug), locale: String(p.locale ?? defaultLocale) });
-      }
-      const terms = new Map<string, { slug: string; taxonomy: string }>();
-      if (termIds.size > 0) {
-        const found = await db.find({ from: "cms_terms", where: { id: { in: [...termIds] } }, select: ["id", "slug", "taxonomyId"], limit: termIds.size });
-        const taxIds = [...new Set(found.map((t) => String(t.taxonomyId)))];
-        const taxa = taxIds.length > 0 ? await db.find({ from: "cms_taxonomies", where: { id: { in: taxIds } }, select: ["id", "slug"], limit: taxIds.length }) : [];
-        const taxSlug = new Map(taxa.map((t) => [String(t.id), String(t.slug)]));
-        for (const t of found) {
-          const tax = taxSlug.get(String(t.taxonomyId));
-          if (tax) terms.set(String(t.id), { slug: String(t.slug), taxonomy: tax });
-        }
-      }
-
-      // An item whose target no longer resolves is DROPPED, together with its subtree. A
-      // nav entry that renders no href is a dead link on every page of the site, and
-      // hoisting orphaned children would silently promote a third-level item into the top
-      // bar. The editor's own `listMenus` returns the raw tree, so nothing is lost there.
-      const resolve = (list: readonly MenuItem[]): MenuItem[] => {
-        const out: MenuItem[] = [];
-        for (const item of list) {
-          let url = item.url;
-          if (item.kind === "page") {
-            const page = item.ref ? pages.get(item.ref) : undefined;
-            if (!page) continue;
-            url = menuHref({ kind: "page", slug: page.slug, locale: page.locale });
-          } else if (item.kind === "term") {
-            const term = item.ref ? terms.get(item.ref) : undefined;
-            if (!term) continue;
-            url = menuHref({ kind: "term", taxonomy: term.taxonomy, slug: term.slug });
-          } else if (item.kind === "collection") {
-            if (!item.ref) continue;
-            url = menuHref({ kind: "collection", slug: item.ref });
-          }
-          if (!url) continue;
-          const children = item.children ? resolve(item.children) : [];
-          out.push({ ...item, url, ...(children.length > 0 ? { children } : { children: undefined }) });
-        }
-        return out;
-      };
-      return { id: String(row.id), name: String(row.name), label: String(row.label), items: resolve(items) };
+      return resolveMenuRow(cdb(ctx), row);
     }, {
       input: (raw): { name: string } => ({ name: assertKey(asObj(raw).name, "menu name") }),
     }),
@@ -2635,7 +2733,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     createRedirect: mutation(async (ctx, input: RedirectPatch & { fromPath: string; toPath: string }) => {
       // A redirect to itself is an infinite loop the moment it is enabled, and the browser
       // is what discovers it. Cheap to refuse here; impossible to diagnose from the outside.
-      if (input.fromPath === input.toPath) throw new BadRequest("a redirect cannot point at itself");
+      if (isSelfRedirect(input.fromPath, input.toPath)) throw new BadRequest("a redirect cannot point at itself");
       const db = cdb(ctx);
       const clash = await db.find({ from: "cms_redirects", where: { fromPath: input.fromPath }, select: ["id"], limit: 1 });
       if (clash[0]) throw new Conflict(`a redirect from '${input.fromPath}' already exists`);
@@ -2658,7 +2756,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       if (!row) throw notFound("redirect");
       const from = input.fromPath ?? String(row.fromPath);
       const to = input.toPath ?? String(row.toPath);
-      if (from === to) throw new BadRequest("a redirect cannot point at itself");
+      if (isSelfRedirect(from, to)) throw new BadRequest("a redirect cannot point at itself");
       if (input.fromPath && input.fromPath !== row.fromPath) {
         const clash = await db.find({ from: "cms_redirects", where: { fromPath: input.fromPath }, select: ["id"], limit: 1 });
         if (clash[0]) throw new Conflict(`a redirect from '${input.fromPath}' already exists`);
@@ -2882,6 +2980,15 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     /** A page's assigned terms. PUBLIC (a published page's classification is public). */
     listPageTerms: query(async (ctx, input: { pageId: string }): Promise<Term[]> => {
       const db = cdb(ctx);
+      // Read the PAGE first, through `ctx.db`, so the caller's own page scope decides
+      // whether this answers at all. Without it the handler never touched `cms_pages` — and
+      // the public grants on the junction and on terms are unscoped `allow()` — so anyone
+      // holding a page id could read a draft or trashed page's classification, and the
+      // non-empty answer confirmed the page exists. `listPagesByTerm` was already safe for
+      // the opposite reason: it traverses `where: { terms: … }`, so the page scope
+      // AND-merges. This is the same rule, applied from the other end.
+      const page = await db.find({ from: "cms_pages", where: { id: input.pageId }, select: ["id"], limit: 1 });
+      if (!page[0]) return [];
       const links = await db.find({ from: "cms_page_terms", where: { pageId: input.pageId }, select: ["termId"], limit: MAX_TERMS });
       const ids = links.map((l) => String(l.termId));
       if (ids.length === 0) return [];
@@ -2985,7 +3092,11 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       const menus = new Map<string, Menu>();
       if (names.length > 0) {
         const found = await db.find({ from: "cms_menus", where: { name: { in: names } }, limit: names.length });
-        for (const m of found) menus.set(String(m.name), { id: String(m.id), name: String(m.name), label: String(m.label), items: Array.isArray(m.items) ? (m.items as MenuItem[]) : [] });
+        // RESOLVED, exactly as `getMenu` returns it. Embedding the raw row here served an
+        // unpublished page's label and id to anonymous callers and handed the layout an
+        // item with no `url` — the two things the resolver exists to prevent, skipped
+        // because this path had its own one-line copy of "read the menu".
+        for (const m of found) menus.set(String(m.name), await resolveMenuRow(db, m));
       }
       return {
         id: String(row.id),
