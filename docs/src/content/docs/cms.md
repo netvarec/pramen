@@ -30,6 +30,17 @@ export const app = {
 };
 ```
 
+### Which store
+
+Both. The CMS is an ordinary app fragment, so it runs on the Durable Object (the default)
+and on D1 unchanged — same schema, same ACL, same handlers. See [Stores](/stores/).
+
+D1 is *usually* the right choice for a CMS behind a site, because it is a binding: the whole
+backend can live inside the site's own Worker, where a Durable Object would have to be
+exported from the worker entry. Reach for the DO when a mutation must be atomic, when you
+want live queries, or when tenants must be isolated by construction. Signed preview links
+work on either.
+
 ### Model
 
 | Concept | Table | Notes |
@@ -47,6 +58,7 @@ export const app = {
 | **Taxonomy** / **Term** | `cms_taxonomies`, `cms_terms` | vocabularies you declare; terms nest only where the vocabulary says so. |
 | **Term assignment** | `cms_page_terms` | the explicit `manyToMany` junction, so `where: { terms: … }` traverses it. |
 | **Widget area** | `cms_widget_areas` | a named layout slot; a `menu` widget resolves inline on read. |
+| **Collection revision** | `cms_collection_revisions` | append-only snapshots for a collection with `supports: ["revisions"]`. |
 
 ### Content API
 
@@ -66,6 +78,24 @@ live draft.
 - **Scheduling** — `schedulePage` uses intent-token outbox tasks (cancel-on-reschedule).
 - **SEO** — per-page meta/canonical/robots/OpenGraph/JSON-LD + `GET /sitemap.xml` and
   `/robots.txt` (`cmsRoutes()`).
+- **Soft delete** — `deletePage` trashes (stamps `deletedAt`); `listTrash` shows what is
+  trashed, `restorePage` puts it back, `purgePage` removes it for good (row, placements,
+  revisions, audit, R2 object). The filter is in the ACL, not in each handler, so a trashed
+  page disappears from the public API, the editor, relation traversals and eager-loads at
+  once. Same four for media.
+- **Optimistic concurrency** — every page and block carries a `version`. Pass the one you
+  read back as `expectedVersion` and a stale write is refused with a **409** instead of
+  silently clobbering a colleague's edit. Optional: omit it for last-write-wins.
+- **Preview links** — `signPagePreview({ pageId })` mints a signed, self-expiring URL scoped
+  to one page. Minting is editor-gated; **redeeming needs no account**, which is the point —
+  the stakeholder reviewing copy before it ships usually has none. Works on both stores.
+- **Structured rich text** — a `richtext` value is a document *tree*, not an HTML string, so
+  there is no markup to sanitize: the write path validates it against a node/mark allow-list
+  and the render side maps node types to your components.
+- **Declared locales** — `createCmsHandlers({ locales: ["cs", "en"] })`. The deployment
+  declares what it publishes in and the editor renders its i18n surface off
+  `listCmsCapabilities`; one locale means no i18n chrome at all. `locales[0]` is the default
+  a page is stamped with.
 
 ### Typed blocks (hybrid)
 
@@ -121,6 +151,63 @@ so an object literal or a `.map` reaches the store without going near them.
 Composing two reconcilers (a package shipping its own block types beside the app's) needs a
 distinct `owner`: `cmsBootstrap(defs, { owner: "my-package" })`. Each releases only what it
 wrote.
+
+### Collections
+
+The block/page model is one opinionated shape: a routable page with a mandatory slug and
+regions of blocks. A **collection** is the escape hatch — it points the editor at **one of
+your own pramen entities** and edits it with the same `FieldDefinition[]` DSL blocks use. So
+"Lectures" is a first-class queryable entity (real columns, relations, cell-level ACL) that
+*also* gets a list and a form. No `cms_pages` row, no slug.
+
+```ts
+import { collection, createCollectionHandlers, collectionPolicies } from "@pramen/cms";
+
+const lectures = collection("lectures", {
+  entity: "lectures",                       // one of YOUR entities, spread into defineSchema
+  label: "Lecture",
+  list: ["title", "speaker", "status"],     // the list columns
+  fields: [
+    { name: "title", type: "text", required: true },
+    { name: "speaker", type: "text" },
+  ],
+});
+
+handlers = { ...createCollectionHandlers([lectures], { schema }) };
+acl = [role("editor", [...collectionPolicies([lectures])])];
+```
+
+It is **column-mapped**: each scalar field is a real column, and a `repeater`/`group` maps to
+a `t.json()` one. That is what buys filtering, ordering, pagination, row and cell ACL, and
+`where` traversal into CMS content — they follow from it being a table, not from the
+collection wrapper.
+
+The `schema` argument is required, and the whole registry is validated against your entities
+at boot: the managed columns exist and are nullable, every declared field maps to a column
+that can hold it, `idField` is the primary key, and no two collections share an entity (the
+ACL would OR-merge that into a *widened* read scope). Writes are whitelisted to declared
+fields, so a caller cannot set an undeclared column like a `passwordHash`, and an unknown
+slug is a 400 rather than a raw table reference.
+
+#### Workflow (`supports`)
+
+A collection is plain CRUD by default — no notion of published. `supports` opts it into the
+page-style workflow:
+
+```ts
+collection("talks", { entity: "talks", label: "Talk", fields: [...],
+  supports: ["drafts", "scheduling", "revisions", "preview"] })
+```
+
+Each feature is backed by **managed columns on your entity** — you declare them, the CMS owns
+their values (`status`, `publishedAt`, `scheduledAt`, `unpublishAt`, …). The editor renders
+the matching controls on a row: Publish/Unpublish, a schedule picker, a preview link, a
+restorable revision list. `collectionPublicPolicies` is the actual boundary, AND-merged into
+every `ctx.db` read, so an unpublished row is invisible to your public queries and relation
+traversals alike — not filtered in the UI.
+
+`supports` gates **visibility, not content**: a collection is column-mapped, so an edit to a
+published row goes live at once. There is no staged snapshot the way a page has one.
 
 ### Site furniture
 

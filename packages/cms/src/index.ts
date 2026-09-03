@@ -4330,11 +4330,11 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     signPagePreview: query(async (ctx, input: { pageId: string; expiresIn?: number }) => {
       const secret = previewSecret(ctx.env);
       if (!secret) throw previewUnconfigured(); // fail closed — never mint a forgeable link
-      // The redeem route always reaches a Durable Object (callPrivileged -> PRAMEN.get); it
-      // has no notion of `x-pramen-store`. Minting on the D1 store therefore produces a
-      // link that 404s forever while the editor reports success — refuse instead of
-      // handing out a token that cannot work.
-
+      // This used to refuse on the D1 store: redemption goes through `ctx.callPrivileged`,
+      // which only forwarded to a DO, so a link minted on D1 would have 404'd forever while
+      // the editor reported success. `callPrivileged` now dispatches locally in the Worker
+      // on D1, so both stores mint. The redeem route is a BROWSER request carrying no
+      // `x-pramen-store`, so a D1 deployment still needs `PRAMEN_STORE=d1` to route it.
       const db = cdb(ctx);
       // Read the page through the ACL first: minting a link is granting access to it, so a
       // caller who cannot read the page must not be able to mint a link that can.
@@ -5626,7 +5626,7 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
     // ---- preview ------------------------------------------------------------
 
     /** Mint a signed link that shows ONE row's unpublished state, to whoever holds it.
-     * Mirrors `signPagePreview` — same secret, same TTL clamp, same D1 refusal, and the
+     * Mirrors `signPagePreview` — same secret, same TTL clamp, works on both stores, and the
      * same rule that the row is read through the ACL FIRST: minting a link is granting
      * access to the row, so a caller who cannot read it must not be able to mint one. */
     signCollectionPreview: query(async (ctx, input: { collection: string; id: string; expiresIn?: number }) => {
