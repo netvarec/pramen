@@ -30,6 +30,7 @@ import {
   type JsonValue,
   type EnvBag,
   type WhereClause,
+  type MigrationContext,
 } from "@pramen/server";
 import {
   authSchema,
@@ -927,6 +928,37 @@ const seededDoc = defineContentType("seeded_doc", {
   regions: [{ name: "content", allowedTypes: ["seeded_note"] }],
 });
 
+// Data migrations: the imperative, recorded half of schema evolution. `migrate()` diffs
+// SHAPES and so can only enact structure; these transform DATA — and unlike `bootstrap`
+// each runs exactly ONCE per (id, partition), recorded in `_pramen_migrations`, so a
+// non-idempotent backfill is safe. Ordered, and fail closed: a throw aborts the tenant's
+// boot rather than recording a half-finished backfill as done.
+//
+// Both of these are written as `WHERE ... IS NULL` backfills, which is what you want
+// anyway: on the D1 store the ledger claim and the work are NOT atomic (D1 has no
+// interactive transactions), so a mid-flight failure releases the claim and re-runs.
+const migrations = [
+  {
+    // The raw-driver path: one bulk UPDATE is the right shape for a backfill — walking rows
+    // through ctx.db on a large table is what blows the DO's wall-clock budget.
+    id: "2026-09-03-backfill-note-meta",
+    async up({ driver }: MigrationContext<typeof schema>) {
+      await driver.exec(`UPDATE "notes" SET "meta" = '{}' WHERE "meta" IS NULL`, []);
+    },
+  },
+  {
+    // The typed path: the same privileged, SYSTEM-scoped ctx.db handlers use (ACL bypassed,
+    // triggers suppressed), for a transformation that needs the ORM rather than one statement.
+    // `MigrationContext<typeof schema>` is what makes ctx.db fully typed here — the DataMigration
+    // contract is schema-agnostic, so an unparameterized ctx would hand back untyped rows.
+    id: "2026-09-03-normalize-signup-status",
+    async up({ db }: MigrationContext<typeof schema>) {
+      const stale = await db.find({ from: "signups", where: { status: { isNull: true } } });
+      for (const row of stale) await db.update("signups", row.id, { status: "pending" });
+    },
+  },
+];
+
 export const app = {
   schema,
   handlers,
@@ -935,4 +967,5 @@ export const app = {
   tasks,
   queues,
   bootstrap: [cmsBootstrap({ blockTypes: [seededNote], contentTypes: [seededDoc] })],
+  migrations,
 };
