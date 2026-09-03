@@ -95,6 +95,33 @@ nothing and `validateFields` skips it, so the field's content is quietly lost on
 The whole area is gated on `listCmsCapabilities().canEdit`, i.e. the deployment's own
 `editorRoles`. A reviewer can read everything and author nothing.
 
+#### Code-defined types are read-only here
+
+A type declared in code — `defineBlockType` / `defineContentType`, reconciled by
+`cmsBootstrap` — is stamped with that reconciler's owner id and shown read-only: a `code`
+badge in the lists, a locked form, and a note saying which declaration to edit.
+`updateBlockType` / `updateContentType` answer **409** for one.
+
+That is because `cmsBootstrap` converges its declarations on **every boot**. Without the
+lock, an edit here returned 200 and was patched back to the literal in `app.ts` at the next
+cold start, taking any block content authored against the added field with it.
+
+Drop a type from the declaration and its row is released — it keeps existing, because pages
+are built out of it, and becomes editable again. To hand *everything* back (you are moving
+type authoring into the editor and removing the reconciler), deploy once with
+`cmsBootstrap({ blockTypes: [], contentTypes: [] })` before deleting the call: an empty array
+declares none and releases them, where an absent key says nothing about that table.
+
+`cmsBootstrap` validates every definition it will write, at app construction, reporting all
+the problems at once. It runs the same rules as the handlers above, so a code-declared type
+cannot store a schema the builder would then refuse to save. The checks live there rather
+than in `define*` because those helpers are optional — `BlockTypeDef` is a plain interface,
+so an object literal or a `.map` reaches the store without going near them.
+
+Composing two reconcilers (a package shipping its own block types beside the app's) needs a
+distinct `owner`: `cmsBootstrap(defs, { owner: "my-package" })`. Each releases only what it
+wrote.
+
 ### Site furniture
 
 The site-level things every project used to rebuild by hand. All four are read by your

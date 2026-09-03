@@ -15,6 +15,7 @@ export default createPage()
     return (
       <ContentTypeEditor
         api={api}
+        codeDefinedTypes={cms.codeDefinedTypes}
         key={params.slug}
         slug={params.slug}
         onSaved={(slug) => {

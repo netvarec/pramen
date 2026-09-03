@@ -34,26 +34,56 @@ compile-time field typing two ways:
 
 `cmsBootstrap({ blockTypes, contentTypes })` reconciles what `defineBlockType` /
 `defineContentType` declare into the store on **every boot**, and the editor authors the same
-two tables. So the rows it declares are flagged `managed`:
+two tables. So every row it writes is stamped `managedBy: <owner>`:
 
 - `updateBlockType` / `updateContentType` answer **409** for one, naming the `define*` call to
   edit instead. Without that, a save returned 200 and was patched back to the literal in
   `app.ts` at the next cold start — taking any block content authored against the added field
   with it.
-- The type builder renders a managed type read-only, with a note saying where its definition
-  lives, and marks it `code` in the overview lists.
-- Drop a type from the declaration and its row is **released** (`managed → false`) — it keeps
-  existing, because pages are built out of it, and becomes editable again.
+- The type builder renders an owned type read-only, with a note saying where its definition
+  lives, and marks it `code` in the overview lists. Gated on
+  `listCmsCapabilities().codeDefinedTypes`, so an editor newer than its server fails closed.
+- Drop a type from the declaration and its row is **released** — it keeps existing, because
+  pages are built out of it, and becomes editable again.
+- A row this owner did not write is never touched. Adopting an editor-authored type of the
+  same slug (replacing its name and schema, then locking it) was the mirror image of the bug
+  above, and left nothing the editor could do about it.
 
-Declare all code-defined types in **one** `cmsBootstrap` call: the argument is read as the
-complete set, so two calls each declaring half would take turns releasing the other half.
+`blockTypes: []` **declares none**, and so releases everything this owner holds; an absent
+`blockTypes` key says nothing about that table and sweeps nothing. The empty array is the
+in-band way to hand every code-defined type back to the editor — deploy it once before
+removing the `cmsBootstrap` call, or the rows stay locked with nothing behind them.
 
-`defineBlockType` / `defineContentType` also validate what they are given, with the same rules
-the editor's handlers enforce (`normalizeFieldSchema`, `normalizeRegions`,
-`normalizeDefaultBlocks`) — a `select` with no `options`, two fields sharing a name, or a
-default block in an undeclared region throws at declaration, naming the definition. tsc types a
-const `FieldDefinition[]`, but it does not know any of those rules, so without this a
-code-declared type could store a schema the builder then refuses to save.
+Two reconcilers compose as long as they pass distinct owners, which is what lets a package
+ship block types beside the app's:
+
+```ts
+bootstrap: [
+  cmsBootstrap({ blockTypes: appBlocks }, { owner: "app" }),
+  cmsBootstrap({ blockTypes: pkgBlocks }, { owner: "some-package" }),
+]
+```
+
+(With a shared owner each call would release the other's rows on every boot, which is exactly
+why this is an owner id and not a `managed` boolean.)
+
+#### Definitions are validated where they are written
+
+`cmsBootstrap` validates and canonicalizes every definition it will write, at app
+construction, reporting **all** the problems at once — the same rules the editor's handlers
+enforce (`normalizeFieldSchema`, `normalizeRegions`, `normalizeDefaultBlocks`), so a
+code-declared type cannot store a schema the builder would then refuse to save.
+
+The check is deliberately *not* in `defineBlockType` / `defineContentType`. Those helpers are
+optional: `BlockTypeDef` and `ContentTypeDef` are ordinary interfaces, so an object literal, a
+`.map` over a config file or a codegen step reaches the store without going near them.
+Guarding the helper guards the convenient path and leaves the sink open — and the row it
+writes is then locked, so an invalid schema could not be repaired through the product at all.
+
+They stay **pure constructors** for a second reason: canonicalization rebuilds every field
+entry, so doing it there made the returned array stop matching the `as const` literal
+`BlockFieldsOf<typeof def>` is inferred from — a cast a component would follow into
+`fields["  title  "] === undefined` with tsc insisting it was fine.
 
 ## SEO & sitemap
 

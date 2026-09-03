@@ -123,10 +123,13 @@ export interface BlockType {
   fieldsSchema?: FieldDefinition[] | null;
   icon?: string | null;
   category?: string | null;
-  /** Declared in the app's code and reconciled by `cmsBootstrap` on every boot. The builder
-   * renders these read-only: a save would 409, and before it did, it would have been quietly
-   * reverted at the next cold start. */
-  managed?: boolean;
+  /** The `cmsBootstrap` owner that declares this type in the app's code, or null/absent when
+   * an editor authored it. The builder renders an owned type read-only: a save would 409, and
+   * before it did, it would have been quietly reverted at the next cold start.
+   *
+   * Only meaningful when `CmsCapabilities.codeDefinedTypes` is true — an older server sends
+   * no owner for any row, which is indistinguishable from "nothing is code-defined". */
+  managedBy?: string | null;
 }
 
 export interface ContentType {
@@ -136,8 +139,8 @@ export interface ContentType {
   regions?: RegionDefinition[] | null;
   fieldsSchema?: FieldDefinition[] | null;
   defaultBlocks?: DefaultBlockDefinition[] | null;
-  /** See `BlockType.managed`. */
-  managed?: boolean;
+  /** See `BlockType.managedBy`. */
+  managedBy?: string | null;
 }
 
 /** A collection: one of the host app's own pramen entities, edited generically via a
@@ -191,6 +194,13 @@ export interface CmsCapabilities {
    * areas). Declared, not probed: an older server answers `listMenus` with a 404 like any
    * unknown handler, and a nav section whose every screen fails is worse than no section. */
   siteFurniture: boolean;
+  /** The server stamps `managedBy` on the types `cmsBootstrap` declares, and refuses to
+   * update one. Declared rather than inferred from the rows: this package has no dependency
+   * on `@pramen/cms`, so a NEWER editor can run against an older server — where every row
+   * reports no owner, which reads identically to "no type is code-defined". Trusting the row
+   * there means the builder offers a save the server accepts and the next cold start
+   * reverts, i.e. GitHub #48 in the deployment that upgraded the editor to fix it. */
+  codeDefinedTypes: boolean;
   /** Whether THIS caller may author, i.e. holds one of the deployment's `editorRoles`.
    *
    * Per-caller, unlike the rest of this probe. The read handlers are open to
@@ -233,6 +243,7 @@ export const DEFAULT_CAPABILITIES: CmsCapabilities = {
   multilingual: false,
   pagesByType: false,
   siteFurniture: false,
+  codeDefinedTypes: false,
   // Fails OPEN, unlike its neighbours. An older server sends no `canEdit`, and hiding
   // every authoring control from a real editor is unrecoverable from inside the editor;
   // showing one that 403s is a legible error with a way forward. The server is the
