@@ -382,6 +382,65 @@ log) for independent single-writer serialization and storage.
   (no page-style staged snapshot). Scheduling converges in any drain order — a publish task
   that drains after its own takedown instant lands the row DOWN rather than publishing and
   discarding the takedown. See `example/app.ts` (the `lectures` collection).
+- CMS site furniture (`@pramen/cms`): menus, redirects, taxonomies and widget areas — the
+  WordPress-parity, SITE-level (not page-level) surface. Public READS (`getMenu`,
+  `resolveRedirect`, `listTaxonomies`/`getTermTree`/`listPagesByTerm`, `getWidgetArea`),
+  editor-gated writes; the tables are in both `cmsPolicies()` fragments. A **menu** is one
+  `t.json()` document because it is read and written whole, and its items store a REFERENCE
+  (`kind: "page" | "term" | "collection"`, `ref`) rather than the href an editor typed — the
+  url is minted at read time through `menuHref`, so a link follows its page's slug. That
+  resolution goes through `ctx.db`, so the anonymous page scope decides it: an item pointing
+  at an unpublished page is DROPPED (with its subtree) instead of rendered as a dead link, and
+  the editor reads `listMenus` (RAW) so editing against the resolved view can't delete those
+  items on save. A **redirect**'s `fromPath` is canonicalized on write (trailing slash, query,
+  fragment) because matching is an exact lookup on a unique column; there is deliberately NO
+  hit counter, which would make the one handler anonymous 404 traffic calls a WRITE. **Terms**
+  hang off `cms_page_terms`, an explicit `manyToMany` junction, with real `ON DELETE` FKs
+  (cascade on an assignment, setNull on a parent — cascade would silently delete a subtree)
+  and a write-side cycle check, the only place a cycle is preventable (the FK keeps `parentId`
+  pointing at a real row but says nothing about shape). **Widget areas** stay their own entity
+  rather than a page-less `cms_blocks` region: making `pageId` nullable would push a null
+  branch through every placement read and page-scoped policy to model something that shares
+  no field with a page. `listCmsCapabilities().siteFurniture` declares the handlers exist, so
+  an older server renders no section rather than one whose every screen 404s.
+- Authoring a field SCHEMA (`normalizeFieldSchema`/`normalizeRegions`/`normalizeDefaultBlocks`)
+  is checked server-side now that the editor writes it: `validateFields` checks a VALUE
+  against a schema, this checks the schema. It is a refusal, not a warning, because nothing
+  downstream fails visibly — `FieldForm` renders nothing for an unknown type, `validateFields`
+  is documented as lenient about them, and the field's content is silently lost on every save;
+  a duplicate sibling name is worse (two controls, one key, one of them unsaveable). A block
+  type's slug admits `_` (it is a component-registry key, `rich_text`), a content type's does
+  not (it is the URL segment `/types/:slug`). A `defaultBlocks` entry naming an undeclared
+  region, or a type its region disallows, is a 400 at declaration — but `createPage` STILL
+  skips such a block, because a later `updateContentType` can narrow `allowedTypes` alone.
+- Editor nav placement: `buildNav` (`cms-editor/src/nav.ts`) returns ORDERED entries and the
+  layout only renders them. `NAV_ORDER` (in the leaf `cms/src/nav.ts`, mirrored in the
+  editor's `types.ts` — the editor has no server dependency) spaces the built-ins 100 apart;
+  `CollectionDef.navOrder`, `AdminPageDef.navOrder` and an `extraNav` link's `order` place
+  against them, and anything unset keeps the position it had. The sort is STABLE, which is
+  what carries the groupings with no numeric expression (content-type tabs, collections
+  sharing a position). This is what stops a project section from being structurally the last
+  nav item in a new tab.
+- `reference` field type: an OPAQUE id pointing at a row we may not own, resolved by a
+  `referenceFrom` query handler that answers TWO shapes — `{ search?, limit, offset }` to
+  browse and `{ ids }` to resolve labels for values already stored. The second is what
+  `select` + `optionsFrom` cannot do: it fetches one page, so a stored value outside it
+  renders as a uuid. `multiple: true` stores an array and needs a `t.json()` column
+  (`fieldColumnTypes` is the one place a field's storage depends on a second flag).
+- Block Kit / custom admin pages (`adminPage()` + `createAdminPageHandlers`, `cms/src/blockkit.ts`):
+  the server describes a whole admin SCREEN as JSON and the editor renders it at `/apps/:slug`,
+  so a project's odd 10% lives inside the chrome instead of behind an `extraNav` link in a new
+  tab. `render` is an ordinary handler body with the CALLER's ctx — it removes the browser
+  code, not the ACL — and is generic over the app schema (`adminPage<typeof schema>`, like
+  `MigrationContext`). `listAdminPages` is role-FILTERED, and a forbidden page answers exactly
+  as an unknown one (a distinct refusal tells an unauthorized caller which pages exist).
+  `adminPageInteract` is a MUTATION even for `page_load`: otherwise which of the two entry
+  points into the same function was transactional would depend on the `type` the client sent.
+  The WHOLE page comes back on every interaction — no patch protocol, which would have to
+  agree with the host about what is on screen. `image.url` is `isSafeHref`-checked on the way
+  OUT, because a page builds blocks from stored data. Deliberately NOT called a "virtual
+  collection": `collection()` promises ACL, row scope, cell projection and `where` traversal
+  because it is a REAL TABLE, and a handler-backed thing wearing that name would void all four.
 - `@pramen/cms-astro` front door: `pramenCms({ backend: { url, tenant?, token? }, collections?, locale? })`
   is an Astro INTEGRATION (issue #35) — it builds the client once and exposes it, `resolve()`
   and the generated collections through a `pramen:cms` virtual module (types injected). The
