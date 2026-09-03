@@ -14,6 +14,30 @@ there are no backward-compatibility guarantees yet.
 
 ## [Unreleased]
 
+### Added
+
+- **`app.migrations` — imperative, recorded data migrations (`@pramen/server`).** Schema
+  reconciliation is a diff between two table SHAPES, so it can only ever enact structure: there
+  was no way to express a TRANSFORMATION — split a column, backfill the nullable column
+  `ADD COLUMN` just created, rewrite units, normalize a `t.json()` blob whose shape changed.
+  That work ended up as a hand-written admin handler someone curls once per tenant and hopes
+  they got them all, with no record that it ran and no ordering guarantee against the schema
+  change that made the column exist. Structure stays declarative; data is now imperative,
+  ordered, and recorded: each `{ id, partition?, up(ctx) }` runs at most once per
+  `(id, partition)`, its ledger row written in `_pramen_migrations` in the same transaction as
+  its work, between `migrate()` and `app.bootstrap` on both the DO and D1 boot paths.
+
+  `app.bootstrap` could not be stretched to cover this and the differences are the ones that
+  matter: bootstrap runs on every boot, MUST be idempotent, and swallows its errors. A
+  migration runs once, need not be idempotent (a backfill that doubles on the second run is the
+  whole point), and **fails closed** — a throw writes no ledger row, aborts the boot, and
+  retries on the next fetch rather than marking a half-finished backfill as done. There are no
+  down migrations, deliberately. Ledger over HTTP at `GET /admin/migrations?tenant=&partition=`
+  (admin-gated, both stores) and in the CLI as `pramen migrations list` / `pramen migrations
+  status [--tenant t] [--all-tenants]` — the latter is the only honest answer to "is it safe to
+  delete this migration?", since migration is lazy and per-DO and a tenant nobody has touched is
+  still unmigrated (the same trap `renamedFrom` carries).
+
 ## [0.0.59] — 2026-09-02
 
 ### Added

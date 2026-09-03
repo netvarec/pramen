@@ -92,6 +92,38 @@ cost of those cross-entity guarantees *for the partitioned entity*. The contract
    automatic re-partitioning / data movement between partitions are explicitly not
    covered — the boundary is enforced, not bridged.
 
+## Schema is declarative; data is imperative and recorded
+
+`migrate()` diffs the live table shape against the declared schema and enacts the
+structural delta on every DO boot. That is the right model for structure and it buys the
+thing that matters most: DO-per-tenant means every tenant is its own database and migrates
+itself lazily on first fetch — no migration runner, no fan-out job, no version ledger to
+babysit.
+
+But a diff between two SHAPES can only express structure, never TRANSFORMATION. Splitting a
+column, backfilling the nullable column `ADD COLUMN` just created, rewriting units,
+normalizing a `t.json()` blob after its shape changed — none of that is expressible as a
+delta between two declared states. So the other half is explicit: `app.migrations`, an
+ordered list of one-shot `up(ctx)` transformations, each recorded once per `(id, partition)`
+in `_pramen_migrations`. Ordering on both boot paths is `migrate()` → data migrations →
+outbox → `bootstrap`.
+
+**`app.bootstrap` is deliberately not this.** Bootstrap runs on EVERY boot, MUST be
+idempotent, targets code-defined reference data, and swallows its errors so a broken
+reconciler can't brick a tenant. A data migration is the inverse on every axis: once ever,
+NOT required to be idempotent (a backfill that doubles on a second run is exactly the case
+this exists for), targets existing user rows, and **fails closed** — no ledger row, boot
+does not complete, retried on the next fetch. Silently marking a half-finished backfill as
+done is worse than a failed boot. And the schema hash proves nothing here: it hashes the
+declared shape, so a perfectly in-sync store carries no evidence a backfill ever ran.
+
+Two consequences are load-bearing rather than incidental. There are **no down migrations**
+(rolling back the Worker doesn't roll back the schema either). And **pruning needs
+evidence**: migration is lazy and per-DO, so a tenant nobody has touched is unmigrated until
+someone touches it — `pramen migrations status --all-tenants` fans out over the registry to
+answer whether an id is safe to delete, the same trap `renamedFrom` carries for the
+identical reason.
+
 ## The real tensions (tracked, not yet solved)
 
 1. **Zero-JS read path.** Ideally SQL compilation stays out of the JS hot path,

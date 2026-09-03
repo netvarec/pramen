@@ -318,6 +318,36 @@ log) for independent single-writer serialization and storage.
   (upsert, don't blind-insert); a throw is logged, never fatal; DO path runs default-partition
   only. `@pramen/cms` ships `defineContentType`/`defineBlockType` + `cmsBootstrap({ blockTypes,
   contentTypes })` (upsert-by-slug) — see `example/app.ts`.
+- Data migrations (structure is declarative, DATA is imperative and RECORDED): `app.migrations:
+  DataMigration[]` — `{ id, partition?, up(ctx) }` — runs in DECLARATION order after `migrate()`
+  and before `bootstrap`, each at most ONCE per `(id, partition)`, recorded in the internal
+  `_pramen_migrations` ledger IN THE SAME TRANSACTION as its work (`runtime/data-migrations.ts`).
+  `migrate()` diffs SHAPES, so it can only enact structure — a backfill/split/unit-rewrite/json
+  normalization has no declarative form. `ctx` is `{ db, driver, schema, partition }`: privileged,
+  SYSTEM-scoped, triggers suppressed (`MigrationContext<typeof schema>` for a typed `db`); prefer a
+  bulk `driver.exec` UPDATE over walking rows. The deliberate INVERSE of `bootstrap` on every axis:
+  once-ever vs every-boot, NOT-required-idempotent vs must-be, user rows vs reference data, and
+  **fail closed** vs logged-and-swallowed — a throw writes no ledger row, aborts the boot (so the
+  later migrations don't run either) and retries on the next fetch; swallowing a half-finished
+  backfill is the one outcome worth bricking a boot over. The schema hash proves nothing here (it
+  hashes the declared shape). Keyed `(id, partition)` like `schema_hash:<partition>`: each
+  partition-DO runs its OWN partition's migrations; D1 is one shared DB with no partition split, so
+  there EVERY declared migration runs (recorded under its own partition key). The ledger row is
+  CLAIMED (`ON CONFLICT DO NOTHING … RETURNING`) BEFORE the work, not written after: on D1 there is
+  no single writer and `d1Ready` is per-isolate, so without the conflicting insert as a lock two cold
+  isolates would each read an empty ledger and both run a `n = n * 2` backfill. D1's
+  `transaction(fn) = fn()` means claim and work are NOT atomic there, so a throw RELEASES the claim
+  (a compensating DELETE, rolled back harmlessly on the DO) — prefer `WHERE col IS NULL`-shaped SQL. NO down migrations. `up()` runs inside `blockConcurrencyWhile` on
+  a tenant's first fetch with no chunking/resume — keep backfills bounded or you stall that request
+  and risk the DO wall-clock limit. PRUNING TRAP (same as `renamedFrom`): migration is lazy and
+  per-DO, so a cold tenant is unmigrated until touched — never delete an id on a hunch; check
+  `pramen migrations status --all-tenants` (`GET /admin/migrations?tenant=&partition=`, admin-gated,
+  both stores; `--store d1` for a D1 deploy) first. That read is deliberately READ-ONLY on both paths
+  — routed BEFORE `ensureMigrated` in the DO and skipping `ensureD1Migrated` in the Worker, tolerating
+  an absent ledger table — because a probe that boots the store would apply every pending backfill as
+  a side effect of ASKING, could never report PENDING, and would silently migrate the whole fleet on
+  `--all-tenants`. `validateMigrations` (called from `createPramen`) rejects an empty/duplicate id
+  or an unknown partition at boot.
 - CMS collections (`@pramen/cms`): the block/page model is one opinionated shape (a routable
   page with a mandatory slug + regions of blocks). A **collection** is the generic escape
   hatch — it points the CMS editor at **one of YOUR OWN pramen entities** (spread into
