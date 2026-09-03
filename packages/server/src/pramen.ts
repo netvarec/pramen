@@ -75,7 +75,7 @@ export type { Env, DoEnv };
  * use the D1 store with deferred tasks. */
 export function createPramen(app: PramenApp): {
   fetch: (request: Request, env: Env, ctx: ExecutionContext) => Promise<Response>;
-  scheduled: (event: unknown, env: Env) => Promise<void>;
+  scheduled: (event: unknown, env: Env, ctx: ExecutionContext) => Promise<void>;
   queue: (batch: QueueBatch, env: Env) => Promise<void>;
   PramenDO: ReturnType<typeof pramenDO>;
 } {

@@ -82,6 +82,16 @@ The data layer runs over a `Driver` (async `exec` + `transaction`) + `Dialect`
   live queries need the DO (single writer + socket host). Proven end-to-end in
   miniflare by `test/suites/d1.ts` (ACL, row scope, field/cell-level projection,
   RETURNING writes, aggregates). The D1 binding is declared in `oblaka.ts`.
+- **The D1 boot is a `SharedBoot`, never a bare memoized promise** (`runtime/boot.ts`, #51).
+  Workers rule: async work belongs to the invocation that started it, and when that invocation
+  ends (the caller disconnects) its pending I/O is canceled — a promise chained on canceled I/O
+  NEVER SETTLES, it does not reject. A once-per-isolate boot memoized from the first request's
+  D1 calls therefore wedged every later fetch in the isolate for its lifetime (0 ms CPU, no logs)
+  once a proxy timed out the legitimately slow first request after a deploy; crons in another
+  isolate stayed healthy, a redeploy "fixed" it. So: the starter puts the boot under
+  `ctx.waitUntil` (pass `ctx` from EVERY entry — fetch, routes, admin, `scheduled`), and awaiters
+  treat a boot with no statement progress for `D1_BOOT_STALE_MS` (30 s, the `waitUntil` cap) as
+  orphaned and start their own. Apply the same rule to any future per-isolate memo of I/O.
 - **`postgresDialect`** — shows the SQL shape for a future Hyperdrive/Postgres port
   (quoting + `$n` placeholders); needs a pg `Driver` over Hyperdrive.
 
@@ -383,7 +393,7 @@ log) for independent single-writer serialization and storage.
   partition-DO runs its OWN partition's migrations; D1 is one shared DB with no partition split, so
   there EVERY declared migration runs (recorded under its own partition key). The ledger row is
   CLAIMED UNDER A LEASE before the work, not written after: on D1 there is no single writer and
-  `d1Ready` is per-isolate, so without a lock two cold isolates would each read an empty ledger and
+  the boot memo is per-isolate, so without a lock two cold isolates would each read an empty ledger and
   both run a `n = n * 2` backfill. One atomic upsert (`ON CONFLICT … DO UPDATE … WHERE leaseUntil <=
   now RETURNING`) inserts, or STEALS an expired lease, or does nothing — `RETURNING` says which.
   `leaseUntil` non-NULL = in flight, NULL = applied, and only applied counts (an in-flight row reads

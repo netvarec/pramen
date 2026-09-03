@@ -46,6 +46,33 @@ there are no backward-compatibility guarantees yet.
   delete this migration?", since migration is lazy and per-DO and a tenant nobody has touched is
   still unmigrated (the same trap `renamedFrom` carries).
 
+### Fixed
+
+- **The D1 store's Worker boot could wedge an isolate for its lifetime (`@pramen/server`,
+  #51).** After some deploys a share of fetch invocations hung at 0–1 ms CPU until the caller
+  gave up, before reaching any handler, while crons on the same Worker stayed healthy and a
+  redeploy of the identical commit cleared it. The cause was the once-per-isolate D1 boot
+  (migrate → data migrations → outbox → bootstrap) memoized as a bare promise shared by every
+  request. Async work belongs to the invocation that starts it: when the first request after a
+  deploy carrying a table rebuild legitimately ran past the caller's ceiling and the caller
+  disconnected, the runtime canceled that invocation's pending I/O — and a promise chained on
+  canceled I/O never settles. Not rejects; never settles. So the `.catch` meant to clear the
+  memo never ran, and every later request in that isolate awaited it for as long as its own
+  caller allowed. Crons ran in another isolate; the ~54 % was the share of traffic routed to
+  the wedged one; a redeploy discarded every isolate.
+
+  Two defenses now, both needed. The invocation that starts the boot puts it under
+  `ctx.waitUntil`, so a disconnecting caller no longer cancels a boot everyone else is waiting
+  on (the `scheduled` entry now receives and passes `ctx` too). And awaiters no longer trust a
+  shared boot unconditionally: the boot reports progress on every statement, and one that has
+  made none for 30 s (the platform's `waitUntil` cap, measured from the last statement so a
+  slow-but-live rebuild is never mistaken for a dead one) is treated as orphaned — the next
+  awaiter, arriving or already waiting, starts a fresh boot in its own invocation and logs a
+  warning. An isolate can now be wedged for at most 30 s, never for its lifetime; every boot
+  step already tolerated a second runner (lease-claimed ledger, diff-based migrate, upsert
+  bootstrap), so a false positive costs a redundant boot, not correctness. `SharedBoot` +
+  `observeDriver` in `runtime/boot.ts`, platform-agnostic and unit-tested.
+
 ## [0.0.59] — 2026-09-02
 
 ### Added

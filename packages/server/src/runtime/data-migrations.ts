@@ -23,7 +23,7 @@
 // that inserts a pending row, or steals one whose lease has expired, or does nothing — and
 // the migration runs only if that statement won the row. On the DO this is merely bookkeeping
 // order inside one transaction. On D1 it is what makes the once-only contract hold at all:
-// there is no single writer and no interactive transaction, `d1Ready` is per-isolate, so two
+// there is no single writer and no interactive transaction, the boot memo is per-isolate, so two
 // cold isolates racing a `SET n = n * 2` backfill would each read an empty ledger, each run
 // it, and quadruple the data. The conflicting upsert is the lock.
 //

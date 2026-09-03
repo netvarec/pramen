@@ -14,6 +14,7 @@ import { createMail } from "./runtime/mail";
 import { createQueue, type QueueProducerBinding } from "./runtime/queue";
 import { dispatchQueueBatch, type QueueBatch, type QueueContext } from "./runtime/queue-consumer";
 import { migrate } from "./runtime/migrate";
+import { SharedBoot, observeDriver } from "./runtime/boot";
 import { compileAcl } from "./runtime/acl";
 import { Db } from "./runtime/db";
 import { D1Driver, type D1SessionStart, type Driver } from "./runtime/driver";
@@ -100,6 +101,14 @@ export function useD1Store(opts: { storeHeader: string | null; isLive: boolean; 
   if (opts.storeHeader === "do") return false;
   return opts.defaultStore === "d1";
 }
+
+/** How long the D1 boot may go without completing a statement before an awaiter treats it
+ * as orphaned and starts its own (GitHub #51). 30 s is the platform's `waitUntil` cap after
+ * a response or a disconnect — the point past which a boot's starter can no longer be
+ * keeping it alive — and comfortably above any single D1 statement a bounded migration
+ * should issue. Measured from the last STATEMENT, not from the boot's start, so a slow but
+ * live boot (a table rebuild followed by a backfill) is never mistaken for a dead one. */
+export const D1_BOOT_STALE_MS = 30_000;
 
 /** Should we warn that no Cron trigger seems to be wired?
  *
@@ -242,14 +251,14 @@ export function makeWorker(app: PramenApp) {
   // here and would otherwise be permanently unrunnable on this store. Each is still recorded
   // under its OWN declared partition key, so a ledger read is comparable across stores.
   //
-  // Errors are NOT swallowed (unlike runBootstrapD1): the .catch in ensureD1Migrated clears
-  // `d1Ready`, so a failed migration fails this request and is retried on the next one —
-  // the same fail-closed contract as the DO path.
+  // Errors are NOT swallowed (unlike runBootstrapD1): a rejected boot clears the shared
+  // memo (`SharedBoot`), so a failed migration fails this request and is retried on the
+  // next one — the same fail-closed contract as the DO path.
   //
   // ATOMICITY CAVEAT: D1's `transaction(fn)` is `fn()` (no interactive transactions), so
   // here the claim and the work do NOT commit together. The runner claims the ledger row
   // before running (which is what keeps two cold isolates from both applying the same
-  // backfill — `d1Ready` is per-isolate and there is no single writer) and releases it on a
+  // backfill — the boot memo is per-isolate and there is no single writer) and releases it on a
   // throw, so a failed migration leaves partial writes and re-runs. Write SQL that tolerates
   // that (`WHERE col IS NULL`) when the D1 store is in play.
   const runDataMigrationsD1 = async (driver: Driver): Promise<void> => {
@@ -272,7 +281,6 @@ export function makeWorker(app: PramenApp) {
     return knownPartitionsCache;
   };
 
-  let d1Ready: Promise<void> | undefined;
   /** Run one handler against the D1 store, in the Worker. The request path and the
    * PRIVILEGED path (routes, which have no ctx.db) both come through here, so the two
    * cannot drift on migration, bootstrap, the multi-tenant guard or the outbox drain.
@@ -293,7 +301,7 @@ export function makeWorker(app: PramenApp) {
     }
     const driver = new D1Driver(env.DB, { start: opts.start });
     const files = createFiles({ tenant: opts.tenant, secret: filesSecret(env), adapter: new R2Adapter(env.FILES) });
-    await ensureD1Migrated(driver, env.PRAMEN_ALLOW_DESTRUCTIVE === "true");
+    await ensureD1Migrated(driver, env.PRAMEN_ALLOW_DESTRUCTIVE === "true", ctx);
     let dispatched;
     try {
       dispatched = await dispatch(
@@ -324,24 +332,43 @@ export function makeWorker(app: PramenApp) {
     }
     const { result, enqueued } = dispatched;
     // Drain in the request tail so an enqueued task does not wait for the next Cron tick.
-    if (enqueued > 0 && ctx) ctx.waitUntil(drainD1(env));
+    if (enqueued > 0 && ctx) ctx.waitUntil(drainD1(env, "request", ctx));
     return { driver, result: result as JsonValue };
   };
 
-  const ensureD1Migrated = (driver: Driver, allowDestructive: boolean): Promise<void> => {
-    if (!d1Ready) {
-      d1Ready = migrate(driver, app.schema, { allowDestructive })
-        .then(() => runDataMigrationsD1(driver)) // imperative, recorded backfills (fail closed)
-        .then(() => ensureOutbox(driver)) // the deferred-tasks table also lives in D1
-        .then(() => runBootstrapD1(driver)) // converge code-defined reference data
-        .then(() => undefined)
-        .catch((e) => {
-          d1Ready = undefined;
-          throw e;
-        });
-    }
-    return d1Ready;
-  };
+  // The D1 store's once-per-isolate boot, shared by every invocation that touches D1. It
+  // is a SharedBoot rather than a bare memoized promise because of GitHub #51: the first
+  // request after a deploy carrying a table rebuild legitimately ran past the caller's
+  // 15 s ceiling, the caller disconnected, the Workers runtime canceled that invocation's
+  // pending I/O — and a promise chained on canceled I/O never settles. Not rejects: never
+  // settles. The memo then wedged every later fetch in that isolate for its lifetime
+  // (0 ms CPU, no logs, "canceled" at whatever timeout the caller had), while crons in
+  // another isolate stayed healthy. See `runtime/boot.ts` for the two defenses.
+  const d1Boot = new SharedBoot({
+    staleMs: D1_BOOT_STALE_MS,
+    onOrphaned: (idleMs) =>
+      console.warn(
+        `pramen: the D1 store's boot in this isolate made no progress for ${Math.round(idleMs / 1000)}s and is being restarted. ` +
+          `The invocation that started it was most likely canceled (its caller disconnected) before the boot finished.`,
+      ),
+  });
+
+  /** Boot the D1 store (migrate → data migrations → outbox → bootstrap) once per isolate.
+   * `ctx` is the CALLING invocation's context: when this call is the one that starts the
+   * boot, the boot is put under its `waitUntil` so a disconnecting caller cannot cancel a
+   * boot everyone else is waiting on. Pass it from every entry that has one. */
+  const ensureD1Migrated = (driver: Driver, allowDestructive: boolean, ctx?: ExecutionContext): Promise<void> =>
+    d1Boot.ensure(
+      (progress) => {
+        const d = observeDriver(driver, progress);
+        return migrate(d, app.schema, { allowDestructive })
+          .then(() => runDataMigrationsD1(d)) // imperative, recorded backfills (fail closed)
+          .then(() => ensureOutbox(d)) // the deferred-tasks table also lives in D1
+          .then(() => runBootstrapD1(d)) // converge code-defined reference data
+          .then(() => undefined);
+      },
+      ctx ? (p) => ctx.waitUntil(p) : undefined,
+    );
 
   // A privileged, system-scoped context for running task handlers on the D1 (Worker)
   // path — mirrors the DO's taskCtx. No live socket, so no DO; drained by a Cron / the
@@ -364,13 +391,13 @@ export function makeWorker(app: PramenApp) {
   let cronSeen = false;
   let warnedNoCron = false;
 
-  const drainD1 = async (env: Env, source: "request" | "cron" | "admin" = "request"): Promise<unknown> => {
+  const drainD1 = async (env: Env, source: "request" | "cron" | "admin" = "request", ctx?: ExecutionContext): Promise<unknown> => {
     if (!env.DB) throw new Error("D1 store is not configured");
     if (source === "cron") cronSeen = true;
     // The drain reads due tasks then writes their status — pin the primary so it sees
     // and updates current outbox state (not a lagging replica).
     const driver = new D1Driver(env.DB, { start: "first-primary" });
-    await ensureD1Migrated(driver, env.PRAMEN_ALLOW_DESTRUCTIVE === "true");
+    await ensureD1Migrated(driver, env.PRAMEN_ALLOW_DESTRUCTIVE === "true", ctx);
     const result = await drainOutbox(driver, bindTasks(app.tasks, d1TaskCtx(driver, env)), Date.now());
     if (source === "request" && shouldWarnMissingCron({ cronSeen, warned: warnedNoCron, nextRunAt: result.nextRunAt, now: Date.now() })) {
       warnedNoCron = true;
@@ -385,11 +412,11 @@ export function makeWorker(app: PramenApp) {
     return result;
   };
 
-  const listD1Tasks = async (env: Env, status?: string, limit?: number): Promise<unknown> => {
+  const listD1Tasks = async (env: Env, ctx: ExecutionContext, status?: string, limit?: number): Promise<unknown> => {
     if (!env.DB) throw new Error("D1 store is not configured");
     // Inspection listing — pin the primary so it reflects current outbox state.
     const driver = new D1Driver(env.DB, { start: "first-primary" });
-    await ensureD1Migrated(driver, env.PRAMEN_ALLOW_DESTRUCTIVE === "true");
+    await ensureD1Migrated(driver, env.PRAMEN_ALLOW_DESTRUCTIVE === "true", ctx);
     return listTasks(driver, { status, limit });
   };
 
@@ -596,7 +623,7 @@ export function makeWorker(app: PramenApp) {
       if (!isAdmin(identity)) return forbidden("tasks");
       if (request.headers.get("x-pramen-store") === "d1") {
         try {
-          return withCors(json({ ok: true, result: await drainD1(env, "admin") }), cors);
+          return withCors(json({ ok: true, result: await drainD1(env, "admin", ctx) }), cors);
         } catch (err) {
           const { status, body } = toResponse(err);
           return withCors(json(body, status), cors);
@@ -623,7 +650,7 @@ export function makeWorker(app: PramenApp) {
       const limit = Number(url.searchParams.get("limit")) || undefined;
       if (request.headers.get("x-pramen-store") === "d1") {
         try {
-          return withCors(json({ ok: true, result: await listD1Tasks(env, status, limit) }), cors);
+          return withCors(json({ ok: true, result: await listD1Tasks(env, ctx, status, limit) }), cors);
         } catch (err) {
           const { status: s, body } = toResponse(err);
           return withCors(json(body, s), cors);
@@ -763,8 +790,8 @@ export function makeWorker(app: PramenApp) {
 
     // Cron Trigger entry: drains the D1 outbox (the DO path self-drains via an alarm,
     // so it needs no cron). Wire a `[triggers] crons` in wrangler/oblaka to call this.
-    async scheduled(_event: unknown, env: Env): Promise<void> {
-      if (env.DB) await drainD1(env, "cron");
+    async scheduled(_event: unknown, env: Env, ctx: ExecutionContext): Promise<void> {
+      if (env.DB) await drainD1(env, "cron", ctx);
     },
 
     // Cloudflare Queues consumer entry: routes a batch to the matching `app.queues`
