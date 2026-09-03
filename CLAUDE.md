@@ -155,20 +155,40 @@ log) for independent single-writer serialization and storage.
   uuid on insert via `crypto.randomUUID()` (uuid-only) and makes the column optional on
   insert. The canonical UUID primary key is `id: primaryKey(generated(t.uuid()))`.
   `defaultTo` also takes a SQL-expression default via the `expr` helper — `expr.now()`
-  (current UTC timestamp as TEXT, like `CURRENT_TIMESTAMP`) or `expr.raw(sql)` — emitted
-  unquoted and parenthesized (`DEFAULT (datetime('now'))`), e.g.
+  (the current UTC instant as ISO-8601 TEXT with millis and a `Z`, byte-identical to
+  `new Date().toISOString()`) or `expr.raw(sql)` — emitted unquoted and parenthesized
+  (`DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))`), e.g.
   `createdAt: defaultTo(t.text(), expr.now())`. Expr-default columns are optional on
   insert (the DB fills them); adding one to an existing table triggers a table rebuild
   (SQLite forbids `ALTER ADD COLUMN` with a non-constant default), which is additive
   (backfills existing rows) and ungated.
+- `expr.now()` EMITS ISO-8601 (`strftime('%Y-%m-%dT%H:%M:%fZ','now')`), not the
+  `datetime('now')` space form it used to. Two reasons, both silent failures: the space form
+  does not compare against `$now()` (which is ISO), and it is second-resolution. The
+  comparison bug is narrower than "inconsistent" and worth knowing exactly — both forms open
+  with `YYYY-MM-DD`, so different DATES still order correctly; it is the SAME date that
+  breaks, where index 10 decides and `' '` (0x20) always sorts below `'T'` (0x54) whatever
+  the time-of-day. So a space-form value dated today is always `<= $now()`, i.e. a row
+  scheduled for later TODAY reads as already published until midnight. Changing the default
+  is a MODIFIER change, so `migrate()` rebuilds the table — and a rebuild COPIES values
+  through, leaving both formats mixed in one column. `isoTimestampBackfill()` (from
+  `@pramen/server`, `sdk/iso-timestamps.ts`) is the rewrite: a `DataMigration` an app spreads
+  into `app.migrations`, scanning the schema for `expr.now()` columns plus any the app names
+  via `extraColumns` (`@pramen/cms` exports `CMS_LEGACY_TIMESTAMP_COLUMNS` for
+  `cms_pages.publishedAt`, which was stamped from handler code and so has no default to
+  find). Bulk `driver.exec` UPDATE, guarded on `length=19 AND substr(col,11,1)=' '` — a third
+  format is left alone rather than guessed at, and the guard makes it idempotent by shape.
+  Safe to declare on a fresh store: every UPDATE matches no rows. In `@pramen/cms` this
+  collapsed `nowStamp`/`isoStamp` into one helper — the two existed only because one column
+  could not satisfy both comparison requirements.
 - Auth/ACL: an unauthenticated caller is the `anonymous` role (define it for public
   reads/writes; absent ⇒ deny). A policy `where` may use `$identity("path")` (caller),
   `$input("path")` (request input — a capability/by-unguessable-key read), or `$now()`
   (the evaluation instant, as an ISO-8601 UTC string — for a time-boxed grant like
   scheduled publication: `{ publishedAt: { lte: $now() } }`, which `isNull: false`
-  can't express since a future timestamp is non-null. Lexicographic TEXT comparison,
-  so the column must hold `toISOString()` values — NOT `expr.now()`'s
-  `'YYYY-MM-DD HH:MM:SS'`, which doesn't compare against the ISO form). Public,
+  can't express since a future timestamp is non-null. Lexicographic TEXT comparison, so
+  the column must hold `toISOString()` values — which `expr.now()` now produces, having
+  emitted the `datetime('now')` space form until `isoTimestampBackfill()` landed). Public,
   pre-auth routes go in `app.routes` (matched before auth; use `ctx.callPrivileged`
   to run a privileged handler) — for signature-authed webhooks.
 - `ctx.callPrivileged` works on BOTH stores. It used to only forward to the DO, so

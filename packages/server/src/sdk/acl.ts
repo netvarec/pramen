@@ -81,11 +81,19 @@ export interface NowMarker {
  * future timestamp is non-null, so a scheduled row would be readable the moment it
  * is saved.
  *
- * Comparison is lexicographic TEXT, which is exact for ISO-8601 UTC but NOT
- * cross-format: `expr.now()` defaults store `'YYYY-MM-DD HH:MM:SS'` (space, no `Z`)
- * and will not compare correctly against this. Store the column with
- * `toISOString()` — as the CMS `publish` field does — or compare it against
- * `expr.now()`-shaped values only. */
+ * Comparison is lexicographic TEXT, which is exact WITHIN one format and wrong across two.
+ * Both `'YYYY-MM-DD HH:MM:SS'` and the ISO form open with the same date, so values on
+ * different dates still order correctly — it is the SAME date that breaks, where index 10
+ * decides and a space (0x20) always sorts below `T` (0x54). A space-form value dated today
+ * therefore compares as less than this marker whatever its time-of-day, so a row scheduled
+ * for later today reads as already past. The column must hold ISO-8601 UTC —
+ * `new Date().toISOString()`.
+ *
+ * `expr.now()` produces exactly that, so a column defaulted with it is directly comparable
+ * here. It did NOT always: it emitted the `datetime('now')` space form, and a policy over
+ * such a column was a time boundary that silently did not hold. A store written by a build
+ * from before that change still holds space-form values until
+ * `isoTimestampBackfill()` rewrites them. */
 export function $now(): NowMarker {
   return { [NOW_MARKER]: true };
 }

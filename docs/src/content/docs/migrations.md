@@ -187,6 +187,47 @@ The lease is 60s, which must exceed your slowest migration: a lease that expires
 holder still running is precisely the double-apply it exists to prevent. That is the same
 constraint as the wall-clock one below, from the other direction.
 
+### A framework-supplied one: `isoTimestampBackfill()`
+
+Most migrations are yours. This one ships with pramen, because a change to `expr.now()`
+changed the *shape* of values already in your columns and no declarative diff can fix that.
+
+`expr.now()` used to emit `datetime('now')` — `'2026-09-03 21:05:00'` — and now emits
+ISO-8601 with millis and a `Z`. Changing a column's DEFAULT is a modifier change, so
+`migrate()` rebuilds the table; a rebuild **copies existing values through untouched**. New
+rows get the new shape, old rows keep the old one, in the same column.
+
+Mixed, they order by their separator rather than their instant — but only on the *same
+date*, since both forms open with `YYYY-MM-DD`. Same date, index 10 decides, and `' '`
+(0x20) always sorts below `'T'` (0x54). So the rows written either side of the deploy are
+exactly the pairs that invert, and a `{ publishedAt: { lte: $now() } }` policy lets a row
+scheduled for later *today* through until midnight.
+
+```ts
+import { isoTimestampBackfill } from "@pramen/server";
+import { CMS_LEGACY_TIMESTAMP_COLUMNS } from "@pramen/cms";  // only if you use the CMS
+
+export const app = {
+  migrations: [isoTimestampBackfill({ extraColumns: CMS_LEGACY_TIMESTAMP_COLUMNS })],
+  // …
+};
+```
+
+It scans your schema for every `expr.now()` column in the partition and rewrites the
+space-form values in place with one bulk `UPDATE` per column. `extraColumns` names the ones
+it cannot find: a column written by *handler* code in the same shape has no default on it to
+recognize (`cms_pages.publishedAt` is the real instance, which is what
+`CMS_LEGACY_TIMESTAMP_COLUMNS` covers).
+
+The `WHERE` is exact — length 19 with a space at index 11 — so a value in some third format
+is left alone rather than guessed at, and a converted value can never be converted twice.
+Declaring it on a store that was never written by an older build costs nothing: every
+`UPDATE` matches no rows. Declare it anyway, because "was this store ever written by an
+older build?" is not a question the code can answer later.
+
+Multiple partitions need one per partition (`isoTimestampBackfill({ partition: "audit", id:
+"pramen:iso-timestamps:audit" })`) — a partition-DO only sees its own tables.
+
 ### Pruning: check before you delete
 
 Migration is **lazy and per-DO**. A tenant nobody has touched for six months is

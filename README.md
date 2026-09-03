@@ -342,8 +342,10 @@ ORM — stripped from every read projection (find/get, mutation echoes, relation
 SYSTEM-mode `/admin/data`) even under `allow()`/SYSTEM, while staying writable and
 visible to raw `ctx.db.exec` (for secrets like a password hash). `defaultTo` also accepts a **SQL-expression default**
 via `expr`: `createdAt: defaultTo(t.text(), expr.now())` emits
-`DEFAULT (datetime('now'))` (current UTC timestamp as TEXT, like `CURRENT_TIMESTAMP`),
-filled by the DB; `expr.raw(sql)` is the escape hatch for any other SQLite default.
+`DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))` — the current UTC instant as ISO-8601
+TEXT, byte-identical to `new Date().toISOString()` and so directly comparable with
+`$now()` — filled by the DB; `expr.raw(sql)` is the escape hatch for any other SQLite
+default (including `expr.raw("datetime('now')")` for the old `CURRENT_TIMESTAMP` shape).
 
 **UUIDs.** `t.uuid()` is a string column; `generated()` auto-mints a v4 on insert
 (via `crypto.randomUUID()`) when you omit it, and `primaryKey()` marks any column

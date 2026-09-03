@@ -8,7 +8,10 @@
 // and codegen load an app.ts for its schema without dragging in the DO runtime.
 
 // --- schema authoring ---
-export { Entity, defineSchema, renamedFrom, notNull, unique, indexed, hidden, defaultTo, primaryKey, generated, expr, ExprDefault, trigger, partitionOf, DEFAULT_PARTITION } from "./sdk/schema";
+export { Entity, defineSchema, renamedFrom, notNull, unique, indexed, hidden, defaultTo, primaryKey, generated, expr, ExprDefault, ISO_NOW_SQL, trigger, partitionOf, DEFAULT_PARTITION } from "./sdk/schema";
+// The one-off rewrite that goes with `expr.now()` changing shape — see ./sdk/iso-timestamps.
+export { isoTimestampBackfill, timestampColumns, LEGACY_NOW_SQL } from "./sdk/iso-timestamps";
+export type { ExtraTimestampColumns, IsoTimestampBackfillOpts } from "./sdk/iso-timestamps";
 export type { TriggerDef, TriggerOp } from "./sdk/schema";
 export { isValidUuid } from "./sdk/uuid";
 export type {
