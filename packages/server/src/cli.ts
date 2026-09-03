@@ -10,6 +10,8 @@
 //   pramen schema snapshot            save the current schema to .pramen/schema.json
 //   pramen schema diff                compare the schema to the snapshot (safe vs unsafe changes)
 //   pramen schema status [--tenant t] [--url u] [--token jwt]   compare a deployed tenant to the schema
+//   pramen migrations list            declared data-migration ids, in order
+//   pramen migrations status          applied vs pending, per tenant + partition
 //   pramen token <sub> [roles...] [--tenant a,b]                mint a dev JWT
 //
 // The bin uses a `bun` shebang: the `schema *` commands import your app module (a .ts
@@ -22,7 +24,9 @@ import { dirname, resolve } from "node:path";
 import { createTableSql } from "./runtime/ddl";
 import { schemaHash } from "./runtime/migrate";
 import { diffSchemaFingerprint, schemaFingerprint, type SchemaFingerprint } from "./runtime/schema-diff";
-import { entitiesInPartition, partitionsOf, type SchemaDef } from "./sdk/schema";
+import { DEFAULT_PARTITION, entitiesInPartition, partitionsOf, type SchemaDef } from "./sdk/schema";
+import { migrationsForPartition } from "./runtime/data-migrations";
+import type { DataMigration } from "./sdk/handlers";
 import { signDevToken } from "./runtime/dev-token";
 
 /** The dev JWT claims `pramen token` mints. See `runtime/dev-token.ts` for the signer. */
@@ -57,14 +61,21 @@ function fail(msg: string): never {
   process.exit(1);
 }
 
-async function loadApp(): Promise<{ schema: SchemaDef }> {
+/** The slice of an app module the CLI needs: the schema, plus the declared data
+ * migrations (`migrations list`/`status` read them; every other command ignores them). */
+interface LoadedApp {
+  schema: SchemaDef;
+  migrations?: readonly DataMigration[];
+}
+
+async function loadApp(): Promise<LoadedApp> {
   const explicit = flag("app");
   const candidates = explicit ? [explicit] : ["./app.ts", "./example/app.ts"];
   for (const c of candidates) {
     const p = resolve(process.cwd(), c);
     if (existsSync(p)) {
-      const mod = (await import(p)) as { app?: { schema?: SchemaDef } };
-      if (mod.app?.schema) return mod.app as { schema: SchemaDef };
+      const mod = (await import(p)) as { app?: Partial<LoadedApp> };
+      if (mod.app?.schema) return { schema: mod.app.schema, migrations: mod.app.migrations };
       fail(`${c} does not export { app }`);
     }
   }
@@ -83,6 +94,9 @@ Usage: pramen <command>
   schema diff               compare the schema to the snapshot (safe vs unsafe)
   schema status             compare a deployed tenant's schema to the local schema
                             [--tenant t] [--url u] [--token jwt]
+  migrations list           declared data migration ids, in order (id + partition)
+  migrations status         applied vs pending data migrations for a deployed tenant
+                            [--tenant t] [--all-tenants] [--store d1] [--url u] [--token jwt]
   token <sub> [roles...]    mint a dev JWT [--tenant a,b]
 
 Flags: --app <path> to point at your app module (default ./app.ts or ./example/app.ts).`;
@@ -200,6 +214,111 @@ async function schemaCmd(sub: string | undefined): Promise<void> {
   console.log(HELP);
 }
 
+/** One (tenant, partition) the ledger is read for. `--all-tenants` fans out over the
+ * registry's real pairs; otherwise the schema's partitions for one tenant. */
+interface MigrationTarget {
+  tenant: string;
+  partition: string;
+}
+
+/** GET the applied-migration ledger for one (tenant, partition). Exits non-zero rather
+ * than reporting a partial fleet — "not answered" must never read as "not applied". */
+async function fetchApplied(
+  url: string,
+  token: string,
+  target: MigrationTarget,
+  store: string | undefined,
+): Promise<{ id: string; appliedAt: string }[]> {
+  const qs = target.partition === DEFAULT_PARTITION ? "" : `&partition=${encodeURIComponent(target.partition)}`;
+  const headers = new Headers({ authorization: `Bearer ${token}` });
+  // The ledger lives in the Worker's shared D1 on that store — there is no DO to ask, and
+  // without this header the request routes to a DO binding a D1-only deploy doesn't have.
+  if (store === "d1") headers.set("x-pramen-store", "d1");
+  const res = await fetch(`${url}/admin/migrations?tenant=${encodeURIComponent(target.tenant)}${qs}`, {
+    headers,
+  }).catch((e: Error) => fail(`migrations status: cannot reach ${url} (${e.message})`));
+  const body = (await res.json().catch(() => ({}))) as {
+    ok?: boolean;
+    result?: { partition: string; applied: { id: string; appliedAt: string }[] };
+    error?: string;
+  };
+  if (!res.ok || !body.ok || !body.result) {
+    fail(`migrations status failed (tenant ${target.tenant}, partition ${target.partition}): ${body.error ?? res.status}`);
+  }
+  return body.result!.applied;
+}
+
+async function migrationsCmd(sub: string | undefined): Promise<void> {
+  if (sub === "list") {
+    const { migrations } = await loadApp();
+    if (!migrations?.length) {
+      console.log("no migrations declared.");
+      return;
+    }
+    for (const m of migrations) console.log(`${m.id}  (partition: ${m.partition ?? DEFAULT_PARTITION})`);
+    return;
+  }
+  if (sub === "status") {
+    const { schema, migrations } = await loadApp();
+    const declared = migrations ?? [];
+    const url = flag("url") ?? "http://localhost:8787";
+    const token = flag("token") ?? (await sign({ sub: "cli", roles: ["admin"] }));
+    const store = flag("store");
+    if (store !== undefined && store !== "d1" && store !== "do") fail(`migrations status: --store must be "do" or "d1"`);
+
+    // --all-tenants asks the registry which (tenant, partition) DOs actually exist — the
+    // only way to answer "is it safe to prune this id?", since a tenant nobody has touched
+    // since the migration shipped is still unmigrated and no local artifact knows that.
+    let targets: MigrationTarget[];
+    if (argv.includes("--all-tenants")) {
+      const res = await fetch(`${url}/tenants`, { headers: { authorization: `Bearer ${token}` } }).catch(
+        (e: Error) => fail(`migrations status: cannot reach ${url} (${e.message})`),
+      );
+      const body = (await res.json().catch(() => ({}))) as { ok?: boolean; result?: MigrationTarget[]; error?: string };
+      if (!res.ok || !body.ok || !body.result) fail(`migrations status: /tenants failed: ${body.error ?? res.status}`);
+      targets = body.result!;
+    } else {
+      const tenant = flag("tenant") ?? "main";
+      // Union the schema's partitions with the ones the migrations themselves declare.
+      // partitionsOf() only returns partitions an ENTITY lives in, so an app whose every
+      // entity is partitioned would drop the default partition from the report — and a
+      // default-partition migration would silently never be listed, in the one command
+      // whose answer gates deleting it.
+      const declaredIn = declared.map((m) => m.partition ?? DEFAULT_PARTITION);
+      targets = [...new Set([...partitionsOf(schema), ...declaredIn])].map((partition) => ({ tenant, partition }));
+    }
+
+    for (const target of targets) {
+      console.log(`\ntenant: ${target.tenant}   partition: ${target.partition}`);
+      const applied = await fetchApplied(url, token, target, store);
+      const appliedAt = new Map(applied.map((a) => [a.id, a.appliedAt]));
+      const forHere = migrationsForPartition(declared, target.partition);
+      let pending = 0;
+      for (const m of forHere) {
+        const at = appliedAt.get(m.id);
+        if (at) console.log(`  ✓ ${m.id}  (applied ${at})`);
+        else {
+          console.log(`  • ${m.id} PENDING`);
+          pending++;
+        }
+      }
+      // A ledger row with no declaration left in the codebase — the pruning question in
+      // reverse. Harmless (it stays applied), but it means this deploy no longer describes
+      // what ran, so a fresh tenant and this one are NOT converging on the same history.
+      const declaredIds = new Set(forHere.map((m) => m.id));
+      for (const a of applied) if (!declaredIds.has(a.id)) console.log(`  ? ${a.id} applied but NOT DECLARED`);
+      console.log(`  ${forHere.length - pending} applied, ${pending} pending`);
+    }
+    console.log(
+      "\nA migration is only safe to DELETE once EVERY live tenant reports it applied — the same trap as\n" +
+        "`renamedFrom`: migration is lazy and per-DO, so a tenant nobody has touched is still unmigrated\n" +
+        "and would silently skip the id if it were gone. Check with --all-tenants.",
+    );
+    return;
+  }
+  console.log(HELP);
+}
+
 async function tokenCmd(args: string[]): Promise<void> {
   const pos = positionals(args);
   const sub = pos[0];
@@ -310,6 +429,8 @@ async function main(): Promise<void> {
       return initCmd(argv.slice(1));
     case "schema":
       return schemaCmd(argv[1]);
+    case "migrations":
+      return migrationsCmd(argv[1]);
     case "token":
       return tokenCmd(argv.slice(1));
     default:
