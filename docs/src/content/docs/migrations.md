@@ -134,6 +134,10 @@ On every boot: `migrate()` → **data migrations** → the outbox table →
 | subject | code-defined reference data | existing user rows |
 | failure | logged and **swallowed** | **fails closed** |
 
+The `failure` row is about the reconciler **at boot**. A factory called from `app.ts` may
+still refuse to build one — `cmsBootstrap` validates its type definitions there and throws,
+like `validateCollections` and `validateMigrations` — which fails the deploy, not a boot.
+
 A backfill that doubles a value on the second run is precisely what bootstrap's
 "MUST be safe to run repeatedly" contract forbids. And the schema hash says nothing
 about backfills — a perfectly in-sync store carries no evidence one ran.

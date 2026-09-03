@@ -16,6 +16,14 @@ allow-lists, and the review/publish gates are all enforced server-side.
   required fields are enforced at publish, not while editing.
 - **Inspector tabs:** Settings, **SEO** (meta/canonical/robots/OG), **Workflow**
   (submit → review → approve/reject/publish, role-gated), **i18n** (translations), **Audit** trail.
+- **Types** (`/schema`): authors the block types and content types everything above is built
+  from — the inverse of the field form, editing a `FieldDefinition[]` and a content type's
+  regions/page fields/default blocks. A type declared in code (`defineBlockType` /
+  `defineContentType`, reconciled by `cmsBootstrap`) is marked `code` and shown **read-only**:
+  the server owns that row and would revert an edit at the next boot.
+- **Collections** (your own pramen entities, edited with the same field DSL), **site
+  furniture** (menus, redirects, taxonomies, widget areas) and **custom admin pages** (Block
+  Kit) — each discovered at runtime, so there is one generic editor and no per-project code.
 - **Media library**, plus **Users** (admin-only: invite via magic link, roles, activate/delete)
   and **Settings** (self-service email/password) tabs.
 - **Real URL routing** ([`@buzola/router`](https://www.npmjs.com/package/@buzola/router), file-based
