@@ -357,9 +357,11 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
       fixed `Db.update`/`delete`/belongsTo-load to resolve the real PK via `pkOf()` (they hardcoded `id`), so
       an entity with a non-`id` `textId`/`primaryKey()` PK (e.g. `auth_users` keyed by `username`) works.
 - [x] SQL-expression defaults (mirrors kvalt's `expr`): `defaultTo(field, expr.now())` / `expr.raw(sql)` —
-      an `ExprDefault` wraps raw SQL, rendered UNQUOTED and parenthesized (`DEFAULT (datetime('now'))`) so a
-      function-call default is legal in SQLite; `expr.now()` is the current UTC timestamp as TEXT
-      (`CURRENT_TIMESTAMP`-shaped). Expr-default columns are optional on insert (DB-filled). SQLite forbids
+      an `ExprDefault` wraps raw SQL, rendered UNQUOTED and parenthesized
+      (`DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))`) so a function-call default is legal in SQLite;
+      `expr.now()` is the current UTC instant as ISO-8601 TEXT, the same shape `$now()` compares against.
+      (It emitted `datetime('now')` until that mismatch was fixed; `isoTimestampBackfill()` rewrites stores
+      written before then.) Expr-default columns are optional on insert (DB-filled). SQLite forbids
       `ALTER ADD COLUMN` with a non-constant default, so adding one to an existing table falls back to a
       table rebuild — additive (the rebuild's INSERT omits the column, so SQLite backfills existing rows via
       the column's DEFAULT) and ungated by `PRAMEN_ALLOW_DESTRUCTIVE`. Unblocks a future `timestamps()` helper.

@@ -17,8 +17,9 @@ export async function runUuid(base: string): Promise<void> {
   assert(isValidUuid(ev.id), "uuid: generated() PK id is a valid uuid");
   assert(isValidUuid(ev.traceId), "uuid: generated() non-PK traceId is a valid uuid");
   assert(ev.id !== ev.traceId, "uuid: the two generated uuids differ");
-  // expr.now() SQL default: createdAt was omitted, so the DB filled it (UTC TEXT).
-  assert(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(ev.createdAt ?? ""), "expr: createdAt auto-filled by expr.now() default");
+  // expr.now() SQL default: createdAt was omitted, so the DB filled it (ISO-8601 UTC).
+  assert(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(ev.createdAt ?? ""), "expr: createdAt auto-filled by expr.now() (ISO-8601)");
+  assert(!Number.isNaN(Date.parse(ev.createdAt ?? "")), "expr: createdAt parses as a JS Date");
 
   // --- round-trip: the generated id reads back unchanged ---
   const listed = await call("listEvents", {}, admin);

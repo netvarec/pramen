@@ -678,7 +678,8 @@ export const cmsSchema = {
       unpublishAt: t.text(),
       // The revision the public content API serves — set on publish. A direct pointer
       // (not "latest by timestamp") so selection is deterministic even when two publishes
-      // land in the same second (expr.now() is second-precision).
+      // land in the same instant. `expr.now()` carries milliseconds now, which narrows the
+      // window without closing it — a pointer has no window at all.
       currentRevisionId: t.uuid(),
       // Soft delete: the epoch-ISO instant the page was trashed, NULL while it is live.
       // Every read scope AND-merges `deletedAt IS NULL` (see cmsPolicies), so a trashed
@@ -771,11 +772,11 @@ export const cmsSchema = {
     collection: indexed(notNull(t.text())),
     rowId: indexed(notNull(t.text())),
     // A monotonic per-row counter, and the ONLY ordering key. Timestamps cannot do this
-    // job: `expr.now()` is second-resolution and even an ISO ms stamp collides, because a
-    // collection revision is written on EVERY edit and two writes land in the same
-    // millisecond often enough to be reproducible. Ordering then falls to a uuid tiebreak,
-    // which is deterministic but NOT insertion order — so "restore the previous version"
-    // could pick the wrong snapshot.
+    // job even at millisecond resolution: a collection revision is written on EVERY edit,
+    // and two writes land in the same millisecond often enough to be reproducible. Ordering
+    // then falls to a uuid tiebreak, which is deterministic but NOT insertion order — so
+    // "restore the previous version" could pick the wrong snapshot. (`expr.now()` was also
+    // second-resolution when this was written, which made the same point louder.)
     //
     // The read-then-increment in `snapshotRow` is serialized by the DO's single writer. On
     // the D1 store it is NOT — `D1Driver.transaction` is a no-op (D1 has no interactive
@@ -786,11 +787,10 @@ export const cmsSchema = {
     snapshot: t.json(),
     note: t.text(),
     actor: t.text(),
-    // NO expr.now() default. `snapshotRow` is the only writer and stamps this itself with
-    // ISO-8601 ms precision, because unlike cms_page_revisions (written only on publish) a
-    // collection revision is written on EVERY edit — an autosave followed immediately by a
-    // publish lands two rows in the same second, and `datetime('now')` (second resolution)
-    // would make "the previous version" an arbitrary pick between them.
+    // NO expr.now() default: `snapshotRow` is the only writer and stamps it. That is now a
+    // consistency choice rather than a precision one — `expr.now()` carries milliseconds
+    // too — but `revision` above is what actually orders these rows, and a column no
+    // writer but `snapshotRow` touches cannot drift from it.
     createdAt: t.text(),
   }), undefined, { unique: [["collection", "rowId", "revision"]] }),
 
@@ -963,6 +963,27 @@ export type {
   AdminPageResponse,
   AdminText,
 } from "./blockkit";
+
+/**
+ * Columns this package wrote in the pre-ISO space form that the SCHEMA cannot identify.
+ *
+ * `isoTimestampBackfill()` finds every column whose DEFAULT is `expr.now()` on its own.
+ * `cms_pages.publishedAt` has no default at all — `doPublish` stamped it from handler code,
+ * in the same space form, to stay comparable with the `updatedAt` written beside it. There
+ * is nothing on that column to find, so it is named here.
+ *
+ * Spread it into the migration if your store was ever written by a build older than this
+ * one:
+ *
+ * ```ts
+ * migrations: [isoTimestampBackfill({ extraColumns: CMS_LEGACY_TIMESTAMP_COLUMNS })]
+ * ```
+ *
+ * Costs nothing on a store that was not — the UPDATE matches no rows.
+ */
+export const CMS_LEGACY_TIMESTAMP_COLUMNS: Readonly<Record<string, readonly string[]>> = {
+  cms_pages: ["publishedAt"],
+};
 
 // --- field validation --------------------------------------------------------
 
@@ -1690,10 +1711,26 @@ const cdb = (ctx: HandlerContext): CmsDb => ctx.db as unknown as CmsDb;
 
 const notFound = (what: string) => new PramenError(`${what} not found`, 404, "not_found");
 const asObj = (v: unknown): FieldValues => (v && typeof v === "object" ? (v as FieldValues) : {});
-// Timestamps in the SAME shape as the `expr.now()` column default (`datetime('now')`:
-// "YYYY-MM-DD HH:MM:SS", UTC, second precision) so a column's insert-default and its
-// handler-written updates stay lexically comparable (an ISO `T`/`Z` string sorts wrong).
-const nowStamp = (): string => new Date().toISOString().slice(0, 19).replace("T", " ");
+/**
+ * An ISO-8601 UTC instant — the ONE format every timestamp this package writes by hand is
+ * in, so it compares correctly against `$now()` and against the `expr.now()` column
+ * defaults beside it.
+ *
+ * There used to be two of these. `expr.now()` emitted the `datetime('now')` space form, so
+ * page-workflow stamps (`updatedAt`, `publishedAt`) matched THAT to stay lexically
+ * comparable with their own column default, while collection managed timestamps minted ISO
+ * to stay comparable with `$now()`. One column could not satisfy both, and the split was
+ * the honest way to live with it — a trap documented at length on the `publish` field.
+ *
+ * `expr.now()` is ISO now, so the two requirements are the same requirement and there is
+ * one helper. Existing rows written in the old shape are rewritten by
+ * `isoTimestampBackfill()` (see `CMS_LEGACY_TIMESTAMP_COLUMNS`).
+ */
+const isoStamp = (): string => new Date().toISOString();
+
+/** Alias kept because the page-workflow call sites read as "stamp it now". Same function. */
+const nowStamp = isoStamp;
+
 /** Does the caller hold one of these roles?
  *
  * Delegates to `authorizeHandler`, which is what the dispatcher uses to enforce a handler's
@@ -4542,10 +4579,13 @@ function collectionMeta(c: CollectionDef): CollectionMeta {
 // TIMESTAMP FORMAT. Managed timestamps are minted as ISO-8601 UTC with a `Z`
 // (`2026-08-20T12:00:00.000Z`), in exactly one place (`isoStamp`). That is the format
 // `$now()` produces, and the published-read scope compares against it LEXICOGRAPHICALLY.
-// It is deliberately NOT `nowStamp()` (`expr.now()`'s "YYYY-MM-DD HH:MM:SS"), which sorts
-// against the ISO form as if hours apart. Minting in one place is what closes the trap
-// documented on the `publish` field: there, `publish` and `datetime` wrote different
-// formats into the same TEXT column and both passed validation.
+//
+// It used to be worth saying that this is NOT the shape `expr.now()` writes. It is now:
+// `expr.now()` emits the same ISO form, so a managed column and an `expr.now()` default
+// beside it are finally comparable, and `nowStamp` is an alias for `isoStamp` rather than a
+// second format. What still holds is the reason for minting in one place — the trap
+// documented on the `publish` field, where two controls wrote different formats into one
+// TEXT column and both passed validation.
 
 /** A workflow feature a collection can opt into.
  *
@@ -4599,11 +4639,6 @@ export const COLLECTION_PUBLISHED = "published";
  * (GitHub #22), and `LIMIT -1` is SQLite for "no limit". */
 const DEFAULT_COLLECTION_LIST_LIMIT = 100;
 const MAX_COLLECTION_LIST_LIMIT = 500;
-
-/** An ISO-8601 UTC instant — the one format every managed collection timestamp is written
- * in, so it compares correctly against `$now()`. See the note above on why this is not
- * `nowStamp()`. */
-const isoStamp = (): string => new Date().toISOString();
 
 /** The epoch-ms range a schedule may name: 1970-01-01 up to (not including) year 10000.
  *

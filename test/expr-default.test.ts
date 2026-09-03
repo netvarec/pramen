@@ -4,7 +4,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { Entity, defineSchema, defaultTo, expr, ExprDefault, type FieldBuilders } from "../packages/server/src/sdk/schema";
+import { Entity, defineSchema, defaultTo, expr, ExprDefault, ISO_NOW_SQL, type FieldBuilders } from "../packages/server/src/sdk/schema";
 import { createTableSql } from "../packages/server/src/runtime/ddl";
 import { migrate } from "../packages/server/src/runtime/migrate";
 import { bunSqliteDriver } from "./sqlite-driver";
@@ -12,17 +12,22 @@ import { bunSqliteDriver } from "./sqlite-driver";
 let t!: FieldBuilders;
 Entity((b) => ((t = b), { id: b.textId() }));
 
-const DATETIME_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
+// ISO-8601 with millis + Z, e.g. 2026-06-22T21:33:07.222Z
+const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+// From the source, not restated: the DDL, the backfill's column scan and this test all
+// have to agree on the exact SQL, and a copy here would let two of them drift while this
+// one kept passing.
+const NOW_SQL = ISO_NOW_SQL;
 
 describe("expr defaults", () => {
   test("expr.now() / expr.raw() produce ExprDefault sql", () => {
     expect(expr.now()).toBeInstanceOf(ExprDefault);
-    expect(expr.now().sql).toBe("datetime('now')");
-    expect(expr.raw("strftime('%s','now')").sql).toBe("strftime('%s','now')");
+    expect(expr.now().sql).toBe(NOW_SQL);
+    expect(expr.raw("datetime('now')").sql).toBe("datetime('now')");
   });
 
   test("defaultTo(field, expr.*) sets defaultExpr; a literal still sets default", () => {
-    expect(defaultTo(t.text(), expr.now())).toEqual({ type: "text", defaultExpr: "datetime('now')" });
+    expect(defaultTo(t.text(), expr.now())).toEqual({ type: "text", defaultExpr: NOW_SQL });
     expect(defaultTo(t.text(), "pending")).toEqual({ type: "text", default: "pending" });
   });
 
@@ -30,9 +35,9 @@ describe("expr defaults", () => {
     const sql = createTableSql("events", {
       fields: { id: t.id(), at: defaultTo(t.text(), expr.now()), status: defaultTo(t.text(), "new") },
     });
-    expect(sql).toContain("DEFAULT (datetime('now'))"); // parenthesized, unquoted
+    expect(sql).toContain(`DEFAULT (${NOW_SQL})`); // parenthesized, unquoted
     expect(sql).toContain("DEFAULT 'new'"); // literal stays quoted
-    expect(sql).not.toContain("DEFAULT 'datetime('now')'");
+    expect(sql).not.toContain(`DEFAULT '${NOW_SQL}'`);
   });
 });
 
@@ -42,7 +47,7 @@ describe("migrate — expr default", () => {
     await migrate(bunSqliteDriver(db), defineSchema({ events: Entity((b) => ({ id: b.id(), at: defaultTo(b.text(), expr.now()) })) }));
     db.run("INSERT INTO events (id) VALUES (1)");
     const row = db.query("SELECT at FROM events WHERE id = 1").get() as { at: string };
-    expect(row.at).toMatch(DATETIME_RE);
+    expect(row.at).toMatch(ISO_RE);
   });
 
   test("ADD COLUMN with an expr default rebuilds (additive, ungated) and backfills existing rows", async () => {
@@ -58,6 +63,6 @@ describe("migrate — expr default", () => {
     expect(r.skipped).toEqual([]);
     const row = db.query("SELECT kind, at FROM events").get() as { kind: string; at: string };
     expect(row.kind).toBe("signup"); // existing data preserved
-    expect(row.at).toMatch(DATETIME_RE); // existing row backfilled with the default
+    expect(row.at).toMatch(ISO_RE); // existing row backfilled with the default
   });
 });

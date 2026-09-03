@@ -31,6 +31,7 @@ import {
   type EnvBag,
   type WhereClause,
   type MigrationContext,
+  isoTimestampBackfill,
 } from "@pramen/server";
 import {
   authSchema,
@@ -48,7 +49,7 @@ import {
   hashPassword,
 } from "@pramen/auth";
 // @pramen/cms — the block/page builder, wired as an ordinary app fragment.
-import { cmsSchema, cmsHandlers, cmsPolicies, cmsTasks, cmsRoutes, defineBlockType, defineContentType, cmsBootstrap, collection, createCollectionHandlers, createCollectionTasks, collectionPolicies, collectionPublicPolicies, adminPage, createAdminPageHandlers, NAV_ORDER } from "@pramen/cms";
+import { CMS_LEGACY_TIMESTAMP_COLUMNS, cmsSchema, cmsHandlers, cmsPolicies, cmsTasks, cmsRoutes, defineBlockType, defineContentType, cmsBootstrap, collection, createCollectionHandlers, createCollectionTasks, collectionPolicies, collectionPublicPolicies, adminPage, createAdminPageHandlers, NAV_ORDER } from "@pramen/cms";
 
 /** The columns `createNote` writes. `meta` is omitted (not null) when absent, so a
  * role with a restricted create-field list isn't tripped by an always-present column. */
@@ -1017,6 +1018,15 @@ const seededDoc = defineContentType("seeded_doc", {
 // anyway: on the D1 store the ledger claim and the work are NOT atomic (D1 has no
 // interactive transactions), so a mid-flight failure releases the claim and re-runs.
 const migrations = [
+  // The framework-supplied one: `expr.now()` used to emit the `datetime('now')` space form
+  // and now emits ISO-8601, so any row this store wrote under an older build still holds the
+  // old shape — and a same-day pair across the two sorts by its separator rather than its
+  // instant. Declared unconditionally: on a store that was never written by an older build
+  // every UPDATE matches no rows, and "was it?" is not a question the code can answer later.
+  //
+  // `CMS_LEGACY_TIMESTAMP_COLUMNS` covers the one column the schema cannot find on its own —
+  // `cms_pages.publishedAt` has no `expr.now()` default, it was stamped from handler code.
+  isoTimestampBackfill({ extraColumns: CMS_LEGACY_TIMESTAMP_COLUMNS }),
   {
     // The raw-driver path: one bulk UPDATE is the right shape for a backfill — walking rows
     // through ctx.db on a large table is what blows the DO's wall-clock budget.

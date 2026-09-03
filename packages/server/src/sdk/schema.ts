@@ -257,11 +257,48 @@ export class ExprDefault {
   constructor(readonly sql: string) {}
 }
 
-/** SQL-expression defaults for `defaultTo(field, expr.now())`. `now()` is the current
- * UTC timestamp as TEXT (`'YYYY-MM-DD HH:MM:SS'`, like `CURRENT_TIMESTAMP`) — pair it
- * with `t.text()`. `raw(sql)` is an escape hatch for any other SQLite default expression. */
+/**
+ * The SQL `expr.now()` emits: the current UTC instant as **ISO-8601 TEXT with
+ * milliseconds and a `Z`** — `'2026-09-03T21:33:07.222Z'`, byte-for-byte what
+ * `new Date().toISOString()` produces.
+ *
+ * Exported because three things have to agree on it and none of them can see the others:
+ * the DDL that writes the default, {@link isoTimestampBackfill} which rewrites rows
+ * written before this format, and the migration diff that decides a column's DEFAULT
+ * changed at all.
+ */
+export const ISO_NOW_SQL = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
+
+/**
+ * SQL-expression defaults for `defaultTo(field, expr.now())`.
+ *
+ * `now()` is the current UTC instant as ISO-8601 TEXT (`'2026-09-03T21:33:07.222Z'`) —
+ * pair it with `t.text()`.
+ *
+ * **It used to emit `datetime('now')`**, the `CURRENT_TIMESTAMP` space form
+ * (`'2026-09-03 21:33:07'`). That form is wrong for this codebase in two ways that both
+ * fail silently:
+ *
+ *   - It does not compare against `$now()`, which is an ISO string. Lexicographic TEXT
+ *     comparison is exact within one format and wrong across two: both open with
+ *     `YYYY-MM-DD`, so values on different dates still order correctly, but on the SAME
+ *     date index 10 decides — a space (0x20) always sorts below `T` (0x54), whatever the
+ *     time-of-day. So `{ publishedAt: { lte: $now() } }` over a space-form column matches
+ *     any row dated today, including one scheduled for later today. A time boundary that
+ *     silently does not hold, for a day at a time.
+ *   - It is second-resolution, so two writes in the same second are indistinguishable and
+ *     `ORDER BY createdAt` falls back to an arbitrary tiebreak. `%f` gives milliseconds.
+ *
+ * Changing it means a column's stored values change shape, so **existing rows must be
+ * rewritten** — a rebuild copies values through untouched and would leave the two formats
+ * mixed in one column, which is worse than either alone. {@link isoTimestampBackfill} is
+ * that rewrite; declare it in `app.migrations`.
+ *
+ * `raw(sql)` remains the escape hatch for any other SQLite default expression, including
+ * `expr.raw("datetime('now')")` if you deliberately want the old shape.
+ */
 export const expr = {
-  now: (): ExprDefault => new ExprDefault("datetime('now')"),
+  now: (): ExprDefault => new ExprDefault(ISO_NOW_SQL),
   raw: (sql: string): ExprDefault => new ExprDefault(sql),
 };
 

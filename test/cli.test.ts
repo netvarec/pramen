@@ -46,7 +46,10 @@ describe("pramen cli", () => {
     const { out, code } = run("migrations", "list", "--app", "example/app.ts");
     expect(code).toBe(0);
     const ids = out.trim().split("\n").map((l) => l.split("  ")[0]);
-    expect(ids).toEqual(["2026-09-03-backfill-note-meta", "2026-09-03-normalize-signup-status"]);
+    // Declaration order, which is also run order. The framework-supplied ISO-timestamp
+    // backfill is first because the example declares it first — it rewrites columns the two
+    // app migrations below then read, so its position is not incidental.
+    expect(ids).toEqual(["pramen:iso-timestamps", "2026-09-03-backfill-note-meta", "2026-09-03-normalize-signup-status"]);
     expect(out).toContain("(partition: default)");
   });
 

@@ -66,16 +66,36 @@ Pass a **literal** (rendered as a quoted SQL literal) or a **SQL expression** vi
 posts: Entity((t) => ({
   id: t.id(),
   status: defaultTo(t.text(), "draft"),       // literal  -> DEFAULT 'draft'
-  createdAt: defaultTo(t.text(), expr.now()),  // expr     -> DEFAULT (datetime('now'))
+  createdAt: defaultTo(t.text(), expr.now()),  // expr     -> DEFAULT (strftime(...))
 }));
 
 await ctx.db.insert("posts", { });
-// -> { id: 1, status: "draft", createdAt: "2026-06-22 21:05:00" }  (DB-filled)
+// -> { id: 1, status: "draft", createdAt: "2026-09-03T21:05:00.412Z" }  (DB-filled)
 ```
 
-`expr.now()` is the current UTC timestamp as TEXT (the `CURRENT_TIMESTAMP` shape);
-`expr.raw(sql)` is an escape hatch for any other SQLite default expression. Expr-default
-columns are filled by the database, so they're optional on insert.
+`expr.now()` is the current UTC instant as **ISO-8601 TEXT** — byte-identical to
+`new Date().toISOString()`, so it compares correctly against [`$now()`](/docs/acl) under
+SQLite's lexicographic TEXT comparison. `expr.raw(sql)` is an escape hatch for any other
+SQLite default expression. Expr-default columns are filled by the database, so they're
+optional on insert.
+
+> **Upgrading a store written before v0.0.60.** `expr.now()` used to emit `datetime('now')`
+> (`'2026-09-03 21:05:00'`). Changing a column's DEFAULT rebuilds the table, and a rebuild
+> copies existing values through — so old rows keep the space form while new ones get ISO.
+> Mixed in one column, values on the *same date* sort by their separator rather than their
+> instant (a space sorts below `T`), and a `{ lte: $now() }` policy lets a row scheduled for
+> later today through. Declare `isoTimestampBackfill()` in `app.migrations` to rewrite them:
+>
+> ```ts
+> import { isoTimestampBackfill } from "@pramen/server";
+> import { CMS_LEGACY_TIMESTAMP_COLUMNS } from "@pramen/cms";  // if you use the CMS
+>
+> migrations: [isoTimestampBackfill({ extraColumns: CMS_LEGACY_TIMESTAMP_COLUMNS })]
+> ```
+>
+> It finds every `expr.now()` column from your schema; `extraColumns` names the ones written
+> by handler code, which have no default to find. Declaring it on a fresh store costs
+> nothing — every `UPDATE` matches no rows.
 
 ### UUIDs
 
