@@ -48,7 +48,7 @@ import {
   hashPassword,
 } from "@pramen/auth";
 // @pramen/cms — the block/page builder, wired as an ordinary app fragment.
-import { cmsSchema, cmsHandlers, cmsPolicies, cmsTasks, cmsRoutes, defineBlockType, defineContentType, cmsBootstrap, collection, createCollectionHandlers, createCollectionTasks, collectionPolicies, collectionPublicPolicies } from "@pramen/cms";
+import { cmsSchema, cmsHandlers, cmsPolicies, cmsTasks, cmsRoutes, defineBlockType, defineContentType, cmsBootstrap, collection, createCollectionHandlers, createCollectionTasks, collectionPolicies, collectionPublicPolicies, adminPage, createAdminPageHandlers, NAV_ORDER } from "@pramen/cms";
 
 /** The columns `createNote` writes. `meta` is omitted (not null) when absent, so a
  * role with a restricted create-field list isn't tripped by an always-present column. */
@@ -267,6 +267,81 @@ const collections = [
   }),
 ];
 
+// @pramen/cms Block Kit: a custom admin PAGE, described as JSON and rendered by the editor
+// inside its own chrome — no project JavaScript in the admin (GitHub #33/#44).
+//
+// This one is the shape a client project actually asks for: a filtered browse UI over data
+// the CMS does not model, with an action on each row. It reads through `ctx.db` like any
+// other handler, so the row ACL still applies — Block Kit removes the browser code, not the
+// boundary.
+const lectureDesk = adminPage<typeof schema>("lecture-desk", {
+  label: "Lecture desk",
+  icon: "🗂",
+  // Between Pages and the collections, rather than after Settings, which is where an
+  // `extraNav` link would have had to go.
+  navOrder: NAV_ORDER.pages + 10,
+  async render(ctx, i) {
+    let toast: { text: string; tone: "success" | "error" } | undefined;
+    // An action is handled BEFORE the read below, so the table it returns already reflects
+    // it — the whole page is re-rendered on every interaction, so there is nothing to patch.
+    if (i.type === "block_action" && i.action_id === "clear-speaker" && typeof i.value === "string") {
+      await ctx.db.update("lectures", i.value, { speaker: null });
+      toast = { text: "Speaker cleared", tone: "success" };
+    }
+    const search = typeof i.values?.q === "string" ? i.values.q : "";
+    const rows = await ctx.db.find({
+      from: "lectures",
+      where: search ? { title: { contains: search } } : undefined,
+      orderBy: { column: "date", dir: "desc" },
+      select: ["id", "title", "speaker", "date"],
+      limit: 25,
+    });
+    return {
+      toast,
+      blocks: [
+        { type: "header", text: "Lecture desk" },
+        { type: "context", text: "A project screen the CMS does not model, rendered from JSON the server sent." },
+        {
+          type: "actions",
+          block_id: "filter",
+          elements: [
+            { type: "text_input", action_id: "q", label: "Search titles", initial_value: search },
+            { type: "button", action_id: "search", label: "Search", style: "primary" },
+          ],
+        },
+        rows.length === 0
+          ? { type: "empty", text: "No lectures match.", hint: "Try a different search." }
+          : {
+              type: "table",
+              columns: [
+                { key: "title", label: "Title" },
+                { key: "speaker", label: "Speaker" },
+                { key: "date", label: "Date" },
+              ],
+              rows: rows.map((r) => ({
+                title: String(r.title ?? ""),
+                speaker: r.speaker == null ? "—" : String(r.speaker),
+                date: r.date == null ? "" : String(r.date),
+              })),
+            },
+        {
+          type: "actions",
+          block_id: "rows",
+          elements: rows.slice(0, 3).map((r) => ({
+            type: "button" as const,
+            action_id: "clear-speaker",
+            label: `Clear speaker: ${String(r.title ?? "")}`,
+            style: "danger" as const,
+            value: String(r.id),
+            // A page has no code in the browser, so it cannot put up its own dialog.
+            confirm: "Clear the speaker on this lecture?",
+          })),
+        },
+      ],
+    };
+  },
+});
+
 const handlers = {
   // @pramen/auth: signup / login / me (issue + use HS256 tokens, no third-party IdP).
   ...authHandlers,
@@ -363,6 +438,10 @@ const handlers = {
   // checked against it at boot, so a missing `status` is a startup error naming the
   // collection rather than a 500 on the first publish.
   ...createCollectionHandlers(collections, { schema }),
+  // @pramen/cms Block Kit: listAdminPages (role-filtered) + adminPageInteract. No ACL
+  // fragment goes with it — a page reads through `ctx.db` under whatever policies the
+  // caller already holds, so there is nothing here to grant.
+  ...createAdminPageHandlers([lectureDesk]),
   // The PUBLIC read for the `lectures` collection. Deliberately un-gated (no `auth`), so
   // anonymous can call it — what limits the result is the ACL, not this query. Anonymous
   // holds only `collectionPublicPolicies`, which scopes `lectures` reads to

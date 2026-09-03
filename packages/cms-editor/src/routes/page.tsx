@@ -52,7 +52,7 @@ export default createPage()
     // match. Rendering one tab under another tab's address means a refresh, a Back, or a
     // shared link all disagree with what is on screen; `setTab` already replaces without
     // adding a history entry, so reconciling costs nothing.
-    const shown = visibleTabs(cms.multilingual);
+    const shown = visibleTabs(cms.multilingual, cms.siteFurniture);
     const tab: InspectorTab = shown.includes(params.tab as InspectorTab) ? (params.tab as InspectorTab) : "settings";
     const setTab = (t: InspectorTab) => navigate("page", { params: { pageId: params.pageId, tab: t }, replace: true });
     useEffect(() => {

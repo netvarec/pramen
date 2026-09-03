@@ -138,6 +138,13 @@ export interface CmsClient {
    * narrowing is done by the SERVER: the handler caps its result, so filtering the answer
    * afterwards filters an already-truncated list and loses the tail of every type. */
   listPublishedPages(filter?: { contentType?: string; locale?: string }): Promise<PublishedPageRef[]>;
+  /** Resolve a request path to its redirect, or `null`.
+   *
+   * The half of the redirects manager that makes it a feature rather than a list: the CMS
+   * stores the mapping, and something has to serve it. Call this from your 404 path (see
+   * `redirectResponse`), not on every request — a lookup per page view would put a round
+   * trip in front of every render to answer "no" almost every time. */
+  resolveRedirect(path: string): Promise<{ to: string; status: number } | null>;
   /** Absolute URL for a relative CMS path (e.g. a media `/media/...` url). */
   resolve(path: string): string;
   readonly baseUrl: string;
@@ -180,6 +187,7 @@ export function createCmsClient(opts: CmsClientOptions): CmsClient {
       throw new Error(`@pramen/cms-astro: preview failed (HTTP ${res.status}${body.code ? `, ${body.code}` : ""}${body.error ? `: ${body.error}` : ""})`);
     },
     listPublishedPages: async (filter) => (await call<PublishedPageRef[]>("listPublishedPages", filter ?? {})) ?? [],
+    resolveRedirect: (path) => call<{ to: string; status: number } | null>("resolveRedirect", { path }).then((r) => r ?? null),
     resolve: (path) => (path.startsWith("http") ? path : `${base}${path}`),
   };
 }
@@ -247,4 +255,50 @@ export function cmsLoader(opts: CmsLoaderOptions): Loader {
       logger.info(`@pramen/cms: loaded ${loaded} published page(s)`);
     },
   };
+}
+
+/**
+ * A `Response` for a request that would otherwise 404, if the CMS has a redirect for it.
+ *
+ * Returns `null` when there is none, so the caller falls through to its own 404 — this is a
+ * REPAIR for a URL that used to work, not a router.
+ *
+ * Wire it where your framework handles a miss:
+ *
+ * ```ts
+ * // src/pages/404.astro (or a middleware's not-found branch)
+ * const redirect = await redirectResponse(client, Astro.url);
+ * if (redirect) return redirect;
+ * ```
+ *
+ * A lookup costs a round trip, which is why it belongs on the 404 path and not in front of
+ * every render: the answer is "no redirect" for essentially every request that resolves.
+ *
+ * The destination is re-checked here even though the CMS canonicalized it on write. This
+ * function turns a value from the store into a `Location` header, and the write that
+ * produced it may predate that validation — a stored `javascript:` or protocol-relative
+ * target would otherwise be handed to the browser verbatim.
+ */
+export async function redirectResponse(client: CmsClient, url: URL | string): Promise<Response | null> {
+  const path = typeof url === "string" ? url : url.pathname;
+  // Every failure degrades to "no redirect", because this runs ON THE 404 PATH: a throw
+  // here turns every miss on the site into a 500. And there are several — `//pricing`
+  // (doubled slash) is refused by the server's own path rule, a backend predating
+  // `resolveRedirect` answers 400, and an anonymous role predating the `cms_redirects`
+  // grant is denied. None of those is a reason to stop rendering a 404. `getPage` already
+  // degrades this way; this did not.
+  let hit: { to: string; status: number } | null = null;
+  try {
+    hit = await client.resolveRedirect(path);
+  } catch {
+    return null;
+  }
+  if (!hit) return null;
+  const to = normalizeHref(hit.to);
+  const ok = /^https?:\/\//i.test(to) || (to.startsWith("/") && !to.startsWith("//") && !to.startsWith("/\\"));
+  if (!ok) return null;
+  // Only the four real redirect statuses; anything else in the row is treated as a
+  // permanent move rather than passed through as an arbitrary response code.
+  const status = [301, 302, 307, 308].includes(hit.status) ? hit.status : 301;
+  return new Response(null, { status, headers: { location: to } });
 }

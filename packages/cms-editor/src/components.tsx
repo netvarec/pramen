@@ -6,19 +6,26 @@ import { Button, Heading, Input, ModalDialog, ModalOverlay, ModalSurface, Textar
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Api, ApiError } from "./api";
 import { CONTROL, FieldForm, formatWhen, fromLocalInput, slugify, toLocalInput } from "./fields";
+import { ROW, WRAP } from "./chrome";
 import type { Config } from "./api";
 import { useApp, type Me } from "./app-context";
 import { isRichTextDoc, richTextToPlainText } from "./rich-text";
-import type { AssembledPage, AuditEntry, BlockType, CmsCapabilities, CollectionMeta, ContentType, FieldDefinition, FieldValue, FieldValues, Media, Page, RegionDefinition, RenderedBlock } from "./types";
+import { flattenTerms } from "./furniture";
+import type { AssembledPage, AuditEntry, BlockType, CmsCapabilities, CollectionMeta, ContentType, FieldDefinition, FieldValue, FieldValues, Media, Page, RegionDefinition, RenderedBlock, Taxonomy, Term } from "./types";
 
-export type InspectorTab = "settings" | "seo" | "workflow" | "i18n" | "audit";
-export const INSPECTOR_TABS: InspectorTab[] = ["settings", "seo", "workflow", "i18n", "audit"];
+export type InspectorTab = "settings" | "seo" | "workflow" | "i18n" | "terms" | "audit";
+export const INSPECTOR_TABS: InspectorTab[] = ["settings", "seo", "workflow", "i18n", "terms", "audit"];
 
 /** The tabs a deployment actually shows. ONE definition, used by the tab bar, the panel
  * switch and the route's deep-link fallback — three places that previously each re-derived
- * "is i18n visible?" and could disagree. */
-export function visibleTabs(multilingual: boolean): InspectorTab[] {
-  return multilingual ? INSPECTOR_TABS : INSPECTOR_TABS.filter((t) => t !== "i18n");
+ * "is i18n visible?" and could disagree.
+ *
+ * `terms` follows `siteFurniture` for the same reason `i18n` follows `multilingual`: on a
+ * server without the taxonomy handlers the panel could only ever render an error. With them
+ * and no vocabularies defined it renders its own empty state, which is the honest answer
+ * and points at the screen that fixes it. */
+export function visibleTabs(multilingual: boolean, siteFurniture = false): InspectorTab[] {
+  return INSPECTOR_TABS.filter((t) => (t === "i18n" ? multilingual : t === "terms" ? siteFurniture : true));
 }
 
 /** Collections-only deployments hide the block/page builder entirely. Read in one place so
@@ -48,8 +55,6 @@ export function splitsByType(contentTypes: ContentType[] | null, cms: CmsCapabil
 
 // --- presentational primitives (podoba tokens; replaces styles.ts classes) ---
 
-const ROW = "flex items-center gap-3 rounded-[14px] border border-transparent bg-surface-card px-[18px] py-3.5";
-const WRAP = "mx-auto max-w-[1200px] px-7 pb-8 pt-2";
 
 function Hero({ lead, em, children }: { lead: string; em: string; children?: ReactNode }) {
   return (
@@ -666,7 +671,7 @@ export function CollectionEditor({ api, def, id, onSaved, onDeleted, onBack, onE
 // --- page editor -------------------------------------------------------------
 
 export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange, registerGuard }: { api: Api; page: Page; blockTypes: BlockType[]; tab: InspectorTab; onTab: (t: InspectorTab) => void; onBack: () => void; onChange: (p: Page) => void; registerGuard: (fn: (() => boolean) | null) => void }) {
-  const { cms: { multilingual } } = useApp();
+  const { cms: { multilingual, siteFurniture, canEdit } } = useApp();
   const [ct, setCt] = useState<ContentType | null>(null);
   const [assembled, setAssembled] = useState<AssembledPage | null>(null);
   const [err, setErr] = useState("");
@@ -905,7 +910,7 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
 
       <div className="overflow-auto rounded-panel border border-border bg-surface-card p-5">
         <div className="mb-3 flex gap-1">
-          {visibleTabs(multilingual).map((t) => (
+          {visibleTabs(multilingual, siteFurniture).map((t) => (
             <Button key={t} variant="ghost" size="sm" className={tab === t ? "bg-surface-muted text-fg" : "text-fg-muted"} onPress={() => onTab(t)}>{t}</Button>
           ))}
         </div>
@@ -913,6 +918,7 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
         {tab === "seo" ? <SeoPanel api={api} page={page} onError={setErr} /> : null}
         {tab === "workflow" ? <Workflow api={api} page={page} onChanged={(p) => { onChange(p); }} onError={setErr} /> : null}
         {tab === "i18n" && multilingual ? <I18n api={api} page={page} onError={setErr} /> : null}
+        {tab === "terms" ? <PageTerms api={api} pageId={page.id} canEdit={canEdit} onError={setErr} /> : null}
         {tab === "audit" ? <AuditLog api={api} pageId={page.id} onError={setErr} /> : null}
       </div>
     </div>
@@ -1397,6 +1403,92 @@ function I18n({ api, page, onError }: { api: Api; page: Page; onError: (s: strin
         <Input label="" value={locale} onChange={setLocale} placeholder="locale (e.g. cs)" />
         <Button variant="secondary" onPress={create} isDisabled={!locale}>add</Button>
       </div>
+    </div>
+  );
+}
+
+/** The page's taxonomy terms.
+ *
+ * Assignment has to live in the page editor: `cms_page_terms` links a term to a PAGE, so
+ * the vocabulary screen can define terms but has no way to attach one — a taxonomy with no
+ * assignment surface is a list of words.
+ *
+ * `setPageTerms` replaces the whole selection rather than adding and removing one at a
+ * time, so the panel holds the selection and saves it as a unit. Two calls each patching
+ * one end of it race into a state neither asked for.
+ */
+function PageTerms({ api, pageId, canEdit, onError }: { api: Api; pageId: string; canEdit: boolean; onError: (s: string) => void }) {
+  const [taxa, setTaxa] = useState<Taxonomy[] | null>(null);
+  const [terms, setTerms] = useState<Record<string, Term[]>>({});
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [busy, setBusy] = useState(false);
+  const [ok, setOk] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      try {
+        const list = await api.listTaxonomies();
+        if (!live) return;
+        setTaxa(list);
+        // In parallel, and alongside the page's own assignments. Awaiting one vocabulary at
+        // a time made the panel's open cost N+1 serial round trips for data that has no
+        // ordering dependency between the calls.
+        const [trees, assigned] = await Promise.all([
+          Promise.all(list.map(async (t) => [t.slug, flattenTerms(await api.getTermTree(t.slug)).map((f) => f.term)] as const)),
+          api.listPageTerms(pageId),
+        ]);
+        if (!live) return;
+        setTerms(Object.fromEntries(trees));
+        setSelected(new Set(assigned.map((t) => t.id)));
+      } catch (e) {
+        if (live) onError(errMsg(e));
+      }
+    })();
+    return () => { live = false; };
+  }, [api, pageId, onError]);
+
+  const toggle = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      await api.setPageTerms(pageId, [...selected]);
+      setOk(true);
+      setTimeout(() => setOk(false), 1200);
+    } catch (e) { onError(errMsg(e)); } finally { setBusy(false); }
+  };
+
+  if (taxa === null) return <p className="text-fg-subtle">Loading…</p>;
+  if (taxa.length === 0) return <p className="text-fg-subtle">No vocabularies defined yet.</p>;
+
+  return (
+    <div className="flex flex-col gap-4">
+      {ok ? <Banner ok>saved</Banner> : null}
+      {taxa.map((t) => (
+        <div key={t.id}>
+          <Section>{t.label}</Section>
+          <div className="flex flex-col gap-1">
+            {(terms[t.slug] ?? []).length === 0 ? <span className="text-caption text-fg-subtle">No terms yet.</span> : null}
+            {(terms[t.slug] ?? []).map((term) => (
+              <label key={term.id} className="flex items-center gap-2">
+                {/* `setPageTerms` is editor-gated, so a reviewer got live checkboxes and a
+                    Save button that 403s — the one new write surface that did not take
+                    `canEdit`. */}
+                <input type="checkbox" disabled={!canEdit} checked={selected.has(term.id)} onChange={() => toggle(term.id)} />
+                <span className="text-sm text-fg">{term.label}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+      ))}
+      {canEdit ? <Button size="sm" className="self-start" onPress={save} isDisabled={busy}>{busy ? "Saving…" : "Save terms"}</Button> : null}
     </div>
   );
 }

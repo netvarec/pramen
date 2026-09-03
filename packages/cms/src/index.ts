@@ -48,10 +48,12 @@ import {
   signToken,
   verifyToken,
   resolveSecret,
+  authorizeHandler,
 } from "@pramen/server";
 import type { HandlerContext, Policy, FileRef, BootstrapFn, JsonValue, SchemaDef, FieldDef, FieldType } from "@pramen/server";
 import type { EnvBag } from "@pramen/server";
 import { isSafeHref, normalizeHref } from "./href";
+import { NAV_ORDER } from "./nav";
 
 // --- field schema DSL (the block-editor field language) ---------------------
 
@@ -109,6 +111,28 @@ export interface FieldDefinition {
     | "slug"
     | "media"
     | "select"
+    /**
+     * A pointer to a record that is NOT this row — another pramen row, or a record in a
+     * system the CMS does not own. Stored as an OPAQUE id (a string), so the same field
+     * links a `cms_pages` row, a collection row and an external CRM record alike.
+     *
+     * `optionsFrom` on a `select` is most of this already, and stays the ergonomic case for
+     * a short closed list: it fetches `{ value, label }[]` ONCE and renders a `<select>`.
+     * What it cannot do is scale — no search term, no paging, and no way to render the
+     * label of a value whose record is not in the first (only) page. Twenty campaigns are
+     * fine; a thousand records are a dropdown nobody can use and a stored id that renders
+     * as a uuid.
+     *
+     * So a reference declares `referenceFrom`, a query handler called with BOTH shapes:
+     *
+     *   { search?: string; limit: number; offset: number }  -> browse / search
+     *   { ids: string[] }                                   -> resolve stored values
+     *
+     * and returning `{ items: ReferenceOption[]; hasMore?: boolean }` either way. The
+     * second shape is what makes an already-stored value renderable without fetching the
+     * whole set — the reason this is a field type and not a wider `select`.
+     */
+    | "reference"
     | "repeater"
     | "group";
   required?: boolean;
@@ -125,6 +149,30 @@ export interface FieldDefinition {
   optionsFrom?: string;
   /** slug only — the sibling field this one is derived from (e.g. `"title"`). */
   from?: string;
+  /** reference only — the query handler that resolves this reference. See the `reference`
+   * type above for the two request shapes it must answer. */
+  referenceFrom?: string;
+  /** reference only — store a LIST of ids rather than one. A multiple reference is a
+   * `t.json()` column (an array), a single one is `t.text()`; `validateCollections`
+   * enforces the difference, because storing an array in a TEXT column is a raw driver
+   * error on the first write and nothing earlier. */
+  multiple?: boolean;
+}
+
+/** One option a `reference` field's `referenceFrom` handler returns. `hint` is secondary
+ * text (a date, an owner, a status) shown under the label — a picker over a thousand
+ * records usually needs more than a name to tell two rows apart. */
+export interface ReferenceOption {
+  value: string;
+  label: string;
+  hint?: string;
+}
+
+/** What a `reference` field's `referenceFrom` handler returns, for BOTH request shapes.
+ * `hasMore` drives the picker's "Load more"; omitting it means "this is everything". */
+export interface ReferenceResult {
+  items: ReferenceOption[];
+  hasMore?: boolean;
 }
 
 /** A named region on a content type; `allowedTypes` (block-type slugs) restricts what
@@ -195,6 +243,8 @@ export type FieldTsType<D extends FieldDefinition> = D["type"] extends "text" | 
         ? boolean
         : D["type"] extends "media"
           ? ResolvedMedia | null
+          : D["type"] extends "reference"
+            ? (D extends { multiple: true } ? string[] : string)
           : D["type"] extends "group"
             ? InferBlockFields<NonNullable<D["fields"]>>
             : D["type"] extends "repeater"
@@ -371,6 +421,9 @@ function tsTypeOf(f: FieldDefinition): string {
       return "boolean";
     case "media":
       return "ResolvedMedia | null";
+    // An opaque id — the record it points at may not be ours to type.
+    case "reference":
+      return f.multiple ? "string[]" : "string";
     case "group":
       return `{ ${(f.fields ?? []).map(tsFieldLine).join(" ")} }`;
     case "repeater":
@@ -442,6 +495,123 @@ export function generateBlockTypes(blockTypes: Array<{ slug: string; fieldsSchem
 
 /** The block/page builder tables. All in the default partition (relations can't cross
  * partitions). Prefixed `cms_` to avoid colliding with your own entities. */
+// --- site furniture: the shapes ----------------------------------------------
+//
+// Menus, taxonomies and widget areas are the site-level furniture a client expects to edit
+// without a deploy. They are deliberately NOT modelled on pages: none of them has a slug, a
+// status, a revision or a workflow, and bending them into `cms_pages` would put a null
+// branch through every page read to serve something that shares no field with a page.
+
+/** What a menu item points at.
+ *
+ * `custom` is a literal href. The rest are REFERENCES resolved at read time, which is the
+ * whole reason the kind exists: a menu that stored `/about` verbatim breaks silently the
+ * day the page's slug changes, and the redirect that covers it is a second thing to
+ * remember. A `page` item follows the page. */
+export type MenuItemKind = "custom" | "page" | "term" | "collection";
+
+/** One entry in a menu tree. */
+export interface MenuItem {
+  /** Stable within the menu — the editor's list key and the only handle a reorder has. */
+  id: string;
+  label: string;
+  /** Defaults to `"custom"` (a literal `url`). */
+  kind?: MenuItemKind;
+  /** `page`: a `cms_pages` id · `term`: a `cms_terms` id · `collection`: a collection slug. */
+  ref?: string | null;
+  /** `custom`: the href, stored verbatim (and `isSafeHref`-checked on write). For the
+   * resolved kinds this is FILLED IN by `getMenu` and ignored on write. */
+  url?: string;
+  target?: string;
+  titleAttr?: string;
+  cssClasses?: string;
+  children?: MenuItem[];
+}
+
+/** A named navigation menu. Read whole with `getMenu(name)`. */
+export interface Menu {
+  id: string;
+  name: string;
+  label: string;
+  items: MenuItem[];
+}
+
+/** How deep a menu tree may nest. Menus are stored as one document, so without a cap a
+ * client could post a tree deep enough to blow the stack in the resolver — and no real
+ * navigation is more than three levels anyway. */
+export const MAX_MENU_DEPTH = 5;
+
+/** How many items one menu may hold, at every level combined.
+ *
+ * Depth alone is not a bound: a FLAT list of 800 `page` items is legal under
+ * `MAX_MENU_DEPTH` and turns every anonymous `getMenu` — the read on every page render of
+ * the site — into a single `WHERE id IN (?×800)`, which the read engine emits with no
+ * chunking. Every other read added alongside this one is bounded (`MAX_TERMS`,
+ * `clampLimit`); this one was not, and it is the one on the hot path. */
+export const MAX_MENU_ITEMS = 200;
+
+/** A classification vocabulary — `category`, `tag`, `region`, whatever the site sorts by. */
+export interface Taxonomy {
+  id: string;
+  slug: string;
+  label: string;
+  pluralLabel?: string | null;
+  description?: string | null;
+  /** Terms may declare a `parentId`. A flat vocabulary REJECTS one on write, rather than
+   * accepting it and rendering it nowhere. */
+  hierarchical: boolean;
+}
+
+/** One term in a vocabulary. `children` is present only on the tree read (`getTermTree`). */
+export interface Term {
+  id: string;
+  taxonomyId: string;
+  slug: string;
+  label: string;
+  description?: string | null;
+  parentId?: string | null;
+  position: number;
+  children?: Term[];
+}
+
+/** How deep a term hierarchy may nest — the same argument as {@link MAX_MENU_DEPTH}, except
+ * here the tree is rows and the risk is a parent CYCLE, which `assertTermParent` refuses. */
+export const MAX_TERM_DEPTH = 5;
+
+/** What a widget renders. `component` is the escape hatch: the CMS stores an id + props and
+ * the front end maps the id to one of its own components, exactly as `BlockRenderer` maps a
+ * block type slug — so a widget area can hold something the CMS has no idea how to draw. */
+export type WidgetType = "content" | "menu" | "component";
+
+/** One widget in a widget area. */
+export interface Widget {
+  id: string;
+  type: WidgetType;
+  title?: string | null;
+  /** `content`: a rich-text document (normalized on write like any other richtext value). */
+  content?: RichTextDoc;
+  /** `menu`: a `cms_menus.name`. `getWidgetArea` resolves it to `menu` alongside. */
+  menuName?: string;
+  /** `component`: the front end's own component id + its props. */
+  componentId?: string;
+  componentProps?: FieldValues;
+}
+
+/** A widget as READ back: a `menu` widget carries its resolved menu, so a layout renders a
+ * whole sidebar from one call rather than one call per widget. */
+export interface ResolvedWidget extends Widget {
+  menu?: Menu | null;
+}
+
+/** A named template region an admin fills without touching code. */
+export interface WidgetArea {
+  id: string;
+  name: string;
+  label: string;
+  description?: string | null;
+  widgets: ResolvedWidget[];
+}
+
 export const cmsSchema = {
   cms_content_types: Entity((t) => ({
     id: primaryKey(generated(t.uuid())),
@@ -532,6 +702,10 @@ export const cmsSchema = {
     (r) => ({
       type: r.belongsTo("cms_content_types", "typeId"),
       placements: r.hasMany("cms_page_blocks", "pageId"),
+      // Taxonomy terms, through the explicit junction. `where: { terms: { slug: "news" } }`
+      // compiles to a nested subquery, so "pages in this category" is an ordinary query and
+      // not a second handler.
+      terms: r.manyToMany("cms_terms", { through: "cms_page_terms", sourceColumn: "pageId", targetColumn: "termId" }),
     }),
     { unique: [["slug", "locale"]] }, // a slug is unique per locale (DB-enforced)
   ),
@@ -620,6 +794,140 @@ export const cmsSchema = {
     createdAt: t.text(),
   }), undefined, { unique: [["collection", "rowId", "revision"]] }),
 
+  // --- site furniture: menus, redirects, taxonomies, widget areas ------------------
+  //
+  // The WordPress-parity furniture every client project reinvents by hand. All four are
+  // SITE-level, not page-level: they exist once per deployment and are read by the layout,
+  // not by a page's regions.
+
+  // A named navigation menu. `items` is a nested `MenuItem[]` document rather than a rows
+  // table, because a menu is edited and read WHOLE — every read is `getMenu("primary")`,
+  // and every write is "here is the new tree". Rows would buy per-item queries nobody makes
+  // and cost a recursive assemble on the one read that matters. The tree is depth-capped on
+  // write (`MAX_MENU_DEPTH`), which is the constraint a rows table would have got for free.
+  cms_menus: Entity((t) => ({
+    id: primaryKey(generated(t.uuid())),
+    // The key `getMenu(name)` resolves — stable, referenced from layout code, and so NOT
+    // renameable through `updateMenu` (the label is what an editor retitles).
+    name: unique(notNull(t.text())),
+    label: notNull(t.text()),
+    items: t.json(), // MenuItem[]
+    // Optimistic concurrency, as on cms_pages/cms_blocks. It matters MORE here, not less:
+    // `updateMenu` writes the whole `items` document, so two editors on one menu meant the
+    // second silently replaced the first's entire tree — where a page edit at least
+    // conflicts per field.
+    version: defaultTo(t.int(), 1),
+    createdAt: defaultTo(t.text(), expr.now()),
+    updatedAt: defaultTo(t.text(), expr.now()),
+  })),
+
+  // A URL redirect. Needed the moment a slug changes on a live site — which the `slug`
+  // field's own docs already flag ("silently rewriting a slug changes a live URL and breaks
+  // every link to it").
+  //
+  // `fromPath`/`toPath`, not `from`/`to`: `from` is a SQL keyword, and while the dialect
+  // quotes every identifier, a column named `from` also collides with the `find({ from })`
+  // query key — a `where: { from: ... }` reads as a table reference to anyone skimming.
+  cms_redirects: Entity((t) => ({
+    id: primaryKey(generated(t.uuid())),
+    // Unique because resolution is an exact lookup: two rows for one path is a coin flip
+    // over which redirect a visitor gets, and the DB is the only place that can refuse it.
+    fromPath: unique(notNull(t.text())),
+    toPath: notNull(t.text()),
+    // 301 (permanent) or 302 (temporary). INT, and constrained on write — a redirect status
+    // is not free-form, and a typo here is a broken response, not a broken page.
+    status: defaultTo(t.int(), 301),
+    // Off-switch that keeps the row. A redirect is usually disabled to TEST whether it is
+    // still needed; deleting it loses the record of what the old URL was.
+    enabled: defaultTo(t.bool(), true),
+    note: t.text(),
+    createdAt: defaultTo(t.text(), expr.now()),
+    updatedAt: defaultTo(t.text(), expr.now()),
+  })),
+  // NOTE: deliberately no hit counter. Counting would make `resolveRedirect` — the one
+  // handler anonymous traffic calls on every 404 — a WRITE, which is an unauthenticated
+  // row mutation on the hot path and, on the DO, a transaction per miss. Redirect usage
+  // belongs in the edge's own logs.
+
+  // A classification vocabulary: `category` (hierarchical) and `tag` (flat) are just two
+  // rows here, which is why there is no built-in of either — a deployment declares what it
+  // classifies by, the same way it declares its content types.
+  cms_taxonomies: Entity((t) => ({
+    id: primaryKey(generated(t.uuid())),
+    slug: unique(notNull(t.text())),
+    label: notNull(t.text()),
+    pluralLabel: t.text(),
+    description: t.text(),
+    // Hierarchical vocabularies allow `parentId` on their terms; flat ones reject it on
+    // write. Enforced in the handler, not the schema — one term table serves both.
+    hierarchical: defaultTo(t.bool(), false),
+    createdAt: defaultTo(t.text(), expr.now()),
+  })),
+
+  cms_terms: Entity(
+    (t) => ({
+      id: primaryKey(generated(t.uuid())),
+      taxonomyId: indexed(notNull(t.uuid())),
+      slug: notNull(t.text()),
+      label: notNull(t.text()),
+      description: t.text(),
+      // Self-referential, and a REAL FK: deleting a parent term must not leave children
+      // pointing at a row that is gone (the front end would render an orphan branch that
+      // no listing can reach). `setNull` promotes them to the top level instead, which is
+      // the only non-destructive answer — `cascade` would silently delete a subtree.
+      parentId: t.uuid(),
+      position: defaultTo(t.int(), 0),
+      createdAt: defaultTo(t.text(), expr.now()),
+    }),
+    (r) => ({
+      taxonomy: r.belongsTo("cms_taxonomies", "taxonomyId", { onDelete: "cascade" }),
+      parent: r.belongsTo("cms_terms", "parentId", { onDelete: "setNull" }),
+      pages: r.hasMany("cms_page_terms", "termId"),
+    }),
+    // A slug identifies a term WITHIN its vocabulary — `/category/news` and `/tag/news`
+    // are two different terms, and both are legitimate.
+    { unique: [["taxonomyId", "slug"]] },
+  ),
+
+  // The term-assignment junction — an EXPLICIT entity, which is what `manyToMany` means
+  // here: `ctx.db.insert("cms_page_terms", …)` links, `delete` unlinks, and `where`
+  // traverses it as a nested subquery. No synthetic table, no write API to learn.
+  cms_page_terms: Entity(
+    (t) => ({
+      id: primaryKey(generated(t.uuid())),
+      pageId: indexed(notNull(t.uuid())),
+      termId: indexed(notNull(t.uuid())),
+    }),
+    (r) => ({
+      page: r.belongsTo("cms_pages", "pageId", { onDelete: "cascade" }),
+      term: r.belongsTo("cms_terms", "termId", { onDelete: "cascade" }),
+    }),
+    // One assignment per (page, term). Without it a double-submit leaves a page tagged
+    // twice and every `with: { terms: true }` renders the term twice.
+    { unique: [["pageId", "termId"]] },
+  ),
+
+  // A named template region an admin fills without touching code — the sidebar, the footer
+  // column, the pre-footer strip.
+  //
+  // Kept as its own entity rather than a page-less `cms_blocks` region, which was the
+  // tempting reuse. A block placement is `(pageId, region, position)` with `pageId` NOT
+  // NULL: making it nullable to model "belongs to no page" would put a null branch through
+  // every placement read, every region assemble and every page-scoped ACL clause, to model
+  // something that shares no field with a page (no slug, no status, no revisions, no
+  // workflow). A widget area is a small ordered document, and that is what it is stored as.
+  cms_widget_areas: Entity((t) => ({
+    id: primaryKey(generated(t.uuid())),
+    name: unique(notNull(t.text())),
+    label: notNull(t.text()),
+    description: t.text(),
+    widgets: t.json(), // Widget[]
+    // Same argument as cms_menus.version — `updateWidgetArea` replaces the whole list.
+    version: defaultTo(t.int(), 1),
+    createdAt: defaultTo(t.text(), expr.now()),
+    updatedAt: defaultTo(t.text(), expr.now()),
+  })),
+
   // Media: a fileRef column holds only R2 metadata; bytes live in R2, uploaded via
   // ctx.files + the Worker /files/* route. Block `fields` reference a media id.
   cms_media: Entity((t) => ({
@@ -632,6 +940,29 @@ export const cmsSchema = {
     createdAt: defaultTo(t.text(), expr.now()),
   })),
 };
+
+/** Block Kit — custom admin pages, described as JSON and rendered by the editor. See
+ * `./blockkit`. Re-exported so a host imports `adminPage` beside `collection`. */
+export {
+  adminPage,
+  createAdminPageHandlers,
+  normalizeAdminResponse,
+  validateAdminPages,
+  MAX_ADMIN_BLOCK_DEPTH,
+} from "./blockkit";
+export type {
+  AdminBlock,
+  AdminButton,
+  AdminElement,
+  AdminInput,
+  AdminInteractionType,
+  AdminPageDef,
+  AdminPageHandlerOpts,
+  AdminPageInteraction,
+  AdminPageMeta,
+  AdminPageResponse,
+  AdminText,
+} from "./blockkit";
 
 // --- field validation --------------------------------------------------------
 
@@ -730,6 +1061,19 @@ export function validateFields(schema: FieldDefinition[] | undefined | null, val
         // (collectMediaIds/resolveMediaFields only handle string ids).
         if (typeof v !== "string") throw new BadRequest(`field '${at}' must be a media id (string)`);
         break;
+      // An OPAQUE id: the record may live in another table, or in a system we do not own,
+      // so there is nothing to check it against here beyond its shape. The picker's
+      // `referenceFrom` handler is the authority on which ids exist, and it runs under the
+      // caller's own ACL — so validating against a list fetched here would be both a second
+      // round trip and a weaker check than the one the storing handler already makes.
+      case "reference":
+        if (def.multiple) {
+          if (!Array.isArray(v)) throw new BadRequest(`field '${at}' must be a list of ids`);
+          if (v.some((id) => typeof id !== "string")) throw new BadRequest(`field '${at}' must be a list of ids (strings)`);
+        } else if (typeof v !== "string") {
+          throw new BadRequest(`field '${at}' must be an id (string)`);
+        }
+        break;
       case "group": {
         // The baseline MUST descend. Stopping at the top level meant a pre-migration
         // richtext value nested in a group was rejected on every write that echoed the
@@ -765,6 +1109,197 @@ export function validateFields(schema: FieldDefinition[] | undefined | null, val
         break; // unknown type — don't block
     }
   }
+}
+
+// --- validating an AUTHORED field schema -------------------------------------
+//
+// `validateFields` above checks a VALUE against a schema. This checks the SCHEMA itself.
+//
+// It did not exist while the only way to create a block type was a developer writing
+// `defineBlockType(...)` in the repo, where tsc is the check. Now that the editor authors
+// types (GitHub #9), `fieldsSchema` arrives from a browser as free JSON into a `t.json()`
+// column — and a malformed one is not caught anywhere downstream: `FieldForm` renders
+// `null` for an unknown type, `validateFields` skips it ("lenient on unknown field types"),
+// and the block silently loses that field's content on every save. A duplicate `name` is
+// worse: two controls write the same key, so one of them can never be saved at all.
+
+/** Every field type the runtime knows. Exported because the editor's type-builder offers
+ * exactly this list — one definition, so a type added here appears there without a second
+ * edit, and a type removed here cannot be authored. */
+export const FIELD_TYPES: readonly FieldDefinition["type"][] = [
+  "text", "textarea", "richtext", "url", "number", "boolean", "date", "datetime",
+  "publish", "slug", "media", "select", "reference", "repeater", "group",
+];
+
+/** Types whose `fields` nest a further schema. */
+const NESTING_TYPES: readonly FieldDefinition["type"][] = ["group", "repeater"];
+
+/** How deep an authored field schema may nest. A schema is rendered by a recursive
+ * component and validated by a recursive function, so the cap is what keeps both bounded
+ * against a hand-posted document; nothing real nests past two or three. */
+export const MAX_FIELD_DEPTH = 5;
+
+/** A field NAME is an object key in a `fields` bag and a property name in generated TS
+ * (`generateBlockTypes`), so it is held to what can be both. */
+const FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** A REGION name. Looser than a field name by one character, because the two are not the
+ * same kind of thing: a field name is emitted as a TS property by `generateBlockTypes`, so
+ * it must be an identifier, while a region name is only ever an object key on the assembled
+ * page (`regions["main-content"]`). Held to `FIELD_NAME` it rejected hyphenated names that
+ * pre-date this validation and are stored today — which would have made every future save
+ * of such a content type fail, with the only fix being a rename that orphans its
+ * placements. */
+const REGION_NAME = /^[A-Za-z_][A-Za-z0-9_-]*$/;
+
+/**
+ * Validate and canonicalize an authored `FieldDefinition[]`, throwing a 400 on the first
+ * problem. Returns the CLEANED schema — each field rebuilt from the keys its type actually
+ * uses, so a `select`'s stale `options` cannot ride along on a field someone switched to
+ * `text` and reappear if they switch back.
+ */
+export function validateFieldSchema(raw: unknown, path = "fieldsSchema", depth = 0): FieldDefinition[] {
+  if (raw == null) return [];
+  if (!Array.isArray(raw)) throw new BadRequest(`${path} must be a list of field definitions`);
+  if (depth >= MAX_FIELD_DEPTH) throw new BadRequest(`${path} nests deeper than ${MAX_FIELD_DEPTH} levels`);
+  const seen = new Set<string>();
+  return raw.map((entry, i) => {
+    const o = asObj(entry) as Record<string, unknown>;
+    const at = `${path}[${i}]`;
+    const name = typeof o.name === "string" ? o.name.trim() : "";
+    if (!FIELD_NAME.test(name)) {
+      throw new BadRequest(`${at}.name must be a field name (a letter or underscore, then letters/digits/underscores), got ${JSON.stringify(o.name)}`);
+    }
+    // Siblings only — a nested `group` legitimately reuses a name from the outer level,
+    // because it writes into its own bag.
+    if (seen.has(name)) throw new BadRequest(`${path} declares '${name}' twice — two controls would write the same key and one could never be saved`);
+    seen.add(name);
+    const type = o.type as FieldDefinition["type"];
+    if (!FIELD_TYPES.includes(type)) {
+      throw new BadRequest(`${at}.type is '${String(o.type)}', which is not a field type (known: ${FIELD_TYPES.join(", ")})`);
+    }
+    const f: FieldDefinition = { name, type };
+    if (typeof o.label === "string" && o.label.trim() !== "") f.label = o.label.trim();
+    if (o.required === true) f.required = true;
+    if (o.default !== undefined) f.default = o.default;
+
+    if (NESTING_TYPES.includes(type)) {
+      f.fields = validateFieldSchema(o.fields, `${at}.fields`, depth + 1);
+      // A `group` with no fields renders an empty box; a `repeater` with none renders rows
+      // of nothing and an Add button. Both are the shape of a half-finished edit, and both
+      // are silently useless rather than visibly wrong, so they are refused here.
+      if (f.fields.length === 0) throw new BadRequest(`${at} is a '${type}' and needs at least one nested field`);
+      if (type === "repeater") {
+        if (typeof o.min === "number" && Number.isFinite(o.min)) f.min = Math.max(0, Math.trunc(o.min));
+        if (typeof o.max === "number" && Number.isFinite(o.max)) f.max = Math.max(1, Math.trunc(o.max));
+        if (f.min != null && f.max != null && f.min > f.max) throw new BadRequest(`${at} has min ${f.min} above max ${f.max}`);
+      }
+    } else if (type === "select") {
+      // `optionsFrom` takes precedence at render time, so requiring options alongside it
+      // would reject the live-data case the option exists for.
+      if (typeof o.optionsFrom === "string" && o.optionsFrom.trim() !== "") {
+        f.optionsFrom = assertHandlerName(o.optionsFrom, `${at}.optionsFrom`);
+      } else {
+        const options = Array.isArray(o.options) ? o.options.map((v) => String(v).trim()).filter((v) => v !== "") : [];
+        if (options.length === 0) throw new BadRequest(`${at} is a 'select' and needs either \`options\` or an \`optionsFrom\` handler`);
+        if (new Set(options).size !== options.length) throw new BadRequest(`${at} lists the same option twice`);
+        f.options = options;
+      }
+    } else if (type === "slug") {
+      // `from` is optional (a slug typed by hand is legitimate), but naming a field that is
+      // not there is a control that silently never follows anything.
+      if (typeof o.from === "string" && o.from.trim() !== "") f.from = o.from.trim();
+    } else if (type === "reference") {
+      if (typeof o.referenceFrom !== "string" || o.referenceFrom.trim() === "") {
+        throw new BadRequest(`${at} is a 'reference' and needs a \`referenceFrom\` query handler`);
+      }
+      f.referenceFrom = assertHandlerName(o.referenceFrom, `${at}.referenceFrom`);
+      if (o.multiple === true) f.multiple = true;
+    }
+    return f;
+  });
+}
+
+/** Resolve `slug` cross-references inside one schema, now that every sibling is known: a
+ * `slug` field's `from` must name a field that exists AT THE SAME LEVEL (the editor reads
+ * it out of the sibling bag) and holds text. Separate pass because forward references are
+ * legitimate — a slug may precede the title it follows. */
+export function checkSlugSources(schema: readonly FieldDefinition[], path = "fieldsSchema"): void {
+  const byName = new Map(schema.map((f) => [f.name, f]));
+  schema.forEach((f, i) => {
+    if (f.type === "slug" && f.from) {
+      const src = byName.get(f.from);
+      if (!src) throw new BadRequest(`${path}[${i}] derives from '${f.from}', which is not a field alongside it`);
+      if (!["text", "textarea", "select", "url"].includes(src.type)) {
+        throw new BadRequest(`${path}[${i}] derives from '${f.from}', which is a '${src.type}' — a slug can only follow a text field`);
+      }
+    }
+    if (f.fields) checkSlugSources(f.fields, `${path}[${i}].fields`);
+  });
+}
+
+/** Validate + canonicalize an authored field schema end to end. */
+export function normalizeFieldSchema(raw: unknown, path = "fieldsSchema"): FieldDefinition[] {
+  const schema = validateFieldSchema(raw, path);
+  checkSlugSources(schema, path);
+  return schema;
+}
+
+/**
+ * Validate a content type's `regions`.
+ *
+ * A region NAME is the key `addBlock({ region })` resolves and the key of the assembled
+ * `regions` object a front end reads, so it is held to the same shape as a field name. An
+ * `allowedTypes` entry is a block-type SLUG; it is not checked against the block types that
+ * exist, on purpose — a content type declaring a region for a block type that has not been
+ * created yet is an ordinary order of work, and `assertRegionAllows` is what enforces the
+ * list at placement time.
+ */
+export function normalizeRegions(raw: unknown): RegionDefinition[] {
+  if (!Array.isArray(raw) || raw.length === 0) throw new BadRequest("at least one region is required");
+  const seen = new Set<string>();
+  return raw.map((entry, i) => {
+    const o = asObj(entry) as Record<string, unknown>;
+    const name = typeof o.name === "string" ? o.name.trim() : "";
+    if (!REGION_NAME.test(name)) throw new BadRequest(`regions[${i}].name must be a region name (a letter or underscore, then letters/digits/hyphens/underscores), got ${JSON.stringify(o.name)}`);
+    if (seen.has(name)) throw new BadRequest(`regions declares '${name}' twice — the assembled page is keyed by region name, so one would overwrite the other`);
+    seen.add(name);
+    const region: RegionDefinition = { name };
+    if (typeof o.label === "string" && o.label.trim() !== "") region.label = o.label.trim();
+    // `null` and omitted both mean "any block type"; an empty ARRAY means "none", which is
+    // a region nothing can ever be placed in. Almost always a half-finished edit, so it is
+    // normalized to "any" rather than stored as a region that silently refuses everything.
+    if (Array.isArray(o.allowedTypes)) {
+      const allowed = o.allowedTypes.map((v) => String(v).trim()).filter((v) => v !== "");
+      region.allowedTypes = allowed.length > 0 ? [...new Set(allowed)] : null;
+    } else {
+      region.allowedTypes = null;
+    }
+    return region;
+  });
+}
+
+/** Validate a content type's `defaultBlocks` against its own regions. A default block that
+ * names a region the type does not declare is created into nowhere — `createPage` would
+ * place it under a key no renderer reads. */
+export function normalizeDefaultBlocks(raw: unknown, regions: readonly RegionDefinition[]): DefaultBlockDefinition[] {
+  if (raw == null) return [];
+  if (!Array.isArray(raw)) throw new BadRequest("defaultBlocks must be a list");
+  const names = new Set(regions.map((r) => r.name));
+  return raw.map((entry, i) => {
+    const o = asObj(entry) as Record<string, unknown>;
+    const region = typeof o.region === "string" ? o.region.trim() : "";
+    const blockTypeSlug = typeof o.blockTypeSlug === "string" ? o.blockTypeSlug.trim() : "";
+    if (!names.has(region)) throw new BadRequest(`defaultBlocks[${i}] targets region '${region}', which this content type does not declare`);
+    if (!blockTypeSlug) throw new BadRequest(`defaultBlocks[${i}] needs a blockTypeSlug`);
+    const allowed = regions.find((r) => r.name === region)?.allowedTypes;
+    if (allowed && !allowed.includes(blockTypeSlug)) {
+      throw new BadRequest(`defaultBlocks[${i}] places '${blockTypeSlug}' into region '${region}', which does not allow it`);
+    }
+    const out: DefaultBlockDefinition = { region, blockTypeSlug };
+    if (o.fields !== undefined) out.fields = asObj(o.fields);
+    return out;
+  });
 }
 
 // --- rich text: the structural allow-list (server-side — the real XSS boundary) ---
@@ -1159,10 +1694,14 @@ const asObj = (v: unknown): FieldValues => (v && typeof v === "object" ? (v as F
 // "YYYY-MM-DD HH:MM:SS", UTC, second precision) so a column's insert-default and its
 // handler-written updates stay lexically comparable (an ISO `T`/`Z` string sorts wrong).
 const nowStamp = (): string => new Date().toISOString().slice(0, 19).replace("T", " ");
-const isEditor = (ctx: HandlerContext, roles: readonly string[]): boolean => {
-  const held = ctx.identity?.roles ?? (ctx.identity?.role ? [ctx.identity.role] : []);
-  return (held as string[]).some((r) => roles.includes(r));
-};
+/** Does the caller hold one of these roles?
+ *
+ * Delegates to `authorizeHandler`, which is what the dispatcher uses to enforce a handler's
+ * own `auth` — so "may call this handler" and "counts as an editor here" cannot answer
+ * differently. The local copy took `roles` OR `role`, where the framework takes the UNION,
+ * so an identity carrying both saw only one of them. */
+const isEditor = (ctx: HandlerContext, roles: readonly string[]): boolean =>
+  authorizeHandler([...roles], ctx.identity ?? null);
 
 /** Assemble a page LIVE from its placements/blocks/types, grouped by region and ordered
  * by position, merging each shared placement's `overrides` over its block's fields. */
@@ -1341,6 +1880,403 @@ async function assertRegionAllows(db: CmsDb, page: Record<string, unknown>, regi
 // the same fail-closed rule: without a usable secret we refuse to mint rather than hand out
 // forgeable links.
 
+// --- site furniture: normalization + resolution helpers ----------------------
+//
+// All of this runs on the WRITE path. A menu, a term tree and a widget list are documents
+// the client posts whole, so "the editor wouldn't send that" is not a boundary — every one
+// of these shapes is reachable with a curl.
+
+const MENU_ITEM_KINDS: readonly MenuItemKind[] = ["custom", "page", "term", "collection"];
+
+/** A stable machine key — the string `getMenu(name)` / `getWidgetArea(name)` resolves, and
+ * a taxonomy's URL segment. Same rule as a page slug, and for the same reason: it lands in
+ * a route. */
+function assertKey(v: unknown, what: string): string {
+  const s = typeof v === "string" ? v.trim() : "";
+  if (!isSlugString(s)) throw new BadRequest(`${what} must be a key (lowercase letters, digits and single hyphens), got ${JSON.stringify(v)}`);
+  return s;
+}
+
+/** A REGISTRY key — a block type's slug. Looser than {@link assertKey} by one character:
+ * underscores are admitted, because a block-type slug is not a URL segment. It is the key a
+ * front end maps to a component (`{ rich_text: RichText }`), and `rich_text` is the
+ * convention every existing schema and the shipped example already use. */
+function assertRegistryKey(v: unknown, what: string): string {
+  const str = typeof v === "string" ? v.trim() : "";
+  if (!/^[a-z0-9]+(?:[-_][a-z0-9]+)*$/.test(str) || str.length > 80) {
+    throw new BadRequest(`${what} must be a key (lowercase letters, digits, and single hyphens or underscores), got ${JSON.stringify(v)}`);
+  }
+  return str;
+}
+
+/**
+ * An RPC handler name, as an authored field schema may name one (`optionsFrom`,
+ * `referenceFrom`).
+ *
+ * Shape-checked rather than merely non-empty, because the editor interpolates it straight
+ * into a request path — `fetch(\`${base}/rpc/${name}\`)`. `"../admin/data"` normalizes to
+ * `/admin/data`, so a stored string an EDITOR authored became an arbitrary same-origin
+ * authenticated POST fired by whoever opened the block — including an admin, whose token
+ * passes the `/admin/*` gate the editor role cannot. A handler name is an identifier;
+ * nothing that can traverse a path is one.
+ */
+function assertHandlerName(v: unknown, what: string): string {
+  const str = typeof v === "string" ? v.trim() : "";
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(str) || str.length > 80) {
+    throw new BadRequest(`${what} must be a handler name (a letter or underscore, then letters/digits/underscores), got ${JSON.stringify(v)}`);
+  }
+  return str;
+}
+
+/**
+ * A menu item's `ref` for a non-`custom` kind.
+ *
+ * `menuHref` interpolates this into a path, so a ref starting with `/` produced
+ * `//evil.example/` — protocol-relative, off-origin, in the site's primary nav on every
+ * page — while the sibling `custom` branch three lines away ran the same string through
+ * `isSafeHref`. A reference is an id or a slug: no slashes, no scheme, no dots.
+ */
+function assertRef(v: unknown, label: string, kind: MenuItemKind): string {
+  const str = typeof v === "string" ? v.trim() : "";
+  if (!/^[A-Za-z0-9_-]{1,200}$/.test(str)) {
+    throw new BadRequest(`menu item '${label}' is a '${kind}' item, so its \`ref\` must be an id or slug (letters, digits, hyphens, underscores), got ${JSON.stringify(v)}`);
+  }
+  return str;
+}
+
+function assertLabel(v: unknown, what: string): string {
+  const s = typeof v === "string" ? v.trim() : "";
+  if (!s) throw new BadRequest(`${what} must not be empty`);
+  return s;
+}
+
+/**
+ * Validate + canonicalize a posted menu tree.
+ *
+ * Every item is rebuilt field by field rather than spread: `items` is a `t.json()` column,
+ * so anything in the posted object would be stored verbatim and handed to a layout that
+ * renders it. Rebuilding is what makes the stored document exactly the declared shape.
+ */
+function normalizeMenuItems(raw: unknown, depth = 0, budget = { left: MAX_MENU_ITEMS }): MenuItem[] {
+  if (!Array.isArray(raw)) {
+    if (raw == null) return [];
+    throw new BadRequest("menu items must be a list");
+  }
+  if (depth >= MAX_MENU_DEPTH) throw new BadRequest(`menu items may nest at most ${MAX_MENU_DEPTH} levels deep`);
+  return raw.map((entry, i) => {
+    // Counted across the WHOLE tree, not per level — the budget is threaded through the
+    // recursion for that reason.
+    if (--budget.left < 0) throw new BadRequest(`a menu may hold at most ${MAX_MENU_ITEMS} items`);
+    const o = asObj(entry) as Record<string, unknown>;
+    const label = assertLabel(o.label, `menu item [${i}] label`);
+    const kind = (typeof o.kind === "string" ? o.kind : "custom") as MenuItemKind;
+    if (!MENU_ITEM_KINDS.includes(kind)) {
+      throw new BadRequest(`menu item '${label}' has unknown kind '${String(o.kind)}' (known: ${MENU_ITEM_KINDS.join(", ")})`);
+    }
+    // A stable id per item. Minted here when absent so a client that posts a tree without
+    // ids still gets reorderable rows back, rather than a list React can only key by index.
+    const item: MenuItem = { id: typeof o.id === "string" && o.id.trim() !== "" ? o.id.trim() : crypto.randomUUID(), label, kind };
+    if (kind === "custom") {
+      // The SAME allow-list a rich-text link mark goes through. A menu is rendered into an
+      // `<a href>` on every page of the site, so `javascript:` here is exactly the hole
+      // `isSafeHref` exists to close — and the editor is not the only writer.
+      const url = normalizeHref(typeof o.url === "string" ? o.url : "");
+      if (!isSafeHref(url)) throw new BadRequest(`menu item '${label}' needs a valid url (http(s), mailto:, tel:, a rooted path, or #anchor)`);
+      item.url = url;
+    } else {
+      item.ref = assertRef(o.ref, label, kind);
+    }
+    // `target` is written into an anchor; anything but the four browsing-context keywords
+    // is a named window, which is a way to reuse a tab the site does not own.
+    if (typeof o.target === "string" && o.target !== "") {
+      if (!["_self", "_blank", "_parent", "_top"].includes(o.target)) throw new BadRequest(`menu item '${label}' has an unsupported target '${o.target}'`);
+      item.target = o.target;
+    }
+    if (typeof o.titleAttr === "string" && o.titleAttr !== "") item.titleAttr = o.titleAttr;
+    if (typeof o.cssClasses === "string" && o.cssClasses !== "") item.cssClasses = o.cssClasses;
+    const children = normalizeMenuItems(o.children, depth + 1, budget);
+    if (children.length > 0) item.children = children;
+    return item;
+  });
+}
+
+/** Every `page`/`term` ref in a tree, so resolution is two queries rather than one per item. */
+function collectMenuRefs(items: readonly MenuItem[], pages: Set<string>, terms: Set<string>): void {
+  for (const it of items) {
+    if (it.ref) {
+      if (it.kind === "page") pages.add(it.ref);
+      else if (it.kind === "term") terms.add(it.ref);
+    }
+    if (it.children) collectMenuRefs(it.children, pages, terms);
+  }
+}
+
+/** Where a resolved menu item points. Passed to `menuHref` so a deployment can route its
+ * own way without the CMS guessing. */
+export type MenuHrefTarget =
+  | { kind: "page"; slug: string; locale: string }
+  | { kind: "term"; taxonomy: string; slug: string }
+  | { kind: "collection"; slug: string };
+
+/** A URL redirect's status. 301/308 are permanent (cached by browsers, and by search
+ * engines as a canonical move); 302/307 are not. Anything else is not a redirect. */
+export const REDIRECT_STATUSES: readonly number[] = [301, 302, 307, 308];
+
+/**
+ * The stored form of a redirect's `fromPath`: a rooted, query-less, fragment-less path.
+ *
+ * Canonicalized rather than merely validated, because matching is an exact string lookup
+ * against a UNIQUE column. `"/old"` and `"/old/"` are the same URL to a visitor and two
+ * rows here, so the second one is dead the moment the first exists — and which one wins is
+ * whichever the editor happened to type. Trailing slash off (except the root), fragment
+ * and query dropped, percent-encoding left exactly as written (the parser's, and the
+ * request's, canonical form).
+ */
+export function normalizeRedirectPath(raw: unknown): string {
+  const s = typeof raw === "string" ? normalizeHref(raw) : "";
+  if (!s.startsWith("/") || s.startsWith("//") || s.startsWith("/\\")) {
+    throw new BadRequest(`redirect path must be a rooted path like /old-url, got ${JSON.stringify(raw)}`);
+  }
+  const path = s.split("#")[0]!.split("?")[0]!;
+  const trimmed = path.length > 1 ? path.replace(/\/+$/, "") || "/" : "/";
+  // PERCENT-ENCODED, through the same parser the request goes through. A visitor's path
+  // reaches `resolveRedirect` as `url.pathname`, which the WHATWG parser has already
+  // encoded — so an editor typing `/o-nás` stored a string that the exact-match lookup
+  // could never be handed, and the redirect silently never fired. On precisely the
+  // non-English sites where slug changes are most common. Idempotent: an already-encoded
+  // path parses back to itself.
+  try {
+    return new URL(trimmed, "https://pramen.invalid").pathname;
+  } catch {
+    throw new BadRequest(`redirect path is not a usable path: ${JSON.stringify(raw)}`);
+  }
+}
+
+/**
+ * Is this redirect a loop — does its destination resolve back to its own source?
+ *
+ * Compared through `normalizeRedirectPath` on BOTH sides, which a raw `from === to` did
+ * not do: `from: "/old", to: "/old/"` differ as strings, so the guard passed — and then a
+ * visitor hitting `/old` was sent to `/old/`, whose 404 handler canonicalizes the trailing
+ * slash back to `/old` and matches the same row. An infinite redirect, from the one pair
+ * the guard exists to catch. (A test here even asserted this pair was fine, on the reading
+ * that a trailing-slash redirect is a normal canonicalization — true in general, and not
+ * true when the lookup canonicalizes the slash away again.)
+ *
+ * An absolute destination is never a loop with a rooted source: it names an origin, and
+ * `resolveRedirect` is only ever handed a path.
+ */
+function isSelfRedirect(fromPath: string, toPath: string): boolean {
+  if (/^https?:\/\//i.test(toPath)) return false;
+  try {
+    return normalizeRedirectPath(toPath) === fromPath;
+  } catch {
+    return false;
+  }
+}
+
+/** A redirect's destination: a rooted path or an absolute http(s) url. `mailto:`/`tel:` are
+ * refused — they are not somewhere a `Location` header can send a page request. */
+function normalizeRedirectTarget(raw: unknown): string {
+  const s = typeof raw === "string" ? normalizeHref(raw) : "";
+  const ok = /^https?:\/\//i.test(s) || (s.startsWith("/") && !s.startsWith("//") && !s.startsWith("/\\"));
+  if (!ok) throw new BadRequest(`redirect target must be a rooted path or an absolute http(s) url, got ${JSON.stringify(raw)}`);
+  return s;
+}
+
+/** Assemble a flat term list into a forest, ordered by `position` then `label`.
+ *
+ * A term whose `parentId` names a row that is not in `rows` is treated as a ROOT rather
+ * than dropped. That is the case where a parent was deleted mid-read (the FK sets children
+ * to NULL, but a snapshot taken across the two states can see the old value) — and a term
+ * that vanishes from a vocabulary listing is a worse answer than one that shows up a level
+ * too high.
+ */
+function buildTermTree(rows: readonly Term[]): Term[] {
+  const byId = new Map<string, Term & { children: Term[] }>();
+  for (const r of rows) byId.set(r.id, { ...r, children: [] });
+  const roots: Term[] = [];
+  for (const node of byId.values()) {
+    const parent = node.parentId ? byId.get(node.parentId) : undefined;
+    // `parent !== node` guards the one cycle a single row can make on its own; deeper
+    // cycles are refused on write by `assertTermParent`, which is where a cycle is
+    // actually preventable.
+    if (parent && parent !== node) parent.children.push(node);
+    else roots.push(node);
+  }
+  const sort = (list: Term[]): Term[] => {
+    list.sort((a, b) => a.position - b.position || a.label.localeCompare(b.label));
+    for (const t of list) if (t.children) sort(t.children);
+    return list;
+  };
+  return sort(roots);
+}
+
+const WIDGET_TYPES: readonly WidgetType[] = ["content", "menu", "component"];
+
+/** A list limit from client input, clamped to what `listPages` already allows. Absent or
+ * unusable falls back to the default rather than to "unbounded" — a request with no limit
+ * on a store reached over RPC is the shape that made lists hang (GitHub #22). */
+function clampLimit(v: unknown): number {
+  const n = typeof v === "number" && Number.isFinite(v) ? Math.floor(v) : PAGE_LIST_LIMIT;
+  return Math.max(1, Math.min(n, PAGE_LIST_MAX_LIMIT));
+}
+
+/** The most terms one vocabulary (or one page) may carry in a single read.
+ *
+ * A vocabulary is read WHOLE by `listTerms`/`getTermTree` — a tree cannot be paged without
+ * either losing branches or fetching ancestors separately — so the cap is what keeps that
+ * read bounded. Tags are the case that grows without anyone deciding to grow it. */
+const MAX_TERMS = 1000;
+
+/** A redirect's editable fields, as posted. `requireEnds` is the CREATE case, where both
+ * ends must be present; an update patches whichever keys it sends. */
+interface RedirectPatch {
+  fromPath?: string;
+  toPath?: string;
+  status?: number;
+  enabled?: boolean;
+  note?: string | null;
+}
+
+function redirectPatch(raw: unknown, requireEnds: boolean): RedirectPatch {
+  const o = asObj(raw);
+  const out: RedirectPatch = {};
+  if (requireEnds || o.fromPath !== undefined) out.fromPath = normalizeRedirectPath(o.fromPath);
+  if (requireEnds || o.toPath !== undefined) out.toPath = normalizeRedirectTarget(o.toPath);
+  if (o.status !== undefined) {
+    const status = typeof o.status === "number" ? Math.trunc(o.status) : NaN;
+    if (!REDIRECT_STATUSES.includes(status)) throw new BadRequest(`redirect status must be one of ${REDIRECT_STATUSES.join(", ")}`);
+    out.status = status;
+  }
+  if (o.enabled !== undefined) out.enabled = Boolean(o.enabled);
+  if (o.note !== undefined) out.note = typeof o.note === "string" ? o.note : null;
+  return out;
+}
+
+/** A required row id from client input. */
+function requireId(raw: unknown, what = "id"): string {
+  const v = (asObj(raw) as Record<string, unknown>)[what];
+  if (typeof v !== "string" || v === "") throw new BadRequest(`${what} is required`);
+  return v;
+}
+
+/** Resolve a taxonomy by its slug. */
+async function taxonomyBySlug(db: CmsDb, slug: string): Promise<{ id: string; hierarchical: boolean } | null> {
+  const rows = await db.find({ from: "cms_taxonomies", where: { slug }, select: ["id", "hierarchical"], limit: 1 });
+  const row = rows[0];
+  return row ? { id: String(row.id), hierarchical: Boolean(row.hierarchical) } : null;
+}
+
+/**
+ * Check a proposed `parentId` for a term: it exists, it is in the SAME vocabulary, the
+ * vocabulary is hierarchical, the tree stays inside {@link MAX_TERM_DEPTH}, and — for an
+ * update — the new parent is not the term itself or one of its own descendants.
+ *
+ * The cycle check is the one that matters. `ON DELETE SET NULL` keeps the FK honest but
+ * says nothing about shape, so `A.parent = B; B.parent = A` is two perfectly legal writes
+ * that together make `buildTermTree` produce a forest missing both, and any recursive
+ * renderer loop forever. It is only preventable on write, which is here.
+ */
+async function assertTermParent(db: CmsDb, tax: { id: string; hierarchical: boolean }, parentId: string | null, termId: string | null): Promise<void> {
+  if (parentId === null) return;
+  if (!tax.hierarchical) throw new BadRequest("this vocabulary is flat — its terms cannot have a parent");
+  if (termId !== null && parentId === termId) throw new BadRequest("a term cannot be its own parent");
+  // How many levels the MOVED term itself occupies. A leaf is 1; a term with children takes
+  // its subtree with it, and a cap that ignored that admitted a 5-level tree grafted under a
+  // 4-level parent. Zero cost on the create path, where there is no subtree yet.
+  const moving = termId === null ? 1 : await subtreeHeight(db, tax.id, termId);
+  let cursor: string | null = parentId;
+  // `depth` counts ANCESTORS walked. The moved term sits at `ancestors + moving` levels, and
+  // that is what the cap governs — counting ancestors alone admitted one level too many
+  // (a chain of 5 put the new term at level 6 under a cap of 5).
+  for (let depth = 0; cursor !== null; depth++) {
+    // About to walk ancestor number `depth + 1`. The moved term would then sit at
+    // `(depth + 1) + moving` levels, and THAT is what the cap governs.
+    if (depth + 1 + moving > MAX_TERM_DEPTH) throw new BadRequest(`terms may nest at most ${MAX_TERM_DEPTH} levels deep`);
+    const rows: Array<Record<string, unknown>> = await db.find({ from: "cms_terms", where: { id: cursor }, select: ["id", "taxonomyId", "parentId"], limit: 1 });
+    const row = rows[0];
+    if (!row) throw new BadRequest("parent term not found");
+    if (String(row.taxonomyId) !== tax.id) throw new BadRequest("a term's parent must be in the same vocabulary");
+    // Walking UP from the proposed parent: meeting the term being edited means the parent
+    // is one of its own descendants, which is the cycle.
+    if (termId !== null && String(row.id) === termId) throw new BadRequest("a term cannot be moved under one of its own descendants");
+    cursor = row.parentId == null ? null : String(row.parentId);
+  }
+}
+
+/** How many levels a term's own subtree occupies (a leaf is 1).
+ *
+ * One query for the whole vocabulary rather than a walk per level: a vocabulary is already
+ * read whole by `listTerms`/`getTermTree` and capped at `MAX_TERMS`, so this is the same
+ * bounded read those make, not a new unbounded one. */
+async function subtreeHeight(db: CmsDb, taxonomyId: string, rootId: string): Promise<number> {
+  const rows = await db.find({ from: "cms_terms", where: { taxonomyId }, select: ["id", "parentId"], limit: MAX_TERMS });
+  const children = new Map<string, string[]>();
+  for (const r of rows) {
+    const parent = r.parentId == null ? null : String(r.parentId);
+    if (parent) children.set(parent, [...(children.get(parent) ?? []), String(r.id)]);
+  }
+  // Iterative, and bounded by MAX_TERMS: a cycle already in the store (written before the
+  // check that now prevents one) must not spin here.
+  let level = 0;
+  let frontier = [rootId];
+  const seen = new Set<string>();
+  while (frontier.length > 0 && level <= MAX_TERM_DEPTH + 1) {
+    level++;
+    const next: string[] = [];
+    for (const id of frontier) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      next.push(...(children.get(id) ?? []));
+    }
+    frontier = next;
+  }
+  return level;
+}
+
+/**
+ * Validate + canonicalize a posted widget list.
+ *
+ * Rebuilt field by field for the same reason a menu tree is: `widgets` is a `t.json()`
+ * column handed straight to a layout, so whatever the client posts is what renders.
+ * A `content` widget's rich text goes through the SAME `normalizeRichText` allow-list every
+ * block field does — this is a second write path into the same renderer, and it must not be
+ * a weaker one.
+ */
+function normalizeWidgets(raw: unknown, rtSchema: RichTextSchema): Widget[] {
+  if (!Array.isArray(raw)) {
+    if (raw == null) return [];
+    throw new BadRequest("widgets must be a list");
+  }
+  return raw.map((entry, i) => {
+    const o = asObj(entry) as Record<string, unknown>;
+    const type = (typeof o.type === "string" ? o.type : "") as WidgetType;
+    if (!WIDGET_TYPES.includes(type)) throw new BadRequest(`widget [${i}] has unknown type '${String(o.type)}' (known: ${WIDGET_TYPES.join(", ")})`);
+    const w: Widget = { id: typeof o.id === "string" && o.id.trim() !== "" ? o.id.trim() : crypto.randomUUID(), type };
+    if (typeof o.title === "string" && o.title !== "") w.title = o.title;
+    if (type === "content") {
+      w.content = normalizeRichText(o.content, rtSchema);
+    } else if (type === "menu") {
+      w.menuName = assertKey(o.menuName, `widget [${i}] menuName`);
+    } else {
+      const id = typeof o.componentId === "string" ? o.componentId.trim() : "";
+      if (!id) throw new BadRequest(`widget [${i}] is a component widget and needs a componentId`);
+      w.componentId = id;
+      // Props are opaque to the CMS — the front end's component owns their meaning — but
+      // they must be a JSON OBJECT, not a bare array or scalar that a spread would silently
+      // turn into indexed props.
+      if (o.componentProps !== undefined) {
+        if (o.componentProps === null || typeof o.componentProps !== "object" || Array.isArray(o.componentProps)) {
+          throw new BadRequest(`widget [${i}] componentProps must be an object`);
+        }
+        w.componentProps = o.componentProps as FieldValues;
+      }
+    }
+    return w;
+  });
+}
+
 /** What a preview link authorizes: one page, in one tenant, until `exp`. */
 export interface PreviewToken {
   /** tenant */ t: string;
@@ -1417,6 +2353,14 @@ export interface CmsHandlerOpts {
    * (what the shipped editor produces). Widen it if your editor adds TipTap extensions —
    * a node type absent from the schema is DROPPED on write, not rejected. */
   richTextSchema?: RichTextSchema;
+  /** Map a resolved menu reference to a site path. The CMS is headless, so it cannot know
+   * how a deployment routes — this is the same seam `sitemapXml`'s `pageUrl` is.
+   *
+   * Defaults: a page is `/${slug}` on a monolingual deployment and `/${locale}/${slug}`
+   * once `locales` declares more than one; a term is `/${taxonomy}/${term}`; a collection
+   * is `/${slug}/`. Override it and `getMenu` follows — which is the point of storing a
+   * REFERENCE rather than the href an editor typed: change the routing, not the menu. */
+  menuHref?: (target: MenuHrefTarget) => string;
 }
 
 /** Build the CMS handler map. Spread into your app's handlers. Editor mutations are
@@ -1431,6 +2375,16 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
   const reviewer = { auth: reviewerRoles };
   const previewTtl = opts.previewTtlSeconds ?? DEFAULT_PREVIEW_TTL_SECONDS;
   const rtSchema = opts.richTextSchema ?? DEFAULT_RICH_TEXT_SCHEMA;
+  const menuHref = opts.menuHref ?? ((target: MenuHrefTarget): string => {
+    switch (target.kind) {
+      // The locale segment appears only where there is a choice to make. A monolingual site
+      // getting `/en/about` is the sitemap default's known wart, and a menu is the one place
+      // it would be visible in the site's own chrome.
+      case "page": return locales.length > 1 ? `/${target.locale}/${target.slug}` : `/${target.slug}`;
+      case "term": return `/${target.taxonomy}/${target.slug}`;
+      case "collection": return `/${target.slug}/`;
+    }
+  });
   // Anyone who edits OR reviews may VIEW content (a reviewer must preview a page + load its
   // content type/blocks before approving). Read/preview handlers use this; writes stay editor.
   const viewerRoles = [...new Set([...editorRoles, ...reviewerRoles])];
@@ -1532,6 +2486,77 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     }
   };
 
+    /**
+     * One stored menu row, with its references resolved to hrefs.
+     *
+     * Shared by `getMenu` and `getWidgetArea` rather than inlined in the first: a `menu`
+     * widget embeds a menu, and returning its RAW items there skipped every rule this
+     * function exists to apply — a `page` item came back with no `url` at all (the layout
+     * renders `href=undefined`) and an UNPUBLISHED page's label and id were served to
+     * anonymous callers, which is precisely what the drop below prevents on the other path.
+     */
+    const resolveMenuRow = async (db: CmsDb, row: Record<string, unknown>): Promise<Menu> => {
+      const items = Array.isArray(row.items) ? (row.items as MenuItem[]) : [];
+
+      // Two lookups for the whole tree, not one per item. Both go through `ctx.db`, so the
+      // caller's own read scope applies: for an anonymous visitor that is the public policy
+      // (published, not trashed), which is precisely the filter a menu needs — a link to a
+      // page that has been unpublished must not render.
+      const pageIds = new Set<string>();
+      const termIds = new Set<string>();
+      collectMenuRefs(items, pageIds, termIds);
+      const pages = new Map<string, { slug: string; locale: string }>();
+      if (pageIds.size > 0) {
+        const found = await db.find({ from: "cms_pages", where: { id: { in: [...pageIds] } }, select: ["id", "slug", "locale"], limit: pageIds.size });
+        for (const p of found) pages.set(String(p.id), { slug: String(p.slug), locale: String(p.locale ?? defaultLocale) });
+      }
+      const terms = new Map<string, { slug: string; taxonomy: string }>();
+      if (termIds.size > 0) {
+        const found = await db.find({ from: "cms_terms", where: { id: { in: [...termIds] } }, select: ["id", "slug", "taxonomyId"], limit: termIds.size });
+        const taxIds = [...new Set(found.map((t) => String(t.taxonomyId)))];
+        const taxa = taxIds.length > 0 ? await db.find({ from: "cms_taxonomies", where: { id: { in: taxIds } }, select: ["id", "slug"], limit: taxIds.length }) : [];
+        const taxSlug = new Map(taxa.map((t) => [String(t.id), String(t.slug)]));
+        for (const t of found) {
+          const tax = taxSlug.get(String(t.taxonomyId));
+          if (tax) terms.set(String(t.id), { slug: String(t.slug), taxonomy: tax });
+        }
+      }
+
+      // An item whose target no longer resolves is DROPPED, together with its subtree. A
+      // nav entry that renders no href is a dead link on every page of the site, and
+      // hoisting orphaned children would silently promote a third-level item into the top
+      // bar. The editor's own `listMenus` returns the raw tree, so nothing is lost there.
+      const resolve = (list: readonly MenuItem[]): MenuItem[] => {
+        const out: MenuItem[] = [];
+        for (const item of list) {
+          let url = item.url;
+          if (item.kind === "page") {
+            const page = item.ref ? pages.get(item.ref) : undefined;
+            if (!page) continue;
+            url = menuHref({ kind: "page", slug: page.slug, locale: page.locale });
+          } else if (item.kind === "term") {
+            const term = item.ref ? terms.get(item.ref) : undefined;
+            if (!term) continue;
+            url = menuHref({ kind: "term", taxonomy: term.taxonomy, slug: term.slug });
+          } else if (item.kind === "collection") {
+            if (!item.ref) continue;
+            url = menuHref({ kind: "collection", slug: item.ref });
+          }
+          // The MINTED url goes through the same allow-list the `custom` branch enforces on
+          // write. A reference is interpolated into a path (`/${slug}/`), and a `ref` that
+          // began with a slash produced `//evil.example/` — protocol-relative, off-origin,
+          // in the site's primary nav on every page. `assertRef` refuses that shape on
+          // write; this is the second half, because `menuHref` is host-supplied and a
+          // deployment's own mapping can build an unsafe href out of a safe ref.
+          if (!url || !isSafeHref(url)) continue;
+          const children = item.children ? resolve(item.children) : [];
+          out.push({ ...item, url, ...(children.length > 0 ? { children } : { children: undefined }) });
+        }
+        return out;
+      };
+      return { id: String(row.id), name: String(row.name), label: String(row.label), items: resolve(items) };
+    };
+
   const TASK_PUBLISH = "cms:publish";
   const TASK_UNPUBLISH = "cms:unpublish";
 
@@ -1540,7 +2565,12 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     listBlockTypes: query((ctx) => cdb(ctx).find({ from: "cms_block_types", orderBy: { column: "name" } })),
 
     createBlockType: mutation(async (ctx, input: { name: string; slug: string; fieldsSchema?: FieldDefinition[]; icon?: string; category?: string; description?: string }) => {
-      return cdb(ctx).insert("cms_block_types", {
+      const db = cdb(ctx);
+      // A clean 409 before the UNIQUE constraint fires. The editor authors these now, and a
+      // raw constraint error reads as "the CMS broke" rather than "that slug is taken".
+      const clash = await db.find({ from: "cms_block_types", where: { slug: input.slug }, select: ["id"], limit: 1 });
+      if (clash[0]) throw new Conflict(`block type '${input.slug}' already exists`);
+      return db.insert("cms_block_types", {
         name: input.name,
         slug: input.slug,
         description: input.description ?? null,
@@ -1553,7 +2583,18 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       input: (raw): { name: string; slug: string; fieldsSchema?: FieldDefinition[]; icon?: string; category?: string; description?: string } => {
         const o = asObj(raw);
         if (typeof o.name !== "string" || typeof o.slug !== "string") throw new BadRequest("name and slug are required");
-        return o as never;
+        if (o.name.trim() === "") throw new BadRequest("name must not be empty");
+        return {
+          name: o.name.trim(),
+          // A block type's slug is a registry key: the editor's inserter, `assertRegionAllows`
+          // and `@pramen/cms/react`'s component map all resolve it. Held to the same shape as
+          // any other key rather than accepted as free text.
+          slug: assertRegistryKey(o.slug, "block type slug"),
+          description: typeof o.description === "string" ? o.description : undefined,
+          icon: typeof o.icon === "string" ? o.icon : undefined,
+          category: typeof o.category === "string" ? o.category : undefined,
+          fieldsSchema: normalizeFieldSchema(o.fieldsSchema),
+        };
       },
     }),
 
@@ -1574,9 +2615,19 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
         // editor (`/types/:slug`) and the key `listPages({ contentType })` resolves. An
         // empty one builds `/types/` — a path the router drops the empty segment from, so
         // the type gets a tab that cannot be reached and a list that cannot be addressed.
-        if (o.name.trim() === "" || o.slug.trim() === "") throw new BadRequest("name and slug must not be empty");
-        if (!Array.isArray(o.regions) || o.regions.length === 0) throw new BadRequest("at least one region is required");
-        return o as never;
+        if (o.name.trim() === "") throw new BadRequest("name must not be empty");
+        const regions = normalizeRegions(o.regions);
+        return {
+          name: o.name.trim(),
+          // The SAME rule a block-type slug follows. They were split — block types admitted
+          // `_`, content types did not — for no reason that survives inspection: both are
+          // registry keys, and an underscore is as legal in the `/types/:slug` segment as it
+          // is anywhere else in a URL. The example itself ships `seeded_doc`.
+          slug: assertRegistryKey(o.slug, "content type slug"),
+          regions,
+          fieldsSchema: normalizeFieldSchema(o.fieldsSchema),
+          defaultBlocks: normalizeDefaultBlocks(o.defaultBlocks, regions),
+        };
       },
     }),
 
@@ -1598,7 +2649,12 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       input: (raw): { id?: string; slug?: string; name?: string; fieldsSchema?: FieldDefinition[]; icon?: string | null; category?: string | null; description?: string | null } => {
         const o = asObj(raw);
         if (typeof o.id !== "string" && typeof o.slug !== "string") throw new BadRequest("id or slug is required");
-        return o as never;
+        const out = { ...o } as Record<string, unknown>;
+        // `name` is the label in the editor's inserter; blanking it leaves an unnamed entry
+        // nobody can identify.
+        if (o.name !== undefined) out.name = assertLabel(o.name, "block type name");
+        if (o.fieldsSchema !== undefined) out.fieldsSchema = normalizeFieldSchema(o.fieldsSchema);
+        return out as never;
       },
     }),
 
@@ -1614,15 +2670,582 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       for (const k of ["name", "regions", "fieldsSchema", "defaultBlocks"] as const) {
         if (k in input) patch[k] = (input as Record<string, unknown>)[k];
       }
+      // A `defaultBlocks` patch that does NOT also send regions is checked here against the
+      // STORED ones — the input parser has no row to read, and a default block placed into a
+      // region the type does not declare is created into a key no renderer looks at.
+      if (patch.defaultBlocks !== undefined && patch.regions === undefined) {
+        patch.defaultBlocks = normalizeDefaultBlocks(patch.defaultBlocks, (Array.isArray(row.regions) ? row.regions : []) as RegionDefinition[]);
+      }
       return db.update("cms_content_types", String(row.id), patch);
     }, {
       ...editor,
       input: (raw): { id?: string; slug?: string; name?: string; regions?: RegionDefinition[]; fieldsSchema?: FieldDefinition[]; defaultBlocks?: DefaultBlockDefinition[] } => {
         const o = asObj(raw);
         if (typeof o.id !== "string" && typeof o.slug !== "string") throw new BadRequest("id or slug is required");
+        const out = { ...o } as Record<string, unknown>;
         // `name` is the editor's tab label; blanking it leaves an unlabelled tab.
-        if (typeof o.name === "string" && o.name.trim() === "") throw new BadRequest("name must not be empty");
-        return o as never;
+        if (o.name !== undefined) out.name = assertLabel(o.name, "content type name");
+        if (o.regions !== undefined) out.regions = normalizeRegions(o.regions);
+        if (o.fieldsSchema !== undefined) out.fieldsSchema = normalizeFieldSchema(o.fieldsSchema);
+        // Checked against the regions being SAVED where the same call sends both — patching
+        // only `defaultBlocks` cannot see the stored regions from an input parser, and the
+        // handler re-checks below.
+        if (out.defaultBlocks !== undefined && out.regions !== undefined) {
+          out.defaultBlocks = normalizeDefaultBlocks(out.defaultBlocks, out.regions as RegionDefinition[]);
+        }
+        return out as never;
+      },
+    }),
+
+    // ---- site furniture: menus ----------------------------------------------
+    //
+    // A menu is read WHOLE (`getMenu("primary")` on every page render) and written whole.
+    // The public read RESOLVES references — that is what makes a `page` item follow its
+    // page's slug instead of freezing the href an editor typed once.
+
+    /** One menu, references resolved to hrefs. PUBLIC — a menu is site chrome.
+     *
+     * Returns `null` for an unknown name rather than 404ing, because a layout asking for a
+     * menu it has not created yet is the normal state of a site being built, and a thrown
+     * error there takes down every page instead of rendering no nav. */
+    getMenu: query(async (ctx, input: { name: string }): Promise<Menu | null> => {
+      const rows = await cdb(ctx).find({ from: "cms_menus", where: { name: input.name }, limit: 1 });
+      const row = rows[0];
+      if (!row) return null;
+      return resolveMenuRow(cdb(ctx), row);
+    }, {
+      input: (raw): { name: string } => ({ name: assertKey(asObj(raw).name, "menu name") }),
+    }),
+
+    /** Every menu, RAW (references unresolved) — the editor's list.
+     *
+     * Capped like every other list here. A site-furniture table is small by nature, which is
+     * an argument for the cap being generous, not for its absence: an unbounded SELECT of a
+     * wide row over RPC is the D1 failure shape from GitHub #22, and "small by nature" is
+     * not a property the query planner knows about. */
+    listMenus: query((ctx) => cdb(ctx).find({ from: "cms_menus", orderBy: { column: "label" }, limit: PAGE_LIST_MAX_LIMIT }), viewer),
+
+    createMenu: mutation(async (ctx, input: { name: string; label: string; items?: MenuItem[] }) => {
+      const db = cdb(ctx);
+      // A clean 409, as every sibling create handler gives. Without it a taken key surfaced
+      // as the UNIQUE constraint's own 500 — and the e2e only asserts "not 200", so it
+      // could not tell the two apart.
+      const clash = await db.find({ from: "cms_menus", where: { name: input.name }, select: ["id"], limit: 1 });
+      if (clash[0]) throw new Conflict(`menu '${input.name}' already exists`);
+      return db.insert("cms_menus", { name: input.name, label: input.label, items: input.items ?? [] });
+    }, {
+      ...editor,
+      input: (raw): { name: string; label: string; items?: MenuItem[] } => {
+        const o = asObj(raw);
+        return { name: assertKey(o.name, "menu name"), label: assertLabel(o.label, "menu label"), items: normalizeMenuItems(o.items) };
+      },
+    }),
+
+    /** Patch a menu found by `id` or `name`. `name` is the key layout code resolves and is
+     * NOT mutable — retitling is what `label` is for. */
+    updateMenu: mutation(async (ctx, input: { id?: string; name?: string; label?: string; items?: MenuItem[]; expectedVersion?: number }) => {
+      const db = cdb(ctx);
+      const rows = await db.find({ from: "cms_menus", where: input.id ? { id: input.id } : { name: input.name }, limit: 1 });
+      const row = rows[0];
+      if (!row) throw notFound("menu");
+      const patch: Record<string, unknown> = { updatedAt: nowStamp(), version: nextVersion(row, input.expectedVersion, "this menu") };
+      if (input.label !== undefined) patch.label = input.label;
+      if (input.items !== undefined) patch.items = input.items;
+      return db.update("cms_menus", String(row.id), patch);
+    }, {
+      ...editor,
+      input: (raw): { id?: string; name?: string; label?: string; items?: MenuItem[]; expectedVersion?: number } => {
+        const o = asObj(raw);
+        const out: { id?: string; name?: string; label?: string; items?: MenuItem[]; expectedVersion?: number } = {};
+        if (typeof o.id === "string") out.id = o.id;
+        else if (typeof o.name === "string") out.name = assertKey(o.name, "menu name");
+        else throw new BadRequest("id or name is required");
+        if (o.label !== undefined) out.label = assertLabel(o.label, "menu label");
+        if (o.items !== undefined) out.items = normalizeMenuItems(o.items);
+        if (typeof o.expectedVersion === "number") out.expectedVersion = o.expectedVersion;
+        return out;
+      },
+    }),
+
+    deleteMenu: mutation(async (ctx, input: { id: string }) => {
+      const ok = await cdb(ctx).delete("cms_menus", input.id);
+      if (!ok) throw notFound("menu");
+      return { ok: true as const };
+    }, {
+      ...editor,
+      input: (raw): { id: string } => {
+        const id = asObj(raw).id;
+        if (typeof id !== "string" || id === "") throw new BadRequest("id is required");
+        return { id };
+      },
+    }),
+
+    // ---- site furniture: redirects -------------------------------------------
+
+    /** Resolve a request path to its redirect, or `null`. PUBLIC and READ-ONLY: this is
+     * what a front end calls on a 404, so it is anonymous traffic on the hot path.
+     *
+     * `enabled` is enforced by the public read POLICY, not by a `where` here, so a disabled
+     * redirect is invisible to every anonymous read (this handler, a future listing, a
+     * relation traversal) rather than to the one call that remembered to filter. */
+    resolveRedirect: query(async (ctx, input: { path: string }): Promise<{ to: string; status: number } | null> => {
+      const rows = await cdb(ctx).find({ from: "cms_redirects", where: { fromPath: input.path, enabled: true }, select: ["toPath", "status"], limit: 1 });
+      const row = rows[0];
+      return row ? { to: String(row.toPath), status: Number(row.status ?? 301) } : null;
+    }, {
+      input: (raw): { path: string } => ({ path: normalizeRedirectPath(asObj(raw).path) }),
+    }),
+
+    listRedirects: query((ctx, input: { limit?: number; offset?: number }) => {
+      return cdb(ctx).find({ from: "cms_redirects", orderBy: { column: "fromPath" }, limit: input.limit ?? PAGE_LIST_LIMIT, offset: input.offset ?? 0 });
+    }, {
+      ...viewer,
+      input: (raw): { limit?: number; offset?: number } => {
+        const o = asObj(raw);
+        return { limit: clampLimit(o.limit), offset: typeof o.offset === "number" && o.offset > 0 ? Math.floor(o.offset) : 0 };
+      },
+    }),
+
+    createRedirect: mutation(async (ctx, input: RedirectPatch & { fromPath: string; toPath: string }) => {
+      // A redirect to itself is an infinite loop the moment it is enabled, and the browser
+      // is what discovers it. Cheap to refuse here; impossible to diagnose from the outside.
+      if (isSelfRedirect(input.fromPath, input.toPath)) throw new BadRequest("a redirect cannot point at itself");
+      const db = cdb(ctx);
+      const clash = await db.find({ from: "cms_redirects", where: { fromPath: input.fromPath }, select: ["id"], limit: 1 });
+      if (clash[0]) throw new Conflict(`a redirect from '${input.fromPath}' already exists`);
+      return db.insert("cms_redirects", {
+        fromPath: input.fromPath,
+        toPath: input.toPath,
+        status: input.status ?? 301,
+        enabled: input.enabled ?? true,
+        note: input.note ?? null,
+      });
+    }, {
+      ...editor,
+      input: (raw): RedirectPatch & { fromPath: string; toPath: string } => redirectPatch(raw, true) as RedirectPatch & { fromPath: string; toPath: string },
+    }),
+
+    updateRedirect: mutation(async (ctx, input: RedirectPatch & { id: string }) => {
+      const db = cdb(ctx);
+      const rows = await db.find({ from: "cms_redirects", where: { id: input.id }, limit: 1 });
+      const row = rows[0];
+      if (!row) throw notFound("redirect");
+      const from = input.fromPath ?? String(row.fromPath);
+      const to = input.toPath ?? String(row.toPath);
+      if (isSelfRedirect(from, to)) throw new BadRequest("a redirect cannot point at itself");
+      if (input.fromPath && input.fromPath !== row.fromPath) {
+        const clash = await db.find({ from: "cms_redirects", where: { fromPath: input.fromPath }, select: ["id"], limit: 1 });
+        if (clash[0]) throw new Conflict(`a redirect from '${input.fromPath}' already exists`);
+      }
+      const patch: Record<string, unknown> = { updatedAt: nowStamp() };
+      for (const k of ["fromPath", "toPath", "status", "enabled", "note"] as const) {
+        if (input[k] !== undefined) patch[k] = input[k];
+      }
+      return db.update("cms_redirects", input.id, patch);
+    }, {
+      ...editor,
+      input: (raw): RedirectPatch & { id: string } => ({ id: requireId(raw), ...redirectPatch(raw, false) }),
+    }),
+
+    deleteRedirect: mutation(async (ctx, input: { id: string }) => {
+      const ok = await cdb(ctx).delete("cms_redirects", input.id);
+      if (!ok) throw notFound("redirect");
+      return { ok: true as const };
+    }, {
+      ...editor,
+      input: (raw): { id: string } => {
+        const id = asObj(raw).id;
+        if (typeof id !== "string" || id === "") throw new BadRequest("id is required");
+        return { id };
+      },
+    }),
+
+    // ---- site furniture: taxonomies ------------------------------------------
+    //
+    // `category` and `tag` are not built in: they are two rows a deployment creates, the
+    // same way it creates its content types. A vocabulary that is hierarchical allows
+    // `parentId` on its terms; a flat one refuses it rather than storing something no
+    // listing renders.
+
+    /** Every vocabulary. PUBLIC — like content types, a taxonomy's slug is structural (it
+     * is a URL segment) and a front end routes on it. */
+    listTaxonomies: query((ctx) => cdb(ctx).find({ from: "cms_taxonomies", orderBy: { column: "label" }, limit: PAGE_LIST_MAX_LIMIT })),
+
+    createTaxonomy: mutation(async (ctx, input: { slug: string; label: string; pluralLabel?: string; description?: string; hierarchical?: boolean }) => {
+      const db = cdb(ctx);
+      const clash = await db.find({ from: "cms_taxonomies", where: { slug: input.slug }, select: ["id"], limit: 1 });
+      if (clash[0]) throw new Conflict(`taxonomy '${input.slug}' already exists`);
+      return db.insert("cms_taxonomies", {
+        slug: input.slug,
+        label: input.label,
+        pluralLabel: input.pluralLabel ?? null,
+        description: input.description ?? null,
+        hierarchical: input.hierarchical ?? false,
+      });
+    }, {
+      ...editor,
+      input: (raw): { slug: string; label: string; pluralLabel?: string; description?: string; hierarchical?: boolean } => {
+        const o = asObj(raw);
+        return {
+          slug: assertKey(o.slug, "taxonomy slug"),
+          label: assertLabel(o.label, "taxonomy label"),
+          pluralLabel: typeof o.pluralLabel === "string" ? o.pluralLabel : undefined,
+          description: typeof o.description === "string" ? o.description : undefined,
+          hierarchical: typeof o.hierarchical === "boolean" ? o.hierarchical : undefined,
+        };
+      },
+    }),
+
+    /** Patch a vocabulary. `slug` is a URL segment and the key `listTerms` resolves, so it
+     * is not mutable — the same rule content types and block types already follow.
+     *
+     * Turning `hierarchical` OFF is refused while any term still has a parent. Allowing it
+     * would leave a stored hierarchy that no reader renders and no writer can clear, and
+     * flattening the terms silently is a destructive edit behind a checkbox. */
+    updateTaxonomy: mutation(async (ctx, input: { id: string; label?: string; pluralLabel?: string | null; description?: string | null; hierarchical?: boolean }) => {
+      const db = cdb(ctx);
+      const rows = await db.find({ from: "cms_taxonomies", where: { id: input.id }, limit: 1 });
+      const row = rows[0];
+      if (!row) throw notFound("taxonomy");
+      if (input.hierarchical === false && row.hierarchical) {
+        const nested = await db.find({ from: "cms_terms", where: { taxonomyId: input.id, parentId: { isNull: false } }, select: ["id"], limit: 1 });
+        if (nested[0]) throw new BadRequest("this vocabulary still has nested terms — move them to the top level before making it flat");
+      }
+      const patch: Record<string, unknown> = {};
+      for (const k of ["label", "pluralLabel", "description", "hierarchical"] as const) {
+        if (input[k] !== undefined) patch[k] = input[k];
+      }
+      return db.update("cms_taxonomies", input.id, patch);
+    }, {
+      ...editor,
+      input: (raw): { id: string; label?: string; pluralLabel?: string | null; description?: string | null; hierarchical?: boolean } => {
+        const o = asObj(raw);
+        if (typeof o.id !== "string" || o.id === "") throw new BadRequest("id is required");
+        const out: { id: string; label?: string; pluralLabel?: string | null; description?: string | null; hierarchical?: boolean } = { id: o.id };
+        if (o.label !== undefined) out.label = assertLabel(o.label, "taxonomy label");
+        if (o.pluralLabel !== undefined) out.pluralLabel = typeof o.pluralLabel === "string" ? o.pluralLabel : null;
+        if (o.description !== undefined) out.description = typeof o.description === "string" ? o.description : null;
+        if (typeof o.hierarchical === "boolean") out.hierarchical = o.hierarchical;
+        return out;
+      },
+    }),
+
+    /** Delete a vocabulary. Its terms go with it, and their page assignments with those —
+     * both by real `ON DELETE CASCADE`, so the cleanup is the DB's and cannot be half-done
+     * by a handler that threw between two writes. */
+    deleteTaxonomy: mutation(async (ctx, input: { id: string }) => {
+      const ok = await cdb(ctx).delete("cms_taxonomies", input.id);
+      if (!ok) throw notFound("taxonomy");
+      return { ok: true as const };
+    }, {
+      ...editor,
+      input: (raw): { id: string } => {
+        const id = asObj(raw).id;
+        if (typeof id !== "string" || id === "") throw new BadRequest("id is required");
+        return { id };
+      },
+    }),
+
+    /** One vocabulary's terms, flat, ordered. PUBLIC. */
+    listTerms: query(async (ctx, input: { taxonomy: string }): Promise<Term[]> => {
+      const db = cdb(ctx);
+      const tax = await taxonomyBySlug(db, input.taxonomy);
+      if (!tax) return [];
+      const rows = await db.find({ from: "cms_terms", where: { taxonomyId: tax.id }, orderBy: [{ column: "position" }, { column: "label" }], limit: MAX_TERMS });
+      return rows as unknown as Term[];
+    }, {
+      input: (raw): { taxonomy: string } => ({ taxonomy: assertKey(asObj(raw).taxonomy, "taxonomy slug") }),
+    }),
+
+    /** One vocabulary's terms as a TREE. PUBLIC. Assembled here rather than by the caller
+     * because a hierarchy is what the nav renders and every consumer would otherwise write
+     * the same fold. */
+    getTermTree: query(async (ctx, input: { taxonomy: string }): Promise<Term[]> => {
+      const db = cdb(ctx);
+      const tax = await taxonomyBySlug(db, input.taxonomy);
+      if (!tax) return [];
+      const rows = await db.find({ from: "cms_terms", where: { taxonomyId: tax.id }, limit: MAX_TERMS });
+      return buildTermTree(rows as unknown as Term[]);
+    }, {
+      input: (raw): { taxonomy: string } => ({ taxonomy: assertKey(asObj(raw).taxonomy, "taxonomy slug") }),
+    }),
+
+    createTerm: mutation(async (ctx, input: { taxonomy: string; slug: string; label: string; description?: string; parentId?: string | null; position?: number }) => {
+      const db = cdb(ctx);
+      const tax = await taxonomyBySlug(db, input.taxonomy);
+      if (!tax) throw notFound("taxonomy");
+      await assertTermParent(db, tax, input.parentId ?? null, null);
+      const clash = await db.find({ from: "cms_terms", where: { taxonomyId: tax.id, slug: input.slug }, select: ["id"], limit: 1 });
+      if (clash[0]) throw new Conflict(`term '${input.slug}' already exists in '${input.taxonomy}'`);
+      return db.insert("cms_terms", {
+        taxonomyId: tax.id,
+        slug: input.slug,
+        label: input.label,
+        description: input.description ?? null,
+        parentId: input.parentId ?? null,
+        position: input.position ?? 0,
+      });
+    }, {
+      ...editor,
+      input: (raw): { taxonomy: string; slug: string; label: string; description?: string; parentId?: string | null; position?: number } => {
+        const o = asObj(raw);
+        return {
+          taxonomy: assertKey(o.taxonomy, "taxonomy slug"),
+          slug: assertKey(o.slug, "term slug"),
+          label: assertLabel(o.label, "term label"),
+          description: typeof o.description === "string" ? o.description : undefined,
+          parentId: typeof o.parentId === "string" && o.parentId !== "" ? o.parentId : null,
+          position: typeof o.position === "number" ? Math.trunc(o.position) : undefined,
+        };
+      },
+    }),
+
+    updateTerm: mutation(async (ctx, input: { id: string; slug?: string; label?: string; description?: string | null; parentId?: string | null; position?: number }) => {
+      const db = cdb(ctx);
+      const rows = await db.find({ from: "cms_terms", where: { id: input.id }, limit: 1 });
+      const row = rows[0];
+      if (!row) throw notFound("term");
+      const taxRows = await db.find({ from: "cms_taxonomies", where: { id: row.taxonomyId }, limit: 1 });
+      const tax = taxRows[0];
+      if (!tax) throw notFound("taxonomy");
+      if (input.parentId !== undefined) {
+        await assertTermParent(db, { id: String(tax.id), hierarchical: Boolean(tax.hierarchical) }, input.parentId, input.id);
+      }
+      // A term's slug IS mutable, unlike a taxonomy's: it is the leaf of a URL, an editor
+      // fixing a typo in one is routine, and the uniqueness that matters is enforced below
+      // and by the composite index behind it.
+      if (input.slug && input.slug !== row.slug) {
+        const clash = await db.find({ from: "cms_terms", where: { taxonomyId: row.taxonomyId, slug: input.slug }, select: ["id"], limit: 1 });
+        if (clash[0]) throw new Conflict(`term '${input.slug}' already exists in this vocabulary`);
+      }
+      const patch: Record<string, unknown> = {};
+      for (const k of ["slug", "label", "description", "parentId", "position"] as const) {
+        if (input[k] !== undefined) patch[k] = input[k];
+      }
+      return db.update("cms_terms", input.id, patch);
+    }, {
+      ...editor,
+      input: (raw): { id: string; slug?: string; label?: string; description?: string | null; parentId?: string | null; position?: number } => {
+        const o = asObj(raw);
+        if (typeof o.id !== "string" || o.id === "") throw new BadRequest("id is required");
+        const out: { id: string; slug?: string; label?: string; description?: string | null; parentId?: string | null; position?: number } = { id: o.id };
+        if (o.slug !== undefined) out.slug = assertKey(o.slug, "term slug");
+        if (o.label !== undefined) out.label = assertLabel(o.label, "term label");
+        if (o.description !== undefined) out.description = typeof o.description === "string" ? o.description : null;
+        if (o.parentId !== undefined) out.parentId = typeof o.parentId === "string" && o.parentId !== "" ? o.parentId : null;
+        if (typeof o.position === "number") out.position = Math.trunc(o.position);
+        return out;
+      },
+    }),
+
+    /** Delete a term. Children are promoted to the top level (`ON DELETE SET NULL`) and
+     * page assignments are removed (`ON DELETE CASCADE`) — see `cms_terms.parentId`. */
+    deleteTerm: mutation(async (ctx, input: { id: string }) => {
+      const ok = await cdb(ctx).delete("cms_terms", input.id);
+      if (!ok) throw notFound("term");
+      return { ok: true as const };
+    }, {
+      ...editor,
+      input: (raw): { id: string } => {
+        const id = asObj(raw).id;
+        if (typeof id !== "string" || id === "") throw new BadRequest("id is required");
+        return { id };
+      },
+    }),
+
+    /** A page's assigned terms. PUBLIC (a published page's classification is public). */
+    listPageTerms: query(async (ctx, input: { pageId: string }): Promise<Term[]> => {
+      const db = cdb(ctx);
+      // Read the PAGE first, through `ctx.db`, so the caller's own page scope decides
+      // whether this answers at all. Without it the handler never touched `cms_pages` — and
+      // the public grants on the junction and on terms are unscoped `allow()` — so anyone
+      // holding a page id could read a draft or trashed page's classification, and the
+      // non-empty answer confirmed the page exists. `listPagesByTerm` was already safe for
+      // the opposite reason: it traverses `where: { terms: … }`, so the page scope
+      // AND-merges. This is the same rule, applied from the other end.
+      const page = await db.find({ from: "cms_pages", where: { id: input.pageId }, select: ["id"], limit: 1 });
+      if (!page[0]) return [];
+      const links = await db.find({ from: "cms_page_terms", where: { pageId: input.pageId }, select: ["termId"], limit: MAX_TERMS });
+      const ids = links.map((l) => String(l.termId));
+      if (ids.length === 0) return [];
+      const rows = await db.find({ from: "cms_terms", where: { id: { in: ids } }, orderBy: [{ column: "position" }, { column: "label" }], limit: ids.length });
+      return rows as unknown as Term[];
+    }, {
+      input: (raw): { pageId: string } => {
+        const id = asObj(raw).pageId;
+        if (typeof id !== "string" || id === "") throw new BadRequest("pageId is required");
+        return { pageId: id };
+      },
+    }),
+
+    /** Replace a page's term assignments wholesale.
+     *
+     * Set semantics, not add/remove: the editor's panel holds the whole selection, and two
+     * calls that each patch one end of it race into a state neither asked for. Existing
+     * links that survive are LEFT ALONE rather than deleted and reinserted, so the junction
+     * rows (and any future column on them) are stable across a save that changed nothing. */
+    setPageTerms: mutation(async (ctx, input: { pageId: string; termIds: string[] }) => {
+      const db = cdb(ctx);
+      const pages = await db.find({ from: "cms_pages", where: { id: input.pageId }, select: ["id"], limit: 1 });
+      if (!pages[0]) throw notFound("page");
+      const wanted = new Set(input.termIds);
+      if (wanted.size > 0) {
+        // Every id must be a real term. Without this the junction happily stores a dangling
+        // uuid — the FK would catch it, but as a driver error with no HTTP status.
+        const found = await db.find({ from: "cms_terms", where: { id: { in: [...wanted] } }, select: ["id"], limit: wanted.size });
+        if (found.length !== wanted.size) throw new BadRequest("one or more termIds are not terms");
+      }
+      const existing = await db.find({ from: "cms_page_terms", where: { pageId: input.pageId }, select: ["id", "termId"], limit: MAX_TERMS });
+      const have = new Map(existing.map((l) => [String(l.termId), String(l.id)]));
+      for (const [termId, linkId] of have) if (!wanted.has(termId)) await db.delete("cms_page_terms", linkId);
+      for (const termId of wanted) if (!have.has(termId)) await db.insert("cms_page_terms", { pageId: input.pageId, termId });
+      return { ok: true as const, count: wanted.size };
+    }, {
+      ...editor,
+      input: (raw): { pageId: string; termIds: string[] } => {
+        const o = asObj(raw);
+        if (typeof o.pageId !== "string" || o.pageId === "") throw new BadRequest("pageId is required");
+        if (!Array.isArray(o.termIds)) throw new BadRequest("termIds must be a list");
+        const ids = o.termIds.map((v) => {
+          if (typeof v !== "string" || v === "") throw new BadRequest("termIds must be a list of ids");
+          return v;
+        });
+        if (ids.length > MAX_TERMS) throw new BadRequest(`a page may carry at most ${MAX_TERMS} terms`);
+        return { pageId: o.pageId, termIds: ids };
+      },
+    }),
+
+    /** Published pages carrying a term. PUBLIC.
+     *
+     * A relation traversal (`where: { terms: { id } }`), so the page read scope is
+     * AND-merged as it is anywhere else — traversal cannot widen access, and an anonymous
+     * caller sees published pages only. */
+    listPagesByTerm: query(async (ctx, input: { taxonomy: string; term: string; limit?: number; offset?: number }) => {
+      const db = cdb(ctx);
+      const tax = await taxonomyBySlug(db, input.taxonomy);
+      if (!tax) return [];
+      const terms = await db.find({ from: "cms_terms", where: { taxonomyId: tax.id, slug: input.term }, select: ["id"], limit: 1 });
+      const term = terms[0];
+      if (!term) return [];
+      return db.find({
+        from: "cms_pages",
+        where: { terms: { id: String(term.id) } },
+        orderBy: { column: "createdAt", dir: "desc" },
+        select: ["id", "typeId", "title", "slug", "locale", "status", "publishedAt"],
+        limit: input.limit ?? PAGE_LIST_LIMIT,
+        offset: input.offset ?? 0,
+      });
+    }, {
+      input: (raw): { taxonomy: string; term: string; limit?: number; offset?: number } => {
+        const o = asObj(raw);
+        return {
+          taxonomy: assertKey(o.taxonomy, "taxonomy slug"),
+          term: assertKey(o.term, "term slug"),
+          limit: clampLimit(o.limit),
+          offset: typeof o.offset === "number" && o.offset > 0 ? Math.floor(o.offset) : 0,
+        };
+      },
+    }),
+
+    // ---- site furniture: widget areas ----------------------------------------
+
+    /** One widget area, with `menu` widgets resolved to their menus. PUBLIC.
+     *
+     * `null` for an unknown name, for the same reason `getMenu` returns null: a layout
+     * asking for a sidebar nobody has filled in yet is the normal state of a site under
+     * construction, and throwing there takes down the page. */
+    getWidgetArea: query(async (ctx, input: { name: string }): Promise<WidgetArea | null> => {
+      const db = cdb(ctx);
+      const rows = await db.find({ from: "cms_widget_areas", where: { name: input.name }, limit: 1 });
+      const row = rows[0];
+      if (!row) return null;
+      const widgets = Array.isArray(row.widgets) ? (row.widgets as Widget[]) : [];
+      // Resolved inline so a layout renders a whole sidebar from ONE call. A menu widget
+      // that names a menu which no longer exists keeps `menu: null` rather than being
+      // dropped — unlike a menu ITEM, an empty widget is a visible hole an editor can see
+      // and fix, where a silently missing one is not.
+      const names = [...new Set(widgets.filter((w) => w.type === "menu" && w.menuName).map((w) => w.menuName!))];
+      const menus = new Map<string, Menu>();
+      if (names.length > 0) {
+        const found = await db.find({ from: "cms_menus", where: { name: { in: names } }, limit: names.length });
+        // RESOLVED, exactly as `getMenu` returns it. Embedding the raw row here served an
+        // unpublished page's label and id to anonymous callers and handed the layout an
+        // item with no `url` — the two things the resolver exists to prevent, skipped
+        // because this path had its own one-line copy of "read the menu".
+        for (const m of found) menus.set(String(m.name), await resolveMenuRow(db, m));
+      }
+      return {
+        id: String(row.id),
+        name: String(row.name),
+        label: String(row.label),
+        description: row.description == null ? null : String(row.description),
+        widgets: widgets.map((w) => (w.type === "menu" && w.menuName ? { ...w, menu: menus.get(w.menuName) ?? null } : w)),
+      };
+    }, {
+      input: (raw): { name: string } => ({ name: assertKey(asObj(raw).name, "widget area name") }),
+    }),
+
+    listWidgetAreas: query((ctx) => cdb(ctx).find({ from: "cms_widget_areas", orderBy: { column: "label" }, limit: PAGE_LIST_MAX_LIMIT }), viewer),
+
+    createWidgetArea: mutation(async (ctx, input: { name: string; label: string; description?: string; widgets?: Widget[] }) => {
+      const db = cdb(ctx);
+      const clash = await db.find({ from: "cms_widget_areas", where: { name: input.name }, select: ["id"], limit: 1 });
+      if (clash[0]) throw new Conflict(`widget area '${input.name}' already exists`);
+      return db.insert("cms_widget_areas", {
+        name: input.name,
+        label: input.label,
+        description: input.description ?? null,
+        widgets: input.widgets ?? [],
+      });
+    }, {
+      ...editor,
+      input: (raw): { name: string; label: string; description?: string; widgets?: Widget[] } => {
+        const o = asObj(raw);
+        return {
+          name: assertKey(o.name, "widget area name"),
+          label: assertLabel(o.label, "widget area label"),
+          description: typeof o.description === "string" ? o.description : undefined,
+          widgets: normalizeWidgets(o.widgets, rtSchema),
+        };
+      },
+    }),
+
+    updateWidgetArea: mutation(async (ctx, input: { id?: string; name?: string; label?: string; description?: string | null; widgets?: Widget[]; expectedVersion?: number }) => {
+      const db = cdb(ctx);
+      const rows = await db.find({ from: "cms_widget_areas", where: input.id ? { id: input.id } : { name: input.name }, limit: 1 });
+      const row = rows[0];
+      if (!row) throw notFound("widget area");
+      const patch: Record<string, unknown> = { updatedAt: nowStamp(), version: nextVersion(row, input.expectedVersion, "this widget area") };
+      for (const k of ["label", "description", "widgets"] as const) {
+        if (input[k] !== undefined) patch[k] = input[k];
+      }
+      return db.update("cms_widget_areas", String(row.id), patch);
+    }, {
+      ...editor,
+      input: (raw): { id?: string; name?: string; label?: string; description?: string | null; widgets?: Widget[]; expectedVersion?: number } => {
+        const o = asObj(raw);
+        const out: { id?: string; name?: string; label?: string; description?: string | null; widgets?: Widget[]; expectedVersion?: number } = {};
+        if (typeof o.id === "string") out.id = o.id;
+        else if (typeof o.name === "string") out.name = assertKey(o.name, "widget area name");
+        else throw new BadRequest("id or name is required");
+        if (o.label !== undefined) out.label = assertLabel(o.label, "widget area label");
+        if (o.description !== undefined) out.description = typeof o.description === "string" ? o.description : null;
+        if (o.widgets !== undefined) out.widgets = normalizeWidgets(o.widgets, rtSchema);
+        if (typeof o.expectedVersion === "number") out.expectedVersion = o.expectedVersion;
+        return out;
+      },
+    }),
+
+    deleteWidgetArea: mutation(async (ctx, input: { id: string }) => {
+      const ok = await cdb(ctx).delete("cms_widget_areas", input.id);
+      if (!ok) throw notFound("widget area");
+      return { ok: true as const };
+    }, {
+      ...editor,
+      input: (raw): { id: string } => {
+        const id = asObj(raw).id;
+        if (typeof id !== "string" || id === "") throw new BadRequest("id is required");
+        return { id };
       },
     }),
 
@@ -2089,7 +3712,23 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
      * feature would render N tabs all showing every type's pages under a heading claiming
      * otherwise — and "New page" from any of them would stamp that tab's type. Declared, not
      * inferred: fail closed on the pooled list rather than open on N lying ones. */
-    listCmsCapabilities: query(() => ({ locales, defaultLocale, multilingual: locales.length > 1, pagesByType: true as const }), viewer),
+    listCmsCapabilities: query((ctx) => ({
+      locales,
+      defaultLocale,
+      multilingual: locales.length > 1,
+      pagesByType: true as const,
+      // Same kind of declaration as `pagesByType`, for the same reason: an OLDER server has
+      // no menu/redirect/taxonomy/widget handlers at all, and a nav section whose every
+      // screen 404s is worse than one that is absent. Fails closed by being absent there.
+      siteFurniture: true as const,
+      // PER-CALLER, unlike everything else here. `viewer` is `editorRoles ∪ reviewerRoles`,
+      // so a reviewer-only session reaches this handler and every read handler — but every
+      // WRITE is `editorRoles`. Without this the editor renders the authoring surfaces
+      // (Types, Menus, Redirects, …) for a reviewer and each one 403s on its first save.
+      // The editor cannot work it out for itself: it knows the caller's roles from `me` but
+      // not which roles this deployment configured as `editorRoles`.
+      canEdit: isEditor(ctx, editorRoles),
+    }), viewer),
 
     /** Distinct locales present across all pages. NOTE: a DATA query — what is in the
      * store — not configuration. `listCmsCapabilities().locales` is what the deployment
@@ -2693,7 +4332,12 @@ export function cmsPolicies(opts: CmsPolicyOpts = {}): { public: Policy[]; edito
   // any app handler, silently overriding the read+create grant `collectionPolicies` emits —
   // duplicate policies on the same (role, entity, action) OR-merge, so the wider one wins.
   // The collection half owns that table's grant; see `collectionPolicies`.
-  const tables = ["cms_content_types", "cms_block_types", "cms_blocks", "cms_pages", "cms_page_blocks", "cms_page_revisions", "cms_media", "cms_audit"] as const;
+  const tables = [
+    "cms_content_types", "cms_block_types", "cms_blocks", "cms_pages", "cms_page_blocks", "cms_page_revisions", "cms_media", "cms_audit",
+    // Site furniture. Full CRUD for an editor, like every other cms_ table — the per-handler
+    // `auth` gate is what separates editor from reviewer; this is the row scope.
+    "cms_menus", "cms_redirects", "cms_taxonomies", "cms_terms", "cms_page_terms", "cms_widget_areas",
+  ] as const;
   // Soft-deleted rows are filtered in the ACL, not in each handler. A read scope is
   // AND-merged into every `ctx.db` read, so one policy hides a trashed row from the public
   // API, the editor, relation traversals and eager-loads at once — where a per-handler
@@ -2733,6 +4377,23 @@ export function cmsPolicies(opts: CmsPolicyOpts = {}): { public: Policy[]; edito
       policy(`${p}:public:revisions:read`, "cms_page_revisions", "read", { where: { page: { status: "published", deletedAt: { isNull: true } } } }),
       // Media metadata is public (the bytes are separately gated by signed urls).
       policy(`${p}:public:media:read`, "cms_media", "read", { where: { deletedAt: { isNull: true } } }),
+      // --- site furniture ---
+      // A menu is site chrome, rendered on every page. `getMenu` resolves its page
+      // references THROUGH `ctx.db`, so the public page scope above is what decides whether
+      // a link to an unpublished page renders — the menu grant does not widen it.
+      policy(`${p}:public:menus:read`, "cms_menus", "read", allow()),
+      // Only ENABLED redirects. `resolveRedirect` also filters, but the scope is the real
+      // boundary: a disabled redirect is one an editor has deliberately taken out of
+      // service, and it must stay invisible to every anonymous read, not just that one.
+      policy(`${p}:public:redirects:read`, "cms_redirects", "read", { where: { enabled: true } }),
+      // Taxonomies and terms are structural (they are URL segments a front end routes on),
+      // exactly like content-type slugs. The junction is granted too, because
+      // `where: { terms: … }` on a page compiles to a subquery THROUGH it — without the
+      // grant the traversal matches nothing and "pages in this category" is silently empty.
+      policy(`${p}:public:taxonomies:read`, "cms_taxonomies", "read", allow()),
+      policy(`${p}:public:terms:read`, "cms_terms", "read", allow()),
+      policy(`${p}:public:page-terms:read`, "cms_page_terms", "read", allow()),
+      policy(`${p}:public:widget-areas:read`, "cms_widget_areas", "read", allow()),
     ],
     editor: editorPolicies,
   };
@@ -2754,6 +4415,12 @@ export function cmsPolicies(opts: CmsPolicyOpts = {}): { public: Policy[]; edito
 // keyed by `slug`, so `collection`/`entity` can never be spoofed to reach an arbitrary
 // table, and writes are whitelisted to declared fields — the client can't set columns the
 // collection didn't declare (e.g. a `roles` or `passwordHash` column on the entity).
+
+/** Nav positions for the editor's built-in sections — see `./nav`. Re-exported here so a
+ * host writing `app.ts` imports it from the same place as `collection()`. It LIVES in a leaf
+ * module because `blockkit.ts` needs it too and must not depend on this one. */
+export { NAV_ORDER } from "./nav";
+
 
 /** Declares that a pramen entity is editable as a collection in the CMS editor. Both
  * halves live here: the runtime facts (entity, idField, validation via `fields`) and the
@@ -2783,6 +4450,16 @@ export interface CollectionDef {
   readonly idField?: string;
   /** Default list ordering; defaults to `{ column: "createdAt", dir: "desc" }`. */
   readonly orderBy?: { column: string; dir?: "asc" | "desc" };
+  /** Where this collection sits in the editor's primary nav. Lower comes first; ties keep
+   * declaration order. Defaults to `NAV_ORDER.collections`, which is between Pages and
+   * Media — where collections have always rendered.
+   *
+   * The point is not cosmetic. Before this the only extension seam was `extraNav`, which
+   * renders dead LAST and (by default, and for good reason) opens a new tab — so a
+   * project-specific section could only ever be a separate app bolted onto the end of the
+   * admin. A section that belongs beside Pages can now say so. See {@link NAV_ORDER} for
+   * the built-in positions to place against. */
+  readonly navOrder?: number;
   /** Workflow features this collection opts into — see {@link CollectionFeature}. Each is
    * backed by MANAGED COLUMNS on `entity` that the CMS writes and `fields` may not declare.
    * Validated against your schema at `createCollectionHandlers` time (which is why that call
@@ -2816,6 +4493,10 @@ export interface CollectionMeta {
   label: string;
   pluralLabel: string;
   icon?: string;
+  /** Nav position — see {@link CollectionDef.navOrder}. Always present in the meta (the
+   * default is filled here) so the editor sorts one list of numbers rather than deciding
+   * per entry whether a default applies. */
+  navOrder: number;
   fields: readonly FieldDefinition[];
   list: readonly string[];
   titleField: string;
@@ -2834,6 +4515,7 @@ function collectionMeta(c: CollectionDef): CollectionMeta {
     label: c.label,
     pluralLabel: c.pluralLabel ?? `${c.label}s`,
     icon: c.icon,
+    navOrder: c.navOrder ?? NAV_ORDER.collections,
     fields: c.fields,
     list: c.list ?? [titleField],
     titleField,
@@ -2962,9 +4644,21 @@ const COLLECTION_FIELD_COLUMN_TYPES: Readonly<Record<FieldDefinition["type"], re
   slug: ["text"],
   media: ["text", "uuid"],
   select: ["text"],
+  // A SINGLE reference is one opaque id in a TEXT column. `multiple: true` stores an array
+  // and needs `t.json()` — `referenceColumnTypes` below is what actually decides, because
+  // this table is keyed by type alone and a reference is the one type whose storage depends
+  // on a second flag.
+  reference: ["text", "uuid"],
   repeater: ["json"],
   group: ["json"],
 };
+
+/** The column types a field can be stored in, including the one case the type alone does
+ * not settle (`reference` + `multiple`). */
+function fieldColumnTypes(f: FieldDefinition): readonly FieldType[] | undefined {
+  if (f.type === "reference" && f.multiple) return ["json"];
+  return COLLECTION_FIELD_COLUMN_TYPES[f.type];
+}
 
 /** Check a collection registry at BOOT: slugs and entities are unique, features are known
  * and have their prerequisites, every declared field maps to a column that can hold it, and
@@ -3057,7 +4751,7 @@ export function validateCollections(collections: readonly CollectionDef[], schem
           `pramen/cms: collection '${c.slug}' declares a field '${f.name}', which is not a column on '${c.entity}' — a collection field is column-mapped, so every declared field needs its own column`,
         );
       }
-      const allowed = COLLECTION_FIELD_COLUMN_TYPES[f.type];
+      const allowed = fieldColumnTypes(f);
       if (allowed && !allowed.includes(col.type)) {
         const want = allowed.map((t) => `t.${t === "integer" ? "int" : t === "boolean" ? "bool" : t}()`).join(" or ");
         throw new Error(

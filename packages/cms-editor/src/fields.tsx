@@ -8,10 +8,10 @@ import Highlight from "@tiptap/extension-highlight";
 import TaskItem from "@tiptap/extension-task-item";
 import TaskList from "@tiptap/extension-task-list";
 import StarterKit from "@tiptap/starter-kit";
-import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import type { Api } from "./api";
 import { isRichTextDoc, richTextToPlainText } from "./rich-text";
-import type { FieldDefinition, FieldValue, FieldValues, Media, RichTextDoc } from "./types";
+import type { FieldDefinition, FieldValue, FieldValues, Media, ReferenceOption, ReferenceResult, RichTextDoc } from "./types";
 
 // Tokenized bare control (podoba's filled-field skin) for the native inputs that
 // don't map cleanly onto a podoba primitive (number/date/select/file).
@@ -259,6 +259,16 @@ function FieldInput({ def, value, onChange, api, hideLabelAs, siblings }: { def:
         <FieldShell label={label}>
           <MediaField value={value as string | null} onChange={onChange} api={api} />
         </FieldShell>
+      );
+    case "reference":
+      // Deliberately NOT FieldShell: the control is a row of <button>s, and a <label>
+      // wrapper would forward a click on the label text to the first one (opening the
+      // picker). Same reason `publish` and `boolean` opt out.
+      return (
+        <div className="flex w-full flex-col gap-2">
+          {label === undefined ? null : <span className="text-sm font-medium text-fg">{label}</span>}
+          <ReferenceField def={def} value={value} onChange={onChange} api={api} ariaLabel={hideLabelAs} />
+        </div>
       );
     case "group":
       return (
@@ -736,6 +746,251 @@ export function MediaPicker({ api, onClose, onPick }: { api: Api; onClose: () =>
             <Button variant="ghost" onPress={onClose}>
               close
             </Button>
+          </div>
+        </ModalDialog>
+      </ModalSurface>
+    </ModalOverlay>
+  );
+}
+
+// --- reference ------------------------------------------------------------------------
+//
+// A pointer to a record that is not this row. `select` + `optionsFrom` already does the
+// easy half — fetch `{ value, label }[]` once, render a `<select>` — and stays the right
+// answer for twenty campaigns. It has no answer for a thousand records: no search, no
+// paging, and no way to render the label of a stored value that is not in the one page it
+// fetched, so an existing row shows a uuid.
+//
+// So this control asks the server two different questions, and the second is the one that
+// makes it work on an existing row:
+//
+//   { search, limit, offset } -> browse / search  (the picker)
+//   { ids: [...] }            -> resolve labels   (what the closed control renders)
+//
+// The stored value stays an opaque id, so the same field points at a pramen row or at a
+// record in a system we do not own.
+
+const REFERENCE_PAGE_SIZE = 20;
+
+/** Tolerate a handler that answers with a bare array — the `optionsFrom` shape — so a
+ * `select`'s existing options handler can be pointed at a `reference` without a rewrite. */
+function asReferenceResult(raw: unknown): ReferenceResult {
+  if (Array.isArray(raw)) return { items: raw as ReferenceOption[] };
+  const r = raw as ReferenceResult | null;
+  return { items: Array.isArray(r?.items) ? r.items : [], hasMore: r?.hasMore };
+}
+
+/** Resolve labels for ids that are already stored.
+ *
+ * Only ever asks for ids it does not already have a label for, and keeps what it has
+ * across renders: a repeater of twenty references would otherwise re-resolve every one of
+ * them on every keystroke in a sibling field. */
+function useReferenceLabels(api: Api, from: string | undefined, ids: readonly string[]): Map<string, ReferenceOption> {
+  const [known, setKnown] = useState<Map<string, ReferenceOption>>(() => new Map());
+  // The ids, as a stable primitive — an array literal is a new identity every render.
+  //
+  // JSON, not `join(" ")`: an id here is OPAQUE, which is the whole premise of the field, so
+  // it may contain a space. Splitting on one turned a single external id into two ids that
+  // resolve to nothing, and the control showed "Loading..." forever.
+  const key = JSON.stringify(ids);
+  useEffect(() => {
+    if (!from) return;
+    const wanted = JSON.parse(key) as string[];
+    const missing = wanted.filter((id) => !known.has(id));
+    if (missing.length === 0) return;
+    let alive = true;
+    api
+      .call<ReferenceResult>(from, { ids: missing })
+      .then((r) => {
+        if (!alive) return;
+        const items = asReferenceResult(r).items;
+        setKnown((prev) => {
+          const next = new Map(prev);
+          for (const it of items) next.set(it.value, it);
+          // An id the handler did not answer for is recorded as UNRESOLVED rather than left
+          // missing — otherwise this effect asks for it again on every render, forever, for
+          // a record that has been deleted.
+          for (const id of missing) if (!next.has(id)) next.set(id, { value: id, label: "" });
+          return next;
+        });
+      })
+      .catch(() => {
+        if (!alive) return;
+        setKnown((prev) => {
+          const next = new Map(prev);
+          for (const id of missing) if (!next.has(id)) next.set(id, { value: id, label: "" });
+          return next;
+        });
+      });
+    return () => { alive = false; };
+  }, [api, from, key, known]);
+  return known;
+}
+
+/** What a stored id renders as while it is being resolved, and after it could not be. */
+function referenceLabel(id: string, known: Map<string, ReferenceOption>): { label: string; muted: boolean } {
+  const hit = known.get(id);
+  if (!hit) return { label: "Loading...", muted: true };
+  // An empty label is the recorded "no such record" — show the raw id, because that is the
+  // only thing left that identifies what the row points at.
+  return hit.label ? { label: hit.label, muted: false } : { label: id, muted: true };
+}
+
+function ReferenceField({ def, value, onChange, api, ariaLabel }: { def: FieldDefinition; value: FieldValue; onChange: (v: FieldValue) => void; api: Api; ariaLabel?: string }) {
+  const multiple = def.multiple === true;
+  // `unknown[]` before filtering: `FieldValue` is a union that INCLUDES array members, so
+  // `Array.isArray` narrows to a union of array types and the type-guard overload of
+  // `.filter` no longer resolves. The guard below is the real narrowing either way.
+  const ids: string[] = multiple
+    ? (Array.isArray(value) ? (value as unknown[]).filter((v): v is string => typeof v === "string") : [])
+    : typeof value === "string" && value !== "" ? [value] : [];
+  const known = useReferenceLabels(api, def.referenceFrom, ids);
+  const [picking, setPicking] = useState(false);
+
+  const pick = (opt: ReferenceOption) => {
+    if (multiple) {
+      if (!ids.includes(opt.value)) onChange([...ids, opt.value]);
+    } else {
+      onChange(opt.value);
+      setPicking(false);
+    }
+  };
+  const remove = (id: string) => onChange(multiple ? ids.filter((v) => v !== id) : null);
+
+  // Nothing to pick FROM. Said out loud rather than rendered as an empty control that
+  // silently does nothing when clicked — this is a schema mistake, and the person seeing it
+  // is the one who can fix it.
+  if (!def.referenceFrom) {
+    return <span className="text-sm text-danger">This reference field declares no `referenceFrom` handler.</span>;
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      {ids.length === 0 ? (
+        <span className="text-sm text-fg-muted">Nothing selected.</span>
+      ) : (
+        <div className="flex flex-col gap-1">
+          {ids.map((id) => {
+            const { label, muted } = referenceLabel(id, known);
+            const hint = known.get(id)?.hint;
+            return (
+              <div key={id} className="flex items-center gap-2 rounded-[14px] bg-surface-card px-4 py-2.5">
+                <span className={`min-w-0 flex-1 truncate text-sm ${muted ? "text-fg-subtle" : "text-fg"}`}>{label}</span>
+                {hint ? <span className="shrink-0 text-caption text-fg-subtle">{hint}</span> : null}
+                <Button variant="ghost" size="sm" className="text-danger" onPress={() => remove(id)}>remove</Button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <Button variant="secondary" size="sm" className="self-start" aria-label={ariaLabel} onPress={() => setPicking(true)}>
+        {multiple ? "+ Add" : ids.length > 0 ? "Change" : "Choose"}
+      </Button>
+      {picking ? (
+        <ReferencePicker
+          api={api}
+          from={def.referenceFrom}
+          title={def.label ?? def.name}
+          selected={ids}
+          multiple={multiple}
+          onPick={pick}
+          onClose={() => setPicking(false)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function ReferencePicker({ api, from, title, selected, multiple, onPick, onClose }: {
+  api: Api;
+  from: string;
+  title: string;
+  selected: readonly string[];
+  multiple: boolean;
+  onPick: (opt: ReferenceOption) => void;
+  onClose: () => void;
+}) {
+  const [search, setSearch] = useState("");
+  const [items, setItems] = useState<ReferenceOption[]>([]);
+  const [hasMore, setHasMore] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  // Debounced: the fetch keys on `term`, so typing does not fire a request per character.
+  const [term, setTerm] = useState("");
+
+  useEffect(() => {
+    const id = setTimeout(() => setTerm(search.trim()), 250);
+    return () => clearTimeout(id);
+  }, [search]);
+
+  const load = useCallback(
+    (offset: number) => {
+      setLoading(true);
+      setErr("");
+      return api
+        .call<ReferenceResult>(from, { search: term || undefined, limit: REFERENCE_PAGE_SIZE, offset })
+        .then((raw) => {
+          const r = asReferenceResult(raw);
+          setItems((prev) => (offset === 0 ? r.items : [...prev, ...r.items]));
+          // A handler that omits `hasMore` is taken at its word only when it returned a
+          // SHORT page; a full one is assumed to have more — the same rule the page and
+          // collection lists use.
+          setHasMore(r.hasMore ?? r.items.length === REFERENCE_PAGE_SIZE);
+        })
+        .catch((e: unknown) => setErr(String((e as Error)?.message ?? e)))
+        .finally(() => setLoading(false));
+    },
+    [api, from, term],
+  );
+
+  useEffect(() => { void load(0); }, [load]);
+
+  return (
+    <ModalOverlay isOpen isDismissable onOpenChange={(open) => !open && onClose()}>
+      <ModalSurface className="w-full max-w-[560px] px-9 py-8">
+        <ModalDialog className="max-h-[86vh] overflow-auto outline-none">
+          <Heading level="1" className="mb-5 font-normal">
+            Choose <span className="text-fg-subtle">{title.toLowerCase()}</span>
+          </Heading>
+          <input
+            className={`${CONTROL} mb-3`}
+            type="search"
+            autoFocus
+            placeholder="Search"
+            aria-label="Search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+          {err ? <div className="mb-2 rounded-lg border border-danger bg-surface-card px-3.5 py-2.5 text-small text-danger">{err}</div> : null}
+          <div className="flex flex-col gap-1">
+            {items.map((opt) => {
+              const already = selected.includes(opt.value);
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  disabled={already}
+                  onClick={() => onPick(opt)}
+                  className="flex items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors hover:bg-surface-muted disabled:opacity-40"
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm text-fg">{opt.label}</span>
+                    {opt.hint ? <span className="block truncate text-caption text-fg-subtle">{opt.hint}</span> : null}
+                  </span>
+                  {already ? <span className="shrink-0 text-caption text-fg-subtle">selected</span> : null}
+                </button>
+              );
+            })}
+            {!loading && items.length === 0 ? <p className="px-3 py-2 text-sm text-fg-subtle">Nothing matches.</p> : null}
+            {loading ? <p className="px-3 py-2 text-sm text-fg-subtle">Loading...</p> : null}
+          </div>
+          {hasMore && !loading ? (
+            <div className="mt-3 text-center">
+              <Button variant="secondary" size="sm" onPress={() => void load(items.length)}>Load more</Button>
+            </div>
+          ) : null}
+          <div className="mt-3 text-right">
+            <Button variant="ghost" onPress={onClose}>{multiple ? "done" : "close"}</Button>
           </div>
         </ModalDialog>
       </ModalSurface>

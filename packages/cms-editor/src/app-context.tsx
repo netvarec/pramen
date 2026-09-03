@@ -8,7 +8,7 @@ import { createContext, use, useCallback, useEffect, useMemo, useRef, useState }
 import { Api, clearConfig, isTokenExpired, loadConfig, saveConfig, type Config } from "./api";
 import { BRAND, SETUP_TITLE, type BrandConfig } from "./brand";
 import { readBackend, type BackendHost } from "./mount";
-import { DEFAULT_CAPABILITIES, type CmsCapabilities, type CollectionMeta, type ContentType, type JsonValue } from "./types";
+import { DEFAULT_CAPABILITIES, type AdminPageMeta, type CmsCapabilities, type CollectionMeta, type ContentType, type JsonValue } from "./types";
 
 declare global {
   interface Window {
@@ -26,8 +26,9 @@ declare global {
        * reads as "the CMS is broken" rather than "this site has no pages". */
       hidePages?: boolean;
       /** Extra top-nav links to companion tools the host serves (e.g. a curation page).
-       * Rendered as plain external `<a>` links after the built-in tabs. */
-      extraNav?: { label: string; href: string; target?: "_blank" | "_self" }[];
+       * Rendered as plain external `<a>` links, positioned by `order` (see `NAV_ORDER`) and
+       * defaulting to after the built-in tabs. */
+      extraNav?: { label: string; href: string; target?: "_blank" | "_self"; order?: number }[];
       /** The wordmark in the topbar, on the Setup screen, and in the browser tab.
        *
        * This editor ships as a package an agency deploys FOR ITS CLIENT, so the default
@@ -93,6 +94,14 @@ interface AppContextValue {
   /** Collections registered on the server (from `listCollections`) — drives the nav + the
    * generic list/edit routes. Empty when the server registers none. */
   collections: CollectionMeta[];
+  /** Custom admin pages the CALLER may open (from `listAdminPages`) — Block Kit screens a
+   * project registered with `adminPage()`. They render inside the editor's own chrome, at a
+   * nav position they choose, which is the difference from an `extraNav` link.
+   *
+   * Filtered server-side by role, so there is no entry here the caller cannot open. An app
+   * that registers none (or a server without the handler) leaves this empty; a failure is
+   * non-fatal, exactly as with collections. */
+  adminPages: AdminPageMeta[];
   /** Content types registered on the server (from `listContentTypes`). More than one ⇒ each
    * gets its own nav tab and its own list route, instead of one pooled "Pages" list where a
    * page and an article sit in the same column with nothing to tell them apart.
@@ -130,6 +139,31 @@ interface AppContextValue {
 
 const AppContext = createContext<AppContextValue | null>(null);
 
+/**
+ * Register this screen's unsaved-changes guard for as long as `dirty` is true.
+ *
+ * The five authoring screens added alongside the CMS work each hold a whole unsaved
+ * document in local state — a field schema, a menu tree, a widget list — and none of them
+ * registered a guard, so any topbar click discarded the work with no prompt. `PageEditor`
+ * had one; nothing made that reusable, so it stayed the only screen with one.
+ *
+ * `beforeunload` too, for the refresh/close half — in-app navigation fires neither, which
+ * is why both halves are needed and why the context guard exists at all.
+ */
+export function useUnsavedGuard(dirty: boolean, message = "You have unsaved changes. Leave anyway?"): void {
+  const { setNavGuard } = useApp();
+  useEffect(() => {
+    if (!dirty) return;
+    setNavGuard(() => confirm(message));
+    const onUnload = (e: BeforeUnloadEvent) => { e.preventDefault(); };
+    window.addEventListener("beforeunload", onUnload);
+    return () => {
+      setNavGuard(null);
+      window.removeEventListener("beforeunload", onUnload);
+    };
+  }, [dirty, message, setNavGuard]);
+}
+
 export function useApp(): AppContextValue {
   const v = use(AppContext);
   if (!v) throw new Error("useApp must be used within <AppProvider>");
@@ -140,6 +174,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [cfg, setCfg] = useState<Config>(() => loadConfig(BACKEND));
   const [me, setMe] = useState<Me | null>(null);
   const [collections, setCollections] = useState<CollectionMeta[]>([]);
+  const [adminPages, setAdminPages] = useState<AdminPageMeta[]>([]);
   const [contentTypes, setContentTypes] = useState<ContentType[] | null>(null);
   const [contentTypesFailed, setContentTypesFailed] = useState(false);
   const [contentTypesNonce, setContentTypesNonce] = useState(0);
@@ -201,6 +236,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // Collections drive the nav + list/edit routes. An app that registers none (or an older
     // server without the handler) just leaves the nav as-is — a failure is non-fatal.
     api.call<CollectionMeta[]>("listCollections").then(setCollections).catch(() => setCollections([]));
+    // Same shape, same tolerance: an app that registers no Block Kit pages, or a server
+    // without the handler, just leaves the nav as it was.
+    api.listAdminPages().then(setAdminPages).catch(() => setAdminPages([]));
     // A server older than this handler leaves the monolingual default, which is the safe
     // way round: the i18n surface stays hidden rather than half-rendered. Merged OVER the
     // defaults, not substituted for them, so a capability the server does not know about
@@ -238,6 +276,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     me,
     isAdmin: (me?.roles ?? []).includes("admin"),
     collections,
+    adminPages,
     contentTypes,
     contentTypesFailed,
     refreshContentTypes,
