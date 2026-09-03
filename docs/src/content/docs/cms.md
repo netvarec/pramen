@@ -129,6 +129,20 @@ Disabling a redirect keeps the record of what the old URL was; deleting it does 
 is deliberately **no hit counter**: counting would turn the one handler anonymous 404 traffic
 calls into a write.
 
+Serving one is the site's job. `@pramen/cms-astro` exposes `client.resolveRedirect(path)`
+and a `redirectResponse(client, url)` helper for the 404 path — that is where it belongs,
+since a lookup in front of every render would buy a round trip to answer "no" almost every
+time:
+
+```astro
+---
+// src/pages/404.astro
+import { redirectResponse } from "@pramen/cms-astro";
+const redirect = await redirectResponse(client, Astro.url);
+if (redirect) return redirect;
+---
+```
+
 **Taxonomies** are an explicit junction (`cms_page_terms`), so "pages in this category" is an
 ordinary query — `where: { terms: { slug: "news" } }` compiles to a subquery. Terms nest only
 in a vocabulary declared `hierarchical`, and a parent that would close a cycle is refused on
