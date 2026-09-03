@@ -48,7 +48,7 @@ const FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 function fieldNameFrom(label: string): string {
   const parts = label
     .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
+    .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^A-Za-z0-9]+/g, " ")
     .trim()
     .split(" ")
