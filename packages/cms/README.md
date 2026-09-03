@@ -30,6 +30,31 @@ compile-time field typing two ways:
   for webmaster-created types. (A `pramen cms codegen` CLI that fetches the rows over HTTP and
   writes the file is the remaining thin wrapper.)
 
+### Code-defined types are read-only in the editor
+
+`cmsBootstrap({ blockTypes, contentTypes })` reconciles what `defineBlockType` /
+`defineContentType` declare into the store on **every boot**, and the editor authors the same
+two tables. So the rows it declares are flagged `managed`:
+
+- `updateBlockType` / `updateContentType` answer **409** for one, naming the `define*` call to
+  edit instead. Without that, a save returned 200 and was patched back to the literal in
+  `app.ts` at the next cold start — taking any block content authored against the added field
+  with it.
+- The type builder renders a managed type read-only, with a note saying where its definition
+  lives, and marks it `code` in the overview lists.
+- Drop a type from the declaration and its row is **released** (`managed → false`) — it keeps
+  existing, because pages are built out of it, and becomes editable again.
+
+Declare all code-defined types in **one** `cmsBootstrap` call: the argument is read as the
+complete set, so two calls each declaring half would take turns releasing the other half.
+
+`defineBlockType` / `defineContentType` also validate what they are given, with the same rules
+the editor's handlers enforce (`normalizeFieldSchema`, `normalizeRegions`,
+`normalizeDefaultBlocks`) — a `select` with no `options`, two fields sharing a name, or a
+default block in an undeclared region throws at declaration, naming the definition. tsc types a
+const `FieldDefinition[]`, but it does not know any of those rules, so without this a
+code-declared type could store a schema the builder then refuses to save.
+
 ## SEO & sitemap
 
 - Per-page SEO on `cms_pages`: `metaTitle`, `metaDescription`, `canonicalUrl`, `robots`,

@@ -470,6 +470,10 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
       runs default-partition only (where such data lives). `@pramen/cms` layers `defineContentType`/
       `defineBlockType` + `cmsBootstrap` (upsert-by-slug) on top. Covered by `test/bootstrap.test.ts`
       (reconcile semantics) + the e2e cms suite (a fresh tenant is pre-seeded on boot).
+      A reconciler and an EDITOR over the same rows are a silent data-loss pair, so the CMS's
+      code-declared types carry a `managed` flag: set by `cmsBootstrap`, refused (409) by the
+      update handlers, rendered read-only in the builder, and cleared again when the definition
+      leaves the repo. The general lesson for any future `bootstrap` reconciler with a UI over it.
 - [x] Query expressiveness: operators (`eq`/`ne`/`gt`/`gte`/`lt`/`lte`/`in`/`notIn`/`like`/`isNull`),
       nestable `AND`/`OR` groups, multi-column `orderBy`, and `limit`/`offset` pagination. The `SqlExpr`
       AST + `compileWhere` (`runtime/read-engine.ts`) handle it; `WhereInput<F>` types operators per

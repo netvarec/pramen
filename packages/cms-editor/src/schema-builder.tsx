@@ -331,6 +331,36 @@ function RepeaterExtras({ def, patch }: { def: FieldDefinition; patch: (p: Parti
   );
 }
 
+// --- code-defined types ---------------------------------------------------------------
+//
+// A type declared with `defineBlockType` / `defineContentType` and reconciled by
+// `cmsBootstrap` is flagged `managed`, and the builder shows it read-only. Both surfaces
+// listed code-defined and editor-authored types identically before, so the obvious thing to
+// do — open one, add a field, hit Save — returned 200 and was reverted at the next cold
+// start, orphaning any content authored against the field (GitHub #48). The server now
+// refuses that write; this is the half that stops an editor walking into it.
+
+/** The marker on a code-defined row in the overview lists. */
+function CodeBadge() {
+  return (
+    <span className="shrink-0 rounded-full border border-border px-2 py-0.5 text-caption text-fg-subtle" title="Defined in code — read-only here">
+      code
+    </span>
+  );
+}
+
+/** Shown at the top of a read-only builder, in place of the Save button. */
+function ManagedNotice({ what, defineFn, slug }: { what: string; defineFn: string; slug: string }) {
+  return (
+    <div className="rounded-lg border border-border bg-surface-muted px-3.5 py-3 text-small text-fg-muted">
+      This {what} is <strong className="font-medium text-fg">defined in code</strong> —{" "}
+      <code className="text-fg">{defineFn}("{slug}", …)</code> in the app, applied on every boot.
+      It is read-only here: a change saved from this screen would be reverted at the next deploy or
+      cold start. Edit the declaration and redeploy.
+    </div>
+  );
+}
+
 // --- the types overview ---------------------------------------------------------------
 
 export function TypesOverview({ api, onOpenBlockType, onOpenContentType, onError }: {
@@ -373,6 +403,7 @@ export function TypesOverview({ api, onOpenBlockType, onOpenContentType, onError
           <div className={"flex cursor-pointer items-center gap-3 rounded-[14px] border border-transparent bg-surface-card px-[18px] py-3.5 hover:bg-surface-muted"} key={bt.id} onClick={() => onOpenBlockType(bt.slug)}>
             <span className="w-6 shrink-0 text-center">{bt.icon ?? ""}</span>
             <span className="min-w-0 flex-1 truncate font-medium">{bt.name}</span>
+            {bt.managed ? <CodeBadge /> : null}
             <span className="shrink-0 truncate text-fg-subtle">{bt.slug}</span>
             <span className="shrink-0 text-caption text-fg-subtle">{(bt.fieldsSchema ?? []).length} field(s)</span>
           </div>
@@ -388,6 +419,7 @@ export function TypesOverview({ api, onOpenBlockType, onOpenContentType, onError
         render={(ct) => (
           <div className={"flex cursor-pointer items-center gap-3 rounded-[14px] border border-transparent bg-surface-card px-[18px] py-3.5 hover:bg-surface-muted"} key={ct.id} onClick={() => onOpenContentType(ct.slug)}>
             <span className="min-w-0 flex-1 truncate font-medium">{ct.name}</span>
+            {ct.managed ? <CodeBadge /> : null}
             <span className="shrink-0 truncate text-fg-subtle">{ct.slug}</span>
             <span className="shrink-0 text-caption text-fg-subtle">{(ct.regions ?? []).length} region(s)</span>
           </div>
@@ -438,6 +470,7 @@ export function BlockTypeEditor({ api, slug, onSaved, onBack, onError }: {
   const isNew = slug === "new";
   const [draft, setDraft] = useState<BlockTypeInput>({ name: "", slug: "", fieldsSchema: [] });
   const [id, setId] = useState<string | null>(null);
+  const [managed, setManaged] = useState(false);
   const [loading, setLoading] = useState(!isNew);
   const [missing, setMissing] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -462,6 +495,7 @@ export function BlockTypeEditor({ api, slug, onSaved, onBack, onError }: {
         const bt = all.find((b) => b.slug === slug);
         if (!bt) { setMissing(true); return; }
         setId(bt.id);
+        setManaged(bt.managed === true);
         const loaded: BlockTypeInput = {
           name: bt.name,
           slug: bt.slug,
@@ -507,8 +541,13 @@ export function BlockTypeEditor({ api, slug, onSaved, onBack, onError }: {
       <div className="mb-4 mt-2 flex items-center gap-3">
         <Button variant="ghost" size="sm" onPress={onBack}>← Types</Button>
         <h1 className="text-[22px] font-normal text-fg">{isNew ? "New block type" : draft.name}</h1>
+        {managed ? <CodeBadge /> : null}
       </div>
-      <div className="flex max-w-[860px] flex-col gap-4">
+      {/* `disabled` on a fieldset disables every control inside it natively, so read-only is
+          one attribute rather than a prop threaded through the region / field / default-block
+          editors — none of which would then be able to forget it. */}
+      <fieldset disabled={managed} className="m-0 flex min-w-0 max-w-[860px] flex-col gap-4 border-0 p-0">
+        {managed ? <ManagedNotice what="block type" defineFn="defineBlockType" slug={draft.slug} /> : null}
         {ok ? <div className="rounded-lg border border-brand-green bg-brand-green/20 px-3.5 py-2.5 text-small text-fg">saved</div> : null}
         <div className="grid grid-cols-2 gap-3 max-[720px]:grid-cols-1">
           <Input
@@ -552,12 +591,14 @@ export function BlockTypeEditor({ api, slug, onSaved, onBack, onError }: {
           <FieldSchemaEditor schema={draft.fieldsSchema ?? []} onChange={(fieldsSchema) => setDraft((d) => ({ ...d, fieldsSchema }))} />
         </div>
 
-        <div className="mt-2">
-          <Button onPress={save} isDisabled={busy || draft.name.trim() === "" || draft.slug.trim() === ""}>
-            {busy ? "Saving…" : isNew ? "Create" : "Save"}
-          </Button>
-        </div>
-      </div>
+        {managed ? null : (
+          <div className="mt-2">
+            <Button onPress={save} isDisabled={busy || draft.name.trim() === "" || draft.slug.trim() === ""}>
+              {busy ? "Saving…" : isNew ? "Create" : "Save"}
+            </Button>
+          </div>
+        )}
+      </fieldset>
     </div>
   );
 }
@@ -574,6 +615,7 @@ export function ContentTypeEditor({ api, slug, onSaved, onBack, onError }: {
   const isNew = slug === "new";
   const [draft, setDraft] = useState<ContentTypeInput>({ name: "", slug: "", regions: [{ name: "content", label: "Content", allowedTypes: null }], fieldsSchema: [], defaultBlocks: [] });
   const [id, setId] = useState<string | null>(null);
+  const [managed, setManaged] = useState(false);
   const [blockTypes, setBlockTypes] = useState<BlockType[]>([]);
   const [loading, setLoading] = useState(!isNew);
   const [missing, setMissing] = useState(false);
@@ -600,6 +642,7 @@ export function ContentTypeEditor({ api, slug, onSaved, onBack, onError }: {
         const ct = all.find((c) => c.slug === slug);
         if (!ct) { setMissing(true); return; }
         setId(ct.id);
+        setManaged(ct.managed === true);
         const loaded: ContentTypeInput = {
           name: ct.name,
           slug: ct.slug,
@@ -653,8 +696,11 @@ export function ContentTypeEditor({ api, slug, onSaved, onBack, onError }: {
       <div className="mb-4 mt-2 flex items-center gap-3">
         <Button variant="ghost" size="sm" onPress={onBack}>← Types</Button>
         <h1 className="text-[22px] font-normal text-fg">{isNew ? "New content type" : draft.name}</h1>
+        {managed ? <CodeBadge /> : null}
       </div>
-      <div className="flex max-w-[860px] flex-col gap-5">
+      {/* See the block-type builder — one `disabled` covers every nested control. */}
+      <fieldset disabled={managed} className="m-0 flex min-w-0 max-w-[860px] flex-col gap-5 border-0 p-0">
+        {managed ? <ManagedNotice what="content type" defineFn="defineContentType" slug={draft.slug} /> : null}
         {ok ? <div className="rounded-lg border border-brand-green bg-brand-green/20 px-3.5 py-2.5 text-small text-fg">saved</div> : null}
         <div className="grid grid-cols-2 gap-3 max-[720px]:grid-cols-1">
           <Input
@@ -718,13 +764,15 @@ export function ContentTypeEditor({ api, slug, onSaved, onBack, onError }: {
           />
         </div>
 
-        <div>
-          <Button onPress={save} isDisabled={busy || draft.name.trim() === "" || draft.slug.trim() === "" || regions.length === 0}>
-            {busy ? "Saving…" : isNew ? "Create" : "Save"}
-          </Button>
-          {regions.length === 0 ? <p className="mt-2 text-caption text-danger">A content type needs at least one region.</p> : null}
-        </div>
-      </div>
+        {managed ? null : (
+          <div>
+            <Button onPress={save} isDisabled={busy || draft.name.trim() === "" || draft.slug.trim() === "" || regions.length === 0}>
+              {busy ? "Saving…" : isNew ? "Create" : "Save"}
+            </Button>
+            {regions.length === 0 ? <p className="mt-2 text-caption text-danger">A content type needs at least one region.</p> : null}
+          </div>
+        )}
+      </fieldset>
     </div>
   );
 }

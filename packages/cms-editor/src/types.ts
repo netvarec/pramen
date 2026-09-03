@@ -123,6 +123,10 @@ export interface BlockType {
   fieldsSchema?: FieldDefinition[] | null;
   icon?: string | null;
   category?: string | null;
+  /** Declared in the app's code and reconciled by `cmsBootstrap` on every boot. The builder
+   * renders these read-only: a save would 409, and before it did, it would have been quietly
+   * reverted at the next cold start. */
+  managed?: boolean;
 }
 
 export interface ContentType {
@@ -132,6 +136,8 @@ export interface ContentType {
   regions?: RegionDefinition[] | null;
   fieldsSchema?: FieldDefinition[] | null;
   defaultBlocks?: DefaultBlockDefinition[] | null;
+  /** See `BlockType.managed`. */
+  managed?: boolean;
 }
 
 /** A collection: one of the host app's own pramen entities, edited generically via a

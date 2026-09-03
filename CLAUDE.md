@@ -337,7 +337,19 @@ log) for independent single-writer serialization and storage.
   into the store so a fresh/reprovisioned DB matches the repo, no manual seeding. Idempotent
   (upsert, don't blind-insert); a throw is logged, never fatal; DO path runs default-partition
   only. `@pramen/cms` ships `defineContentType`/`defineBlockType` + `cmsBootstrap({ blockTypes,
-  contentTypes })` (upsert-by-slug) — see `example/app.ts`.
+  contentTypes })` (upsert-by-slug) — see `example/app.ts`. Those two VALIDATE at declaration
+  (`normalizeFieldSchema`/`normalizeRegions`/`normalizeDefaultBlocks`, the same rules the editor's
+  handlers enforce) and throw naming the definition, so a code-declared type can't store a schema
+  the builder would then refuse to save — the surface reporting the problem being the one that
+  can't fix it. Every row `cmsBootstrap` declares is flagged **`managed`**, because convergence
+  and the type editor (#46) point at the same rows: an editor added a field, got a 200, and lost
+  it at the next cold start when `upsertBySlug` patched `fieldsSchema` back to the literal in
+  `app.ts` — orphaning the block content authored against it. `updateBlockType`/`updateContentType`
+  now 409 on a managed row (the row exists and the edit is well-formed; the conflict is with a
+  definition the request can't reach) and the builder renders it read-only behind one
+  `<fieldset disabled>`. A type that DROPS OUT of the declaration is released (`managed → false`) —
+  a lock with nothing behind it is worse than no lock — which is why all code-defined types belong
+  in ONE `cmsBootstrap` call: the argument is read as the complete set.
 - Data migrations (structure is declarative, DATA is imperative and RECORDED): `app.migrations:
   DataMigration[]` — `{ id, partition?, up(ctx) }` — runs in DECLARATION order after `migrate()`
   and before `bootstrap`, each at most ONCE per `(id, partition)`, recorded in the internal

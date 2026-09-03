@@ -100,3 +100,79 @@ describe("cmsBootstrap — code-defined content/block type reconcile", () => {
     expect(second.createdAt).toBe(first.createdAt);
   });
 });
+
+// GitHub #48 — bootstrap converges these rows on every boot, and the editor authors the same
+// rows. Without a marker the two are indistinguishable, so an editor's save returned 200 and
+// was reverted at the next cold start. `managed` is what makes them different things.
+describe("cmsBootstrap — code-defined types are flagged managed", () => {
+  test("declared types are marked managed; a hand-created one is not", async () => {
+    const driver = await freshStore();
+    const db = sysDb(driver);
+    await db.insert("cms_block_types", { name: "Hand made", slug: "hand_made", fieldsSchema: [] });
+    await cmsBootstrap({ blockTypes: [richText], contentTypes: [article] })(ctx(driver));
+
+    const bts = (await db.find({ from: "cms_block_types" })) as any[];
+    expect(bts.find((b) => b.slug === "rich_text").managed).toBe(true);
+    expect(bts.find((b) => b.slug === "hand_made").managed).toBe(false);
+    expect(((await db.find({ from: "cms_content_types" })) as any[])[0].managed).toBe(true);
+  });
+
+  test("a type dropped from the declaration is RELEASED back to the editor", async () => {
+    const driver = await freshStore();
+    const db = sysDb(driver);
+    await cmsBootstrap({ blockTypes: [richText, image] })(ctx(driver));
+    // `image` leaves the repo. Its row stays (blocks are built out of it) but nothing
+    // converges it any more, so a read-only builder would be a lock with nothing behind it.
+    await cmsBootstrap({ blockTypes: [richText] })(ctx(driver));
+
+    const bts = (await db.find({ from: "cms_block_types" })) as any[];
+    expect(bts.length).toBe(2);
+    expect(bts.find((b) => b.slug === "rich_text").managed).toBe(true);
+    expect(bts.find((b) => b.slug === "image").managed).toBe(false);
+  });
+
+  test("a table the call says nothing about is left alone, not swept", async () => {
+    const driver = await freshStore();
+    const db = sysDb(driver);
+    await cmsBootstrap({ blockTypes: [richText], contentTypes: [article] })(ctx(driver));
+    await cmsBootstrap({ contentTypes: [article] })(ctx(driver)); // no `blockTypes` key at all
+    const bts = (await db.find({ from: "cms_block_types" })) as any[];
+    expect(bts.find((b) => b.slug === "rich_text").managed).toBe(true);
+  });
+});
+
+// The editor validates an authored field schema (`normalizeFieldSchema`). A code-declared
+// type went straight into the store unchecked, so `defineBlockType` could write a schema the
+// builder would then REFUSE to save — the only surface reporting the problem being the one
+// that cannot fix it.
+describe("defineBlockType / defineContentType — validated at declaration", () => {
+  test("a select with no options is refused, naming the definition", () => {
+    expect(() => defineBlockType("card", [{ name: "variant", type: "select" }] as const))
+      .toThrow(/block type 'card'/);
+  });
+
+  test("a duplicate field name is refused", () => {
+    expect(() => defineBlockType("dup", [{ name: "a", type: "text" }, { name: "a", type: "text" }] as const))
+      .toThrow(/block type 'dup'/);
+  });
+
+  test("a default block naming an undeclared region is refused", () => {
+    expect(() => defineContentType("post", {
+      regions: [{ name: "content" }],
+      defaultBlocks: [{ region: "sidebar", blockTypeSlug: "rich_text" }],
+    })).toThrow(/content type 'post'/);
+  });
+
+  test("a bad slug is refused before it reaches the store", () => {
+    expect(() => defineBlockType("Rich Text", [{ name: "body", type: "text" }] as const)).toThrow(/block type/);
+  });
+
+  test("a valid definition is canonicalized, so bootstrap writes what the editor would", () => {
+    const ct = defineContentType("post", { regions: [{ name: "content" }] });
+    // `allowedTypes` omitted means "any" — stored as an explicit null, exactly as
+    // `createContentType` would have written it, so it does not read as drift.
+    expect(ct.regions).toEqual([{ name: "content", allowedTypes: null }]);
+    expect(ct.fields).toEqual([]);
+    expect(ct.defaultBlocks).toEqual([]);
+  });
+});

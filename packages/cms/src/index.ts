@@ -284,7 +284,32 @@ export function defineBlockType<S extends string, F extends readonly FieldDefini
   fields: F,
   opts: { name?: string; description?: string; icon?: string; category?: string } = {},
 ): BlockTypeDef<S, F> {
-  return { slug, name: opts.name ?? slug, fieldsSchema: fields, description: opts.description, icon: opts.icon, category: opts.category };
+  return {
+    slug: checkedDefinition("block type", slug, () => assertRegistryKey(slug, "block type slug")) as S,
+    name: opts.name ?? slug,
+    // Held to the SAME rules the editor's `createBlockType` enforces. tsc types a const
+    // `FieldDefinition[]`, but it does not know that a `select` needs options or that two
+    // fields may not share a name — so without this a code-declared type could store a
+    // schema the editor then REFUSES to save, and the only surface that reports the problem
+    // is the one that cannot fix it. Canonicalized as well as checked, so the stored row is
+    // byte-identical to what the editor would have written and does not read as drift.
+    fieldsSchema: checkedDefinition("block type", slug, () => normalizeFieldSchema(fields, `block type '${slug}' fields`)) as unknown as F,
+    description: opts.description,
+    icon: opts.icon,
+    category: opts.category,
+  };
+}
+
+/** Run an authoring validator at DECLARATION time. The validators throw `BadRequest` — a
+ * 400, which is meaningless here: the caller is a module body, not a request. Rethrown as a
+ * plain Error naming the definition, so a bad `defineBlockType` fails the boot with a
+ * message that says WHICH one rather than a stray 400 with no subject. */
+function checkedDefinition<T>(what: string, slug: string, fn: () => T): T {
+  try {
+    return fn();
+  } catch (e) {
+    throw new Error(`${what} '${slug}': ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
 
 /** The inferred `fields` type of a `defineBlockType` result. */
@@ -328,7 +353,18 @@ export function defineContentType(
     defaultBlocks?: readonly DefaultBlockDefinition[];
   },
 ): ContentTypeDef {
-  return { slug, name: opts.name ?? slug, description: opts.description, fields: opts.fields, regions: opts.regions, defaultBlocks: opts.defaultBlocks };
+  // Same reasoning as `defineBlockType` — the editor validates an authored content type, so
+  // a code-declared one is held to the same rules rather than being the one way to store a
+  // shape the builder cannot round-trip.
+  const regions = checkedDefinition("content type", slug, () => normalizeRegions(opts.regions));
+  return {
+    slug: checkedDefinition("content type", slug, () => assertRegistryKey(slug, "content type slug")),
+    name: opts.name ?? slug,
+    description: opts.description,
+    fields: checkedDefinition("content type", slug, () => normalizeFieldSchema(opts.fields, `content type '${slug}' fields`)),
+    regions,
+    defaultBlocks: checkedDefinition("content type", slug, () => normalizeDefaultBlocks(opts.defaultBlocks, regions)),
+  };
 }
 
 /** The narrow slice of the system Db a reconcile needs. `cmsBootstrap` runs with a SYSTEM
@@ -358,6 +394,22 @@ async function upsertBySlug(db: ReconcileDb, table: string, slug: string, values
   if (Object.keys(patch).length) await db.update(table, String(existing.id), patch);
 }
 
+/** Clear `managed` on rows this reconciler no longer declares.
+ *
+ * A type dropped from the repo keeps its row — pages are still built out of it — but nothing
+ * converges it any more, so leaving it read-only in the builder would be a lock with nothing
+ * behind it, next to a note pointing at code that no longer mentions it.
+ *
+ * This is the reason all code-defined types belong in ONE `cmsBootstrap` call: the argument
+ * is read as the COMPLETE set, so two calls each declaring half would take turns releasing
+ * the other half. A table the call says nothing about (`blockTypes` omitted entirely) is left
+ * alone rather than swept. */
+async function releaseUndeclared(db: ReconcileDb, table: string, declared: ReadonlySet<string>): Promise<void> {
+  for (const row of await db.find({ from: table, where: { managed: true } })) {
+    if (!declared.has(String(row.slug))) await db.update(table, String(row.id), { managed: false });
+  }
+}
+
 /** Build a pramen `bootstrap` reconciler that upserts code-defined block + content types by
  * `slug` on each boot. Idempotent: inserts a missing type, updates a drifted one, leaves an
  * identical one untouched. Register it on your app:
@@ -366,7 +418,12 @@ async function upsertBySlug(db: ReconcileDb, table: string, slug: string, values
  *     bootstrap: [ cmsBootstrap({ blockTypes: [...], contentTypes: [...] }) ] };
  *
  * Runs with a privileged system Db, so a fresh/reprovisioned database converges to the
- * code-declared types with no manual createContentType/createBlockType call. */
+ * code-declared types with no manual createContentType/createBlockType call.
+ *
+ * Every row it declares is flagged `managed`, which makes the editor show it read-only —
+ * convergence and an editor pointed at the same rows are otherwise a silent data-loss pair
+ * (GitHub #48). Declare ALL code-defined types in ONE call: the argument is read as the
+ * complete set, and a type that drops out of it is released back to the editor. */
 export function cmsBootstrap(defs: { blockTypes?: readonly BlockTypeDef[]; contentTypes?: readonly ContentTypeDef[] }): BootstrapFn {
   return async ({ db }) => {
     const sys = db as unknown as ReconcileDb;
@@ -378,8 +435,12 @@ export function cmsBootstrap(defs: { blockTypes?: readonly BlockTypeDef[]; conte
         fieldsSchema: bt.fieldsSchema ?? [],
         icon: bt.icon ?? null,
         category: bt.category ?? null,
+        // What tells the editor this row is code-owned, so it renders read-only instead of
+        // accepting an edit this same loop would revert on the next cold start.
+        managed: true,
       });
     }
+    if (defs.blockTypes) await releaseUndeclared(sys, "cms_block_types", new Set(defs.blockTypes.map((bt) => bt.slug)));
     for (const ct of defs.contentTypes ?? []) {
       await upsertBySlug(sys, "cms_content_types", ct.slug, {
         name: ct.name,
@@ -388,8 +449,10 @@ export function cmsBootstrap(defs: { blockTypes?: readonly BlockTypeDef[]; conte
         fieldsSchema: ct.fields ?? [],
         regions: ct.regions ?? [],
         defaultBlocks: ct.defaultBlocks ?? [],
+        managed: true,
       });
     }
+    if (defs.contentTypes) await releaseUndeclared(sys, "cms_content_types", new Set(defs.contentTypes.map((ct) => ct.slug)));
   };
 }
 
@@ -621,6 +684,8 @@ export const cmsSchema = {
     fieldsSchema: t.json(), // FieldDefinition[] for page-level fields
     regions: t.json(), // RegionDefinition[]
     defaultBlocks: t.json(), // DefaultBlockDefinition[]
+    // TRUE while `cmsBootstrap` declares this type in code. See cms_block_types.managed.
+    managed: defaultTo(t.bool(), false),
     createdAt: defaultTo(t.text(), expr.now()),
   })),
 
@@ -632,6 +697,14 @@ export const cmsSchema = {
     fieldsSchema: t.json(), // FieldDefinition[]
     icon: t.text(),
     category: t.text(),
+    // TRUE while this row is CODE-DEFINED — `cmsBootstrap` declares it and converges it on
+    // every boot. The editor authors these rows too (GitHub #9), and the two are otherwise
+    // indistinguishable: an editor would add a field, get a 200, and lose it silently at the
+    // next cold start when `upsertBySlug` patched the column back to the literal in `app.ts`.
+    // So the flag is set by the reconciler, refused by `updateBlockType`/`updateContentType`,
+    // and rendered read-only in the builder. Cleared again when the definition leaves the repo
+    // (see `releaseUndeclared`) — a lock with nothing behind it is worse than no lock.
+    managed: defaultTo(t.bool(), false),
     createdAt: defaultTo(t.text(), expr.now()),
   })),
 
@@ -1946,6 +2019,22 @@ function assertRegistryKey(v: unknown, what: string): string {
   return str;
 }
 
+/** Refuse an editor write to a CODE-DEFINED type.
+ *
+ * `cmsBootstrap` reconciles these rows on every boot, so a save here would return 200 and
+ * then be reverted at the next cold start, taking any content authored against the added
+ * field with it. A 409 is the honest answer: the row exists, the edit is well-formed, and
+ * the conflict is with a definition that lives somewhere this request cannot reach.
+ *
+ * The editor renders a managed type read-only, so this is the curl / stale-tab half. */
+function assertNotManaged(row: Record<string, unknown>, what: string, defineFn: string): void {
+  if (!row.managed) return;
+  throw new Conflict(
+    `${what} '${String(row.slug)}' is defined in code — edit its ${defineFn}(...) declaration and redeploy. ` +
+      `A change saved here would be reverted by cmsBootstrap on the next boot.`,
+  );
+}
+
 /**
  * An RPC handler name, as an authored field schema may name one (`optionsFrom`,
  * `referenceFrom`).
@@ -2676,6 +2765,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       const rows = await db.find({ from: "cms_block_types", where: input.id ? { id: input.id } : { slug: input.slug }, limit: 1 });
       const row = rows[0];
       if (!row) throw notFound("block type");
+      assertNotManaged(row, "block type", "defineBlockType");
       const patch: Record<string, unknown> = {};
       for (const k of ["name", "fieldsSchema", "icon", "category", "description"] as const) {
         if (k in input) patch[k] = (input as Record<string, unknown>)[k];
@@ -2703,6 +2793,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       const rows = await db.find({ from: "cms_content_types", where: input.id ? { id: input.id } : { slug: input.slug }, limit: 1 });
       const row = rows[0];
       if (!row) throw notFound("content type");
+      assertNotManaged(row, "content type", "defineContentType");
       const patch: Record<string, unknown> = {};
       for (const k of ["name", "regions", "fieldsSchema", "defaultBlocks"] as const) {
         if (k in input) patch[k] = (input as Record<string, unknown>)[k];
