@@ -568,10 +568,9 @@ binding + `MAIL_FROM` gives you **Cloudflare Email Sending** (no API keys);
 `MAIL_CAPTURE=true` captures to a dev inbox; otherwise it **fails closed** (a send
 throws) so a misconfigured prod never silently stashes a security email.
 
-Mailgun wins when both are configured, and it is what you want as soon as the recipients
-are real users: Cloudflare can only send FROM a domain that is a zone in the same
-account, and some accounts also refuse any recipient that is not a verified destination
-in Email Routing.
+Mailgun wins when both are configured. Cloudflare can only send FROM a domain that is a
+zone in the same account; Mailgun asks the domain be verified once, then delivers from
+anywhere.
 
 Or declare it once on the entity — a **trigger** auto-enqueues a task on a matching
 write (still in the write's transaction), no `ctx.tasks.enqueue` in the handler:

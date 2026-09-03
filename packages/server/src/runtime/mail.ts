@@ -6,10 +6,9 @@
 //   await ctx.mail.send({ to: "u@x.com", subject: "Welcome", text: "…" });
 //
 // Two real transports. Cloudflare Email Sending (the `send_email`/`EMAIL` binding) needs
-// no API keys, but it can only send FROM a domain that is a zone in the same account,
-// and on some accounts only TO addresses verified in Email Routing — which rules it out
-// whenever the recipients are ordinary people. Mailgun is the way out of both: an HTTP
-// API, any recipient, at the cost of a key. Configure it and it wins.
+// no API keys, but it can only send FROM a domain that is a zone in the same account.
+// Mailgun is the way out of that: an HTTP API, a domain verified once with Mailgun
+// rather than owned by the account, at the cost of a key. Configure it and it wins.
 //
 // With neither configured (local/dev), mail is captured instead of sent — to KV (so an
 // e2e/dashboard can read the "inbox") or in-memory — so handlers work unchanged
@@ -90,11 +89,9 @@ export class CloudflareEmailAdapter implements MailAdapter {
 
 /** Mailgun — an HTTP transport, for when Cloudflare Email Sending cannot be used.
  *
- * Worth the key for one reason: Cloudflare will only send from a domain that is a zone
- * in the same account, and some accounts additionally refuse any recipient that is not a
- * verified destination in Email Routing ("destination address is not a verified
- * address"). That is workable for a handful of operators and hopeless for real users.
- * Mailgun asks the domain be verified once, then delivers to anyone.
+ * Worth the key for one reason: Cloudflare will only send from a domain that is a zone in
+ * the same account. Mailgun asks the domain be verified once with Mailgun instead, so the
+ * sender need not be a domain this account owns.
  *
  * A non-2xx THROWS, deliberately: `ctx.mail.send` is normally called from a task, and a
  * throw is what makes the outbox retry and then dead-letter visibly. Swallowing the
