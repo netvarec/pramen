@@ -3,7 +3,6 @@
 import { createPage, useNavigate } from "@buzola/router";
 import { useApp } from "../app-context";
 import { WidgetAreaEditor } from "../furniture";
-import { useStableError } from "../schema-builder";
 
 export default createPage()
   .params({ name: "string" })
@@ -11,7 +10,6 @@ export default createPage()
   .render(function WidgetAreaRoute({ params }) {
     const { api, cms, setError } = useApp();
     const navigate = useNavigate();
-    const onError = useStableError(setError);
     return (
       <WidgetAreaEditor
         api={api}
@@ -20,7 +18,7 @@ export default createPage()
         canEdit={cms.canEdit}
         onBack={() => navigate("widgets")}
         onDeleted={() => navigate("widgets")}
-        onError={onError}
+        onError={setError}
       />
     );
   });

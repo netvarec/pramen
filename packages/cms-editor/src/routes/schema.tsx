@@ -9,14 +9,13 @@
 import { createPage, useNavigate } from "@buzola/router";
 import { useApp } from "../app-context";
 import { Notice } from "../components";
-import { TypesOverview, useStableError } from "../schema-builder";
+import { TypesOverview } from "../schema-builder";
 
 export default createPage()
   .route("/schema")
   .render(function SchemaRoute() {
     const { api, cms, setError } = useApp();
     const navigate = useNavigate();
-    const onError = useStableError(setError);
 
     // Every handler behind this screen is editor-gated, so a reviewer-only session would
     // get a builder where each save 403s. The nav hides the tab for the same reason; this
@@ -28,7 +27,7 @@ export default createPage()
         api={api}
         onOpenBlockType={(slug) => navigate("block-type", { params: { slug } })}
         onOpenContentType={(slug) => navigate("content-type", { params: { slug } })}
-        onError={onError}
+        onError={setError}
       />
     );
   });

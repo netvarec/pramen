@@ -12,7 +12,7 @@
 // of the server's own list, which is what keeps that true.
 
 import { Button, Heading, Input, Textarea } from "@podoba/react";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import type { Api, BlockTypeInput, ContentTypeInput } from "./api";
 import { CONTROL, slugify } from "./fields";
 import type { BlockType, ContentType, DefaultBlockDefinition, FieldDefinition, FieldType, RegionDefinition } from "./types";
@@ -765,10 +765,4 @@ function DefaultBlocksEditor({ blocks, regions, blockTypes, onChange }: {
       <Button variant="secondary" size="sm" className="self-start" onPress={add} isDisabled={regions.length === 0 || blockTypes.length === 0}>+ Add default block</Button>
     </div>
   );
-}
-
-/** A stable `onError` for the screens above — they take it as an effect dependency, so an
- * inline arrow at the call site would re-run the load on every render. */
-export function useStableError(setError: (s: string) => void): (s: string) => void {
-  return useCallback((s: string) => setError(s), [setError]);
 }

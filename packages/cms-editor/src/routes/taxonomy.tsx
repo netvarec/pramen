@@ -3,7 +3,6 @@
 import { createPage, useNavigate } from "@buzola/router";
 import { useApp } from "../app-context";
 import { TaxonomyEditor } from "../furniture";
-import { useStableError } from "../schema-builder";
 
 export default createPage()
   .params({ slug: "string" })
@@ -11,7 +10,6 @@ export default createPage()
   .render(function TaxonomyRoute({ params }) {
     const { api, cms, setError } = useApp();
     const navigate = useNavigate();
-    const onError = useStableError(setError);
     return (
       <TaxonomyEditor
         api={api}
@@ -20,7 +18,7 @@ export default createPage()
         canEdit={cms.canEdit}
         onBack={() => navigate("taxonomies")}
         onDeleted={() => navigate("taxonomies")}
-        onError={onError}
+        onError={setError}
       />
     );
   });

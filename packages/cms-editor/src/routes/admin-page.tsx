@@ -9,7 +9,6 @@ import { createPage, useNavigate } from "@buzola/router";
 import { useApp } from "../app-context";
 import { AdminPageView } from "../blockkit";
 import { Notice } from "../components";
-import { useStableError } from "../schema-builder";
 import { Button } from "@podoba/react";
 
 export default createPage()
@@ -18,7 +17,6 @@ export default createPage()
   .render(function AdminPageRoute({ params }) {
     const { api, adminPages, setError } = useApp();
     const navigate = useNavigate();
-    const onError = useStableError(setError);
     const def = adminPages.find((p) => p.slug === params.slug);
 
     // `listAdminPages` is role-FILTERED server-side, so an absent slug means either "still
@@ -34,5 +32,5 @@ export default createPage()
     // Keyed on the slug so switching between two pages REMOUNTS the view: buzola renders the
     // same component instance across a params-only change, and the blocks, the form values
     // and any toast all belong to one page.
-    return <AdminPageView api={api} key={def.slug} slug={def.slug} label={def.label} onError={onError} />;
+    return <AdminPageView api={api} key={def.slug} slug={def.slug} label={def.label} onError={setError} />;
   });

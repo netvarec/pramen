@@ -3,7 +3,6 @@
 import { createPage, useNavigate } from "@buzola/router";
 import { useApp } from "../app-context";
 import { MenuEditor } from "../furniture";
-import { useStableError } from "../schema-builder";
 
 export default createPage()
   .params({ name: "string" })
@@ -11,7 +10,6 @@ export default createPage()
   .render(function MenuRoute({ params }) {
     const { api, cms, collections, setError } = useApp();
     const navigate = useNavigate();
-    const onError = useStableError(setError);
     return (
       <MenuEditor
         api={api}
@@ -21,7 +19,7 @@ export default createPage()
         collections={collections}
         onBack={() => navigate("menus")}
         onDeleted={() => navigate("menus")}
-        onError={onError}
+        onError={setError}
       />
     );
   });
