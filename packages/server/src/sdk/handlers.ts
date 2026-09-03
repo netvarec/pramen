@@ -82,6 +82,49 @@ export interface BootstrapContext<S extends SchemaDef = SchemaDef> {
  * tenant's boot; it simply retries on the next boot. Set as `app.bootstrap`. */
 export type BootstrapFn = (ctx: BootstrapContext) => void | Promise<void>;
 
+/** Context handed to a data migration's `up()`. Same privileged, SYSTEM-scoped shape as
+ * `BootstrapContext` (ACL bypassed, triggers suppressed) but scoped to the migration's
+ * own `partition` — each partition-DO runs its own partition's migrations, so `db`/`driver`
+ * here address exactly that DO's tables. */
+export interface MigrationContext<S extends SchemaDef = SchemaDef> {
+  /** System-scoped Db (ACL bypassed), triggers suppressed, scoped to `partition`. */
+  readonly db: Db<S>;
+  /** Raw driver — a bulk `UPDATE`/`INSERT … SELECT` is usually the right tool for a
+   * backfill; going row-by-row through `db` on a large table is what blows the DO's
+   * wall-clock budget. */
+  readonly driver: Driver;
+  readonly schema: S;
+  /** The partition this migration is running (and being recorded) under. */
+  readonly partition: string;
+}
+
+/** One imperative, ORDERED, recorded-once transformation of existing DATA — the half a
+ * declarative diff cannot express: split a column, backfill the nullable column `ADD COLUMN`
+ * just created, rewrite units, normalize a `t.json()` blob after its shape changed.
+ *
+ * The deliberate inverse of `BootstrapFn` on every axis that matters: it runs ONCE ever
+ * (recorded in `_pramen_migrations` keyed by `(id, partition)`), so it need NOT be
+ * idempotent — a backfill that would double a value on a second run is exactly what this
+ * exists for; and a throw is NOT swallowed. It fails CLOSED: no ledger row, the boot does
+ * not complete, the request fails, and the migration is retried on the tenant's next fetch.
+ * Silently marking a half-finished backfill as done is the one outcome worth bricking a
+ * boot to avoid.
+ *
+ * Runs after `migrate()` (so the column exists) and before `app.bootstrap`. There are no
+ * DOWN migrations. Set as `app.migrations`. */
+export interface DataMigration {
+  /** Stable, unique, never reused — this is the ledger key. Deleting an id from the array
+   * does NOT un-apply it; and a cold tenant is unmigrated until touched, so an id can only
+   * be pruned once EVERY live tenant reports it applied (`pramen migrations status
+   * --all-tenants`). */
+  id: string;
+  /** Restrict to one partition; default = the default partition. Only that partition's DO
+   * runs it (its tables live in no other DO). The D1 store is one shared database with no
+   * partition split, so there every migration runs — still recorded under this key. */
+  partition?: string;
+  up(ctx: MigrationContext): void | Promise<void>;
+}
+
 /** The deferred-side-effects facade handed to handlers as `ctx.tasks`. */
 export interface Tasks {
   /** Enqueue a task to run after commit. `kind` selects the `app.tasks` handler;

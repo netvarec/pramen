@@ -21,6 +21,7 @@ import { dispatch, tasksFacade, bindTasks } from "./runtime/dispatch";
 import { createMail } from "./runtime/mail";
 import { createQueue } from "./runtime/queue";
 import { ensureOutbox, drainOutbox, listTasks } from "./runtime/outbox";
+import { appliedMigrations, runDataMigrations as runPendingDataMigrations } from "./runtime/data-migrations";
 import { Db } from "./runtime/db";
 import { digest } from "./runtime/digest";
 import { compileAcl, type AclContext, type CompiledAcl } from "./runtime/acl";
@@ -148,9 +149,35 @@ export class PramenDOBase extends DurableObject<DoEnv> {
       await this.driver.transaction(() =>
         migrate(this.driver, this.app.schema, { allowDestructive, partition }).then(() => {}),
       );
+      await this.runDataMigrations(); // imperative, recorded backfills for THIS partition
       await ensureOutbox(this.driver); // the deferred-tasks table (internal, all partitions)
       await this.runBootstrap(); // converge code-defined reference data (default partition only)
       this.migrated = true;
+    });
+  }
+
+  // Run this partition's pending app.migrations once, right after migrate() (so a backfill
+  // sees the column ADD COLUMN just created) and before bootstrap. Unlike runBootstrap this
+  // is NOT default-partition-only: a partition's rows live in ITS DO, so each partition-DO
+  // runs its own partition's migrations against its own tables.
+  //
+  // It deliberately does NOT swallow errors, which is the one place it diverges from
+  // runBootstrap. A bootstrap reconciler is idempotent and retried every boot, so logging a
+  // failure and carrying on is safe; a data migration is a ONE-SHOT transformation of user
+  // rows, and swallowing a half-finished backfill would leave the store silently corrupt
+  // AND (via the ledger row it never wrote) look unmigrated forever. Failing closed brings
+  // the tenant's first fetch down instead, and the migration retries on the next one.
+  private async runDataMigrations(): Promise<void> {
+    const migrations = this.app.migrations;
+    if (!migrations?.length) return;
+    const db = new Db(
+      this.driver,
+      { acl: this.acl, identity: { roles: ["admin"] }, system: true, partition: this.partition, schema: this.app.schema, suppressTriggers: true },
+      this.app.schema,
+    );
+    await runPendingDataMigrations(this.driver, migrations, {
+      partition: this.partition,
+      makeContext: (partition) => ({ db, driver: this.driver, schema: this.app.schema, partition }),
     });
   }
 
@@ -186,6 +213,14 @@ export class PramenDOBase extends DurableObject<DoEnv> {
     // Absent header (shouldn't happen post-routing) -> default partition.
     const partitionHeader = request.headers.get("x-pramen-partition");
     if (partitionHeader) this.partition = partitionHeader;
+
+    // READ-ONLY PROBE, answered before the boot. Everything below this line migrates:
+    // ensureMigrated() runs migrate(), the data migrations and bootstrap. Answering the
+    // ledger after that would make `pramen migrations status` apply every pending backfill
+    // as a side effect of ASKING — it could never report PENDING, and `--all-tenants`
+    // (advertised as the read-only "is it safe to prune?" check) would silently migrate the
+    // whole fleet. Reads no table it might have to create; see handleMigrations.
+    if (new URL(request.url).pathname === "/__migrations") return this.handleMigrations();
 
     await this.ensureMigrated();
     await this.ensureRegistered(request);
@@ -581,6 +616,24 @@ export class PramenDOBase extends DurableObject<DoEnv> {
     const byKey = new Map(rows.map((r) => [r.key, r.value]));
     const tables = byKey.has(tablesKey) ? (JSON.parse(byKey.get(tablesKey)!) as Record<string, string[]>) : {};
     return Response.json({ ok: true, result: { hash: byKey.get(hashKey) ?? null, tables } });
+  }
+
+  // Introspection: which data migrations this partition has applied (admin-gated at the
+  // Worker). Powers the CLI's `migrations status` — the fleet-wide "is it safe to prune this
+  // id yet?" answer, which nothing else can give: a tenant nobody has touched since the
+  // migration shipped is still unmigrated, and the schema hash says nothing about backfills.
+  // Ensure the ledger exists first so a DO that has never applied one answers with [] rather
+  // than a missing-table error.
+  private async handleMigrations(): Promise<Response> {
+    // Strictly read-only — NOT ensureMigrationsTable(). A DO that has never applied a
+    // migration has no ledger table, and CREATE-ing one here would make the probe a write
+    // (and would boot an otherwise-untouched tenant's store just to answer a question about
+    // it). An absent table is simply "none applied".
+    const rows = await appliedMigrations(this.driver, this.partition).catch(() => []);
+    return Response.json({
+      ok: true,
+      result: { partition: this.partition, applied: rows.map((r) => ({ id: r.id, appliedAt: r.appliedAt })) },
+    });
   }
 
   // Generic admin data ops (admin-gated at the Worker). Runs through a SYSTEM-mode
