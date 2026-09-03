@@ -204,9 +204,13 @@ const handlers = { ...createCmsHandlers(cms) };
 const routes = [...cmsRoutes({ handlers: cms })];
 ```
 
-That identity must also be granted by your ACL. Preview is **DO-only**: redemption reaches
-the Durable Object, so `signPagePreview` refuses on the D1 store rather than mint a link
-that could never be redeemed.
+That identity must also be granted by your ACL. Preview works on **both stores**. It used to
+be DO-only — redemption goes through `ctx.callPrivileged`, which only forwarded to the
+Durable Object, so minting on D1 would have handed out a link that 404s forever and
+`signPagePreview` refused instead. `callPrivileged` now dispatches locally in the Worker on
+the D1 store, so the refusal is gone. A browser redeeming a link sends no `x-pramen-store`
+header, so a deployment serving the CMS from D1 needs `PRAMEN_STORE=d1` for the redeem route
+to land on the right store (an embedded topology sets it anyway).
 
 The grant is scoped to **one page** and carries its own expiry (default 1 hour, clamped to
 30 days), so a leaked link is not "see all drafts" and stops working on its own. Signing
