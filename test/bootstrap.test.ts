@@ -100,3 +100,173 @@ describe("cmsBootstrap — code-defined content/block type reconcile", () => {
     expect(second.createdAt).toBe(first.createdAt);
   });
 });
+
+// GitHub #48 — bootstrap converges these rows on every boot, and the editor authors the same
+// rows. Without a marker the two are indistinguishable, so an editor's save returned 200 and
+// was reverted at the next cold start. `managedBy` is what makes them different things — an
+// OWNER id rather than a flag, so two reconcilers in one `app.bootstrap` compose.
+describe("cmsBootstrap — code-defined types carry an owner", () => {
+  test("declared types are stamped with the owner; a hand-created one is not", async () => {
+    const driver = await freshStore();
+    const db = sysDb(driver);
+    await db.insert("cms_block_types", { name: "Hand made", slug: "hand_made", fieldsSchema: [] });
+    await cmsBootstrap({ blockTypes: [richText], contentTypes: [article] })(ctx(driver));
+
+    const bts = (await db.find({ from: "cms_block_types" })) as any[];
+    expect(bts.find((b) => b.slug === "rich_text").managedBy).toBe("cms");
+    expect(bts.find((b) => b.slug === "hand_made").managedBy).toBe(null);
+    expect(((await db.find({ from: "cms_content_types" })) as any[])[0].managedBy).toBe("cms");
+  });
+
+  test("a type dropped from the declaration is RELEASED back to the editor", async () => {
+    const driver = await freshStore();
+    const db = sysDb(driver);
+    await cmsBootstrap({ blockTypes: [richText, image] })(ctx(driver));
+    // `image` leaves the repo. Its row stays (blocks are built out of it) but nothing
+    // converges it any more, so a read-only builder would be a lock with nothing behind it.
+    await cmsBootstrap({ blockTypes: [richText] })(ctx(driver));
+
+    const bts = (await db.find({ from: "cms_block_types" })) as any[];
+    expect(bts.length).toBe(2);
+    expect(bts.find((b) => b.slug === "rich_text").managedBy).toBe("cms");
+    expect(bts.find((b) => b.slug === "image").managedBy).toBe(null);
+  });
+
+  test("an ABSENT key says nothing about that table; an EMPTY array declares none and sweeps", async () => {
+    const driver = await freshStore();
+    const db = sysDb(driver);
+    const owned = async () => ((await db.find({ from: "cms_block_types", where: { slug: "rich_text" }, limit: 1 })) as any[])[0].managedBy;
+
+    await cmsBootstrap({ blockTypes: [richText], contentTypes: [article] })(ctx(driver));
+    await cmsBootstrap({ contentTypes: [article] })(ctx(driver)); // no `blockTypes` key at all
+    expect(await owned()).toBe("cms");
+
+    // `blockTypes: []` is a DECLARATION of none — which is also the in-band way to hand every
+    // code-defined type back to the editor when the reconciler itself is being removed.
+    await cmsBootstrap({ blockTypes: [], contentTypes: [article] })(ctx(driver));
+    expect(await owned()).toBe(null);
+  });
+
+  // The reason for an owner id rather than a boolean: `app.bootstrap` is an ARRAY, and with a
+  // flag the sweep could not tell "not mine" from "no longer declared", so two calls released
+  // each other's rows on every boot and half the types silently fell back to editable.
+  test("two reconcilers in one app.bootstrap do not release each other's rows", async () => {
+    const driver = await freshStore();
+    const db = sysDb(driver);
+    const a = cmsBootstrap({ blockTypes: [richText] }, { owner: "app" });
+    const b = cmsBootstrap({ blockTypes: [image] }, { owner: "plugin" });
+    for (let boot = 0; boot < 2; boot++) { await a(ctx(driver)); await b(ctx(driver)); }
+
+    const bts = (await db.find({ from: "cms_block_types" })) as any[];
+    expect(bts.find((x) => x.slug === "rich_text").managedBy).toBe("app");
+    expect(bts.find((x) => x.slug === "image").managedBy).toBe("plugin");
+  });
+
+  // The mirror image of #48: the reconciler silently overwrote an editor-authored row of the
+  // same slug — name and schema replaced, then LOCKED, so the editor could not put back what
+  // it had just lost. `createBlockType` refuses this collision at the RPC edge.
+  test("an editor-authored row of the same slug is left alone, not adopted", async () => {
+    const driver = await freshStore();
+    const db = sysDb(driver);
+    await db.insert("cms_block_types", { name: "Editor made", slug: "rich_text", fieldsSchema: [{ name: "custom", type: "text" }] });
+    await cmsBootstrap({ blockTypes: [richText] })(ctx(driver));
+
+    const row = ((await db.find({ from: "cms_block_types", where: { slug: "rich_text" }, limit: 1 })) as any[])[0];
+    expect(row.name).toBe("Editor made");
+    expect(row.fieldsSchema).toEqual([{ name: "custom", type: "text" }]);
+    expect(row.managedBy).toBe(null);
+  });
+
+  // One bad definition must not skip every later type AND both sweeps: the boot runner only
+  // LOGS a throwing reconciler, so an aborted pass leaves the store half-converged for that
+  // isolate's whole lifetime with nothing to retry it.
+  test("a failing row does not abort the rest of the reconcile", async () => {
+    const driver = await freshStore();
+    const db = sysDb(driver);
+    // `rich_text` is editor-owned, so its reconcile is refused; `image` must still land.
+    await db.insert("cms_block_types", { name: "Editor made", slug: "rich_text", fieldsSchema: [] });
+    await cmsBootstrap({ blockTypes: [richText, image], contentTypes: [article] })(ctx(driver));
+
+    expect(((await db.find({ from: "cms_block_types", where: { slug: "image" }, limit: 1 })) as any[])[0].managedBy).toBe("cms");
+    expect(((await db.find({ from: "cms_content_types" })) as any[]).length).toBe(1);
+  });
+});
+
+// The editor validates an authored field schema (`normalizeFieldSchema`). A code-declared type
+// went straight into the store unchecked, so a bad one could store a schema the builder would
+// then REFUSE to save — the only surface reporting the problem being the one that cannot fix
+// it, and the row is then locked, so it cannot be repaired through the product at all.
+//
+// The check lives on `cmsBootstrap`, not on `defineBlockType`: those helpers are OPTIONAL, and
+// `BlockTypeDef` is a structural interface, so an object literal or a `.map` reaches the store
+// without going near them. Guarding the helper guards the convenient path and leaves the sink.
+describe("cmsBootstrap — validates the definitions it will write", () => {
+  test("a select with no options is refused", () => {
+    expect(() => cmsBootstrap({ blockTypes: [defineBlockType("card", [{ name: "variant", type: "select" }] as const)] }))
+      .toThrow(/needs either `options` or an `optionsFrom` handler/);
+  });
+
+  test("a duplicate field name is refused", () => {
+    expect(() => cmsBootstrap({ blockTypes: [defineBlockType("dup", [{ name: "a", type: "text" }, { name: "a", type: "text" }] as const)] }))
+      .toThrow(/declares 'a' twice/);
+  });
+
+  test("a default block naming an undeclared region is refused", () => {
+    expect(() => cmsBootstrap({ contentTypes: [defineContentType("post", {
+      regions: [{ name: "content" }],
+      defaultBlocks: [{ region: "sidebar", blockTypeSlug: "rich_text" }],
+    })] })).toThrow(/targets region 'sidebar'/);
+  });
+
+  test("a bad slug is refused, and is checked BEFORE the regions", () => {
+    // Ordering matters: validating regions first produced an error that never mentioned the
+    // slug, so you fixed the regions, redeployed, and met a second boot failure.
+    expect(() => cmsBootstrap({ contentTypes: [defineContentType("Bad Slug", { regions: [] })] }))
+      .toThrow(/content type slug must be a key/);
+  });
+
+  // A plain object literal — no helper anywhere. This is the path the check exists for.
+  test("an object literal that never touched define* is validated too", () => {
+    expect(() => cmsBootstrap({ blockTypes: [{ slug: "Bad Slug", name: "x", fieldsSchema: [] }] }))
+      .toThrow(/block type slug must be a key/);
+  });
+
+  test("a slug declared twice in one call is refused, not silently last-wins", () => {
+    expect(() => cmsBootstrap({ blockTypes: [
+      defineBlockType("cta", [{ name: "a", type: "text" }] as const, { name: "CTA (marketing)" }),
+      defineBlockType("cta", [{ name: "b", type: "text" }] as const, { name: "CTA (product)" }),
+    ] })).toThrow(/declared twice/);
+  });
+
+  test("every problem is reported at once, not one deploy at a time", () => {
+    let msg = "";
+    try {
+      cmsBootstrap({
+        blockTypes: [defineBlockType("card", [{ name: "v", type: "select" }] as const), { slug: "Bad Slug", name: "x", fieldsSchema: [] }],
+        contentTypes: [defineContentType("post", { regions: [] })],
+      });
+    } catch (e) { msg = (e as Error).message; }
+    expect(msg).toMatch(/3 invalid type definition\(s\)/);
+    expect(msg).toContain("card");
+    expect(msg).toContain("Bad Slug");
+    expect(msg).toContain("post");
+  });
+
+  test("what it writes is CANONICALIZED — the row matches what the editor would have saved", async () => {
+    const driver = await freshStore();
+    await cmsBootstrap({ contentTypes: [defineContentType("post", { regions: [{ name: "content" }] })] })(ctx(driver));
+    const row = ((await sysDb(driver).find({ from: "cms_content_types", where: { slug: "post" }, limit: 1 })) as any[])[0];
+    // `allowedTypes` omitted means "any" — stored as an explicit null, exactly as
+    // `createContentType` would have written it, so it does not read as drift.
+    expect(row.regions).toEqual([{ name: "content", allowedTypes: null }]);
+    expect(row.fieldsSchema).toEqual([]);
+    expect(row.defaultBlocks).toEqual([]);
+  });
+
+  // Canonicalization happens at the SINK, so the helper stays a pure constructor and
+  // `BlockFieldsOf<typeof def>` still describes the array it returned.
+  test("defineBlockType returns its input untouched", () => {
+    const fields = [{ name: "  body  ", type: "text" }] as const;
+    expect(defineBlockType("x", fields).fieldsSchema).toBe(fields);
+  });
+});

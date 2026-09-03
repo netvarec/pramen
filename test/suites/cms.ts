@@ -47,6 +47,30 @@ export async function runCms(base: string): Promise<void> {
     "cms: app.bootstrap seeded the 'seeded_note' block type on boot",
   );
 
+  // GitHub #48 — a seeded type is CODE-DEFINED, and bootstrap patches it back on every boot.
+  // The flag is what the editor reads to render it read-only; the refusal below is what stops
+  // a curl (or a stale tab) from making an edit that silently disappears at the next cold start.
+  assert(
+    (seededBts.body.result as Array<{ slug: string; managedBy?: string | null }>).find((b) => b.slug === "seeded_note")?.managedBy === "cms",
+    "cms: a bootstrap-declared block type carries its reconciler's owner id",
+  );
+  assert(
+    (seededCts.body.result as Array<{ slug: string; managedBy?: string | null }>).find((c) => c.slug === "seeded_doc")?.managedBy === "cms",
+    "cms: a bootstrap-declared content type carries its reconciler's owner id",
+  );
+  // Declared, not inferred from the rows: the editor is a separate package that can be newer
+  // than the server, where every row reports no owner and nothing would render read-only.
+  const caps = await call("listCmsCapabilities", {}, admin);
+  assert(caps.body.ok === true && (caps.body.result as { codeDefinedTypes?: boolean }).codeDefinedTypes === true,
+    "cms: listCmsCapabilities declares codeDefinedTypes, so an older server fails closed");
+  const editSeeded = await call("updateBlockType", { slug: "seeded_note", name: "Hijacked" }, admin);
+  assert(
+    editSeeded.status === 409 && editSeeded.body.ok === false,
+    "cms: updateBlockType refuses a code-defined type (409), rather than accepting a write bootstrap reverts",
+  );
+  const editSeededCt = await call("updateContentType", { slug: "seeded_doc", name: "Hijacked" }, admin);
+  assert(editSeededCt.status === 409 && editSeededCt.body.ok === false, "cms: updateContentType refuses a code-defined type (409)");
+
   // --- editor auth: an anonymous caller cannot create block types ---
   const anonCreate = await call("createBlockType", { name: "X", slug: "x" });
   assert(anonCreate.status === 403 && anonCreate.body.ok === false, "cms: anonymous cannot create a block type (403)");

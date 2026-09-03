@@ -337,7 +337,36 @@ log) for independent single-writer serialization and storage.
   into the store so a fresh/reprovisioned DB matches the repo, no manual seeding. Idempotent
   (upsert, don't blind-insert); a throw is logged, never fatal; DO path runs default-partition
   only. `@pramen/cms` ships `defineContentType`/`defineBlockType` + `cmsBootstrap({ blockTypes,
-  contentTypes })` (upsert-by-slug) — see `example/app.ts`.
+  contentTypes })` (upsert-by-slug) — see `example/app.ts`. Every row `cmsBootstrap` writes is
+  stamped **`managedBy: <owner>`**, because convergence and the type editor (#46) point at the same
+  rows: an editor added a field, got a 200, and lost it at the next cold start when `upsertBySlug`
+  patched `fieldsSchema` back to the literal in `app.ts` — orphaning the block content authored
+  against it. `updateBlockType`/`updateContentType` now 409 on an owned row (the row exists and the
+  edit is well-formed; the conflict is with a definition the request can't reach) and the builder
+  renders it read-only. The guard reads `managedBy` through an explicit `select` and THROWS if the
+  column is absent: reads are column-projected, so "absent ⇒ editable" would have disarmed the
+  guard for exactly the deployments that restrict read `fields`. An OWNER id, not a boolean,
+  because `app.bootstrap` is an ARRAY — a sweep can't tell "not mine" from "no longer declared",
+  so two `cmsBootstrap` calls released each other's rows every boot; each now releases only what
+  it wrote, and a package can ship block types beside the app's via `{ owner }`. A type that drops
+  out of the declaration is released (a lock with nothing behind it is worse than no lock) — and
+  `blockTypes: []` DECLARES none (sweeps) where an absent key says nothing about that table, which
+  is also the in-band way to hand everything back before deleting the reconciler. `upsertBySlug`
+  never ADOPTS a row it doesn't own: overwriting an editor-authored type of the same slug and then
+  locking it was #48's mirror image, unrepairable from the editor.
+  Validation lives on `cmsBootstrap`, NOT on `define*`: those helpers are optional and
+  `BlockTypeDef` is a structural interface, so a literal/`.map`/codegen reaches the store without
+  them — guarding the helper guarded the convenient path and left the sink open. It runs the
+  editor's own rules (`normalizeFieldSchema`/`normalizeRegions`/`normalizeDefaultBlocks`), reports
+  EVERY bad definition at once, and throws at APP CONSTRUCTION like `validateCollections` /
+  `validateMigrations` — which is not the "logged, never fatal" rule above: that governs the
+  `BootstrapFn` at boot, and there each row is reconciled in its own try/catch so one failure
+  can't skip the rest and both sweeps. `define*` stay PURE constructors, so `BlockFieldsOf<typeof
+  def>` still describes the array that gets stored (canonicalizing there rebuilt every entry and
+  made the `as unknown as F` cast a lie). `listCmsCapabilities().codeDefinedTypes` declares the
+  whole thing, because `@pramen/cms-editor` has no dependency on `@pramen/cms` and a newer editor
+  against an older server reads "no owner on any row" as "nothing is code-defined" — #48 again, in
+  the deployment that upgraded to fix it.
 - Data migrations (structure is declarative, DATA is imperative and RECORDED): `app.migrations:
   DataMigration[]` — `{ id, partition?, up(ctx) }` — runs in DECLARATION order after `migrate()`
   and before `bootstrap`, each at most ONCE per `(id, partition)`, recorded in the internal
@@ -428,9 +457,10 @@ log) for independent single-writer serialization and storage.
   against a schema, this checks the schema. It is a refusal, not a warning, because nothing
   downstream fails visibly — `FieldForm` renders nothing for an unknown type, `validateFields`
   is documented as lenient about them, and the field's content is silently lost on every save;
-  a duplicate sibling name is worse (two controls, one key, one of them unsaveable). A block
-  type's slug admits `_` (it is a component-registry key, `rich_text`), a content type's does
-  not (it is the URL segment `/types/:slug`). A `defaultBlocks` entry naming an undeclared
+  a duplicate sibling name is worse (two controls, one key, one of them unsaveable). Both a block
+  type's and a content type's slug go through `assertRegistryKey`, so both admit `_` — they
+  were split (block types yes, content types no) for no reason that survived inspection, and
+  the example itself ships `seeded_doc`. A `defaultBlocks` entry naming an undeclared
   region, or a type its region disallows, is a 400 at declaration — but `createPage` STILL
   skips such a block, because a later `updateContentType` can narrow `allowedTypes` alone.
 - Editor nav placement: `buildNav` (`cms-editor/src/nav.ts`) returns ORDERED entries and the

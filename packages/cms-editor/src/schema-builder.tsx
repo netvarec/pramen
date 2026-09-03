@@ -331,10 +331,79 @@ function RepeaterExtras({ def, patch }: { def: FieldDefinition; patch: (p: Parti
   );
 }
 
+// --- code-defined types ---------------------------------------------------------------
+//
+// A type declared with `defineBlockType` / `defineContentType` and reconciled by
+// `cmsBootstrap` is flagged `managed`, and the builder shows it read-only. Both surfaces
+// listed code-defined and editor-authored types identically before, so the obvious thing to
+// do — open one, add a field, hit Save — returned 200 and was reverted at the next cold
+// start, orphaning any content authored against the field (GitHub #48). The server now
+// refuses that write; this is the half that stops an editor walking into it.
+
+/** The marker on a code-defined row in the overview lists. */
+function CodeBadge() {
+  return (
+    <span className="shrink-0 rounded-full border border-border px-2 py-0.5 text-caption text-fg-subtle" title="Defined in code — read-only here">
+      code
+    </span>
+  );
+}
+
+/** Shown ABOVE a read-only builder, in place of the Save button.
+ *
+ * Above, not inside: it used to sit within the disabled `<fieldset>`, and `disabled` takes
+ * the whole subtree out of the tab order — so a screen-reader user tabbed from "← Types"
+ * straight past every control and never reached the one paragraph explaining why the screen
+ * was empty. It is also what the fieldset's `aria-describedby` points at. */
+function ManagedNotice({ id, what, defineFn, slug, owner }: { id: string; what: string; defineFn: string; slug: string; owner?: string | null }) {
+  return (
+    <div id={id} className="mb-4 max-w-[860px] rounded-lg border border-border bg-surface-muted px-3.5 py-3 text-small text-fg-muted">
+      This {what} is <strong className="font-medium text-fg">defined in code</strong> —{" "}
+      <code className="text-fg">{defineFn}("{slug}", …)</code>, applied on every boot by{" "}
+      <code className="text-fg">cmsBootstrap</code>{owner && owner !== "cms" ? <> (owner <code className="text-fg">{owner}</code>)</> : null}.
+      It is read-only here: a change saved from this screen would be reverted at the next deploy or
+      cold start. Edit the declaration and redeploy.
+    </div>
+  );
+}
+
+/** The read-only form wrapper. `disabled` on a fieldset disables every native control inside
+ * it, so the lock is one attribute rather than a prop threaded through the region / field /
+ * default-block editors — none of which would then be able to forget it.
+ *
+ * It needs the styling too. podoba's controls render their disabled look from
+ * `data-[disabled]`, which react-aria sets from its OWN `isDisabled` prop and never from an
+ * ancestor fieldset — so the inert form was pixel-identical to a live one, except for the two
+ * buttons that happen to carry a `:disabled` class and dimmed while their neighbours did not.
+ * An editor clicked into Name, typed, and no characters appeared. The wrapper carries the
+ * visual state for everything inside it. */
+function ReadOnlyFieldset({ locked, describedBy, label, className, children }: {
+  locked: boolean;
+  describedBy?: string;
+  label: string;
+  className: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <fieldset
+      disabled={locked}
+      aria-describedby={locked ? describedBy : undefined}
+      className={`m-0 min-w-0 border-0 p-0 ${className} ${locked ? "select-none opacity-60 [&_*]:cursor-not-allowed" : ""}`}
+    >
+      {/* An unnamed `group` is what a screen reader announces otherwise. */}
+      <legend className="sr-only">{label}</legend>
+      {children}
+    </fieldset>
+  );
+}
+
 // --- the types overview ---------------------------------------------------------------
 
-export function TypesOverview({ api, onOpenBlockType, onOpenContentType, onError }: {
+export function TypesOverview({ api, codeDefinedTypes, onOpenBlockType, onOpenContentType, onError }: {
   api: Api;
+  /** `listCmsCapabilities().codeDefinedTypes` — see `CmsCapabilities`. False against an older
+   * server, where `managedBy` is absent on every row and means nothing. */
+  codeDefinedTypes: boolean;
   onOpenBlockType: (slug: string) => void;
   onOpenContentType: (slug: string) => void;
   onError: (s: string) => void;
@@ -373,6 +442,7 @@ export function TypesOverview({ api, onOpenBlockType, onOpenContentType, onError
           <div className={"flex cursor-pointer items-center gap-3 rounded-[14px] border border-transparent bg-surface-card px-[18px] py-3.5 hover:bg-surface-muted"} key={bt.id} onClick={() => onOpenBlockType(bt.slug)}>
             <span className="w-6 shrink-0 text-center">{bt.icon ?? ""}</span>
             <span className="min-w-0 flex-1 truncate font-medium">{bt.name}</span>
+            {codeDefinedTypes && bt.managedBy ? <CodeBadge /> : null}
             <span className="shrink-0 truncate text-fg-subtle">{bt.slug}</span>
             <span className="shrink-0 text-caption text-fg-subtle">{(bt.fieldsSchema ?? []).length} field(s)</span>
           </div>
@@ -388,6 +458,7 @@ export function TypesOverview({ api, onOpenBlockType, onOpenContentType, onError
         render={(ct) => (
           <div className={"flex cursor-pointer items-center gap-3 rounded-[14px] border border-transparent bg-surface-card px-[18px] py-3.5 hover:bg-surface-muted"} key={ct.id} onClick={() => onOpenContentType(ct.slug)}>
             <span className="min-w-0 flex-1 truncate font-medium">{ct.name}</span>
+            {codeDefinedTypes && ct.managedBy ? <CodeBadge /> : null}
             <span className="shrink-0 truncate text-fg-subtle">{ct.slug}</span>
             <span className="shrink-0 text-caption text-fg-subtle">{(ct.regions ?? []).length} region(s)</span>
           </div>
@@ -424,11 +495,16 @@ function TypeSection<T>({ title, empty, rows, newLabel, onNew, render }: {
 
 // --- block-type editor ----------------------------------------------------------------
 
+/** The `aria-describedby` target linking a locked fieldset to its explanation. */
+const NOTICE_ID = "cms-managed-notice";
+
 /** Empty-string-to-null, for the optional text columns. */
 const orNull = (s: string): string | null => (s.trim() === "" ? null : s.trim());
 
-export function BlockTypeEditor({ api, slug, onSaved, onBack, onError }: {
+export function BlockTypeEditor({ api, codeDefinedTypes, slug, onSaved, onBack, onError }: {
   api: Api;
+  /** See `TypesOverview`. */
+  codeDefinedTypes: boolean;
   /** `"new"` creates; anything else loads that block type by slug. */
   slug: string;
   onSaved: (slug: string) => void;
@@ -438,6 +514,7 @@ export function BlockTypeEditor({ api, slug, onSaved, onBack, onError }: {
   const isNew = slug === "new";
   const [draft, setDraft] = useState<BlockTypeInput>({ name: "", slug: "", fieldsSchema: [] });
   const [id, setId] = useState<string | null>(null);
+  const [owner, setOwner] = useState<string | null>(null);
   const [loading, setLoading] = useState(!isNew);
   const [missing, setMissing] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -462,6 +539,7 @@ export function BlockTypeEditor({ api, slug, onSaved, onBack, onError }: {
         const bt = all.find((b) => b.slug === slug);
         if (!bt) { setMissing(true); return; }
         setId(bt.id);
+        setOwner(bt.managedBy ?? null);
         const loaded: BlockTypeInput = {
           name: bt.name,
           slug: bt.slug,
@@ -473,7 +551,10 @@ export function BlockTypeEditor({ api, slug, onSaved, onBack, onError }: {
         setDraft(loaded);
         setBaseline(JSON.stringify(loaded));
       })
-      .catch((e: Error) => onError(String(e.message ?? e)))
+      // `missing` as well as the error toast: without it the failed load fell through to an
+      // EDITABLE, un-badged, empty form for what may well be a code-defined type — a screen
+      // asserting the opposite of the truth, whose Save then 400s on a null id.
+      .catch((e: Error) => { if (live) setMissing(true); onError(String(e.message ?? e)); })
       .finally(() => { if (live) setLoading(false); });
     return () => { live = false; };
   }, [api, slug, isNew, onError]);
@@ -502,13 +583,18 @@ export function BlockTypeEditor({ api, slug, onSaved, onBack, onError }: {
   if (missing) return <div className={WRAP}><p className="pt-8 text-fg-subtle">Unknown block type: {slug}</p></div>;
   if (loading) return <div className={WRAP}><p className="pt-8 text-fg-subtle">Loading…</p></div>;
 
+  // An owner means nothing on a server that does not declare the capability.
+  const locked = codeDefinedTypes && owner !== null;
+
   return (
     <div className={WRAP}>
       <div className="mb-4 mt-2 flex items-center gap-3">
         <Button variant="ghost" size="sm" onPress={onBack}>← Types</Button>
         <h1 className="text-[22px] font-normal text-fg">{isNew ? "New block type" : draft.name}</h1>
+        {locked ? <CodeBadge /> : null}
       </div>
-      <div className="flex max-w-[860px] flex-col gap-4">
+      {locked ? <ManagedNotice id={NOTICE_ID} what="block type" defineFn="defineBlockType" slug={draft.slug} owner={owner} /> : null}
+      <ReadOnlyFieldset locked={locked} describedBy={NOTICE_ID} label="Block type" className="flex max-w-[860px] flex-col gap-4">
         {ok ? <div className="rounded-lg border border-brand-green bg-brand-green/20 px-3.5 py-2.5 text-small text-fg">saved</div> : null}
         <div className="grid grid-cols-2 gap-3 max-[720px]:grid-cols-1">
           <Input
@@ -552,20 +638,24 @@ export function BlockTypeEditor({ api, slug, onSaved, onBack, onError }: {
           <FieldSchemaEditor schema={draft.fieldsSchema ?? []} onChange={(fieldsSchema) => setDraft((d) => ({ ...d, fieldsSchema }))} />
         </div>
 
-        <div className="mt-2">
-          <Button onPress={save} isDisabled={busy || draft.name.trim() === "" || draft.slug.trim() === ""}>
-            {busy ? "Saving…" : isNew ? "Create" : "Save"}
-          </Button>
-        </div>
-      </div>
+        {locked ? null : (
+          <div className="mt-2">
+            <Button onPress={save} isDisabled={busy || draft.name.trim() === "" || draft.slug.trim() === ""}>
+              {busy ? "Saving…" : isNew ? "Create" : "Save"}
+            </Button>
+          </div>
+        )}
+      </ReadOnlyFieldset>
     </div>
   );
 }
 
 // --- content-type editor --------------------------------------------------------------
 
-export function ContentTypeEditor({ api, slug, onSaved, onBack, onError }: {
+export function ContentTypeEditor({ api, codeDefinedTypes, slug, onSaved, onBack, onError }: {
   api: Api;
+  /** See `TypesOverview`. */
+  codeDefinedTypes: boolean;
   slug: string;
   onSaved: (slug: string) => void;
   onBack: () => void;
@@ -574,6 +664,7 @@ export function ContentTypeEditor({ api, slug, onSaved, onBack, onError }: {
   const isNew = slug === "new";
   const [draft, setDraft] = useState<ContentTypeInput>({ name: "", slug: "", regions: [{ name: "content", label: "Content", allowedTypes: null }], fieldsSchema: [], defaultBlocks: [] });
   const [id, setId] = useState<string | null>(null);
+  const [owner, setOwner] = useState<string | null>(null);
   const [blockTypes, setBlockTypes] = useState<BlockType[]>([]);
   const [loading, setLoading] = useState(!isNew);
   const [missing, setMissing] = useState(false);
@@ -600,6 +691,7 @@ export function ContentTypeEditor({ api, slug, onSaved, onBack, onError }: {
         const ct = all.find((c) => c.slug === slug);
         if (!ct) { setMissing(true); return; }
         setId(ct.id);
+        setOwner(ct.managedBy ?? null);
         const loaded: ContentTypeInput = {
           name: ct.name,
           slug: ct.slug,
@@ -610,7 +702,8 @@ export function ContentTypeEditor({ api, slug, onSaved, onBack, onError }: {
         setDraft(loaded);
         setBaseline(JSON.stringify(loaded));
       })
-      .catch((e: Error) => onError(String(e.message ?? e)))
+      // See the block-type builder: a failed load must not render an editable empty form.
+      .catch((e: Error) => { if (live) setMissing(true); onError(String(e.message ?? e)); })
       .finally(() => { if (live) setLoading(false); });
     return () => { live = false; };
   }, [api, slug, isNew, onError]);
@@ -648,13 +741,16 @@ export function ContentTypeEditor({ api, slug, onSaved, onBack, onError }: {
   if (loading) return <div className={WRAP}><p className="pt-8 text-fg-subtle">Loading…</p></div>;
 
   const regions = draft.regions ?? [];
+  const locked = codeDefinedTypes && owner !== null;
   return (
     <div className={WRAP}>
       <div className="mb-4 mt-2 flex items-center gap-3">
         <Button variant="ghost" size="sm" onPress={onBack}>← Types</Button>
         <h1 className="text-[22px] font-normal text-fg">{isNew ? "New content type" : draft.name}</h1>
+        {locked ? <CodeBadge /> : null}
       </div>
-      <div className="flex max-w-[860px] flex-col gap-5">
+      {locked ? <ManagedNotice id={NOTICE_ID} what="content type" defineFn="defineContentType" slug={draft.slug} owner={owner} /> : null}
+      <ReadOnlyFieldset locked={locked} describedBy={NOTICE_ID} label="Content type" className="flex max-w-[860px] flex-col gap-5">
         {ok ? <div className="rounded-lg border border-brand-green bg-brand-green/20 px-3.5 py-2.5 text-small text-fg">saved</div> : null}
         <div className="grid grid-cols-2 gap-3 max-[720px]:grid-cols-1">
           <Input
@@ -718,13 +814,15 @@ export function ContentTypeEditor({ api, slug, onSaved, onBack, onError }: {
           />
         </div>
 
-        <div>
-          <Button onPress={save} isDisabled={busy || draft.name.trim() === "" || draft.slug.trim() === "" || regions.length === 0}>
-            {busy ? "Saving…" : isNew ? "Create" : "Save"}
-          </Button>
-          {regions.length === 0 ? <p className="mt-2 text-caption text-danger">A content type needs at least one region.</p> : null}
-        </div>
-      </div>
+        {locked ? null : (
+          <div>
+            <Button onPress={save} isDisabled={busy || draft.name.trim() === "" || draft.slug.trim() === "" || regions.length === 0}>
+              {busy ? "Saving…" : isNew ? "Create" : "Save"}
+            </Button>
+            {regions.length === 0 ? <p className="mt-2 text-caption text-danger">A content type needs at least one region.</p> : null}
+          </div>
+        )}
+      </ReadOnlyFieldset>
     </div>
   );
 }

@@ -25,6 +25,7 @@ export default createPage()
     return (
       <TypesOverview
         api={api}
+        codeDefinedTypes={cms.codeDefinedTypes}
         onOpenBlockType={(slug) => navigate("block-type", { params: { slug } })}
         onOpenContentType={(slug) => navigate("content-type", { params: { slug } })}
         onError={setError}
