@@ -52,6 +52,7 @@ import {
 import type { HandlerContext, Policy, FileRef, BootstrapFn, JsonValue, SchemaDef, FieldDef, FieldType } from "@pramen/server";
 import type { EnvBag } from "@pramen/server";
 import { isSafeHref, normalizeHref } from "./href";
+import { NAV_ORDER } from "./nav";
 
 // --- field schema DSL (the block-editor field language) ---------------------
 
@@ -922,6 +923,29 @@ export const cmsSchema = {
     createdAt: defaultTo(t.text(), expr.now()),
   })),
 };
+
+/** Block Kit — custom admin pages, described as JSON and rendered by the editor. See
+ * `./blockkit`. Re-exported so a host imports `adminPage` beside `collection`. */
+export {
+  adminPage,
+  createAdminPageHandlers,
+  normalizeAdminResponse,
+  validateAdminPages,
+  MAX_ADMIN_BLOCK_DEPTH,
+} from "./blockkit";
+export type {
+  AdminBlock,
+  AdminButton,
+  AdminElement,
+  AdminInput,
+  AdminInteractionType,
+  AdminPageDef,
+  AdminPageHandlerOpts,
+  AdminPageInteraction,
+  AdminPageMeta,
+  AdminPageResponse,
+  AdminText,
+} from "./blockkit";
 
 // --- field validation --------------------------------------------------------
 
@@ -4201,36 +4225,11 @@ export function cmsPolicies(opts: CmsPolicyOpts = {}): { public: Policy[]; edito
 // table, and writes are whitelisted to declared fields — the client can't set columns the
 // collection didn't declare (e.g. a `roles` or `passwordHash` column on the entity).
 
-/**
- * Where each built-in section sits in the CMS editor's primary nav.
- *
- * Spaced 100 apart so anything can be placed BETWEEN two built-ins without renumbering
- * them — `navOrder: 150` puts a section after Pages and before collections. The values
- * themselves are ordinals with no other meaning; only their relative order is contract.
- *
- * Declared here (server side) rather than only in the editor because the ordering key
- * travels on `CollectionMeta` and on `AdminPageMeta`: a host choosing a position has to be
- * able to name what it is placing against, and it is writing `app.ts`, not editor code.
- * The editor keeps a mirror of this table — it is a standalone browser app that speaks to
- * the CMS purely over HTTP, so it cannot import from this package.
- */
-export const NAV_ORDER = {
-  pages: 100,
-  collections: 200,
-  media: 300,
-  menus: 400,
-  taxonomies: 500,
-  widgets: 600,
-  redirects: 700,
-  /** Custom admin pages (`adminPage()`), which are project surfaces, not CMS furniture. */
-  adminPages: 800,
-  /** Block/content-type authoring — schema, so it sits with the admin tools, not content. */
-  types: 900,
-  users: 1000,
-  settings: 1100,
-  /** Host-configured `extraNav` links, which are still last by default. */
-  extra: 1200,
-} as const;
+/** Nav positions for the editor's built-in sections — see `./nav`. Re-exported here so a
+ * host writing `app.ts` imports it from the same place as `collection()`. It LIVES in a leaf
+ * module because `blockkit.ts` needs it too and must not depend on this one. */
+export { NAV_ORDER } from "./nav";
+
 
 /** Declares that a pramen entity is editable as a collection in the CMS editor. Both
  * halves live here: the runtime facts (entity, idField, validation via `fields`) and the

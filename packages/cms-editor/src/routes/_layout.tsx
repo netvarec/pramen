@@ -36,7 +36,7 @@ export function segmentAt(pathname: string, prefix: string): string | undefined 
 }
 
 export default function RootLayout() {
-  const { isAdmin, collections, contentTypes, cms, error, reconfigure, confirmNavigation } = useApp();
+  const { isAdmin, collections, adminPages, contentTypes, cms, error, reconfigure, confirmNavigation } = useApp();
   const navigate = useNavigate();
   const { pathname } = useRoute();
 
@@ -61,6 +61,8 @@ export default function RootLayout() {
   const collectionSlug = segmentAt(pathname, "/collections/");
   // …and the active content type, under /types/:slug.
   const typeSlug = segmentAt(pathname, "/types/");
+  // …and the active Block Kit page, under /apps/:slug.
+  const appSlug = segmentAt(pathname, "/apps/");
 
   // "Pages" stays lit while editing a page (/pages/:id) too — but only on a deployment that
   // still HAS a pooled Pages tab. Split by type, the page editor lights nothing: the route
@@ -68,6 +70,7 @@ export default function RootLayout() {
   // without fetching the page the editor is already fetching.
   const active = collectionSlug ? `col:${collectionSlug}`
     : typeSlug ? `type:${typeSlug}`
+    : appSlug ? `app:${appSlug}`
     : pathname.startsWith("/pages") || pathname === "/" ? "pages"
     : pathname.startsWith("/media") ? "media"
     // `/schema` rather than `/types`, because `/types/:slug` is already one content type's
@@ -95,7 +98,7 @@ export default function RootLayout() {
   const hidePages = pagesHidden();
   // Same rule as the landing redirect and the page editor's back target — see `splitsByType`.
   const splitByType = splitsByType(contentTypes, cms, hidePages);
-  const nav = buildNav({ collections, contentTypes, cms, hidePages, splitByType, isAdmin, extraNav });
+  const nav = buildNav({ collections, adminPages, contentTypes, cms, hidePages, splitByType, isAdmin, extraNav });
 
   // See the extraNav comment below. The rules live in `mount.ts` beside the containment they
   // depend on; what this supplies is the URL the BROWSER will resolve a relative href

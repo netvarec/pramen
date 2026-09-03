@@ -1,7 +1,7 @@
 // HTTP client for the CMS handlers. Bearer token + the pramen `{ ok, result }` envelope,
 // same transport shape as @pramen/admin's api.ts. Config is persisted in localStorage.
 
-import type { AssembledPage, AuditEntry, BlockType, ContentType, Media, Menu, MenuItem, Page, Redirect, Taxonomy, Term, Widget, WidgetArea } from "./types";
+import type { AdminPageMeta, AdminPageResponse, AssembledPage, AuditEntry, BlockType, ContentType, Media, Menu, MenuItem, Page, Redirect, Taxonomy, Term, Widget, WidgetArea } from "./types";
 import type { DefaultBlockDefinition, FieldDefinition, RegionDefinition, RpcInput } from "./types";
 
 /** The payload `createBlockType` / `updateBlockType` take. `fieldsSchema` is the whole
@@ -226,6 +226,15 @@ export class Api {
 
   listPageTerms = (pageId: string) => this.call<Term[]>("listPageTerms", { pageId });
   setPageTerms = (pageId: string, termIds: string[]) => this.call<{ ok: true }>("setPageTerms", { pageId, termIds });
+
+  // --- Block Kit: custom admin pages ---
+  /** The pages THIS caller may open. Filtered server-side, so a nav entry that 403s when
+   * clicked cannot happen. An older server has no such handler; the caller treats a failure
+   * as "no custom pages". */
+  listAdminPages = () => this.call<AdminPageMeta[]>("listAdminPages");
+  /** Render a page, or act on it and render the result. One round trip per interaction. */
+  adminPageInteract = (input: { page: string; type: "page_load" | "block_action" | "form_submit"; action_id?: string; block_id?: string; value?: unknown; values?: Record<string, unknown> }) =>
+    this.call<AdminPageResponse>("adminPageInteract", input as unknown as RpcInput);
 
   listWidgetAreas = () => this.call<WidgetArea[]>("listWidgetAreas");
   createWidgetArea = (name: string, label: string, description?: string) => this.call<WidgetArea>("createWidgetArea", { name, label, description, widgets: [] });

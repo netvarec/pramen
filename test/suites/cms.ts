@@ -937,4 +937,97 @@ export async function runCms(base: string): Promise<void> {
   const delLecture = await call("collectionDelete", { collection: "lectures", id: lecRowId }, admin);
   assert(delLecture.body.ok, "cms: collectionDelete removes the row");
   assert((await call("collectionGet", { collection: "lectures", id: lecRowId }, admin)).body.result === null, "cms: the deleted row is gone");
+
+  // --- site furniture: menus, redirects, taxonomies, widget areas (GitHub #32) ---
+  //
+  // End to end rather than in the unit tests, because the interesting half is the ACL: the
+  // reads a site renders are ANONYMOUS, and what limits them is the public policy set, not
+  // the handler.
+
+  // A page of its own for the furniture assertions below: the earlier ones trash, unpublish
+  // and archive pages as they go, so reusing one would make these depend on the order the
+  // assertions above happen to run in.
+  const navPage = await call("createPage", { typeId: ct.body.result.id, title: "Nav target", slug: "nav-target" }, admin);
+  const menuPageId = navPage.body.result.id as string;
+  await call("publishPage", { pageId: menuPageId }, admin);
+
+  const menu = await call("createMenu", { name: "primary", label: "Primary" }, admin);
+  assert(menu.body.ok, "cms: createMenu ok");
+  assert((await call("createMenu", { name: "primary", label: "Dup" }, admin)).status !== 200, "cms: a duplicate menu name is refused");
+  assert((await call("createMenu", { name: "other", label: "Other" })).status === 403, "cms: creating a menu needs an editor role (403)");
+
+  // A page ITEM, so the resolution path is exercised: the stored ref is a page id, and the
+  // url is worked out at read time from that page's slug.
+  const menuItems = [
+    { id: "home", label: "Home", kind: "custom", url: "/" },
+    { id: "art", label: "Article", kind: "page", ref: menuPageId, children: [{ id: "sub", label: "Docs", kind: "custom", url: "/docs" }] },
+  ];
+  assert((await call("updateMenu", { name: "primary", items: menuItems }, admin)).body.ok, "cms: updateMenu stores a tree");
+  const badMenu = await call("updateMenu", { name: "primary", items: [{ label: "x", url: "javascript:alert(1)" }] }, admin);
+  assert(badMenu.status === 400, "cms: a javascript: menu href is refused (400)");
+
+  const anonMenu = await call("getMenu", { name: "primary" });
+  assert(anonMenu.body.ok, "cms: getMenu is public — a menu is site chrome");
+  const anonMenuItems = anonMenu.body.result.items as Array<{ id: string; url: string; children?: unknown[] }>;
+  assert(anonMenuItems.length === 2, "cms: both items resolve while the page is published");
+  assert(anonMenuItems[1].url.endsWith("/nav-target"), "cms: a page item follows its page's slug rather than a frozen href");
+  assert((anonMenuItems[1].children ?? []).length === 1, "cms: children come through resolved");
+
+  // Unpublish the page it points at: the item is DROPPED, because the resolution read goes
+  // through ctx.db and the anonymous scope is "published, not trashed".
+  assert((await call("unpublishPage", { pageId: menuPageId }, admin)).body.ok, "cms: unpublishPage ok");
+  const afterUnpub = await call("getMenu", { name: "primary" });
+  assert((afterUnpub.body.result.items as unknown[]).length === 1, "cms: a menu item pointing at an unpublished page is left out, not rendered dead");
+  assert((await call("publishPage", { pageId: menuPageId }, admin)).body.ok, "cms: republished for the assertions that follow");
+
+  const redirect = await call("createRedirect", { fromPath: "/old-url/", toPath: "/new-url" }, admin);
+  assert(redirect.body.ok && redirect.body.result.fromPath === "/old-url", "cms: a redirect path is canonicalized on the way in");
+  const resolved = await call("resolveRedirect", { path: "/old-url" });
+  assert(resolved.body.ok && resolved.body.result.to === "/new-url" && resolved.body.result.status === 301, "cms: resolveRedirect is public and answers with the destination");
+  assert((await call("updateRedirect", { id: redirect.body.result.id, enabled: false }, admin)).body.ok, "cms: a redirect can be disabled");
+  assert((await call("resolveRedirect", { path: "/old-url" })).body.result === null, "cms: a disabled redirect is invisible to an anonymous read");
+
+  const tax = await call("createTaxonomy", { slug: "category", label: "Category", hierarchical: true }, admin);
+  assert(tax.body.ok, "cms: createTaxonomy ok");
+  const termNews = await call("createTerm", { taxonomy: "category", slug: "news", label: "News" }, admin);
+  const termLocal = await call("createTerm", { taxonomy: "category", slug: "local", label: "Local", parentId: termNews.body.result.id }, admin);
+  assert(termNews.body.ok && termLocal.body.ok, "cms: terms are created, nested included");
+  const tree = await call("getTermTree", { taxonomy: "category" });
+  assert(tree.body.ok && (tree.body.result as Array<{ children: unknown[] }>)[0].children.length === 1, "cms: getTermTree is public and folds the hierarchy");
+
+  assert((await call("setPageTerms", { pageId: menuPageId, termIds: [termNews.body.result.id] }, admin)).body.ok, "cms: setPageTerms assigns");
+  const pageTerms = await call("listPageTerms", { pageId: menuPageId });
+  assert((pageTerms.body.result as Array<{ slug: string }>).map((t) => t.slug).join() === "news", "cms: a published page's terms are public");
+  const byTerm = await call("listPagesByTerm", { taxonomy: "category", term: "news" });
+  assert((byTerm.body.result as Array<{ id: string }>).some((p) => p.id === menuPageId), "cms: listPagesByTerm traverses the junction under the public page scope");
+
+  // Deleting a term takes its assignments with it — a real ON DELETE CASCADE, so the
+  // cleanup cannot be half-done by a handler that threw between two writes.
+  assert((await call("deleteTerm", { id: termNews.body.result.id }, admin)).body.ok, "cms: deleteTerm ok");
+  assert(((await call("listPageTerms", { pageId: menuPageId })).body.result as unknown[]).length === 0, "cms: the term's page assignments went with it");
+
+  const area = await call("createWidgetArea", { name: "sidebar", label: "Sidebar" }, admin);
+  assert(area.body.ok, "cms: createWidgetArea ok");
+  assert((await call("updateWidgetArea", {
+    name: "sidebar",
+    widgets: [{ id: "w1", type: "menu", menuName: "primary" }, { id: "w2", type: "content", title: "Hello", content: rt("Side note") }],
+  }, admin)).body.ok, "cms: updateWidgetArea stores widgets");
+  const anonArea = await call("getWidgetArea", { name: "sidebar" });
+  const anonWidgets = anonArea.body.result.widgets as Array<{ type: string; menu?: { name: string } | null }>;
+  assert(anonArea.body.ok && anonWidgets[0].menu?.name === "primary", "cms: getWidgetArea is public and resolves a menu widget inline");
+  assert((await call("getWidgetArea", { name: "nope" })).body.result === null, "cms: an unknown widget area is null, not a 404");
+
+  // --- Block Kit: a custom admin page (GitHub #33 / #44 tier 3) ---
+  const anonPages = await call("listAdminPages", {});
+  assert(anonPages.body.ok && (anonPages.body.result as unknown[]).length === 0, "cms: listAdminPages is FILTERED — anonymous sees no page it cannot open");
+  const adminPages = await call("listAdminPages", {}, admin);
+  assert((adminPages.body.result as Array<{ slug: string }>).some((p) => p.slug === "lecture-desk"), "cms: an editor sees the registered admin page");
+  assert(!Object.keys((adminPages.body.result as Array<Record<string, unknown>>)[0]).includes("roles"), "cms: the listing never carries the role list");
+
+  const load = await call("adminPageInteract", { page: "lecture-desk", type: "page_load" }, admin);
+  assert(load.body.ok && Array.isArray(load.body.result.blocks), "cms: a page_load answers with blocks");
+  assert((load.body.result.blocks as Array<{ type: string }>)[0].type === "header", "cms: the blocks are the page's own description of itself");
+  assert((await call("adminPageInteract", { page: "lecture-desk", type: "page_load" })).status === 400, "cms: an unopenable page is indistinguishable from an unknown one");
+  assert((await call("adminPageInteract", { page: "nope", type: "page_load" }, admin)).status === 400, "cms: an unknown slug is a 400, never a raw dispatch");
+  assert((await call("adminPageInteract", { page: "lecture-desk", type: "eval" }, admin)).status === 400, "cms: an unknown interaction type is refused");
 }

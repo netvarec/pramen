@@ -8,7 +8,7 @@ import { createContext, use, useCallback, useEffect, useMemo, useRef, useState }
 import { Api, clearConfig, isTokenExpired, loadConfig, saveConfig, type Config } from "./api";
 import { BRAND, SETUP_TITLE, type BrandConfig } from "./brand";
 import { readBackend, type BackendHost } from "./mount";
-import { DEFAULT_CAPABILITIES, type CmsCapabilities, type CollectionMeta, type ContentType, type JsonValue } from "./types";
+import { DEFAULT_CAPABILITIES, type AdminPageMeta, type CmsCapabilities, type CollectionMeta, type ContentType, type JsonValue } from "./types";
 
 declare global {
   interface Window {
@@ -93,6 +93,14 @@ interface AppContextValue {
   /** Collections registered on the server (from `listCollections`) — drives the nav + the
    * generic list/edit routes. Empty when the server registers none. */
   collections: CollectionMeta[];
+  /** Custom admin pages the CALLER may open (from `listAdminPages`) — Block Kit screens a
+   * project registered with `adminPage()`. They render inside the editor's own chrome, at a
+   * nav position they choose, which is the difference from an `extraNav` link.
+   *
+   * Filtered server-side by role, so there is no entry here the caller cannot open. An app
+   * that registers none (or a server without the handler) leaves this empty; a failure is
+   * non-fatal, exactly as with collections. */
+  adminPages: AdminPageMeta[];
   /** Content types registered on the server (from `listContentTypes`). More than one ⇒ each
    * gets its own nav tab and its own list route, instead of one pooled "Pages" list where a
    * page and an article sit in the same column with nothing to tell them apart.
@@ -140,6 +148,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [cfg, setCfg] = useState<Config>(() => loadConfig(BACKEND));
   const [me, setMe] = useState<Me | null>(null);
   const [collections, setCollections] = useState<CollectionMeta[]>([]);
+  const [adminPages, setAdminPages] = useState<AdminPageMeta[]>([]);
   const [contentTypes, setContentTypes] = useState<ContentType[] | null>(null);
   const [contentTypesFailed, setContentTypesFailed] = useState(false);
   const [contentTypesNonce, setContentTypesNonce] = useState(0);
@@ -201,6 +210,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // Collections drive the nav + list/edit routes. An app that registers none (or an older
     // server without the handler) just leaves the nav as-is — a failure is non-fatal.
     api.call<CollectionMeta[]>("listCollections").then(setCollections).catch(() => setCollections([]));
+    // Same shape, same tolerance: an app that registers no Block Kit pages, or a server
+    // without the handler, just leaves the nav as it was.
+    api.listAdminPages().then(setAdminPages).catch(() => setAdminPages([]));
     // A server older than this handler leaves the monolingual default, which is the safe
     // way round: the i18n surface stays hidden rather than half-rendered. Merged OVER the
     // defaults, not substituted for them, so a capability the server does not know about
@@ -238,6 +250,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     me,
     isAdmin: (me?.roles ?? []).includes("admin"),
     collections,
+    adminPages,
     contentTypes,
     contentTypesFailed,
     refreshContentTypes,

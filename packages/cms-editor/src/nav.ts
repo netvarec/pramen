@@ -15,7 +15,7 @@
 // turns entries into buttons, this decides what they are and what order they come in.
 
 import type { BuzolaPageMap } from "@buzola/router";
-import { NAV_ORDER, type CmsCapabilities, type CollectionMeta, type ContentType } from "./types";
+import { NAV_ORDER, type AdminPageMeta, type CmsCapabilities, type CollectionMeta, type ContentType } from "./types";
 
 /** A buzola page id. Typed off the generated page map, so a nav entry naming a route that
  * does not exist is a compile error rather than a tab that navigates nowhere. */
@@ -45,6 +45,8 @@ export type NavEntry =
  * this a pure function of the session's facts. */
 export interface NavInput {
   collections: CollectionMeta[];
+  /** Block Kit pages this caller may open — already role-filtered by the server. */
+  adminPages: AdminPageMeta[];
   contentTypes: ContentType[] | null;
   cms: CmsCapabilities;
   /** Deployment hides the block/page builder entirely (`hidePages`). */
@@ -64,7 +66,7 @@ export interface NavInput {
  * therefore declaration order, which is the only answer a host can predict.
  */
 export function buildNav(input: NavInput): NavEntry[] {
-  const { collections, contentTypes, cms, hidePages, splitByType, isAdmin, extraNav } = input;
+  const { collections, adminPages, contentTypes, cms, hidePages, splitByType, isAdmin, extraNav } = input;
   const entries: NavEntry[] = [];
 
   if (!hidePages) {
@@ -102,6 +104,14 @@ export function buildNav(input: NavInput): NavEntry[] {
     if (!hidePages) entries.push({ kind: "route", key: "taxonomies", order: NAV_ORDER.taxonomies, label: "Taxonomies", page: "taxonomies" });
     entries.push({ kind: "route", key: "widgets", order: NAV_ORDER.widgets, label: "Widgets", page: "widgets" });
     entries.push({ kind: "route", key: "redirects", order: NAV_ORDER.redirects, label: "Redirects", page: "redirects" });
+  }
+
+  // A project's own screens, INSIDE the chrome and at a position they choose. This is the
+  // whole difference from `extraNav`, which renders after Settings and opens a new tab — so
+  // the odd 10% of a client site was a separate deployment that looked nothing like the
+  // admin it hung off.
+  for (const p of adminPages) {
+    entries.push({ kind: "route", key: `app:${p.slug}`, order: p.navOrder ?? NAV_ORDER.adminPages, label: `${p.icon ? `${p.icon} ` : ""}${p.label}`, page: "admin-page", params: { slug: p.slug } });
   }
 
   // Authoring the SCHEMA, not content — so it is gated on `canEdit` (every handler behind

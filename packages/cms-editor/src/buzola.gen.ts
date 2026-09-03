@@ -6,29 +6,31 @@ import { buildRouteTree } from '@buzola/router';
 import type { RouteConfig } from '@buzola/router';
 
 import Route0 from './routes/_layout';
-const Route1 = () => import('./routes/block-type').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
-const Route2 = () => import('./routes/collection-item').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
-const Route3 = () => import('./routes/collection').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
-const Route4 = () => import('./routes/content-type').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
-const Route5 = () => import('./routes/home').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
-const Route6 = () => import('./routes/media').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
-const Route7 = () => import('./routes/menu').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
-const Route8 = () => import('./routes/menus').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
-const Route9 = () => import('./routes/page').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
-const Route10 = () => import('./routes/redirects').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
-const Route11 = () => import('./routes/schema').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
-const Route12 = () => import('./routes/settings').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
-const Route13 = () => import('./routes/taxonomies').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
-const Route14 = () => import('./routes/taxonomy').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
-const Route15 = () => import('./routes/type').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
-const Route16 = () => import('./routes/users').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
-const Route17 = () => import('./routes/widget-area').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
-const Route18 = () => import('./routes/widgets').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
-const Route19 = () => import('./routes/_404').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
+const Route1 = () => import('./routes/admin-page').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
+const Route2 = () => import('./routes/block-type').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
+const Route3 = () => import('./routes/collection-item').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
+const Route4 = () => import('./routes/collection').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
+const Route5 = () => import('./routes/content-type').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
+const Route6 = () => import('./routes/home').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
+const Route7 = () => import('./routes/media').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
+const Route8 = () => import('./routes/menu').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
+const Route9 = () => import('./routes/menus').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
+const Route10 = () => import('./routes/page').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
+const Route11 = () => import('./routes/redirects').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
+const Route12 = () => import('./routes/schema').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
+const Route13 = () => import('./routes/settings').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
+const Route14 = () => import('./routes/taxonomies').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
+const Route15 = () => import('./routes/taxonomy').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
+const Route16 = () => import('./routes/type').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
+const Route17 = () => import('./routes/users').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
+const Route18 = () => import('./routes/widget-area').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
+const Route19 = () => import('./routes/widgets').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
+const Route20 = () => import('./routes/_404').then(m => ({ default: m.default.component })) as Promise<{ default: ComponentType }>;
 
 // Module augmentation for type-safe page-centric routing
 declare module '@buzola/router' {
   interface BuzolaPageMap {
+    'admin-page': { slug: string };
     'block-type': { slug: string };
     'collection-item': { slug: string; id: string };
     'collection': { slug: string };
@@ -52,6 +54,7 @@ declare module '@buzola/router' {
 
 // Page registry — page ID → route pattern
 export const pageRegistry: Record<string, string> = {
+  'admin-page': '/apps/:slug',
   'block-type': '/schema/blocks/:slug',
   'collection-item': '/collections/:slug/:id',
   'collection': '/collections/:slug',
@@ -79,109 +82,115 @@ const routeConfigs: RouteConfig[] = [
     isLayout: true,
     children: [
       {
-        path: '/block-type',
-        matchPath: '/schema/blocks/:slug',
+        path: '/admin-page',
+        matchPath: '/apps/:slug',
         component: lazy(Route1),
         preload: Route1,
       },
       {
-        path: '/collection-item',
-        matchPath: '/collections/:slug/:id',
+        path: '/block-type',
+        matchPath: '/schema/blocks/:slug',
         component: lazy(Route2),
         preload: Route2,
       },
       {
-        path: '/collection',
-        matchPath: '/collections/:slug',
+        path: '/collection-item',
+        matchPath: '/collections/:slug/:id',
         component: lazy(Route3),
         preload: Route3,
       },
       {
-        path: '/content-type',
-        matchPath: '/schema/content/:slug',
+        path: '/collection',
+        matchPath: '/collections/:slug',
         component: lazy(Route4),
         preload: Route4,
       },
       {
-        path: '/home',
-        matchPath: '/',
+        path: '/content-type',
+        matchPath: '/schema/content/:slug',
         component: lazy(Route5),
         preload: Route5,
       },
       {
-        path: '/media',
+        path: '/home',
+        matchPath: '/',
         component: lazy(Route6),
         preload: Route6,
       },
       {
-        path: '/menu',
-        matchPath: '/menus/:name',
+        path: '/media',
         component: lazy(Route7),
         preload: Route7,
       },
       {
-        path: '/menus',
+        path: '/menu',
+        matchPath: '/menus/:name',
         component: lazy(Route8),
         preload: Route8,
       },
       {
-        path: '/page',
-        matchPath: '/pages/:pageId',
+        path: '/menus',
         component: lazy(Route9),
         preload: Route9,
       },
       {
-        path: '/redirects',
+        path: '/page',
+        matchPath: '/pages/:pageId',
         component: lazy(Route10),
         preload: Route10,
       },
       {
-        path: '/schema',
+        path: '/redirects',
         component: lazy(Route11),
         preload: Route11,
       },
       {
-        path: '/settings',
+        path: '/schema',
         component: lazy(Route12),
         preload: Route12,
       },
       {
-        path: '/taxonomies',
+        path: '/settings',
         component: lazy(Route13),
         preload: Route13,
       },
       {
-        path: '/taxonomy',
-        matchPath: '/taxonomies/:slug',
+        path: '/taxonomies',
         component: lazy(Route14),
         preload: Route14,
       },
       {
-        path: '/type',
-        matchPath: '/types/:slug',
+        path: '/taxonomy',
+        matchPath: '/taxonomies/:slug',
         component: lazy(Route15),
         preload: Route15,
       },
       {
-        path: '/users',
+        path: '/type',
+        matchPath: '/types/:slug',
         component: lazy(Route16),
         preload: Route16,
       },
       {
-        path: '/widget-area',
-        matchPath: '/widgets/:name',
+        path: '/users',
         component: lazy(Route17),
         preload: Route17,
       },
       {
-        path: '/widgets',
+        path: '/widget-area',
+        matchPath: '/widgets/:name',
         component: lazy(Route18),
         preload: Route18,
       },
       {
-        path: '/:__notFound+',
+        path: '/widgets',
         component: lazy(Route19),
         preload: Route19,
+      },
+      {
+        path: '/:__notFound+',
+        component: lazy(Route20),
+        preload: Route20,
       },
     ],
   },

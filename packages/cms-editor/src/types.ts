@@ -383,3 +383,57 @@ export interface WidgetArea {
   description?: string | null;
   widgets?: Widget[] | null;
 }
+
+// --- Block Kit: custom admin pages (mirrors @pramen/cms `./blockkit`) ----------------
+
+/** An input a Block Kit form or actions row can carry. */
+export type AdminInput =
+  | { type: "text_input"; action_id: string; label?: string; placeholder?: string; initial_value?: string; multiline?: boolean; required?: boolean }
+  | { type: "number_input"; action_id: string; label?: string; placeholder?: string; initial_value?: number; min?: number; max?: number; required?: boolean }
+  | { type: "select"; action_id: string; label?: string; options: { value: string; label: string }[]; initial_value?: string; required?: boolean }
+  | { type: "toggle"; action_id: string; label?: string; initial_value?: boolean }
+  /** Write-only: deliberately has NO `initial_value`, so a stored secret is never echoed
+   * back into the admin's DOM. */
+  | { type: "secret_input"; action_id: string; label?: string; placeholder?: string; required?: boolean };
+
+export interface AdminButton {
+  type: "button";
+  action_id: string;
+  label: string;
+  style?: "primary" | "secondary" | "danger";
+  value?: string;
+  /** Ask before firing. A page has no code in the browser, so it cannot put up its own. */
+  confirm?: string;
+}
+
+export type AdminElement = AdminButton | AdminInput;
+
+export type AdminBlock =
+  | { type: "header"; text: string; level?: 1 | 2 | 3 }
+  | { type: "section"; text: string }
+  | { type: "divider" }
+  | { type: "context"; text: string }
+  | { type: "fields"; fields: { label: string; value: string }[] }
+  | { type: "table"; columns: { key: string; label: string }[]; rows: Record<string, string | number | boolean | null>[]; empty?: string }
+  | { type: "stats"; stats: { label: string; value: string; hint?: string }[] }
+  | { type: "actions"; block_id?: string; elements: AdminElement[] }
+  | { type: "form"; block_id: string; fields: AdminInput[]; submit: { label: string; action_id: string } }
+  | { type: "image"; url: string; alt?: string; caption?: string }
+  | { type: "columns"; columns: AdminBlock[][] }
+  | { type: "empty"; text: string; hint?: string }
+  | { type: "accordion"; title: string; blocks: AdminBlock[]; open?: boolean };
+
+/** What a Block Kit page answers with. The WHOLE page comes back on every interaction. */
+export interface AdminPageResponse {
+  blocks: AdminBlock[];
+  toast?: { text: string; tone?: "info" | "success" | "error" };
+}
+
+/** A custom admin page, as the editor sees it (from `listAdminPages`) — never the render
+ * function, and never the role list. A page the caller may not open is simply absent. */
+export interface AdminPageMeta {
+  slug: string;
+  label: string;
+  icon?: string;
+  navOrder?: number;
+}

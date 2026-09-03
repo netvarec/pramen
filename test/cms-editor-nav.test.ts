@@ -36,6 +36,7 @@ const col = (slug: string, navOrder?: number): CollectionMeta => ({
 const nav = (over: Partial<NavInput> = {}) =>
   buildNav({
     collections: [],
+    adminPages: [],
     contentTypes: TYPES,
     cms: { ...DEFAULT_CAPABILITIES, canEdit: false },
     hidePages: false,
@@ -109,6 +110,13 @@ describe("what the nav shows at all", () => {
     // save 403s.
     expect(nav({ cms: { ...DEFAULT_CAPABILITIES, canEdit: false } })).not.toContain("types");
     expect(nav({ cms: { ...DEFAULT_CAPABILITIES, canEdit: true } })).toContain("types");
+  });
+
+  test("a Block Kit page sits INSIDE the chrome, at a position it chooses", () => {
+    // The point of #33/#44 tier 3: before this, a project screen could only be an
+    // `extraNav` link — last in the nav, and opening a new tab.
+    expect(nav({ adminPages: [{ slug: "dispatch", label: "Dispatch" }] })).toEqual(["pages", "media", "app:dispatch", "settings"]);
+    expect(nav({ adminPages: [{ slug: "dispatch", label: "Dispatch", navOrder: NAV_ORDER.pages + 10 }] })).toEqual(["pages", "app:dispatch", "media", "settings"]);
   });
 
   test("hiding the page builder hides Pages and Types with it", () => {
