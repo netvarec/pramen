@@ -52,11 +52,9 @@ there are no backward-compatibility guarantees yet.
 
 - **Mailgun as a `ctx.mail` transport (`@pramen/server`).** Cloudflare Email Sending
   needs no API key, but it can only send FROM a domain that is a zone in the same
-  account, and some accounts refuse any recipient that is not a verified destination in
-  Email Routing — workable for a handful of operators, hopeless the moment the
-  recipients are real users. `MAILGUN_API_KEY` + `MAILGUN_DOMAIN` + `MAIL_FROM` now
-  selects Mailgun instead, with `MAILGUN_API_BASE` for the EU region (the two regions
-  are separate deployments and a key from one 401s against the other).
+  account. `MAILGUN_API_KEY` + `MAILGUN_DOMAIN` + `MAIL_FROM` now selects Mailgun
+  instead, with `MAILGUN_API_BASE` for the EU region (the two regions are separate
+  deployments and a key from one 401s against the other).
 
   It slots into the existing adapter seam, so no handler changes. Mailgun outranks the
   `EMAIL` binding when both are present: the binding tends to exist because the
