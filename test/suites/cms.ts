@@ -669,19 +669,45 @@ export async function runCms(base: string): Promise<void> {
   const afterRm = await call("getPage", { slug, preview: true }, admin);
   assert((afterRm.body.result.regions.content as unknown[]).length === contentPlacements.length - 1, "cms: the removed placement is gone from the page");
 
-  // --- createPage skips (not scaffolds) a default block that violates a REGION allow-list
-  // (missing required fields are OK on a draft; an unknown type / disallowed region is not) ---
+  // --- a default block that can never be scaffolded is refused AT DECLARATION ---
+  // The editor authors content types now (GitHub #9), so a `defaultBlocks` entry naming a
+  // region the type does not declare, or a block type that region does not allow, is a
+  // mistake the person making it can still see. Silently skipping it at createPage time
+  // instead left a scaffold that simply never appeared, with nothing anywhere saying why.
+  const badRegion = await call("createContentType", {
+    name: "Bad region",
+    slug: "bad-region",
+    regions: [{ name: "hero", allowedTypes: ["hero"] }],
+    defaultBlocks: [{ region: "nowhere", blockTypeSlug: "hero" }],
+  }, admin);
+  assert(badRegion.status === 400 && badRegion.body.ok === false, "cms: a defaultBlock into an undeclared region is refused (400)");
+
+  const badAllowed = await call("createContentType", {
+    name: "Bad allowed",
+    slug: "bad-allowed",
+    regions: [{ name: "hero", allowedTypes: ["hero"] }],
+    defaultBlocks: [{ region: "hero", blockTypeSlug: "rich_text", fields: { body: rt("x") } }],
+  }, admin);
+  assert(badAllowed.status === 400 && badAllowed.body.ok === false, "cms: a defaultBlock the region does not allow is refused (400)");
+
+  // --- …and createPage STILL skips one that became invalid later ---
+  // Declaration-time validation cannot cover this: the region's allow-list is narrowed by a
+  // later `updateContentType` that patches `regions` alone, leaving a stored default block
+  // that was legal when it was written. `createPage` must skip it rather than 500, so the
+  // runtime guard stays whether or not the declaration was checked.
   const showcaseCt = await call("createContentType", {
     name: "Showcase",
     slug: "showcase",
-    regions: [{ name: "hero", allowedTypes: ["hero"] }],
-    // rich_text isn't allowed in the hero region → must be skipped, not scaffolded.
+    regions: [{ name: "hero", allowedTypes: ["hero", "rich_text"] }],
     defaultBlocks: [{ region: "hero", blockTypeSlug: "rich_text", fields: { body: rt("x") } }],
   }, admin);
+  assert(showcaseCt.body.ok, "cms: a legal defaultBlock is accepted");
+  const narrowed = await call("updateContentType", { slug: "showcase", regions: [{ name: "hero", allowedTypes: ["hero"] }] }, admin);
+  assert(narrowed.body.ok, "cms: narrowing a region's allow-list does not require rewriting defaultBlocks");
   const showcasePage = await call("createPage", { typeId: showcaseCt.body.result.id, title: "Showcase", slug: "showcase-1" }, admin);
-  assert(showcasePage.body.ok, "cms: createPage succeeds despite an invalid default block");
+  assert(showcasePage.body.ok, "cms: createPage succeeds despite a default block that is now invalid");
   const showcasePreview = await call("getPage", { slug: "showcase-1", preview: true }, admin);
-  assert(((showcasePreview.body.result.regions.hero as unknown[] | undefined) ?? []).length === 0, "cms: a disallowed default block is skipped, not scaffolded");
+  assert(((showcasePreview.body.result.regions.hero as unknown[] | undefined) ?? []).length === 0, "cms: a now-disallowed default block is skipped, not scaffolded");
 
   // --- scheduling: input validation ---
   const badOrder = await call("schedulePage", { pageId, publishAt: Date.now() + 1000, unpublishAt: Date.now() + 500 }, admin);

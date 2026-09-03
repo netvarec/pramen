@@ -1,8 +1,28 @@
 // HTTP client for the CMS handlers. Bearer token + the pramen `{ ok, result }` envelope,
 // same transport shape as @pramen/admin's api.ts. Config is persisted in localStorage.
 
-import type { AssembledPage, AuditEntry, BlockType, ContentType, Media, Page } from "./types";
-import type { RpcInput } from "./types";
+import type { AssembledPage, AuditEntry, BlockType, ContentType, Media, Menu, MenuItem, Page, Redirect, Taxonomy, Term, Widget, WidgetArea } from "./types";
+import type { DefaultBlockDefinition, FieldDefinition, RegionDefinition, RpcInput } from "./types";
+
+/** The payload `createBlockType` / `updateBlockType` take. `fieldsSchema` is the whole
+ * point: a block type IS its field schema. */
+export interface BlockTypeInput {
+  name: string;
+  slug: string;
+  description?: string | null;
+  icon?: string | null;
+  category?: string | null;
+  fieldsSchema?: FieldDefinition[];
+}
+
+/** The payload `createContentType` / `updateContentType` take. */
+export interface ContentTypeInput {
+  name: string;
+  slug: string;
+  regions?: RegionDefinition[];
+  fieldsSchema?: FieldDefinition[];
+  defaultBlocks?: DefaultBlockDefinition[];
+}
 
 export interface Config {
   baseUrl: string;
@@ -163,6 +183,55 @@ export class Api {
   listTrash = (limit = 50) => this.call<{ pages: Page[]; media: Media[] }>("listTrash", { limit });
   restoreMedia = (id: string) => this.call<{ ok: true }>("restoreMedia", { id });
   purgeMedia = (id: string) => this.call<{ ok: true }>("purgeMedia", { id });
+
+  // --- block types & content types (the schema behind pages) ---
+  //
+  // Read wrappers existed from the start; the WRITE half did not, which is why a fresh CMS
+  // could not be bootstrapped from the editor at all — `createBlockType` / `createContentType`
+  // had to be curled before the editor was usable (GitHub #9). The handlers were already
+  // there and already editor-gated; only these and the screens over them were missing.
+  createBlockType = (input: BlockTypeInput) => this.call<BlockType>("createBlockType", input as unknown as RpcInput);
+  /** Patch a block type. `slug` is the stable key and is NOT mutable server-side. */
+  updateBlockType = (id: string, input: Partial<BlockTypeInput>) => this.call<BlockType>("updateBlockType", { id, ...input } as unknown as RpcInput);
+  createContentType = (input: ContentTypeInput) => this.call<ContentType>("createContentType", input as unknown as RpcInput);
+  updateContentType = (id: string, input: Partial<ContentTypeInput>) => this.call<ContentType>("updateContentType", { id, ...input } as unknown as RpcInput);
+
+  // --- site furniture ---
+  listMenus = () => this.call<Menu[]>("listMenus");
+  createMenu = (name: string, label: string) => this.call<Menu>("createMenu", { name, label, items: [] });
+  updateMenu = (id: string, patch: { label?: string; items?: MenuItem[] }) => this.call<Menu>("updateMenu", { id, ...patch } as unknown as RpcInput);
+  deleteMenu = (id: string) => this.call<{ ok: true }>("deleteMenu", { id });
+
+  listRedirects = (limit = 200, offset = 0) => this.call<Redirect[]>("listRedirects", { limit, offset });
+  createRedirect = (input: { fromPath: string; toPath: string; status?: number; enabled?: boolean; note?: string }) =>
+    this.call<Redirect>("createRedirect", input);
+  updateRedirect = (id: string, patch: { fromPath?: string; toPath?: string; status?: number; enabled?: boolean; note?: string | null }) =>
+    this.call<Redirect>("updateRedirect", { id, ...patch } as unknown as RpcInput);
+  deleteRedirect = (id: string) => this.call<{ ok: true }>("deleteRedirect", { id });
+
+  listTaxonomies = () => this.call<Taxonomy[]>("listTaxonomies");
+  createTaxonomy = (input: { slug: string; label: string; pluralLabel?: string; description?: string; hierarchical?: boolean }) =>
+    this.call<Taxonomy>("createTaxonomy", input);
+  updateTaxonomy = (id: string, patch: { label?: string; pluralLabel?: string | null; description?: string | null; hierarchical?: boolean }) =>
+    this.call<Taxonomy>("updateTaxonomy", { id, ...patch } as unknown as RpcInput);
+  deleteTaxonomy = (id: string) => this.call<{ ok: true }>("deleteTaxonomy", { id });
+
+  /** A vocabulary's terms as a TREE. The server folds it, so every consumer does not. */
+  getTermTree = (taxonomy: string) => this.call<Term[]>("getTermTree", { taxonomy });
+  createTerm = (input: { taxonomy: string; slug: string; label: string; description?: string; parentId?: string | null; position?: number }) =>
+    this.call<Term>("createTerm", input as unknown as RpcInput);
+  updateTerm = (id: string, patch: { slug?: string; label?: string; description?: string | null; parentId?: string | null; position?: number }) =>
+    this.call<Term>("updateTerm", { id, ...patch } as unknown as RpcInput);
+  deleteTerm = (id: string) => this.call<{ ok: true }>("deleteTerm", { id });
+
+  listPageTerms = (pageId: string) => this.call<Term[]>("listPageTerms", { pageId });
+  setPageTerms = (pageId: string, termIds: string[]) => this.call<{ ok: true }>("setPageTerms", { pageId, termIds });
+
+  listWidgetAreas = () => this.call<WidgetArea[]>("listWidgetAreas");
+  createWidgetArea = (name: string, label: string, description?: string) => this.call<WidgetArea>("createWidgetArea", { name, label, description, widgets: [] });
+  updateWidgetArea = (id: string, patch: { label?: string; description?: string | null; widgets?: Widget[] }) =>
+    this.call<WidgetArea>("updateWidgetArea", { id, ...patch } as unknown as RpcInput);
+  deleteWidgetArea = (id: string) => this.call<{ ok: true }>("deleteWidgetArea", { id });
 
   /** Full upload flow: sign → PUT the bytes → persist a `cms_media` row. Returns the row. */
   async uploadMedia(file: File): Promise<Media> {

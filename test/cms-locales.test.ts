@@ -24,6 +24,7 @@ interface Caps {
   defaultLocale: string;
   multilingual: boolean;
   pagesByType: boolean;
+  siteFurniture: boolean;
   canEdit: boolean;
 }
 
@@ -43,15 +44,15 @@ const asRole = (...roles: string[]): HandlerContext => ({ identity: { roles } })
 
 describe("declared locales", () => {
   test("a deployment that declares nothing is monolingual `en` — the previous default", () => {
-    expect(caps()).toEqual({ locales: ["en"], defaultLocale: "en", multilingual: false, pagesByType: true });
+    expect(caps()).toEqual({ locales: ["en"], defaultLocale: "en", multilingual: false, pagesByType: true, siteFurniture: true });
   });
 
   test("one declared locale is still monolingual — no i18n surface for a single-locale site", () => {
-    expect(caps({ locales: ["cs"] })).toEqual({ locales: ["cs"], defaultLocale: "cs", multilingual: false, pagesByType: true });
+    expect(caps({ locales: ["cs"] })).toEqual({ locales: ["cs"], defaultLocale: "cs", multilingual: false, pagesByType: true, siteFurniture: true });
   });
 
   test("two or more is multilingual, and the FIRST is the default a page is stamped with", () => {
-    expect(caps({ locales: ["cs", "en"] })).toEqual({ locales: ["cs", "en"], defaultLocale: "cs", multilingual: true, pagesByType: true });
+    expect(caps({ locales: ["cs", "en"] })).toEqual({ locales: ["cs", "en"], defaultLocale: "cs", multilingual: true, pagesByType: true, siteFurniture: true });
   });
 
   // The bug the old flag's doc comment papered over: a Czech-only site that hid the i18n
@@ -63,7 +64,7 @@ describe("declared locales", () => {
   });
 
   test("an empty declaration falls back rather than leaving a page with no locale", () => {
-    expect(caps({ locales: [] })).toEqual({ locales: ["en"], defaultLocale: "en", multilingual: false, pagesByType: true });
+    expect(caps({ locales: [] })).toEqual({ locales: ["en"], defaultLocale: "en", multilingual: false, pagesByType: true, siteFurniture: true });
   });
 });
 
@@ -93,12 +94,20 @@ describe("the editor's visible inspector tabs", () => {
   // ONE definition of the rule, used by the tab bar, the panel switch and the route's
   // deep-link fallback — which previously each re-derived it and could disagree.
   test("i18n is shown only on a multilingual deployment", () => {
-    expect(visibleTabs(true)).toEqual(INSPECTOR_TABS);
+    expect(visibleTabs(true, true)).toEqual(INSPECTOR_TABS);
     expect(visibleTabs(false)).not.toContain("i18n");
   });
 
   test("hiding i18n removes exactly that tab, in order", () => {
-    expect(visibleTabs(false)).toEqual(["settings", "seo", "workflow", "audit"]);
+    expect(visibleTabs(false, true)).toEqual(["settings", "seo", "workflow", "terms", "audit"]);
+  });
+
+  // Same rule, the other optional panel: `terms` assigns taxonomy terms to the page, and on
+  // a server without the taxonomy handlers it could only ever render an error.
+  test("terms is shown only where the server has the site-furniture handlers", () => {
+    expect(visibleTabs(true, false)).not.toContain("terms");
+    expect(visibleTabs(false, true)).toContain("terms");
+    expect(visibleTabs(false, false)).toEqual(["settings", "seo", "workflow", "audit"]);
   });
 
   // Until the server answers — and on a server too old to have the handler — the editor

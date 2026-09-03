@@ -58,6 +58,9 @@ export type FieldType =
   | "slug"
   | "media"
   | "select"
+  /** A pointer to a record that is not this row — a pramen row or an external record.
+   * Stored as an opaque id; resolved through `referenceFrom`. */
+  | "reference"
   | "repeater"
   | "group";
 
@@ -77,6 +80,27 @@ export interface FieldDefinition {
   optionsFrom?: string;
   /** For `slug`: the sibling field this one is derived from (e.g. `"title"`). */
   from?: string;
+  /** For `reference`: the query handler that resolves it. Called `{ search?, limit, offset }`
+   * to browse and `{ ids }` to resolve labels for stored values; returns
+   * {@link ReferenceResult} either way. */
+  referenceFrom?: string;
+  /** For `reference`: store a list of ids rather than one. */
+  multiple?: boolean;
+}
+
+/** One option a `reference` field's handler returns. */
+export interface ReferenceOption {
+  value: string;
+  label: string;
+  /** Secondary text under the label — a date, an owner, a status. A picker over a thousand
+   * records usually needs more than a name to tell two rows apart. */
+  hint?: string;
+}
+
+/** What a `reference` field's handler returns, for both request shapes. */
+export interface ReferenceResult {
+  items: ReferenceOption[];
+  hasMore?: boolean;
 }
 
 export interface RegionDefinition {
@@ -119,6 +143,11 @@ export interface CollectionMeta {
   label: string;
   pluralLabel: string;
   icon?: string;
+  /** Where this collection sits in the primary nav — see {@link NAV_ORDER}. Filled in
+   * server-side, so the editor sorts one list of numbers. Optional here only because an
+   * OLDER server does not send it; `NAV_ORDER.collections` is the fallback, which is
+   * exactly where collections rendered before the key existed. */
+  navOrder?: number;
   fields: FieldDefinition[];
   list: string[];
   titleField: string;
@@ -152,12 +181,58 @@ export interface CmsCapabilities {
    * without this probe the editor renders N tabs that all show every type's pages under a
    * heading claiming otherwise, and "New page" from any of them stamps that tab's type. */
   pagesByType: boolean;
+  /** The server has the site-furniture handlers (menus, redirects, taxonomies, widget
+   * areas). Declared, not probed: an older server answers `listMenus` with a 404 like any
+   * unknown handler, and a nav section whose every screen fails is worse than no section. */
+  siteFurniture: boolean;
+  /** Whether THIS caller may author, i.e. holds one of the deployment's `editorRoles`.
+   *
+   * Per-caller, unlike the rest of this probe. The read handlers are open to
+   * `editorRoles ∪ reviewerRoles` but every write is editor-only, and the editor cannot
+   * derive that: it knows the caller's roles from `me` but not which roles the deployment
+   * configured. Without it a reviewer-only session gets the authoring nav and every screen
+   * 403s on its first save. */
+  canEdit: boolean;
 }
+
+/**
+ * Where each built-in section sits in the primary nav — the editor's mirror of
+ * `NAV_ORDER` in @pramen/cms.
+ *
+ * A mirror, not an import: the editor is a standalone browser app that speaks to the CMS
+ * purely over HTTP and has no server-package dependency (see the note at the top of this
+ * file). The numbers are ordinals spaced 100 apart; only their relative order is contract.
+ */
+export const NAV_ORDER = {
+  pages: 100,
+  collections: 200,
+  media: 300,
+  menus: 400,
+  taxonomies: 500,
+  widgets: 600,
+  redirects: 700,
+  adminPages: 800,
+  types: 900,
+  users: 1000,
+  settings: 1100,
+  extra: 1200,
+} as const;
 
 /** Used until `listCmsCapabilities` answers, and when it cannot (an older server). Assumes
  * MONOLINGUAL: a hidden i18n surface on a multilingual site is recoverable by reloading,
  * where a half-rendered one on a single-locale site is what this replaced. */
-export const DEFAULT_CAPABILITIES: CmsCapabilities = { locales: ["en"], defaultLocale: "en", multilingual: false, pagesByType: false };
+export const DEFAULT_CAPABILITIES: CmsCapabilities = {
+  locales: ["en"],
+  defaultLocale: "en",
+  multilingual: false,
+  pagesByType: false,
+  siteFurniture: false,
+  // Fails OPEN, unlike its neighbours. An older server sends no `canEdit`, and hiding
+  // every authoring control from a real editor is unrecoverable from inside the editor;
+  // showing one that 403s is a legible error with a way forward. The server is the
+  // boundary either way — this only decides what is drawn.
+  canEdit: true,
+};
 
 /** Mirror of @pramen/cms `CollectionFeature`. */
 export type CollectionFeature = "drafts" | "scheduling" | "revisions" | "preview";
@@ -222,4 +297,89 @@ export interface AuditEntry {
   actor: string | null;
   note: string | null;
   createdAt: string;
+}
+
+// --- site furniture (mirrors of the @pramen/cms shapes) ----------------------
+
+/** What a menu item points at. `custom` is a literal href; the rest are references the
+ * server resolves at read time, so a link follows its page instead of freezing a slug. */
+export type MenuItemKind = "custom" | "page" | "term" | "collection";
+
+export interface MenuItem {
+  id: string;
+  label: string;
+  kind?: MenuItemKind;
+  /** `page`: a page id · `term`: a term id · `collection`: a collection slug. */
+  ref?: string | null;
+  /** `custom`: the href as authored. Filled in by `getMenu` for the resolved kinds. */
+  url?: string;
+  target?: string;
+  titleAttr?: string;
+  cssClasses?: string;
+  children?: MenuItem[];
+}
+
+export interface Menu {
+  id: string;
+  name: string;
+  label: string;
+  items?: MenuItem[] | null;
+}
+
+/** Mirror of `MAX_MENU_DEPTH` in @pramen/cms — the editor refuses to nest deeper rather
+ * than letting a save fail on the server with the tree already reordered on screen. */
+export const MAX_MENU_DEPTH = 5;
+
+export interface Redirect {
+  id: string;
+  fromPath: string;
+  toPath: string;
+  status: number;
+  enabled: boolean;
+  note?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/** Mirror of `REDIRECT_STATUSES` in @pramen/cms. */
+export const REDIRECT_STATUSES = [301, 302, 307, 308] as const;
+
+export interface Taxonomy {
+  id: string;
+  slug: string;
+  label: string;
+  pluralLabel?: string | null;
+  description?: string | null;
+  hierarchical?: boolean;
+}
+
+export interface Term {
+  id: string;
+  taxonomyId: string;
+  slug: string;
+  label: string;
+  description?: string | null;
+  parentId?: string | null;
+  position?: number;
+  children?: Term[];
+}
+
+export type WidgetType = "content" | "menu" | "component";
+
+export interface Widget {
+  id: string;
+  type: WidgetType;
+  title?: string | null;
+  content?: RichTextDoc;
+  menuName?: string;
+  componentId?: string;
+  componentProps?: FieldValues;
+}
+
+export interface WidgetArea {
+  id: string;
+  name: string;
+  label: string;
+  description?: string | null;
+  widgets?: Widget[] | null;
 }

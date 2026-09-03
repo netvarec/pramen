@@ -9,6 +9,7 @@ import { useApp } from "../app-context";
 import { BRAND } from "../brand";
 import { pagesHidden, splitsByType } from "../components";
 import { opensInSameTab } from "../mount";
+import { buildNav, type ExtraNavLink } from "../nav";
 
 const THEME_KEY = "pramen.cms.theme";
 
@@ -69,6 +70,13 @@ export default function RootLayout() {
     : typeSlug ? `type:${typeSlug}`
     : pathname.startsWith("/pages") || pathname === "/" ? "pages"
     : pathname.startsWith("/media") ? "media"
+    // `/schema` rather than `/types`, because `/types/:slug` is already one content type's
+    // PAGE LIST — a different thing entirely, and the tab keyed `type:<slug>` above.
+    : pathname.startsWith("/schema") ? "types"
+    : pathname.startsWith("/menus") ? "menus"
+    : pathname.startsWith("/taxonomies") ? "taxonomies"
+    : pathname.startsWith("/widgets") ? "widgets"
+    : pathname.startsWith("/redirects") ? "redirects"
     : pathname.startsWith("/users") ? "users"
     : pathname.startsWith("/settings") ? "settings"
     : "";
@@ -82,11 +90,12 @@ export default function RootLayout() {
   });
 
   // Host-configured links to companion tools (e.g. a curation page), from /config.js.
-  const extraNav = typeof window !== "undefined" ? window.PRAMEN_CMS_EDITOR?.extraNav ?? [] : [];
+  const extraNav: ExtraNavLink[] = typeof window !== "undefined" ? window.PRAMEN_CMS_EDITOR?.extraNav ?? [] : [];
   // Collections-only deployments hide the block/page builder entirely.
   const hidePages = pagesHidden();
   // Same rule as the landing redirect and the page editor's back target — see `splitsByType`.
   const splitByType = splitsByType(contentTypes, cms, hidePages);
+  const nav = buildNav({ collections, contentTypes, cms, hidePages, splitByType, isAdmin, extraNav });
 
   // See the extraNav comment below. The rules live in `mount.ts` beside the containment they
   // depend on; what this supplies is the URL the BROWSER will resolve a relative href
@@ -114,63 +123,33 @@ export default function RootLayout() {
           </button>
         </Topbar.Brand>
         <Topbar.Nav aria-label="Primary">
-          {/* One tab per content type once a deployment declares more than one: a CMS holding
-              pages AND articles pooled them into a single "Pages" list where the only thing
-              distinguishing a landing page from a news item was the slug. A single type keeps
-              the plain "Pages" tab — there is nothing there to separate, and splitting it
-              would put the deployment's own type name where a generic label reads better.
-              The label is the type's `name`, so a host that wants a plural tab writes one. */}
-          {hidePages ? null : splitByType ? (
-            (contentTypes ?? []).map((t) => (
+          {/* Order comes from `buildNav`, not from the sequence written here — see nav.ts.
+              A section can therefore sit BETWEEN two built-ins (a collection declaring
+              `navOrder`, a host link declaring `order`) rather than only after Settings,
+              which is what made a project-specific section structurally a bolted-on second
+              app. Rendering stays here because navigation belongs to the layout: every
+              route entry goes through the unsaved-changes guard, and an `extraNav` link
+              that leaves the document takes the same guard. */}
+          {nav.map((entry) =>
+            entry.kind === "route" ? (
               <Button
-                key={t.slug}
+                key={entry.key}
                 variant="ghost"
                 size="sm"
-                {...tabProps(`type:${t.slug}`)}
-                onPress={guarded(() => navigate("type", { params: { slug: t.slug } }))}
+                {...tabProps(entry.key)}
+                onPress={guarded(() => navigate(entry.page as never, entry.params ? ({ params: entry.params } as never) : undefined as never))}
               >
-                {t.name}
+                {entry.label}
               </Button>
-            ))
-          ) : (
-            <Button variant="ghost" size="sm" {...tabProps("pages")} onPress={guarded(() => navigate("home"))}>
-              Pages
-            </Button>
+            ) : (
+              <NavLink
+                key={entry.key}
+                link={entry.link}
+                sameTab={opensInSameTab(entry.link.href, entry.link.target, basePath, documentUrl)}
+                confirm={confirmNavigation}
+              />
+            ),
           )}
-          {collections.map((c) => (
-            <Button key={c.slug} variant="ghost" size="sm" {...tabProps(`col:${c.slug}`)} onPress={guarded(() => navigate("collection", { params: { slug: c.slug } }))}>
-              {c.icon ? `${c.icon} ` : ""}
-              {c.pluralLabel}
-            </Button>
-          ))}
-          <Button variant="ghost" size="sm" {...tabProps("media")} onPress={guarded(() => navigate("media"))}>
-            Media
-          </Button>
-          {isAdmin ? (
-            <Button variant="ghost" size="sm" {...tabProps("users")} onPress={guarded(() => navigate("users"))}>
-              Users
-            </Button>
-          ) : null}
-          <Button variant="ghost" size="sm" {...tabProps("settings")} onPress={guarded(() => navigate("settings"))}>
-            Settings
-          </Button>
-          {extraNav.map((l) => (
-            // Defaults to a new tab: a companion tool is normally a separate deployment, and
-            // `_404.tsx` registers the catch-all `/:__notFound+`, so the router matches every
-            // SAME-ORIGIN path — a same-tab click would land on the in-app 404 rather than the
-            // tool. `target: "_self"` asks for the co-hosted case, and is honoured only where
-            // the router provably will not claim the url (`opensInSameTab` in mount.ts):
-            //
-            //   - cross-origin: always, mounted or not. The catch-all cannot reach another
-            //     origin, so this is the ONE case that also works at the origin root.
-            //   - same-origin: only outside the mount prefix, where `scopeToBasePath` leaves
-            //     the navigation to the browser. At the root there is no outside, so never.
-            //
-            // Anything else degrades to the new tab rather than stranding the user on a 404.
-            // (When @buzola/router moves past ^0.0.12 here, `router.leaveApp(href)` releases
-            // one navigation to the browser and makes same-origin `_self` work unmounted too.)
-            <NavLink key={`${l.href}|${l.label}`} link={l} sameTab={opensInSameTab(l.href, l.target, basePath, documentUrl)} confirm={confirmNavigation} />
-          ))}
         </Topbar.Nav>
         <Topbar.Actions>
           {/* The tenant is deployment configuration, not something an editor acts on —
@@ -211,7 +190,7 @@ export default function RootLayout() {
  * and differ only in label or target — keyed on href alone React reconciles them together
  * and the rendered label can end up on the other one's anchor.
  */
-function NavLink({ link, sameTab, confirm }: { link: { label: string; href: string; target?: string }; sameTab: boolean; confirm: () => boolean }) {
+function NavLink({ link, sameTab, confirm }: { link: ExtraNavLink; sameTab: boolean; confirm: () => boolean }) {
   return (
     <a
       href={link.href}

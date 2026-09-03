@@ -1070,6 +1070,187 @@ export function validateFields(schema: FieldDefinition[] | undefined | null, val
   }
 }
 
+// --- validating an AUTHORED field schema -------------------------------------
+//
+// `validateFields` above checks a VALUE against a schema. This checks the SCHEMA itself.
+//
+// It did not exist while the only way to create a block type was a developer writing
+// `defineBlockType(...)` in the repo, where tsc is the check. Now that the editor authors
+// types (GitHub #9), `fieldsSchema` arrives from a browser as free JSON into a `t.json()`
+// column — and a malformed one is not caught anywhere downstream: `FieldForm` renders
+// `null` for an unknown type, `validateFields` skips it ("lenient on unknown field types"),
+// and the block silently loses that field's content on every save. A duplicate `name` is
+// worse: two controls write the same key, so one of them can never be saved at all.
+
+/** Every field type the runtime knows. Exported because the editor's type-builder offers
+ * exactly this list — one definition, so a type added here appears there without a second
+ * edit, and a type removed here cannot be authored. */
+export const FIELD_TYPES: readonly FieldDefinition["type"][] = [
+  "text", "textarea", "richtext", "url", "number", "boolean", "date", "datetime",
+  "publish", "slug", "media", "select", "reference", "repeater", "group",
+];
+
+/** Types whose `fields` nest a further schema. */
+const NESTING_TYPES: readonly FieldDefinition["type"][] = ["group", "repeater"];
+
+/** How deep an authored field schema may nest. A schema is rendered by a recursive
+ * component and validated by a recursive function, so the cap is what keeps both bounded
+ * against a hand-posted document; nothing real nests past two or three. */
+export const MAX_FIELD_DEPTH = 5;
+
+/** A field NAME is an object key in a `fields` bag and a property name in generated TS
+ * (`generateBlockTypes`), so it is held to what can be both. */
+const FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * Validate and canonicalize an authored `FieldDefinition[]`, throwing a 400 on the first
+ * problem. Returns the CLEANED schema — each field rebuilt from the keys its type actually
+ * uses, so a `select`'s stale `options` cannot ride along on a field someone switched to
+ * `text` and reappear if they switch back.
+ */
+export function validateFieldSchema(raw: unknown, path = "fieldsSchema", depth = 0): FieldDefinition[] {
+  if (raw == null) return [];
+  if (!Array.isArray(raw)) throw new BadRequest(`${path} must be a list of field definitions`);
+  if (depth >= MAX_FIELD_DEPTH) throw new BadRequest(`${path} nests deeper than ${MAX_FIELD_DEPTH} levels`);
+  const seen = new Set<string>();
+  return raw.map((entry, i) => {
+    const o = asObj(entry) as Record<string, unknown>;
+    const at = `${path}[${i}]`;
+    const name = typeof o.name === "string" ? o.name.trim() : "";
+    if (!FIELD_NAME.test(name)) {
+      throw new BadRequest(`${at}.name must be a field name (a letter or underscore, then letters/digits/underscores), got ${JSON.stringify(o.name)}`);
+    }
+    // Siblings only — a nested `group` legitimately reuses a name from the outer level,
+    // because it writes into its own bag.
+    if (seen.has(name)) throw new BadRequest(`${path} declares '${name}' twice — two controls would write the same key and one could never be saved`);
+    seen.add(name);
+    const type = o.type as FieldDefinition["type"];
+    if (!FIELD_TYPES.includes(type)) {
+      throw new BadRequest(`${at}.type is '${String(o.type)}', which is not a field type (known: ${FIELD_TYPES.join(", ")})`);
+    }
+    const f: FieldDefinition = { name, type };
+    if (typeof o.label === "string" && o.label.trim() !== "") f.label = o.label.trim();
+    if (o.required === true) f.required = true;
+    if (o.default !== undefined) f.default = o.default;
+
+    if (NESTING_TYPES.includes(type)) {
+      f.fields = validateFieldSchema(o.fields, `${at}.fields`, depth + 1);
+      // A `group` with no fields renders an empty box; a `repeater` with none renders rows
+      // of nothing and an Add button. Both are the shape of a half-finished edit, and both
+      // are silently useless rather than visibly wrong, so they are refused here.
+      if (f.fields.length === 0) throw new BadRequest(`${at} is a '${type}' and needs at least one nested field`);
+      if (type === "repeater") {
+        if (typeof o.min === "number" && Number.isFinite(o.min)) f.min = Math.max(0, Math.trunc(o.min));
+        if (typeof o.max === "number" && Number.isFinite(o.max)) f.max = Math.max(1, Math.trunc(o.max));
+        if (f.min != null && f.max != null && f.min > f.max) throw new BadRequest(`${at} has min ${f.min} above max ${f.max}`);
+      }
+    } else if (type === "select") {
+      // `optionsFrom` takes precedence at render time, so requiring options alongside it
+      // would reject the live-data case the option exists for.
+      if (typeof o.optionsFrom === "string" && o.optionsFrom.trim() !== "") {
+        f.optionsFrom = o.optionsFrom.trim();
+      } else {
+        const options = Array.isArray(o.options) ? o.options.map((v) => String(v).trim()).filter((v) => v !== "") : [];
+        if (options.length === 0) throw new BadRequest(`${at} is a 'select' and needs either \`options\` or an \`optionsFrom\` handler`);
+        if (new Set(options).size !== options.length) throw new BadRequest(`${at} lists the same option twice`);
+        f.options = options;
+      }
+    } else if (type === "slug") {
+      // `from` is optional (a slug typed by hand is legitimate), but naming a field that is
+      // not there is a control that silently never follows anything.
+      if (typeof o.from === "string" && o.from.trim() !== "") f.from = o.from.trim();
+    } else if (type === "reference") {
+      const from = typeof o.referenceFrom === "string" ? o.referenceFrom.trim() : "";
+      if (!from) throw new BadRequest(`${at} is a 'reference' and needs a \`referenceFrom\` query handler`);
+      f.referenceFrom = from;
+      if (o.multiple === true) f.multiple = true;
+    }
+    return f;
+  });
+}
+
+/** Resolve `slug` cross-references inside one schema, now that every sibling is known: a
+ * `slug` field's `from` must name a field that exists AT THE SAME LEVEL (the editor reads
+ * it out of the sibling bag) and holds text. Separate pass because forward references are
+ * legitimate — a slug may precede the title it follows. */
+export function checkSlugSources(schema: readonly FieldDefinition[], path = "fieldsSchema"): void {
+  const byName = new Map(schema.map((f) => [f.name, f]));
+  schema.forEach((f, i) => {
+    if (f.type === "slug" && f.from) {
+      const src = byName.get(f.from);
+      if (!src) throw new BadRequest(`${path}[${i}] derives from '${f.from}', which is not a field alongside it`);
+      if (!["text", "textarea", "select", "url"].includes(src.type)) {
+        throw new BadRequest(`${path}[${i}] derives from '${f.from}', which is a '${src.type}' — a slug can only follow a text field`);
+      }
+    }
+    if (f.fields) checkSlugSources(f.fields, `${path}[${i}].fields`);
+  });
+}
+
+/** Validate + canonicalize an authored field schema end to end. */
+export function normalizeFieldSchema(raw: unknown, path = "fieldsSchema"): FieldDefinition[] {
+  const schema = validateFieldSchema(raw, path);
+  checkSlugSources(schema, path);
+  return schema;
+}
+
+/**
+ * Validate a content type's `regions`.
+ *
+ * A region NAME is the key `addBlock({ region })` resolves and the key of the assembled
+ * `regions` object a front end reads, so it is held to the same shape as a field name. An
+ * `allowedTypes` entry is a block-type SLUG; it is not checked against the block types that
+ * exist, on purpose — a content type declaring a region for a block type that has not been
+ * created yet is an ordinary order of work, and `assertRegionAllows` is what enforces the
+ * list at placement time.
+ */
+export function normalizeRegions(raw: unknown): RegionDefinition[] {
+  if (!Array.isArray(raw) || raw.length === 0) throw new BadRequest("at least one region is required");
+  const seen = new Set<string>();
+  return raw.map((entry, i) => {
+    const o = asObj(entry) as Record<string, unknown>;
+    const name = typeof o.name === "string" ? o.name.trim() : "";
+    if (!FIELD_NAME.test(name)) throw new BadRequest(`regions[${i}].name must be a region name (a letter or underscore, then letters/digits/underscores), got ${JSON.stringify(o.name)}`);
+    if (seen.has(name)) throw new BadRequest(`regions declares '${name}' twice — the assembled page is keyed by region name, so one would overwrite the other`);
+    seen.add(name);
+    const region: RegionDefinition = { name };
+    if (typeof o.label === "string" && o.label.trim() !== "") region.label = o.label.trim();
+    // `null` and omitted both mean "any block type"; an empty ARRAY means "none", which is
+    // a region nothing can ever be placed in. Almost always a half-finished edit, so it is
+    // normalized to "any" rather than stored as a region that silently refuses everything.
+    if (Array.isArray(o.allowedTypes)) {
+      const allowed = o.allowedTypes.map((v) => String(v).trim()).filter((v) => v !== "");
+      region.allowedTypes = allowed.length > 0 ? [...new Set(allowed)] : null;
+    } else {
+      region.allowedTypes = null;
+    }
+    return region;
+  });
+}
+
+/** Validate a content type's `defaultBlocks` against its own regions. A default block that
+ * names a region the type does not declare is created into nowhere — `createPage` would
+ * place it under a key no renderer reads. */
+export function normalizeDefaultBlocks(raw: unknown, regions: readonly RegionDefinition[]): DefaultBlockDefinition[] {
+  if (raw == null) return [];
+  if (!Array.isArray(raw)) throw new BadRequest("defaultBlocks must be a list");
+  const names = new Set(regions.map((r) => r.name));
+  return raw.map((entry, i) => {
+    const o = asObj(entry) as Record<string, unknown>;
+    const region = typeof o.region === "string" ? o.region.trim() : "";
+    const blockTypeSlug = typeof o.blockTypeSlug === "string" ? o.blockTypeSlug.trim() : "";
+    if (!names.has(region)) throw new BadRequest(`defaultBlocks[${i}] targets region '${region}', which this content type does not declare`);
+    if (!blockTypeSlug) throw new BadRequest(`defaultBlocks[${i}] needs a blockTypeSlug`);
+    const allowed = regions.find((r) => r.name === region)?.allowedTypes;
+    if (allowed && !allowed.includes(blockTypeSlug)) {
+      throw new BadRequest(`defaultBlocks[${i}] places '${blockTypeSlug}' into region '${region}', which does not allow it`);
+    }
+    const out: DefaultBlockDefinition = { region, blockTypeSlug };
+    if (o.fields !== undefined) out.fields = asObj(o.fields);
+    return out;
+  });
+}
+
 // --- rich text: the structural allow-list (server-side — the real XSS boundary) ---
 //
 // A `richtext` value is a document TREE, so there is no HTML to scrub — the boundary is
@@ -1661,6 +1842,18 @@ function assertKey(v: unknown, what: string): string {
   return s;
 }
 
+/** A REGISTRY key — a block type's slug. Looser than {@link assertKey} by one character:
+ * underscores are admitted, because a block-type slug is not a URL segment. It is the key a
+ * front end maps to a component (`{ rich_text: RichText }`), and `rich_text` is the
+ * convention every existing schema and the shipped example already use. */
+function assertRegistryKey(v: unknown, what: string): string {
+  const str = typeof v === "string" ? v.trim() : "";
+  if (!/^[a-z0-9]+(?:[-_][a-z0-9]+)*$/.test(str) || str.length > 80) {
+    throw new BadRequest(`${what} must be a key (lowercase letters, digits, and single hyphens or underscores), got ${JSON.stringify(v)}`);
+  }
+  return str;
+}
+
 function assertLabel(v: unknown, what: string): string {
   const s = typeof v === "string" ? v.trim() : "";
   if (!s) throw new BadRequest(`${what} must not be empty`);
@@ -2137,7 +2330,12 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     listBlockTypes: query((ctx) => cdb(ctx).find({ from: "cms_block_types", orderBy: { column: "name" } })),
 
     createBlockType: mutation(async (ctx, input: { name: string; slug: string; fieldsSchema?: FieldDefinition[]; icon?: string; category?: string; description?: string }) => {
-      return cdb(ctx).insert("cms_block_types", {
+      const db = cdb(ctx);
+      // A clean 409 before the UNIQUE constraint fires. The editor authors these now, and a
+      // raw constraint error reads as "the CMS broke" rather than "that slug is taken".
+      const clash = await db.find({ from: "cms_block_types", where: { slug: input.slug }, select: ["id"], limit: 1 });
+      if (clash[0]) throw new Conflict(`block type '${input.slug}' already exists`);
+      return db.insert("cms_block_types", {
         name: input.name,
         slug: input.slug,
         description: input.description ?? null,
@@ -2150,7 +2348,18 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       input: (raw): { name: string; slug: string; fieldsSchema?: FieldDefinition[]; icon?: string; category?: string; description?: string } => {
         const o = asObj(raw);
         if (typeof o.name !== "string" || typeof o.slug !== "string") throw new BadRequest("name and slug are required");
-        return o as never;
+        if (o.name.trim() === "") throw new BadRequest("name must not be empty");
+        return {
+          name: o.name.trim(),
+          // A block type's slug is a registry key: the editor's inserter, `assertRegionAllows`
+          // and `@pramen/cms/react`'s component map all resolve it. Held to the same shape as
+          // any other key rather than accepted as free text.
+          slug: assertRegistryKey(o.slug, "block type slug"),
+          description: typeof o.description === "string" ? o.description : undefined,
+          icon: typeof o.icon === "string" ? o.icon : undefined,
+          category: typeof o.category === "string" ? o.category : undefined,
+          fieldsSchema: normalizeFieldSchema(o.fieldsSchema),
+        };
       },
     }),
 
@@ -2171,9 +2380,15 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
         // editor (`/types/:slug`) and the key `listPages({ contentType })` resolves. An
         // empty one builds `/types/` — a path the router drops the empty segment from, so
         // the type gets a tab that cannot be reached and a list that cannot be addressed.
-        if (o.name.trim() === "" || o.slug.trim() === "") throw new BadRequest("name and slug must not be empty");
-        if (!Array.isArray(o.regions) || o.regions.length === 0) throw new BadRequest("at least one region is required");
-        return o as never;
+        if (o.name.trim() === "") throw new BadRequest("name must not be empty");
+        const regions = normalizeRegions(o.regions);
+        return {
+          name: o.name.trim(),
+          slug: assertKey(o.slug, "content type slug"),
+          regions,
+          fieldsSchema: normalizeFieldSchema(o.fieldsSchema),
+          defaultBlocks: normalizeDefaultBlocks(o.defaultBlocks, regions),
+        };
       },
     }),
 
@@ -2195,7 +2410,12 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       input: (raw): { id?: string; slug?: string; name?: string; fieldsSchema?: FieldDefinition[]; icon?: string | null; category?: string | null; description?: string | null } => {
         const o = asObj(raw);
         if (typeof o.id !== "string" && typeof o.slug !== "string") throw new BadRequest("id or slug is required");
-        return o as never;
+        const out = { ...o } as Record<string, unknown>;
+        // `name` is the label in the editor's inserter; blanking it leaves an unnamed entry
+        // nobody can identify.
+        if (o.name !== undefined) out.name = assertLabel(o.name, "block type name");
+        if (o.fieldsSchema !== undefined) out.fieldsSchema = normalizeFieldSchema(o.fieldsSchema);
+        return out as never;
       },
     }),
 
@@ -2211,15 +2431,30 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       for (const k of ["name", "regions", "fieldsSchema", "defaultBlocks"] as const) {
         if (k in input) patch[k] = (input as Record<string, unknown>)[k];
       }
+      // A `defaultBlocks` patch that does NOT also send regions is checked here against the
+      // STORED ones — the input parser has no row to read, and a default block placed into a
+      // region the type does not declare is created into a key no renderer looks at.
+      if (patch.defaultBlocks !== undefined && patch.regions === undefined) {
+        patch.defaultBlocks = normalizeDefaultBlocks(patch.defaultBlocks, (Array.isArray(row.regions) ? row.regions : []) as RegionDefinition[]);
+      }
       return db.update("cms_content_types", String(row.id), patch);
     }, {
       ...editor,
       input: (raw): { id?: string; slug?: string; name?: string; regions?: RegionDefinition[]; fieldsSchema?: FieldDefinition[]; defaultBlocks?: DefaultBlockDefinition[] } => {
         const o = asObj(raw);
         if (typeof o.id !== "string" && typeof o.slug !== "string") throw new BadRequest("id or slug is required");
+        const out = { ...o } as Record<string, unknown>;
         // `name` is the editor's tab label; blanking it leaves an unlabelled tab.
-        if (typeof o.name === "string" && o.name.trim() === "") throw new BadRequest("name must not be empty");
-        return o as never;
+        if (o.name !== undefined) out.name = assertLabel(o.name, "content type name");
+        if (o.regions !== undefined) out.regions = normalizeRegions(o.regions);
+        if (o.fieldsSchema !== undefined) out.fieldsSchema = normalizeFieldSchema(o.fieldsSchema);
+        // Checked against the regions being SAVED where the same call sends both — patching
+        // only `defaultBlocks` cannot see the stored regions from an input parser, and the
+        // handler re-checks below.
+        if (out.defaultBlocks !== undefined && out.regions !== undefined) {
+          out.defaultBlocks = normalizeDefaultBlocks(out.defaultBlocks, out.regions as RegionDefinition[]);
+        }
+        return out as never;
       },
     }),
 
@@ -3267,6 +3502,10 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       defaultLocale,
       multilingual: locales.length > 1,
       pagesByType: true as const,
+      // Same kind of declaration as `pagesByType`, for the same reason: an OLDER server has
+      // no menu/redirect/taxonomy/widget handlers at all, and a nav section whose every
+      // screen 404s is worse than one that is absent. Fails closed by being absent there.
+      siteFurniture: true as const,
       // PER-CALLER, unlike everything else here. `viewer` is `editorRoles ∪ reviewerRoles`,
       // so a reviewer-only session reaches this handler and every read handler — but every
       // WRITE is `editorRoles`. Without this the editor renders the authoring surfaces
