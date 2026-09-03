@@ -96,6 +96,10 @@ describe("regions and default blocks", () => {
   test("a content type needs at least one region, with usable, distinct names", () => {
     expect(() => normalizeRegions([])).toThrow(/at least one region/);
     expect(() => normalizeRegions([{ name: "my region" }])).toThrow(/must be a region name/);
+    // A HYPHEN is fine: a region name is only an object key on the assembled page, unlike a
+    // field name, which `generateBlockTypes` emits as a TS property. Held to the stricter
+    // rule it rejected names already stored, making such a type permanently unsavable.
+    expect(normalizeRegions([{ name: "main-content" }])[0]!.name).toBe("main-content");
     // The assembled page is an object keyed by region name, so a duplicate silently
     // overwrites.
     expect(() => normalizeRegions([{ name: "a" }, { name: "a" }])).toThrow(/declares 'a' twice/);
@@ -131,10 +135,13 @@ describe("the type handlers hold the line", () => {
     expect(() => parse("createBlockType", { name: "x", slug: "Rich Text" })).toThrow(/must be a key/);
   });
 
-  test("a content type's slug is a URL segment, so it does not", () => {
-    // It addresses the type's own page list at `/types/:slug`.
-    expect(() => parse("createContentType", { name: "x", slug: "my_type", regions: [{ name: "a" }] })).toThrow(/must be a key/);
+  test("a content type's slug follows the same rule — both are registry keys", () => {
+    // These were split (block types admitted `_`, content types did not) for no reason that
+    // survives inspection: an underscore is as legal in the `/types/:slug` segment as
+    // anywhere else in a URL, and the example ships `seeded_doc`.
+    expect(parse("createContentType", { name: "x", slug: "my_type", regions: [{ name: "a" }] })).toMatchObject({ slug: "my_type" });
     expect(parse("createContentType", { name: "x", slug: "my-type", regions: [{ name: "a" }] })).toMatchObject({ slug: "my-type" });
+    expect(() => parse("createContentType", { name: "x", slug: "My Type", regions: [{ name: "a" }] })).toThrow(/must be a key/);
   });
 
   test("authoring a type is editor-gated", () => {

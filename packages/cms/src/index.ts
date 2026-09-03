@@ -1135,6 +1135,15 @@ export const MAX_FIELD_DEPTH = 5;
  * (`generateBlockTypes`), so it is held to what can be both. */
 const FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
+/** A REGION name. Looser than a field name by one character, because the two are not the
+ * same kind of thing: a field name is emitted as a TS property by `generateBlockTypes`, so
+ * it must be an identifier, while a region name is only ever an object key on the assembled
+ * page (`regions["main-content"]`). Held to `FIELD_NAME` it rejected hyphenated names that
+ * pre-date this validation and are stored today — which would have made every future save
+ * of such a content type fail, with the only fix being a rename that orphans its
+ * placements. */
+const REGION_NAME = /^[A-Za-z_][A-Za-z0-9_-]*$/;
+
 /**
  * Validate and canonicalize an authored `FieldDefinition[]`, throwing a 400 on the first
  * problem. Returns the CLEANED schema — each field rebuilt from the keys its type actually
@@ -1244,7 +1253,7 @@ export function normalizeRegions(raw: unknown): RegionDefinition[] {
   return raw.map((entry, i) => {
     const o = asObj(entry) as Record<string, unknown>;
     const name = typeof o.name === "string" ? o.name.trim() : "";
-    if (!FIELD_NAME.test(name)) throw new BadRequest(`regions[${i}].name must be a region name (a letter or underscore, then letters/digits/underscores), got ${JSON.stringify(o.name)}`);
+    if (!REGION_NAME.test(name)) throw new BadRequest(`regions[${i}].name must be a region name (a letter or underscore, then letters/digits/hyphens/underscores), got ${JSON.stringify(o.name)}`);
     if (seen.has(name)) throw new BadRequest(`regions declares '${name}' twice — the assembled page is keyed by region name, so one would overwrite the other`);
     seen.add(name);
     const region: RegionDefinition = { name };
@@ -2559,7 +2568,11 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
         const regions = normalizeRegions(o.regions);
         return {
           name: o.name.trim(),
-          slug: assertKey(o.slug, "content type slug"),
+          // The SAME rule a block-type slug follows. They were split — block types admitted
+          // `_`, content types did not — for no reason that survives inspection: both are
+          // registry keys, and an underscore is as legal in the `/types/:slug` segment as it
+          // is anywhere else in a URL. The example itself ships `seeded_doc`.
+          slug: assertRegistryKey(o.slug, "content type slug"),
           regions,
           fieldsSchema: normalizeFieldSchema(o.fieldsSchema),
           defaultBlocks: normalizeDefaultBlocks(o.defaultBlocks, regions),
