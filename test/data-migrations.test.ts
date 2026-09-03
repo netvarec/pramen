@@ -47,6 +47,16 @@ async function freshStore(partition = "default"): Promise<Driver> {
   return driver;
 }
 
+/** A driver whose ledger LISTING reads empty (the ORDER BY query `appliedMigrations` runs),
+ * while point lookups still see the truth — the view a racing isolate has after reading the
+ * ledger a moment before someone else wrote to it. */
+function blindListing(driver: Driver): Driver {
+  return {
+    ...driver,
+    exec: (sql, params) => (/ORDER BY/i.test(sql) && sql.includes("_pramen_migrations") ? Promise.resolve([]) : driver.exec(sql, params)),
+  };
+}
+
 const run = (driver: Driver, migrations: readonly DataMigration[], partition?: string) =>
   runDataMigrations(driver, migrations, { partition, makeContext: makeContext(driver) });
 
@@ -195,21 +205,15 @@ describe("data migrations — the runner", () => {
     expect(work).toBeGreaterThan(claim);
   });
 
-  test("a claim already held is not re-run — the D1 concurrent-isolate case", async () => {
-    // Simulate the race directly: another isolate has already claimed the row (but not yet
-    // finished). The second runner must NOT run the work, or a `n = n * 2` backfill doubles
-    // twice. This is the property the pre-read `done` set alone cannot give on D1, where
-    // `d1Ready` is per-isolate and there is no single writer.
+  test("an applied row is skipped without re-running, even if the up-front read missed it", async () => {
+    // The pre-read `done` set is only an optimization; the claim is what decides. Blind the
+    // up-front listing (its ORDER BY is the tell) so only the claim can catch the row —
+    // exactly what a racing isolate sees when it read the ledger before the other one wrote.
     const driver = await freshStore();
     await ensureMigrationsTable(driver);
     await driver.exec(`INSERT INTO "_pramen_migrations" ("id", "partition", "appliedAt") VALUES ('m', 'default', '2026-01-01T00:00:00.000Z')`, []);
     let ran = false;
-    // Hide the row from the up-front read so only the claim can catch it — exactly what a
-    // racing isolate sees when it read the ledger before the other one claimed.
-    const blind: Driver = {
-      ...driver,
-      exec: (sql, params) => (/^\s*SELECT/i.test(sql) && sql.includes("_pramen_migrations") ? Promise.resolve([]) : driver.exec(sql, params)),
-    };
+    const blind = blindListing(driver);
     const result = await runDataMigrations(blind, [{ id: "m", up: () => void (ran = true) }], {
       partition: "default",
       makeContext: makeContext(blind),
@@ -219,6 +223,79 @@ describe("data migrations — the runner", () => {
     expect(result.skipped).toEqual(["m"]);
     expect((await appliedMigrations(driver, "default")).length).toBe(1); // still one row
   });
+
+  test("an in-flight row does not read as applied", async () => {
+    // `leaseUntil IS NULL` IS the definition of applied. A row a runner is still holding must
+    // read as PENDING — otherwise the admin ledger and the CLI would report a backfill that
+    // is still running (or died mid-run) as done.
+    const driver = await freshStore();
+    await ensureMigrationsTable(driver);
+    await driver.exec(
+      `INSERT INTO "_pramen_migrations" ("id", "partition", "appliedAt", "leaseUntil") VALUES ('m', 'default', '2026-01-01T00:00:00.000Z', ?)`,
+      [Date.now() + 60_000],
+    );
+    expect(await appliedMigrations(driver, "default")).toEqual([]);
+  });
+
+  test("a LIVE lease is waited out, then FAILS CLOSED — never a concurrent double-run", async () => {
+    // The window the lease exists to close: another isolate is mid-backfill. Skipping would
+    // serve traffic against half-migrated data and strand the migration if that holder failed.
+    const driver = await freshStore();
+    await ensureMigrationsTable(driver);
+    await driver.exec(
+      `INSERT INTO "_pramen_migrations" ("id", "partition", "appliedAt", "leaseUntil") VALUES ('held', 'default', '2026-01-01T00:00:00.000Z', ?)`,
+      [Date.now() + 60_000],
+    );
+    let ran = false;
+    await expect(
+      runDataMigrations(driver, [{ id: "held", up: () => void (ran = true) }], {
+        partition: "default",
+        makeContext: makeContext(driver),
+        lease: { waitMs: 120, pollMs: 20 },
+      }),
+    ).rejects.toThrow(/holds the lease/);
+    expect(ran).toBe(false); // the whole point: it did NOT run alongside the holder
+  });
+
+  test("an EXPIRED lease is stolen — a holder that died mid-backfill cannot strand it", async () => {
+    // No compensating DELETE can cover an isolate evicted mid-run; only the lease expiring can.
+    const driver = await freshStore();
+    await ensureMigrationsTable(driver);
+    await driver.exec(
+      `INSERT INTO "_pramen_migrations" ("id", "partition", "appliedAt", "leaseUntil") VALUES ('abandoned', 'default', '2026-01-01T00:00:00.000Z', ?)`,
+      [Date.now() - 1],
+    );
+    let ran = false;
+    const result = await run(driver, [{ id: "abandoned", up: () => void (ran = true) }], "default");
+    expect(ran).toBe(true);
+    expect(result.applied).toEqual(["abandoned"]);
+    const ledger = await appliedMigrations(driver, "default");
+    expect(ledger.map((r) => r.id)).toEqual(["abandoned"]); // now genuinely applied
+  });
+
+  test("a lease that COMPLETES while we wait lets the waiter proceed without re-running", async () => {
+    // The good case for waiting: the holder commits, and the waiter carries on knowing the
+    // data IS migrated — rather than either duplicating the work or failing the request.
+    const driver = await freshStore();
+    await ensureMigrationsTable(driver);
+    await driver.exec(
+      `INSERT INTO "_pramen_migrations" ("id", "partition", "appliedAt", "leaseUntil") VALUES ('slow', 'default', '2026-01-01T00:00:00.000Z', ?)`,
+      [Date.now() + 60_000],
+    );
+    // The "other isolate" finishes shortly after we start waiting.
+    setTimeout(() => {
+      void driver.exec(`UPDATE "_pramen_migrations" SET "leaseUntil" = NULL WHERE "id" = 'slow'`, []);
+    }, 60);
+    let ran = false;
+    const result = await runDataMigrations(driver, [{ id: "slow", up: () => void (ran = true) }], {
+      partition: "default",
+      makeContext: makeContext(driver),
+      lease: { waitMs: 3_000, pollMs: 20 },
+    });
+    expect(ran).toBe(false);
+    expect(result.skipped).toEqual(["slow"]);
+  });
+
 
   test("ensureMigrationsTable is idempotent and the ledger reads empty on a fresh store", async () => {
     const driver = await freshStore();

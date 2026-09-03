@@ -32,7 +32,15 @@ there are no backward-compatibility guarantees yet.
   migration runs once, need not be idempotent (a backfill that doubles on the second run is the
   whole point), and **fails closed** — a throw writes no ledger row, aborts the boot, and
   retries on the next fetch rather than marking a half-finished backfill as done. There are no
-  down migrations, deliberately. Ledger over HTTP at `GET /admin/migrations?tenant=&partition=`
+  down migrations, deliberately.
+
+  The claim carries a **lease**, because D1 has no single writer: one atomic upsert inserts the
+  row, steals one whose lease has expired, or does nothing, and only the runner it hands the row
+  to runs the migration. A runner meeting a live lease waits for the holder rather than skipping
+  past it — skipping would serve traffic against half-migrated data and strand the migration if
+  that holder then failed — and a holder that dies mid-backfill without releasing, which no
+  compensating delete can cover, is recovered by its lease expiring. Ledger over HTTP at
+  `GET /admin/migrations?tenant=&partition=`
   (admin-gated, both stores) and in the CLI as `pramen migrations list` / `pramen migrations
   status [--tenant t] [--all-tenants]` — the latter is the only honest answer to "is it safe to
   delete this migration?", since migration is lazy and per-DO and a tenant nobody has touched is

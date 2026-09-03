@@ -168,10 +168,24 @@ partial writes behind; the ledger row it had claimed is released, so it re-runs 
 next request. Prefer SQL that tolerates that anyway (`WHERE col IS NULL`) when the D1
 store is in play. On the DO the work and the ledger row commit together.
 
-The ledger row is **claimed before** the work, not written after it. On the DO that is
-just bookkeeping order inside one transaction; on D1 it is what makes "once, ever" hold
-at all — there is no single writer, so two cold Worker isolates would otherwise both read
-an empty ledger and both run the same backfill.
+The ledger row is **claimed before** the work, not written after it, and the claim carries
+a **lease**. On the DO that is just bookkeeping order inside one transaction; on D1 it is
+what makes "once, ever" hold at all — there is no single writer, so two cold Worker
+isolates would otherwise both read an empty ledger and both run the same backfill.
+
+A row is therefore either *in flight* (a runner holds it until its lease expires) or
+*applied*. Only an applied row counts, so a migration still running reads as `PENDING`
+everywhere, the admin ledger included. A runner that meets a **live** lease waits for the
+holder — up to 5s — and then either proceeds (the holder committed, and the data is
+migrated), takes the row (the holder released it), or fails closed. It never skips past a
+live lease: that would serve traffic against half-migrated data, and would strand the
+migration entirely if the holder then failed. A holder that dies without releasing — an
+isolate evicted mid-backfill, which no compensating delete can cover — is recovered by its
+lease expiring, after which the next runner steals the row.
+
+The lease is 60s, which must exceed your slowest migration: a lease that expires under a
+holder still running is precisely the double-apply it exists to prevent. That is the same
+constraint as the wall-clock one below, from the other direction.
 
 ### Pruning: check before you delete
 

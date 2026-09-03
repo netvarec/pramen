@@ -333,11 +333,18 @@ log) for independent single-writer serialization and storage.
   hashes the declared shape). Keyed `(id, partition)` like `schema_hash:<partition>`: each
   partition-DO runs its OWN partition's migrations; D1 is one shared DB with no partition split, so
   there EVERY declared migration runs (recorded under its own partition key). The ledger row is
-  CLAIMED (`ON CONFLICT DO NOTHING … RETURNING`) BEFORE the work, not written after: on D1 there is
-  no single writer and `d1Ready` is per-isolate, so without the conflicting insert as a lock two cold
-  isolates would each read an empty ledger and both run a `n = n * 2` backfill. D1's
-  `transaction(fn) = fn()` means claim and work are NOT atomic there, so a throw RELEASES the claim
-  (a compensating DELETE, rolled back harmlessly on the DO) — prefer `WHERE col IS NULL`-shaped SQL. NO down migrations. `up()` runs inside `blockConcurrencyWhile` on
+  CLAIMED UNDER A LEASE before the work, not written after: on D1 there is no single writer and
+  `d1Ready` is per-isolate, so without a lock two cold isolates would each read an empty ledger and
+  both run a `n = n * 2` backfill. One atomic upsert (`ON CONFLICT … DO UPDATE … WHERE leaseUntil <=
+  now RETURNING`) inserts, or STEALS an expired lease, or does nothing — `RETURNING` says which.
+  `leaseUntil` non-NULL = in flight, NULL = applied, and only applied counts (an in-flight row reads
+  as PENDING in the admin ledger). A runner meeting a LIVE lease WAITS (≤5s) then fails closed — it
+  must never skip past one, which would serve traffic against half-migrated data and strand the
+  migration if the holder failed. `DEFAULT_LEASE.ttlMs` (60s) must EXCEED the slowest migration or
+  the lease expires under a live holder and you get the double-apply back. D1's `transaction(fn) =
+  fn()` means claim and work are NOT atomic there, so a throw RELEASES the claim (a compensating
+  DELETE guarded on `leaseUntil IS NOT NULL`, rolled back harmlessly on the DO) and a holder that
+  DIES without releasing is recovered by the lease expiring — prefer `WHERE col IS NULL`-shaped SQL. NO down migrations. `up()` runs inside `blockConcurrencyWhile` on
   a tenant's first fetch with no chunking/resume — keep backfills bounded or you stall that request
   and risk the DO wall-clock limit. PRUNING TRAP (same as `renamedFrom`): migration is lazy and
   per-DO, so a cold tenant is unmigrated until touched — never delete an id on a hunch; check
