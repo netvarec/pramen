@@ -84,6 +84,36 @@ there are no backward-compatibility guarantees yet.
   muted-surface token, so hover and active are otherwise the same pixel and "where am I"
   disappears under the cursor.
 
+- **The media library can be searched, sorted and filtered (`@pramen/cms`, `@pramen/cms-editor`).**
+  `listMedia` gains `q`, `sort` (newest/oldest, name A–Z/Z–A, largest/smallest) and `kind`
+  (image/video/audio/document/other), and the library gets a search field, a sort menu and a
+  row of type chips. All three are SERVER-side, because the library is paged: sorting or
+  filtering the 60 rows that arrived sorts and filters 60 rows, which is neither.
+
+  That required real columns. `cms_media.file` is a `t.fileRef()` — JSON in a TEXT cell — so
+  its `filename`, `contentType` and `size` are invisible to `orderBy` and `where`. They are now
+  projected onto indexed columns beside it, written where a media row is CREATED and nowhere
+  else, so there is one writer and `file` stays the source of truth for serving. SQLite
+  generated columns would remove the duplication outright, but the schema DSL cannot declare
+  one. Nullable, so an existing store takes a plain `ADD COLUMN`.
+
+  **`cmsMigrations` is new and must be spread into `app.migrations`** — it backfills those
+  columns from the JSON that has always held the same values. Forgetting it fails quietly, in
+  the way this package's other fragments do: pre-existing rows keep NULL and sort together
+  under a name sort. The backfill is one bulk `UPDATE … json_extract(…)`, with an ORM walk as a
+  fallback, because nothing in this repo had depended on JSON1 before and DO SQLite is
+  Cloudflare's own engine — a missing function must not brick a tenant's boot, which is
+  precisely what a data migration's fail-closed contract would otherwise do.
+
+  `sort` and `kind` are a CLOSED vocabulary on the server, never a column name and a direction
+  from the client: both compile straight into `ORDER BY` and `WHERE`, so accepting a column
+  would hand a caller the ability to order by — and therefore probe — `alt` or `deletedAt`. An
+  unrecognised value falls back to the default rather than erroring, so a bookmark outliving a
+  rename shows the library. Search matches the filename OR the alt text, since that is the only
+  human description a media row carries and "logo" should find the file somebody described as
+  one even when the upload was called `IMG_2831.png`; the needle's `%` and `_` are escaped to
+  literals by the read engine, which `test/suites/cms.ts` asserts.
+
 - **The screen header stays as the page scrolls, condensed (`@pramen/cms-editor`).** Scrolling a
   media library past the first row used to take the header away, leaving a wall of thumbnails
   with no title and no primary action. Sticky alone would be worse — a 190px banner pinned to

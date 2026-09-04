@@ -459,3 +459,42 @@ export interface AdminPageMeta {
   icon?: string;
   navOrder?: number;
 }
+
+// --- media sorting and filtering -----------------------------------------------------------
+//
+// Mirrors of the vocabularies `listMedia` accepts in @pramen/cms. Mirrored rather than
+// imported for the reason at the top of this file — the editor is a standalone browser app
+// with no server-package dependency — and checked against the originals in
+// `test/cms-editor-mirrors.test.ts`, because a duplicate nobody verifies is a latent bug with
+// a comment on it.
+//
+// The server treats an unrecognised value as absent, so a drift here degrades to the default
+// order rather than to an error. That is the failure worth having, and it is still a failure:
+// a sort the editor offers and the server drops is a control that silently does nothing.
+
+/** How the media library may be ordered. */
+export const MEDIA_SORTS = ["newest", "oldest", "name", "name_desc", "largest", "smallest"] as const;
+export type MediaSort = (typeof MEDIA_SORTS)[number];
+
+/** What each sort is called on screen. */
+export const MEDIA_SORT_LABELS: Record<MediaSort, string> = {
+  newest: "Newest first",
+  oldest: "Oldest first",
+  name: "Name A–Z",
+  name_desc: "Name Z–A",
+  largest: "Largest first",
+  smallest: "Smallest first",
+};
+
+/** The coarse type buckets the library filters by. */
+export const MEDIA_KINDS = ["image", "video", "audio", "document", "other"] as const;
+export type MediaKind = (typeof MEDIA_KINDS)[number];
+
+/** …and their labels. Plural, because each names a SET the filter narrows to. */
+export const MEDIA_KIND_LABELS: Record<MediaKind, string> = {
+  image: "Images",
+  video: "Video",
+  audio: "Audio",
+  document: "Documents",
+  other: "Other",
+};

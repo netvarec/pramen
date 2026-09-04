@@ -412,6 +412,55 @@ export async function runCms(base: string): Promise<void> {
   const mediaId = media.body.result.id as string;
   const mediaKey = signed.body.result.ref.key as string;
 
+  // The library is PAGED, so sorting and filtering have to happen in SQL — which they can only
+  // do against real columns, because `file` is a fileRef (JSON in a TEXT cell) and `orderBy`
+  // cannot see inside it. These assert the projection actually lands on the row.
+  const listed = await call("listMedia", { limit: 50 }, admin);
+  const row = (listed.body.result as Array<{ id: string; filename?: string; contentType?: string; size?: number }>).find((m) => m.id === mediaId);
+  assert(row?.filename === "logo.png", "cms: createMedia projects filename onto a queryable column");
+  assert(row?.contentType === "image/png", "cms: …and contentType");
+  assert(row?.size === bytes.length, "cms: …and size, from the STORED blob rather than the client's claim");
+
+  const images = await call("listMedia", { limit: 50, kind: "image" }, admin);
+  assert(
+    (images.body.result as Array<{ id: string }>).some((m) => m.id === mediaId),
+    "cms: listMedia(kind: image) matches an image/* row",
+  );
+  const docs = await call("listMedia", { limit: 50, kind: "document" }, admin);
+  assert(
+    !(docs.body.result as Array<{ id: string }>).some((m) => m.id === mediaId),
+    "cms: …and kind: document does not",
+  );
+  // A sort this build does not know must degrade to the default order, not 400: a bookmark
+  // outliving a rename should show the library.
+  const bogus = await call("listMedia", { limit: 1, sort: "'; DROP TABLE cms_media --" }, admin);
+  assert(bogus.body.ok === true, "cms: an unknown sort falls back instead of erroring");
+  const named = await call("listMedia", { limit: 50, sort: "name" }, admin);
+  assert(named.body.ok === true, "cms: listMedia sorts by name");
+
+  const found = await call("listMedia", { limit: 50, q: "LOGO" }, admin);
+  assert(
+    (found.body.result as Array<{ id: string }>).some((m) => m.id === mediaId),
+    "cms: listMedia(q) matches a filename case-insensitively",
+  );
+  const byAlt = await call("listMedia", { limit: 50, q: "Our logo" }, admin);
+  assert(
+    (byAlt.body.result as Array<{ id: string }>).some((m) => m.id === mediaId),
+    "cms: …and matches the alt text, the only human description a media row carries",
+  );
+  const narrowed = await call("listMedia", { limit: 50, q: "logo", kind: "document" }, admin);
+  assert(
+    !(narrowed.body.result as Array<{ id: string }>).some((m) => m.id === mediaId),
+    "cms: a search inside a type filter is ANDed, not ORed",
+  );
+  // The needle goes into a LIKE pattern, so its wildcards must be literal — otherwise "%"
+  // matches the entire library and a filename is unsearchable the moment it contains one.
+  const wild = await call("listMedia", { limit: 50, q: "%" }, admin);
+  assert(
+    !(wild.body.result as Array<{ id: string }>).some((m) => m.id === mediaId),
+    "cms: a LIKE wildcard in the needle is escaped to a literal",
+  );
+
   const imgPage = await call("createPage", { typeId: ct.body.result.id, title: "Logo Page", slug: "logo-page" }, admin);
   await call("addBlock", { pageId: imgPage.body.result.id, blockTypeSlug: "image", region: "content", fields: { image: mediaId, caption: "Hi" } }, admin);
   await call("publishPage", { pageId: imgPage.body.result.id }, admin);

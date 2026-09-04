@@ -21,11 +21,16 @@ import { describe, expect, test } from "bun:test";
 import {
   FIELD_TYPES,
   MAX_MENU_DEPTH,
+  MEDIA_KINDS,
   NAV_ORDER,
   REDIRECT_STATUSES,
 } from "../packages/cms/src/index";
 import {
   MAX_MENU_DEPTH as EDITOR_MAX_MENU_DEPTH,
+  MEDIA_KIND_LABELS,
+  MEDIA_KINDS as EDITOR_MEDIA_KINDS,
+  MEDIA_SORT_LABELS,
+  MEDIA_SORTS as EDITOR_MEDIA_SORTS,
   NAV_ORDER as EDITOR_NAV_ORDER,
   REDIRECT_STATUSES as EDITOR_REDIRECT_STATUSES,
 } from "../packages/cms-editor/src/types";
@@ -57,5 +62,30 @@ describe("caps the client may tighten but never loosen", () => {
     // The editor disables its "nest" control at the limit so it does not offer an edit the
     // save would reject. Stricter is conservative; looser hands the user a 400.
     expect(EDITOR_MAX_MENU_DEPTH).toBeLessThanOrEqual(MAX_MENU_DEPTH);
+  });
+});
+
+describe("the media library's sort and filter vocabularies", () => {
+  test("the type buckets match exactly", () => {
+    // The editor renders one chip per kind and sends the string back; the server compiles it
+    // into a WHERE. A kind the editor offers and the server does not know is a chip that
+    // silently shows everything — the server treats an unrecognised value as absent, which is
+    // the right failure and still a failure.
+    expect([...EDITOR_MEDIA_KINDS]).toEqual([...MEDIA_KINDS]);
+  });
+
+  test("every sort and kind the editor offers has a label", () => {
+    // A missing entry renders `undefined` in the menu, which is the kind of hole a type can
+    // catch and a test should prove has been caught.
+    for (const k of EDITOR_MEDIA_KINDS) expect(MEDIA_KIND_LABELS[k]).toBeTruthy();
+    for (const s of EDITOR_MEDIA_SORTS) expect(MEDIA_SORT_LABELS[s]).toBeTruthy();
+  });
+
+  test("the sorts are the ones the server resolves", () => {
+    // `MediaSort` is a type on the server and a runtime array here, so this is the one place
+    // the two can be compared at all. Written out rather than imported from a server-side
+    // array, because the server's is a Record's keys and the ORDER of that Record is what the
+    // editor's menu shows — pinning the list pins the menu.
+    expect([...EDITOR_MEDIA_SORTS]).toEqual(["newest", "oldest", "name", "name_desc", "largest", "smallest"]);
   });
 });

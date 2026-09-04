@@ -2,7 +2,7 @@
 // route modules under `routes/` are thin adapters: they pull `api`/`me`/`setError` from
 // the app context and wire URL params + navigation into these components.
 
-import { Button, Dialog, type DialogSize, Input, Textarea } from "@podoba/react";
+import { Button, Dialog, type DialogSize, DropdownMenu, DropdownMenuItem, DropdownMenuTrigger, Input, SearchField, Textarea } from "@podoba/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Api, ApiError } from "./api";
 import { CONTROL, FieldForm, formatWhen, fromLocalInput, slugify, toLocalInput } from "./fields";
@@ -13,7 +13,8 @@ import type { Config } from "./api";
 import { useApp, type Me } from "./app-context";
 import { isRichTextDoc, richTextToPlainText } from "./rich-text";
 import { flattenTerms } from "./furniture";
-import type { AssembledPage, AuditEntry, BlockType, CmsCapabilities, CollectionMeta, ContentType, FieldDefinition, FieldValue, FieldValues, Media, Page, RegionDefinition, RenderedBlock, Taxonomy, Term } from "./types";
+import type { AssembledPage, AuditEntry, BlockType, CmsCapabilities, CollectionMeta, ContentType, FieldDefinition, FieldValue, FieldValues, Media, MediaKind, MediaSort, Page, RegionDefinition, RenderedBlock, Taxonomy, Term } from "./types";
+import { MEDIA_KIND_LABELS, MEDIA_KINDS, MEDIA_SORT_LABELS, MEDIA_SORTS } from "./types";
 
 export type InspectorTab = "settings" | "seo" | "workflow" | "i18n" | "terms" | "audit";
 export const INSPECTOR_TABS: InspectorTab[] = ["settings", "seo", "workflow", "i18n", "terms", "audit"];
@@ -1551,8 +1552,28 @@ function AuditLog({ api, pageId, onError }: { api: Api; pageId: string; onError:
   );
 }
 
+/** One filter bucket. A toggle rather than a link: pressing the active one clears the filter,
+ * which is the gesture a chip bar teaches — and `aria-pressed` says so, since the tint alone
+ * is invisible to a screen reader and marginal to anyone who cannot see it. */
+function FilterChip({ active, onPress, children }: { active: boolean; onPress: () => void; children: ReactNode }) {
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      aria-pressed={active}
+      className={`rounded-full px-3 py-1 text-compact ${active ? "bg-surface-muted font-medium text-fg" : "text-fg-muted hover:text-fg"}`}
+      onPress={onPress}
+    >
+      {children}
+    </Button>
+  );
+}
+
 // --- media library (a top-level view: browse, upload, edit alt, delete) ---
 const PAGE_SIZE = 60;
+/** How long typing has to pause before the library is re-queried. Long enough that a typed
+ * word is one request rather than five, short enough that it still reads as live. */
+const SEARCH_DEBOUNCE_MS = 250;
 
 export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) => void }) {
   const [media, setMedia] = useState<Media[]>([]);
@@ -1567,11 +1588,25 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
   // publicly fetchable with no way to reach purgeMedia — the case a takedown request needs.
   const [trash, setTrash] = useState<Media[]>([]);
   const [showTrash, setShowTrash] = useState(false);
+  // Order and type filter. Both are SERVER-side: the library is paged, and sorting or
+  // filtering the page that arrived would sort or filter 60 of however many there are, which
+  // is not sorting and not filtering.
+  const [sort, setSort] = useState<MediaSort>("newest");
+  const [kind, setKind] = useState<MediaKind | null>(null);
+  // Two states for one search box. `query` is what the field shows and must update on every
+  // keystroke; `search` is what the server is asked for, and lags it by `SEARCH_DEBOUNCE_MS`
+  // — without the split, either the field stutters or every letter is a round trip.
+  const [query, setQuery] = useState("");
+  const [search, setSearch] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setSearch(query.trim()), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [query]);
 
   const load = useCallback(
     (off: number) => {
       api
-        .listMedia(PAGE_SIZE, off)
+        .listMedia(PAGE_SIZE, off, sort, kind ?? undefined, search || undefined)
         .then((rows) => {
           setMedia((prev) => (off === 0 ? rows : [...prev, ...rows]));
           setHasMore(rows.length === PAGE_SIZE);
@@ -1579,7 +1614,9 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
         })
         .catch((e) => onError(errMsg(e)));
     },
-    [api, onError],
+    // Changing either resets to page 0 through the effect below — appending a differently
+    // ordered page onto the one already on screen would interleave two orderings.
+    [api, onError, sort, kind, search],
   );
   const loadTrash = useCallback(() => {
     api.listTrash().then((r) => setTrash(r.media ?? [])).catch((e) => onError(errMsg(e)));
@@ -1634,6 +1671,48 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
         </Button>
       </Hero>
       <div className={WRAP}>
+        {/* Order and type, above the grid rather than in the header: the header is the
+            SCREEN's identity and its one primary action, and a row of controls in it would be
+            the mint-pill mistake again — a second cluster competing with the artwork. They sit
+            with the thing they act on. */}
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          {/* Matches the filename AND the alt text — the only human description a media row
+              carries, so searching for "logo" finds the file somebody described as one even
+              when the upload was called `IMG_2831.png`. */}
+          <SearchField
+            aria-label="Search media"
+            placeholder="Search files…"
+            value={query}
+            onChange={setQuery}
+            className="w-[220px] shrink-0"
+          />
+          {/* A menu, not podoba's `Select`: that is a form FIELD — a stacked visible label
+              over a trigger, sized and spaced for a form — and in a toolbar it would stand a
+              head taller than the chips beside it. A trigger showing the current order is the
+              toolbar shape, and it is the same RAC menu pattern underneath. */}
+          <DropdownMenuTrigger>
+            <Button variant="secondary" size="sm" className="shrink-0 px-3 py-1 text-compact">
+              {MEDIA_SORT_LABELS[sort]}
+            </Button>
+            <DropdownMenu aria-label="Sort media" onAction={(k) => setSort(k as MediaSort)}>
+              {MEDIA_SORTS.map((v) => (
+                <DropdownMenuItem key={v} id={v}>{MEDIA_SORT_LABELS[v]}</DropdownMenuItem>
+              ))}
+            </DropdownMenu>
+          </DropdownMenuTrigger>
+          {/* Buttons, not a second dropdown: five buckets is few enough to show, and a filter
+              you can see the state of without opening it is the point of a filter bar. "All"
+              is `null` rather than a sixth kind — the server's absent-means-everything, said
+              once, on the side that has the state. */}
+          <div className="flex flex-wrap items-center gap-1">
+            <FilterChip active={kind === null} onPress={() => setKind(null)}>All</FilterChip>
+            {MEDIA_KINDS.map((k) => (
+              <FilterChip key={k} active={kind === k} onPress={() => setKind(kind === k ? null : k)}>
+                {MEDIA_KIND_LABELS[k]}
+              </FilterChip>
+            ))}
+          </div>
+        </div>
         {media.length === 0 ? (
           <p className="text-fg-subtle">No media yet. Upload images to use them in blocks and SEO.</p>
         ) : (

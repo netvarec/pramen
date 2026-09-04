@@ -2,7 +2,7 @@
 // same transport shape as @pramen/admin's api.ts. Config is persisted in localStorage.
 
 import type { AdminPageMeta, AdminPageResponse, AssembledPage, AuditEntry, BlockType, ContentType, Media, Menu, MenuItem, Page, Redirect, Taxonomy, Term, Widget, WidgetArea } from "./types";
-import type { DefaultBlockDefinition, FieldDefinition, RegionDefinition, RpcInput } from "./types";
+import type { DefaultBlockDefinition, FieldDefinition, MediaKind, MediaSort, RegionDefinition, RpcInput } from "./types";
 
 /** The payload `createBlockType` / `updateBlockType` take. `fieldsSchema` is the whole
  * point: a block type IS its field schema. */
@@ -173,7 +173,10 @@ export class Api {
   listPageAudit = (pageId: string) => this.call<AuditEntry[]>("listPageAudit", { pageId });
 
   // --- media ---
-  listMedia = (limit = 50, offset = 0) => this.call<Media[]>("listMedia", { limit, offset });
+  // `undefined` values are simply not serialized, so the absent narrowings need no
+  // conditional spreading — an omitted key and a key set to undefined reach the server the same.
+  listMedia = (limit = 50, offset = 0, sort?: MediaSort, kind?: MediaKind, q?: string) =>
+    this.call<Media[]>("listMedia", { limit, offset, sort, kind, q });
   getMedia = (id: string) => this.call<Media | null>("getMedia", { id });
   updateMedia = (id: string, alt: string | null) => this.call<Media>("updateMedia", { id, alt });
   deleteMedia = (id: string) => this.call<{ ok: true }>("deleteMedia", { id });

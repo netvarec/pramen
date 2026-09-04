@@ -50,7 +50,7 @@ import {
   hashPassword,
 } from "@pramen/auth";
 // @pramen/cms — the block/page builder, wired as an ordinary app fragment.
-import { CMS_LEGACY_TIMESTAMP_COLUMNS, cmsSchema, cmsHandlers, cmsPolicies, cmsTasks, cmsRoutes, defineBlockType, defineContentType, cmsBootstrap, collection, createCollectionHandlers, createCollectionTasks, collectionPolicies, collectionPublicPolicies, adminPage, createAdminPageHandlers, NAV_ORDER } from "@pramen/cms";
+import { CMS_LEGACY_TIMESTAMP_COLUMNS, cmsSchema, cmsHandlers, cmsPolicies, cmsTasks, cmsRoutes, defineBlockType, defineContentType, cmsBootstrap, cmsMigrations, collection, createCollectionHandlers, createCollectionTasks, collectionPolicies, collectionPublicPolicies, adminPage, createAdminPageHandlers, NAV_ORDER } from "@pramen/cms";
 
 /** The columns `createNote` writes. `meta` is omitted (not null) when absent, so a
  * role with a restricted create-field list isn't tripped by an always-present column. */
@@ -1080,6 +1080,9 @@ const seededDoc = defineContentType("seeded_doc", {
 // anyway: on the D1 store the ledger claim and the work are NOT atomic (D1 has no
 // interactive transactions), so a mid-flight failure releases the claim and re-runs.
 const migrations = [
+  // @pramen/cms's own, spread like every other fragment this package ships. Currently the
+  // backfill for the columns `cms_media` grew so the library can be sorted and filtered.
+  ...cmsMigrations,
   // The framework-supplied one: `expr.now()` used to emit the `datetime('now')` space form
   // and now emits ISO-8601, so any row this store wrote under an older build still holds the
   // old shape — and a same-day pair across the two sorts by its separator rather than its

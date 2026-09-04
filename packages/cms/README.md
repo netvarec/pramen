@@ -126,6 +126,19 @@ entry, so doing it there made the returned array stop matching the `as const` li
   the tenant's `media/` prefix); the client PUTs the bytes, then `createMedia({ ref, alt? })`
   confirms the blob is in R2 and persists a `cms_media` row. `listMedia`/`getMedia`/`deleteMedia`
   (deleteMedia also removes the R2 blob) round it out. Editor-gated.
+- **Browsing:** `listMedia({ limit, offset, q?, sort?, kind? })`. `q` matches the filename **or**
+  the alt text (case-insensitive; a `%` or `_` in the needle is a literal), `sort` is one of
+  `newest`/`oldest`/`name`/`name_desc`/`largest`/`smallest`, and `kind` narrows to
+  `image`/`video`/`audio`/`document`/`other`. All three are applied in SQL rather than to the
+  page that arrived, so they mean what they say on a library larger than one page. `sort` and
+  `kind` are closed vocabularies — a caller never names a column — and an unrecognised value
+  falls back to the default instead of erroring.
+
+  This is what `cms_media.filename`/`contentType`/`size` are for: `file` is a `fileRef` (JSON in
+  a TEXT cell), which `orderBy` and `where` cannot see into, so the three fields the library
+  queries by are projected onto indexed columns when a row is created. **Spread `cmsMigrations`
+  into `app.migrations`** to backfill rows written before those columns existed — without it
+  they keep NULL, sort together under a name sort, and answer only the `other` filter.
 - **Reference from a block:** a `"media"` field stores a `cms_media` id. At assemble/publish time
   the id is resolved (recursively, through group/repeater nesting) to a `ResolvedMedia`
   `{ id, key, url, alt, contentType, filename }` in the snapshot — so the content API returns a

@@ -50,7 +50,7 @@ import {
   resolveSecret,
   authorizeHandler,
 } from "@pramen/server";
-import type { HandlerContext, Policy, FileRef, BootstrapFn, JsonValue, SchemaDef, FieldDef, FieldType } from "@pramen/server";
+import type { HandlerContext, Policy, FileRef, BootstrapFn, DataMigration, MigrationContext, JsonValue, SchemaDef, FieldDef, FieldType, WhereClause } from "@pramen/server";
 import type { EnvBag } from "@pramen/server";
 import { isSafeHref, normalizeHref } from "./href";
 import { NAV_ORDER } from "./nav";
@@ -1095,6 +1095,23 @@ export const cmsSchema = {
   cms_media: Entity((t) => ({
     id: primaryKey(generated(t.uuid())),
     file: t.fileRef(),
+    // The three fields the library SORTS and FILTERS by, projected out of `file` into real
+    // columns. `file` is a `t.fileRef()` — JSON in a TEXT cell — so its `filename`,
+    // `contentType` and `size` are invisible to `orderBy` and `where`, and sorting a library
+    // after the page has been fetched sorts one page, which is not sorting.
+    //
+    // A duplicate, deliberately, and the cost is named: they are written where a media row is
+    // CREATED and nowhere else (`updateMedia` never touches the file), so there is one writer
+    // and `file` stays the source of truth for serving. SQLite generated columns would remove
+    // the duplication outright — `GENERATED ALWAYS AS (json_extract(file,'$.filename'))` — but
+    // the schema DSL has no way to declare one, and `generated()` here means something else
+    // entirely (auto-mint a uuid on insert).
+    //
+    // Nullable, so adding them is a plain `ADD COLUMN` on an existing store rather than a
+    // gated table rebuild; `cmsMigrations` backfills what is already there.
+    filename: indexed(t.text()),
+    contentType: indexed(t.text()),
+    size: t.int(),
     alt: t.text(),
     // Soft delete, as on cms_pages. The R2 OBJECT is deliberately kept while a media row
     // is trashed — deleting the bytes would make restore a lie. `purgeMedia` drops both.
@@ -1102,6 +1119,68 @@ export const cmsSchema = {
     createdAt: defaultTo(t.text(), expr.now()),
   })),
 };
+
+// --- media: what the library may be sorted and filtered by ---------------------------------
+//
+// A CLOSED vocabulary on the server, not a column name and a direction from the client. The
+// two inputs compile straight into `ORDER BY` and `WHERE`, so letting a caller name the column
+// would hand it the ability to order by — and therefore probe — any column on the table,
+// `alt` and `deletedAt` included. Six sorts and five kinds is what the screen offers.
+
+/** How a media list may be ordered. */
+export type MediaSort = "newest" | "oldest" | "name" | "name_desc" | "largest" | "smallest";
+
+/** …resolved to the order the read engine takes. `createdAt` is ISO-8601 TEXT (`expr.now()`),
+ * so a lexicographic sort on it IS chronological. */
+const MEDIA_SORTS: Record<MediaSort, { column: string; dir: "asc" | "desc" }> = {
+  newest: { column: "createdAt", dir: "desc" },
+  oldest: { column: "createdAt", dir: "asc" },
+  name: { column: "filename", dir: "asc" },
+  name_desc: { column: "filename", dir: "desc" },
+  largest: { column: "size", dir: "desc" },
+  smallest: { column: "size", dir: "asc" },
+};
+
+/** The coarse type buckets the library filters by — the first segment of a MIME type, which
+ * is the distinction someone browsing a library actually makes ("show me the images"). */
+export const MEDIA_KINDS = ["image", "video", "audio", "document", "other"] as const;
+export type MediaKind = (typeof MEDIA_KINDS)[number];
+
+/** MIME prefixes for the buckets that have one. `document` is a LIST rather than a prefix
+ * because the useful documents share no MIME family — a PDF is `application/pdf` and a Word
+ * file is `application/vnd.openxmlformats-…`. */
+const DOCUMENT_PREFIXES = ["application/pdf", "text/", "application/msword", "application/vnd."] as const;
+
+/** Trim and cap a search needle. Capped because it lands in a `LIKE` pattern: the engine
+ * escapes `%` and `_` for us, so this is not an injection guard — it is a bound on work a
+ * caller can ask the database to do per row. */
+function mediaQuery(raw: unknown): string | undefined {
+  const q = typeof raw === "string" ? raw.trim().slice(0, 120) : "";
+  return q === "" ? undefined : q;
+}
+
+/** Match a needle against the two fields that NAME a file: what it was uploaded as, and what
+ * an editor wrote about it. `alt` is included because it is the only human description a
+ * media row carries, and searching a library for "logo" should find the file somebody
+ * described as a logo even when the upload was called `IMG_2831.png`. */
+function mediaSearchWhere(q: string): WhereClause<typeof cmsSchema, "cms_media"> {
+  return { OR: [{ filename: { contains: q } }, { alt: { contains: q } }] };
+}
+
+/** The `where` clause for one bucket, or `undefined` for "everything".
+ *
+ * `other` is the interesting one: it is defined as NOT any of the buckets that have a
+ * definition, so a file type nobody anticipated still has exactly one home rather than
+ * disappearing from every filter. A row whose `contentType` is NULL — uploaded before the
+ * projection columns existed and never backfilled — lands there too, which is the honest
+ * place for it. */
+function mediaKindWhere(kind: MediaKind | undefined): WhereClause<typeof cmsSchema, "cms_media"> | undefined {
+  if (kind === undefined) return undefined;
+  if (kind === "image" || kind === "video" || kind === "audio") return { contentType: { startsWith: `${kind}/` } };
+  const documents = { OR: DOCUMENT_PREFIXES.map((p) => ({ contentType: { startsWith: p } })) };
+  if (kind === "document") return documents;
+  return { NOT: { OR: [{ contentType: { startsWith: "image/" } }, { contentType: { startsWith: "video/" } }, { contentType: { startsWith: "audio/" } }, documents] } };
+}
 
 /** Block Kit — custom admin pages, described as JSON and rendered by the editor. See
  * `./blockkit`. Re-exported so a host imports `adminPage` beside `collection`. */
@@ -3512,7 +3591,15 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
         filename: input.ref.filename,
         uploadedAt: Date.now(),
       };
-      return cdb(ctx).insert("cms_media", { file, alt: input.alt ?? null });
+      // The projection columns go in beside `file`, from the SAME resolved values — never
+      // from `input`, which is the client's claim about a blob it has just uploaded.
+      return cdb(ctx).insert("cms_media", {
+        file,
+        filename: file.filename ?? null,
+        contentType: file.contentType ?? null,
+        size: file.size ?? null,
+        alt: input.alt ?? null,
+      });
     }, {
       ...editor,
       input: (raw): { ref: FileRef; alt?: string } => {
@@ -3531,11 +3618,34 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       },
     }),
 
-    listMedia: query((ctx, input: { limit?: number; offset?: number }) => {
+    listMedia: query((ctx, input: { limit?: number; offset?: number; sort?: MediaSort; kind?: MediaKind; q?: string }) => {
       const limit = Math.min(Math.max(Math.trunc(Number(input?.limit ?? 50)) || 50, 1), 200);
       const offset = Math.max(Math.trunc(Number(input?.offset ?? 0)) || 0, 0);
-      return cdb(ctx).find({ from: "cms_media", orderBy: { column: "createdAt", dir: "desc" }, limit, offset });
-    }, viewer),
+      // The two narrowings AND together — a search inside a type filter is a search inside a
+      // type filter. Built as a list so neither has to know whether the other is present.
+      const clauses = [mediaKindWhere(input?.kind), input?.q ? mediaSearchWhere(input.q) : undefined].filter(
+        (c): c is WhereClause<typeof cmsSchema, "cms_media"> => c !== undefined,
+      );
+      const where = clauses.length === 0 ? undefined : clauses.length === 1 ? clauses[0] : { AND: clauses };
+      return cdb(ctx).find({ from: "cms_media", where, orderBy: MEDIA_SORTS[input?.sort ?? "newest"], limit, offset });
+    }, {
+      ...viewer,
+      // Parsed, not cast: `sort` names an ORDER BY and `kind` a WHERE, and both arrive from a
+      // browser. Anything unrecognised falls back to the default rather than erroring — a
+      // stale bookmark carrying a sort this build dropped should show the library, not a 400.
+      input: (raw): { limit?: number; offset?: number; sort?: MediaSort; kind?: MediaKind; q?: string } => {
+        const o = asObj(raw);
+        const sort = typeof o.sort === "string" && o.sort in MEDIA_SORTS ? (o.sort as MediaSort) : undefined;
+        const kind = typeof o.kind === "string" && (MEDIA_KINDS as readonly string[]).includes(o.kind) ? (o.kind as MediaKind) : undefined;
+        return {
+          limit: typeof o.limit === "number" ? o.limit : undefined,
+          offset: typeof o.offset === "number" ? o.offset : undefined,
+          sort,
+          kind,
+          q: mediaQuery(o.q),
+        };
+      },
+    }),
 
     getMedia: query(async (ctx, input: { id: string }) => {
       const rows = await cdb(ctx).find({ from: "cms_media", where: { id: input.id }, limit: 1 });
@@ -5876,6 +5986,63 @@ export function createCollectionTasks(collections: readonly CollectionDef[]) {
  * between the revision insert and the page update leaves the page unpublished with an orphan
  * revision until the next at-least-once redelivery re-runs (the token still matches, so it
  * completes). Acceptable for a scheduled job; the interactive path is atomic. */
+/**
+ * The CMS's own data migrations — spread into `app.migrations`.
+ *
+ *     migrations: [...cmsMigrations]
+ *
+ * Opt-in like every other fragment this package ships (`cmsHandlers`, `cmsPolicies`,
+ * `cmsTasks`), and with the same consequence for forgetting it: nothing breaks loudly. Media
+ * rows written before the projection columns existed keep NULL `filename`/`contentType`, so
+ * they sort together under a name sort and answer only the `other` type filter. New uploads
+ * are unaffected — `createMedia` writes the columns itself.
+ */
+export const cmsMigrations: readonly DataMigration[] = [
+  {
+    // Fill the columns `cms_media` grew for sorting and filtering, out of the `file` JSON that
+    // has always held the same three values.
+    id: "cms:2026-09-04-media-projection-columns",
+    // `MigrationContext<typeof cmsSchema>` is what types `db` here — the `DataMigration`
+    // contract is schema-agnostic, so an unparameterized ctx hands back untyped rows.
+    async up({ db, driver }: MigrationContext<typeof cmsSchema>) {
+      const d = driver.dialect;
+      const t = d.id("cms_media");
+      const set = (c: string, path: string) => `${d.id(c)} = json_extract(${d.id("file")}, '$.${path}')`;
+      try {
+        // One statement for the whole table. `WHERE filename IS NULL` makes it cheap on a
+        // store that has nothing to do, and keeps it off rows a later upload already filled.
+        await driver.exec(
+          `UPDATE ${t} SET ${set("filename", "filename")}, ${set("contentType", "contentType")}, ${set("size", "size")} ` +
+            `WHERE ${d.id("filename")} IS NULL AND ${d.id("contentType")} IS NULL`,
+          [],
+        );
+        return;
+      } catch {
+        // `json_extract` is a JSON1 function. It is present in D1 and in every ordinary SQLite
+        // build, but nothing in this repo has depended on it before and DO SQLite is
+        // Cloudflare's own engine — so a missing function must not brick a tenant's boot,
+        // which is exactly what a data migration's fail-closed contract would otherwise do.
+        // The fallback walks the rows through the ORM, where the fileRef codec has already
+        // parsed the same JSON for us. Slower, and bounded by how many media a tenant has.
+      }
+      // No chunking: this runs inside `blockConcurrencyWhile` on a tenant's first fetch, so a
+      // very large library will stall that one request — which is still the right trade
+      // against leaving half the table unsorted forever, since a migration runs ONCE.
+      const rows = await db.find({ from: "cms_media", where: { filename: { isNull: true }, contentType: { isNull: true } } });
+      for (const row of rows) {
+        const file = row.file;
+        if (!file || typeof file !== "object" || Array.isArray(file)) continue;
+        const ref = file as { filename?: unknown; contentType?: unknown; size?: unknown };
+        await db.update("cms_media", String(row.id), {
+          filename: typeof ref.filename === "string" ? ref.filename : null,
+          contentType: typeof ref.contentType === "string" ? ref.contentType : null,
+          size: typeof ref.size === "number" ? ref.size : null,
+        });
+      }
+    },
+  },
+];
+
 export const cmsTasks = {
   "cms:publish": async (ctx: HandlerContext, payload: unknown) => {
     const { pageId, token } = asObj(payload) as { pageId?: string; token?: string };
