@@ -1,11 +1,10 @@
 ---
-// One page per published article, prerendered. `BlockRenderer` maps each block's type slug
-// to one of the site's own components; an unmapped type renders a visible placeholder
-// rather than disappearing.
+// One page per published article, prerendered. The markup lives in `Article.astro`, shared
+// with `preview.astro` — a preview rendered by a second copy of the layout is a preview of
+// the copy.
 import type { RenderedBlock } from "@pramen/cms-astro";
-import BlockRenderer from "@pramen/cms-astro/BlockRenderer.astro";
 import { getCollection } from "astro:content";
-import RichText from "../components/blocks/RichText.astro";
+import Article from "../components/Article.astro";
 
 /** What this site expects a published article to look like — the default `cmsLoader`
  * transform flattens the page's own fields to the top level and adds these.
@@ -14,36 +13,22 @@ import RichText from "../components/blocks/RichText.astro";
  * and every read below would otherwise go unchecked. Declaring `Props` is what gives
  * `astro check` something to verify. It is a claim about the content, not a guarantee —
  * enforcement would mean a schema on the collection. */
-interface Article {
+interface ArticleData {
   title: string;
   blocks: RenderedBlock[];
   seo?: { metaDescription?: string } | null;
 }
 
 interface Props {
-  page: Article;
+  page: ArticleData;
 }
 
 export async function getStaticPaths() {
   const articles = await getCollection("articles");
-  return articles.map((a) => ({ params: { slug: a.id }, props: { page: a.data as Article } }));
+  return articles.map((a) => ({ params: { slug: a.id }, props: { page: a.data as ArticleData } }));
 }
 
 const { page } = Astro.props;
-const components = { rich_text: RichText };
 ---
 
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{page.title}</title>
-    {page.seo?.metaDescription ? <meta name="description" content={page.seo.metaDescription} /> : null}
-  </head>
-  <body>
-    <h1>{page.title}</h1>
-    <BlockRenderer blocks={page.blocks} {components} />
-    <p><a href="/">Back</a></p>
-  </body>
-</html>
+<Article title={page.title} blocks={page.blocks} description={page.seo?.metaDescription} />

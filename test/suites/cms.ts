@@ -412,6 +412,85 @@ export async function runCms(base: string): Promise<void> {
   const mediaId = media.body.result.id as string;
   const mediaKey = signed.body.result.ref.key as string;
 
+  // The library is PAGED, so sorting and filtering have to happen in SQL — which they can only
+  // do against real columns, because `file` is a fileRef (JSON in a TEXT cell) and `orderBy`
+  // cannot see inside it. These assert the projection actually lands on the row.
+  const mediaListed = await call("listMedia", { limit: 50 }, admin);
+  const row = (mediaListed.body.result as Array<{ id: string; filename?: string; contentType?: string; size?: number }>).find((m) => m.id === mediaId);
+  assert(row?.filename === "logo.png", "cms: createMedia projects filename onto a queryable column");
+  assert(row?.contentType === "image/png", "cms: …and contentType");
+  assert(row?.size === bytes.length, "cms: …and size, from the STORED blob rather than the client's claim");
+
+  const images = await call("listMedia", { limit: 50, kind: "image" }, admin);
+  assert(
+    (images.body.result as Array<{ id: string }>).some((m) => m.id === mediaId),
+    "cms: listMedia(kind: image) matches an image/* row",
+  );
+  const docs = await call("listMedia", { limit: 50, kind: "document" }, admin);
+  assert(
+    !(docs.body.result as Array<{ id: string }>).some((m) => m.id === mediaId),
+    "cms: …and kind: document does not",
+  );
+
+  // A LEGACY row: projection columns never backfilled, so `contentType` is NULL. Reached
+  // through /admin/data because `createMedia` cannot produce one — its parser defaults the
+  // content type — and this is exactly the row a deployment that upgraded without spreading
+  // `cmsMigrations` is full of.
+  //
+  // SQL is three-valued, so `NOT (col LIKE … OR …)` is NULL against a NULL column, not TRUE:
+  // `other` excluded the very rows its own doc comment says belong there, and the row was
+  // invisible under ALL FIVE chips with only "clear the filter" to find it.
+  const legacyUp = await call("signMediaUpload", { contentType: "image/png", filename: "legacy.png" }, admin);
+  await fetch(`${base}${legacyUp.body.result.url}`, { method: "PUT", headers: { "content-type": "image/png" }, body: new Uint8Array([137, 80, 78, 71, 7]) });
+  const legacy = await call("createMedia", { ref: legacyUp.body.result.ref }, admin);
+  const legacyId = legacy.body.result.id as string;
+  await fetch(`${base}/admin/data`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${admin}` },
+    body: JSON.stringify({ tenant: TENANT, table: "cms_media", op: "update", id: legacyId, patch: { contentType: null } }),
+  });
+  const other = await call("listMedia", { limit: 200, kind: "other" }, admin);
+  assert(
+    (other.body.result as Array<{ id: string }>).some((m) => m.id === legacyId),
+    "cms: a row with no contentType lands in `other`, not in nothing",
+  );
+  for (const k of ["image", "video", "audio", "document"]) {
+    const bucket = await call("listMedia", { limit: 200, kind: k }, admin);
+    assert(
+      !(bucket.body.result as Array<{ id: string }>).some((m) => m.id === legacyId),
+      `cms: …and not in ${k}`,
+    );
+  }
+  // A sort this build does not know must degrade to the default order, not 400: a bookmark
+  // outliving a rename should show the library.
+  const bogus = await call("listMedia", { limit: 1, sort: "'; DROP TABLE cms_media --" }, admin);
+  assert(bogus.body.ok === true, "cms: an unknown sort falls back instead of erroring");
+  const named = await call("listMedia", { limit: 50, sort: "name" }, admin);
+  assert(named.body.ok === true, "cms: listMedia sorts by name");
+
+  const found = await call("listMedia", { limit: 50, q: "LOGO" }, admin);
+  assert(
+    (found.body.result as Array<{ id: string }>).some((m) => m.id === mediaId),
+    "cms: listMedia(q) matches a filename case-insensitively",
+  );
+  const byAlt = await call("listMedia", { limit: 50, q: "Our logo" }, admin);
+  assert(
+    (byAlt.body.result as Array<{ id: string }>).some((m) => m.id === mediaId),
+    "cms: …and matches the alt text, the only human description a media row carries",
+  );
+  const mediaNarrowed = await call("listMedia", { limit: 50, q: "logo", kind: "document" }, admin);
+  assert(
+    !(mediaNarrowed.body.result as Array<{ id: string }>).some((m) => m.id === mediaId),
+    "cms: a search inside a type filter is ANDed, not ORed",
+  );
+  // The needle goes into a LIKE pattern, so its wildcards must be literal — otherwise "%"
+  // matches the entire library and a filename is unsearchable the moment it contains one.
+  const wild = await call("listMedia", { limit: 50, q: "%" }, admin);
+  assert(
+    !(wild.body.result as Array<{ id: string }>).some((m) => m.id === mediaId),
+    "cms: a LIKE wildcard in the needle is escaped to a literal",
+  );
+
   const imgPage = await call("createPage", { typeId: ct.body.result.id, title: "Logo Page", slug: "logo-page" }, admin);
   await call("addBlock", { pageId: imgPage.body.result.id, blockTypeSlug: "image", region: "content", fields: { image: mediaId, caption: "Hi" } }, admin);
   await call("publishPage", { pageId: imgPage.body.result.id }, admin);
@@ -737,13 +816,23 @@ export async function runCms(base: string): Promise<void> {
   const badOrder = await call("schedulePage", { pageId, publishAt: Date.now() + 1000, unpublishAt: Date.now() + 500 }, admin);
   assert(badOrder.status === 400 && badOrder.body.ok === false, "cms: schedulePage rejects unpublishAt <= publishAt (400)");
 
+  // --- scheduling does not publish: a FUTURE schedule, so nothing can drain it ---
+  //
+  // This used to be asserted against a schedule due NOW, one HTTP call after arming it — and
+  // the DO self-drains via an alarm set to the next due time, so it was asserting that the
+  // race went its way. It held locally and lost in CI. Split in two instead, so neither half
+  // races: the "does not publish" claim is made about a schedule that CANNOT be due yet, and
+  // the "drain publishes it" claim below only ever asserts the state AFTER the drain, which is
+  // the same whether the alarm or the explicit drain got there first.
+  const pending = await call("createPage", { typeId: ct.body.result.id, title: "Pending", slug: "pending-launch" }, admin);
+  await call("schedulePage", { pageId: pending.body.result.id, publishAt: Date.now() + 3_600_000 }, admin);
+  assert((await call("getPage", { slug: "pending-launch" })).status === 404, "cms: a scheduled page is not public before its instant");
+
   // --- scheduled publish, end-to-end via a drain (intent-validated outbox task) ---
   const launch = await call("createPage", { typeId: ct.body.result.id, title: "Launch", slug: "launch" }, admin);
   const launchId = launch.body.result.id as string;
   await call("addBlock", { pageId: launchId, blockTypeSlug: "rich_text", region: "content", fields: { body: rt("Launch!") } }, admin);
   await call("schedulePage", { pageId: launchId, publishAt: Date.now() }, admin);
-  const beforeDrain = await call("getPage", { slug: "launch" });
-  assert(beforeDrain.status === 404, "cms: a scheduled page is not public until the task drains");
   await drain(base, admin);
   const afterDrain = await call("getPage", { slug: "launch" });
   assert(afterDrain.body.ok && (afterDrain.body.result.regions.content as unknown[]).length === 1, "cms: after drain, the scheduled page is published with its block");
@@ -1025,10 +1114,72 @@ export async function runCms(base: string): Promise<void> {
   const byTerm = await call("listPagesByTerm", { taxonomy: "category", term: "news" });
   assert((byTerm.body.result as Array<{ id: string }>).some((p) => p.id === menuPageId), "cms: listPagesByTerm traverses the junction under the public page scope");
 
+  // Media carries the SAME vocabularies through its own junction. Its own upload, so these
+  // do not depend on the lifecycle of the library row above (which is purged by here).
+  const tagUp = await call("signMediaUpload", { contentType: "image/png", filename: "tagged.png" }, admin);
+  await fetch(`${base}${tagUp.body.result.url}`, { method: "PUT", headers: { "content-type": "image/png" }, body: new Uint8Array([137, 80, 78, 71, 9]) });
+  const tagged = await call("createMedia", { ref: tagUp.body.result.ref, alt: "Tagged file" }, admin);
+  const taggedId = tagged.body.result.id as string;
+  const newsId = termNews.body.result.id as string;
+  const localId = termLocal.body.result.id as string;
+
+  assert((await call("setMediaTerms", { mediaId: taggedId, termIds: [localId] }, admin)).body.ok, "cms: setMediaTerms assigns a term to a file");
+  const mediaTerms = await call("listMediaTerms", { mediaId: taggedId }, admin);
+  assert((mediaTerms.body.result as Array<{ slug: string }>).map((t) => t.slug).join() === "local", "cms: listMediaTerms reads them back");
+  // The point of the junction: the library narrows by term IN SQL, like it narrows by kind.
+  const byTag = await call("listMedia", { limit: 50, term: localId }, admin);
+  assert((byTag.body.result as Array<{ id: string }>).some((m) => m.id === taggedId), "cms: listMedia(term) traverses the junction");
+  const byOtherTag = await call("listMedia", { limit: 50, term: newsId }, admin);
+  assert(!(byOtherTag.body.result as Array<{ id: string }>).some((m) => m.id === taggedId), "cms: …and a term the file does not carry excludes it");
+  const tagAndKind = await call("listMedia", { limit: 50, term: localId, kind: "document" }, admin);
+  assert(!(tagAndKind.body.result as Array<{ id: string }>).some((m) => m.id === taggedId), "cms: a tag filter ANDs with the type filter");
+  // A term id that is not a term matches nothing rather than erroring or matching everything.
+  const bogusTag = await call("listMedia", { limit: 50, term: "not-a-term" }, admin);
+  assert(bogusTag.body.ok === true && !(bogusTag.body.result as Array<{ id: string }>).some((m) => m.id === taggedId), "cms: an unknown term id narrows to nothing");
+
+  // --- what a vocabulary is offered for -----------------------------------------------------
+  // `category` above was created without `appliesTo`, i.e. it classifies EVERYTHING — which is
+  // also how a row written before the column existed reads. Both assignments above therefore
+  // had to be accepted, and were.
+  const catAll = await call("listTaxonomies", { target: "media" });
+  assert((catAll.body.result as Array<{ slug: string }>).some((t) => t.slug === "category"), "cms: an un-narrowed vocabulary applies to everything");
+
+  const shots = await call("createTaxonomy", { slug: "shot-type", label: "Shot type", appliesTo: ["media"] }, admin);
+  assert(shots.body.ok, "cms: createTaxonomy takes appliesTo");
+  const shotTerm = await call("createTerm", { taxonomy: "shot-type", slug: "closeup", label: "Close-up" }, admin);
+  const forMedia = await call("listTaxonomies", { target: "media" });
+  const forPages = await call("listTaxonomies", { target: "page" });
+  assert((forMedia.body.result as Array<{ slug: string }>).some((t) => t.slug === "shot-type"), "cms: listTaxonomies(media) offers a media vocabulary");
+  assert(!(forPages.body.result as Array<{ slug: string }>).some((t) => t.slug === "shot-type"), "cms: …and listTaxonomies(page) does not");
+  const unfiltered = await call("listTaxonomies", {});
+  assert((unfiltered.body.result as Array<{ slug: string }>).some((t) => t.slug === "shot-type"), "cms: an unfiltered list still shows it — the screen that edits the scope must see it");
+
+  // The write side, not just the UI: hiding the vocabulary from a panel without refusing the
+  // assignment would make appliesTo a hint, and leave every non-panel caller unguarded.
+  const wrongTarget = await call("setPageTerms", { pageId: menuPageId, termIds: [shotTerm.body.result.id] }, admin);
+  assert(wrongTarget.status === 400, "cms: assigning a media-only term to a PAGE is refused");
+  assert((await call("setMediaTerms", { mediaId: taggedId, termIds: [shotTerm.body.result.id] }, admin)).body.ok, "cms: …and the same term on a file is fine");
+
+  // Narrowing away a target that is still in use would strand those assignments: still stored,
+  // still returned, invisible in the panel that could remove them.
+  const narrowUsed = await call("updateTaxonomy", { id: shots.body.result.id, appliesTo: ["page"] }, admin);
+  assert(narrowUsed.status === 400, "cms: narrowing a vocabulary away from something it is assigned to is refused");
+  // Widening strands nothing, so it is always allowed.
+  assert((await call("updateTaxonomy", { id: shots.body.result.id, appliesTo: ["page", "media"] }, admin)).body.ok, "cms: widening is allowed");
+  assert((await call("createTaxonomy", { slug: "bad-scope", label: "Bad", appliesTo: ["collection"] }, admin)).status === 400, "cms: an unknown target is refused, not dropped");
+  assert((await call("createTaxonomy", { slug: "empty-scope", label: "Empty", appliesTo: [] }, admin)).status === 400, "cms: a vocabulary that classifies nothing is refused");
+
   // Deleting a term takes its assignments with it — a real ON DELETE CASCADE, so the
   // cleanup cannot be half-done by a handler that threw between two writes.
-  assert((await call("deleteTerm", { id: termNews.body.result.id }, admin)).body.ok, "cms: deleteTerm ok");
+  assert((await call("deleteTerm", { id: newsId }, admin)).body.ok, "cms: deleteTerm ok");
   assert(((await call("listPageTerms", { pageId: menuPageId })).body.result as unknown[]).length === 0, "cms: the term's page assignments went with it");
+  assert((await call("deleteTerm", { id: localId }, admin)).body.ok, "cms: deleteTerm ok (the media-tagged one)");
+  // The DELETED term specifically, not "the list is empty" — the file also carries the
+  // shot-type term by now, and an emptiness check would pass for the wrong reason if the
+  // cascade ever took the wrong rows.
+  const afterCascade = (await call("listMediaTerms", { mediaId: taggedId }, admin)).body.result as Array<{ id: string }>;
+  assert(!afterCascade.some((t) => t.id === localId), "cms: …and the term's MEDIA assignments went with it too");
+  assert(afterCascade.some((t) => t.id === shotTerm.body.result.id), "cms: …while the file's other tags are untouched");
 
   const area = await call("createWidgetArea", { name: "sidebar", label: "Sidebar" }, admin);
   assert(area.body.ok, "cms: createWidgetArea ok");

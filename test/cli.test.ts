@@ -46,10 +46,18 @@ describe("pramen cli", () => {
     const { out, code } = run("migrations", "list", "--app", "example/app.ts");
     expect(code).toBe(0);
     const ids = out.trim().split("\n").map((l) => l.split("  ")[0]);
-    // Declaration order, which is also run order. The framework-supplied ISO-timestamp
-    // backfill is first because the example declares it first — it rewrites columns the two
-    // app migrations below then read, so its position is not incidental.
-    expect(ids).toEqual(["pramen:iso-timestamps", "2026-09-03-backfill-note-meta", "2026-09-03-normalize-signup-status"]);
+    // Declaration order, which is also run order — and the list is the sum of what every
+    // spread-in package declares plus the app's own, which is exactly what the command is
+    // for: `@pramen/cms` contributes the media-projection backfill, the framework the
+    // ISO-timestamp rewrite, and only the last two are the example's. The framework one
+    // precedes the app's two because it rewrites columns they then read, so its position is
+    // not incidental.
+    expect(ids).toEqual([
+      "cms:2026-09-04-media-projection-columns",
+      "pramen:iso-timestamps",
+      "2026-09-03-backfill-note-meta",
+      "2026-09-03-normalize-signup-status",
+    ]);
     expect(out).toContain("(partition: default)");
   });
 

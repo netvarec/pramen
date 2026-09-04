@@ -199,7 +199,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
     );
     for (const fn of fns) {
       try {
-        await this.driver.transaction(() => Promise.resolve(fn({ db, driver: this.driver, schema: this.app.schema, partition: this.partition })));
+        await this.driver.transaction(() => Promise.resolve(fn({ db, driver: this.driver, schema: this.app.schema, partition: this.partition, env: this.envBag })));
       } catch (e) {
         console.error(`[pramen] bootstrap failed (partition=${this.partition}):`, e);
       }

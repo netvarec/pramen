@@ -1,0 +1,122 @@
+---
+// The example's sign-in page — the door the CMS editor sends an unauthenticated visitor to.
+//
+// The editor is BYO-IdP by design: it verifies a bearer token and knows nothing about how one
+// is obtained, so the SITE owns this screen. That is the same shape a real deployment uses
+// (`admin: { signInUrl }` in astro.config.mjs), and it is why the editor needs no coupling to
+// @pramen/auth: this page calls `login`, writes the token where the editor reads it, and
+// hands over.
+//
+// Credentials come from `devUserBootstrap` in example/app.ts, seeded only when
+// PRAMEN_DEV_SEED is set — which `oblaka.ts` does for the local env and nowhere else.
+export const prerender = true;
+
+// The same env var the integration resolves its backend from, so the page and the editor
+// cannot end up pointing at different Workers. Read at BUILD time, which is correct for a
+// prerendered page and is what makes this a static asset with no server round-trip.
+const backend = (process.env.PRAMEN_CMS_URL ?? "http://localhost:8787").replace(/\/+$/, "");
+const tenant = process.env.PRAMEN_CMS_TENANT ?? "main";
+const devUser = "pramen@local";
+const devPassword = "pramen-dev";
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sign in · example cms</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body { margin: 0; display: grid; place-items: center; min-height: 100vh; background: #fff; color: #0d0d0d;
+             font: 400 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+      main { width: 100%; max-width: 380px; padding: 0 24px; }
+      h1 { margin: 0 0 4px; font-size: 28px; letter-spacing: -0.01em; }
+      p.lead { margin: 0 0 24px; color: #7d786f; }
+      label { display: block; margin-bottom: 14px; }
+      label span { display: block; margin-bottom: 6px; font-size: 13px; color: #7d786f; }
+      input { width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid #eceae1; border-radius: 8px;
+              background: #fff; color: inherit; font: inherit; }
+      button { width: 100%; padding: 11px 16px; border: 0; border-radius: 999px; background: #0d0d0d; color: #fff;
+               font: inherit; font-weight: 500; cursor: pointer; }
+      button[disabled] { opacity: 0.5; cursor: progress; }
+      .status { min-height: 20px; margin-top: 14px; font-size: 13px; }
+      .status.err { color: #b3261e; }
+      .status.ok { color: #1a7f4b; }
+      .hint { margin-top: 24px; padding: 12px 14px; border: 1px dashed #eceae1; border-radius: 10px;
+              font-size: 13px; color: #7d786f; }
+      code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #0d0d0d; }
+      @media (prefers-color-scheme: dark) {
+        body { background: #242423; color: #fff; }
+        input { background: #2e2e2d; border-color: #ffffff1a; }
+        button { background: #fff; color: #0d0d0d; }
+        .hint { border-color: #ffffff1a; }
+        code { color: #fff; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Sign in</h1>
+      <p class="lead">example · cms</p>
+      <form id="f" novalidate>
+        <label>
+          <span>Username</span>
+          <input id="u" type="text" autocomplete="username" value={devUser} />
+        </label>
+        <label>
+          <span>Password</span>
+          <input id="p" type="password" autocomplete="current-password" value={devPassword} />
+        </label>
+        <button id="b" type="submit">Sign in</button>
+      </form>
+      <div id="s" class="status"></div>
+      <p class="hint">
+        Local demo account, seeded by <code>devUserBootstrap</code> when <code>PRAMEN_DEV_SEED</code> is set.
+        No account? <code>bun tools/dev-token.ts</code> mints a token for the editor's own
+        Setup screen at <code>?setup=1</code>.
+      </p>
+    </main>
+
+    <script define:vars={{ backend, tenant }}>
+      const $ = (id) => document.getElementById(id);
+      const say = (msg, kind) => { $("s").className = "status " + (kind ?? ""); $("s").textContent = msg; };
+      const LABEL = $("b").textContent;
+
+      $("f").addEventListener("submit", async (ev) => {
+        ev.preventDefault();
+        $("b").disabled = true;
+        // PBKDF2 at 100k iterations takes a beat, and longer on a cold isolate. A dead button
+        // and nothing else reads as broken well before the request is actually late.
+        $("b").textContent = "Signing in…";
+        say("");
+        try {
+          const res = await fetch(`${backend}/rpc/login`, {
+            method: "POST",
+            headers: { "content-type": "application/json", "x-pramen-tenant": tenant },
+            body: JSON.stringify({ username: $("u").value.trim(), password: $("p").value }),
+          });
+          const body = await res.json();
+          if (body.ok !== true) {
+            const err = new Error(body.error || "the server rejected the request");
+            err.code = body.code;
+            throw err;
+          }
+          // The key and the shape must match `LS` in @pramen/cms-editor/api.ts. The shell
+          // declares the backend itself and wins over anything stored, so the token is the
+          // part that matters — the rest is written for a standalone editor mount.
+          localStorage.setItem("pramen.cmsEditor", JSON.stringify({ baseUrl: backend, tenant, token: body.result.token }));
+          say("Signed in. Opening the editor…", "ok");
+          location.replace("/__admin");
+        } catch (e) {
+          // Only claim "wrong credentials" when the SERVER said so. Without the code check a
+          // network failure or a 500 reads as a bad password, which sends someone off to
+          // reset a password that was never the problem.
+          if (e?.code === "unauthorized") say("Wrong username or password.", "err");
+          else say("Sign-in failed: " + (e?.message || "unknown error"), "err");
+          $("b").disabled = false;
+          $("b").textContent = LABEL;
+        }
+      });
+    </script>
+  </body>
+</html>

@@ -46,6 +46,345 @@ there are no backward-compatibility guarantees yet.
   delete this migration?", since migration is lazy and per-DO and a tenant nobody has touched is
   still unmigrated (the same trap `renamedFrom` carries).
 
+### Changed
+
+- **The editor's primary nav is a sidebar with icons and groups (`@pramen/cms-editor`).** It was
+  a row of tabs in the podoba topbar, which is a brand-left / few-tabs-right bar and fits a few
+  tabs. A real deployment is not a few: Pages (or one tab per content type), N collections,
+  Media, Menus, Taxonomies, Widgets, Redirects, any Block Kit page, Types, Users, Settings and
+  whatever `extraNav` adds is a dozen-plus destinations. Past six or seven they became a dense
+  unlabelled ribbon and then a horizontal scroller — a nav you have to scroll to discover, which
+  is the one thing a primary nav must not be. The rail shows every destination at once, with an
+  icon per row and headings that group them; below `md` it collapses to a disclosure under the
+  wordmark. Everything else stays podoba (ghost pills, `text-compact`, the surface and border
+  tokens); only the chrome's layout changed, and no page's own content moved.
+
+  The groups — Content, Site, Apps, System — are BANDS OF `order`, not a hand-written list of
+  sections, so the module's one contract still decides everything: an entry placed at
+  `NAV_ORDER.pages + 50` is in Content and one at `NAV_ORDER.menus + 10` is in Site, exactly as
+  the number reads. Enumerating keys instead would have let a host-placed entry land visually
+  inside a group it is not a member of. Empty groups are dropped, and a deployment with only one
+  group (collections-only, no site furniture) gets no headings at all — a single heading over a
+  whole rail captions a list with no sibling to distinguish it from.
+
+  A collection's or a Block Kit page's declared `icon` now goes in the ICON COLUMN. It used to be
+  prepended to the label, where it read as part of the words, wrapped with them, and could not be
+  aligned with anything; anything declaring none gets its section's glyph, so the column has no
+  ragged edge. The glyphs podoba does not ship yet live in `cms-editor/src/icons.tsx`, drawn on
+  its exact 24×24 / 2px-round grid so the nav reads as one family.
+
+  The rail is shaped like NOTION's, which is the shape this kind of nav has converged on and the
+  one an editor already knows how to read: a ground of its own (`surface-card` against the
+  content's `surface`), so the two regions separate without a rule between them; dense rows
+  (13px label, 15px icon, ~26px tall — a list to scan, not a strip of buttons to aim at, which
+  is what podoba's `rounded-full` / `py-2` action pill made them); and **collapsible groups**,
+  the fold remembered per browser in `localStorage`. In DARK, podoba maps `surface-card` onto
+  `surface`, so there the hairline does the separating — which is why the border is
+  unconditional and the tone is not. The active row also takes `font-medium`: podoba has one
+  muted-surface token, so hover and active are otherwise the same pixel and "where am I"
+  disappears under the cursor.
+
+- **The media library can be searched, sorted and filtered (`@pramen/cms`, `@pramen/cms-editor`).**
+  `listMedia` gains `q`, `sort` (newest/oldest, name A–Z/Z–A, largest/smallest) and `kind`
+  (image/video/audio/document/other), and the library gets a search field, a sort menu and a
+  row of type chips. All three are SERVER-side, because the library is paged: sorting or
+  filtering the 60 rows that arrived sorts and filters 60 rows, which is neither.
+
+  That required real columns. `cms_media.file` is a `t.fileRef()` — JSON in a TEXT cell — so
+  its `filename`, `contentType` and `size` are invisible to `orderBy` and `where`. They are now
+  projected onto indexed columns beside it, written where a media row is CREATED and nowhere
+  else, so there is one writer and `file` stays the source of truth for serving. SQLite
+  generated columns would remove the duplication outright, but the schema DSL cannot declare
+  one. Nullable, so an existing store takes a plain `ADD COLUMN`.
+
+  **`cmsMigrations` is new and must be spread into `app.migrations`** — it backfills those
+  columns from the JSON that has always held the same values. Forgetting it fails quietly, in
+  the way this package's other fragments do: pre-existing rows keep NULL and sort together
+  under a name sort. The backfill is one bulk `UPDATE … json_extract(…)`, with an ORM walk as a
+  fallback, because nothing in this repo had depended on JSON1 before and DO SQLite is
+  Cloudflare's own engine — a missing function must not brick a tenant's boot, which is
+  precisely what a data migration's fail-closed contract would otherwise do.
+
+  The `other` bucket needs its own NULL clause, and shipped without one. SQL is three-valued:
+  against a NULL `contentType` every `LIKE` is NULL, so `NOT (… OR …)` is NULL rather than
+  TRUE and the row is excluded. `other` therefore matched everything except the rows it is
+  defined to hold, and a legacy row — the deployment that upgraded and did not spread
+  `cmsMigrations` — was invisible under all five chips, findable only by clearing the filter
+  and with nothing on screen saying why.
+
+  `sort` and `kind` are a CLOSED vocabulary on the server, never a column name and a direction
+  from the client: both compile straight into `ORDER BY` and `WHERE`, so accepting a column
+  would hand a caller the ability to order by — and therefore probe — `alt` or `deletedAt`. An
+  unrecognised value falls back to the default rather than erroring, so a bookmark outliving a
+  rename shows the library. Search matches the filename OR the alt text, since that is the only
+  human description a media row carries and "logo" should find the file somebody described as
+  one even when the upload was called `IMG_2831.png`; the needle's `%` and `_` are escaped to
+  literals by the read engine, which `test/suites/cms.ts` asserts.
+
+- **Media carries taxonomy terms (`@pramen/cms`, `@pramen/cms-editor`).** Files are tagged with
+  the SAME vocabularies pages are — `cms_taxonomies` / `cms_terms`, through a new
+  `cms_media_terms` junction — so a deployment that declares "Topics" tags a photo with one
+  without declaring it twice, and the Taxonomies screen stays the one place a vocabulary is
+  edited. `listMediaTerms` / `setMediaTerms` mirror the page pair (set semantics: the panel
+  holds the whole selection, and two calls each patching one end of it race into a state
+  neither asked for), and `listMedia` gains `term`, which ANDs with `kind` and `q`.
+
+  A second junction rather than one polymorphic `cms_object_terms(objectType, objectId, …)`: a
+  polymorphic key cannot carry a real foreign key, and the FKs are what does the work — purging
+  a file or deleting a term takes its assignments with it, with no handler remembering to. The
+  `where` traversal needs a typed column to join on too; `objectId` would have to be filtered by
+  a discriminator the read engine cannot require, so one forgotten `objectType` clause would
+  silently mix a page's tags into a media query.
+
+  Filtering by term is a relation traversal compiled to a subquery, so it costs the same page of
+  rows as filtering by kind — which is the whole reason the assignments are a junction and not a
+  JSON array on the media row. A tag you cannot filter a paged library by is decoration.
+  `listCmsCapabilities().mediaTerms` declares it: on an older server the detail panel's Tags
+  section would 404 on open and the library's tag filter would send an argument that is silently
+  ignored, i.e. a control that visibly does nothing.
+
+  A vocabulary now declares **`appliesTo`** (`["page"]`, `["media"]`, both, or `null` for
+  everything), because reusing the page vocabularies wholesale meant offering all of them in
+  both places: a photo filed under "Local news", and `getTermTree("category")` filling up with
+  terms like "hero" that no page listing will ever use. `listTaxonomies({ target })` narrows to
+  it — server-side, so the page panel, the media panel and the write-side guard read one answer
+  and cannot disagree.
+
+  It is enforced on the WRITE, not just in the UI. Hiding a vocabulary from a panel without
+  refusing the assignment is the `hideI18n` mistake this package already retired once: the
+  control disappears, the request does not. And narrowing a vocabulary away from something it is
+  still assigned to is refused, on the same grounds the `hierarchical` flag already refuses being
+  turned off under nested terms — the assignments would stay stored and returned while
+  disappearing from the only panel that could remove them.
+
+  `null` is the un-narrowed state and the reading for every row written before the column
+  existed, so an existing vocabulary keeps applying to everything and both stores behave alike.
+  Nothing to migrate — a new table is additive, `migrate()` creates it, and `appliesTo` is a
+  nullable `ADD COLUMN`.
+
+- **The page editor is rebuilt around a toolbar (`@pramen/cms-editor`).** It opened onto
+  three columns of panels with no header, and everything you came to do was somewhere you
+  would not look for it.
+
+  **Publishing was behind a tab called "workflow"** — a lowercase ghost button among five that
+  read as filter chips, so the point of the screen required knowing that word. The transitions
+  now live in a sticky toolbar beside the status they act on: the obvious next move is the
+  primary button (Publish on a draft, Approve on one in review, Unpublish on a live page) and
+  the rest are in a `⋯` menu. `pageWorkflowActions(status)` is a pure table, so that ORDER is
+  asserted rather than read out of a component.
+
+  **There were three save models on one screen**: an unlabelled "Save" on the canvas, an
+  identically unlabelled one in the inspector saving the other half, and blocks in between
+  autosaving silently. The page's own fields are content, exactly like a block, so they
+  autosave on the same 800 ms debounce and the toolbar carries one line of truth about it.
+  Title and slug keep an explicit **Save settings** — a slug is the page's URL, and autosaving
+  one keystroke at a time would publish `/ab`, `/abo`, `/abou` and race the uniqueness check on
+  each — now disabled until something actually differs.
+
+  **The title appeared three times** (app-bar crumb, a rail card, the inspector) and the status
+  twice. The rail card and the inspector's status row are gone, and the editor no longer
+  publishes a detail crumb: the toolbar names the page.
+
+  A narrowed rail no longer strands a phone. The narrow look is expressed entirely in
+  `md:`-scoped classes, so it exists only at desktop widths — while the choice behind it is
+  persisted per browser and travels to every viewport that browser opens. A rail narrowed on a
+  laptop came back "narrowed" on a phone, where those classes are inert: the rows kept their
+  labels and full width, while the JS gated on the stored choice removed all four group
+  headings, and the hairline that stands in for one at 56px is `md:`-only too. One
+  undifferentiated column of a dozen rows, with the toggle that would undo it
+  `hidden md:inline-flex` — no way back from that viewport. `railIsNarrow(choice, wide)` is
+  now the one rule, and JS agrees with the breakpoint instead of ignoring it.
+
+  The media library also stops claiming to be empty when a filter simply matched nothing:
+  "No media yet. Upload images…" is a claim about the library, and search/type/tag are all
+  narrowings of it. It says "No matches" with a **Clear filters** button instead.
+
+  **The 260px left rail held three lines you could not click**, and is gone. It became an
+  outline first, which was the wrong answer to the same question: it is a table of contents for
+  a document that is almost never longer than the screen, printing the same region names in the
+  same order as the canvas one column away, and its only extra — a block count — is what "is
+  this region empty" looks like when you look at it. Its one real service, jumping to a far
+  region, is scrolling on a page you are already scrolling. The region headings are sticky
+  instead, so on a long page the slot you are editing is always named — which is the
+  orientation an outline was standing in for.
+
+  Smaller, in passing: the page-fields heading says "Page fields", because a region is very
+  often named `content` and the two headings sat one above the other both reading CONTENT;
+  inspector tabs are a real tab strip with written-out labels (a CSS `capitalize` rendered
+  "seo" as "Seo"); the back button names its destination, which on a per-type deployment is
+  that type's list and not a pooled "Pages" the deployment does not have; and a breadcrumb
+  separator no longer leads the trail when a screen publishes a detail crumb from a route no
+  nav entry matches.
+
+- **Preview links reach a page you can actually look at (`@pramen/cms-editor`,
+  `@pramen/cms-astro`, `example/site`).** Two halves were missing and the feature fell through
+  the gap between them.
+
+  The page editor never minted one. `signPagePreview` has existed on the server, tested end to
+  end, since preview stopped being a role check — and no editor screen called it, so the only
+  way to get a link was to write the RPC by hand. The collection editor has had its button
+  since `supports: ["preview"]`; the page half now has the same one, in the Workflow panel.
+  It is not keyed to the status, because a published page is exactly what you preview before
+  changing it and a draft is exactly what you send for comment.
+
+  And the link opened JSON. The CMS redeems the token itself and answers with the assembled
+  draft, because a headless CMS has the content and no idea what it should look like —
+  correct for a machine, useless for the stakeholder without an account who a preview link is
+  FOR. A host can now declare **`admin.previewUrl`**: a route of its own that the editor sends
+  the token to instead. Same seam as `menuHref` and the sitemap's `pageUrl` — the CMS cannot
+  know how a deployment routes, so the deployment says. Unset, nothing changes.
+
+  The link it copies is ABSOLUTE. `previewUrl` is normally written as a path, so the
+  configured — recommended — path put `/preview?token=…` in the clipboard: dead the moment it
+  is pasted into Slack, which is half of what the button is for. The new tab hid it, because a
+  blank window opened by the editor inherits its base URL and resolves a relative href
+  perfectly well.
+
+  The button OPENS it, in a new tab, and still shows and copies the link — "look at my draft"
+  and "send this to someone" are both what it is for, and only one of them ends in the new tab.
+  The tab is opened synchronously before the round trip and pointed at the link afterwards,
+  because `window.open` called after an `await` has lost the user gesture that authorised it
+  and every popup blocker takes it; a blocked one falls back to the revealed link, which is
+  still a working answer. A mint that fails now closes the placeholder tab and says why,
+  rather than leaving a stray `about:blank` and a button that looked like it did nothing.
+
+  `example/site` ships the other end: `src/pages/preview.astro` redeems the token with
+  `client.getPreview(token)` and renders the draft through the SAME `Article.astro` the
+  published route uses — the layout was extracted for exactly this reason, since a preview
+  drawn by a second copy of the markup is a preview of the copy. It carries a draft banner,
+  `noindex`, `no-store`, and answers a forged or expired token with a 404 indistinguishable
+  from a missing page, so spraying tokens at it confirms nothing.
+
+  Pages only. A collection row has no canonical URL — the site decides what one looks like, if
+  anything — so `signCollectionPreview` keeps pointing at the backend.
+
+- **The screen header stays as the page scrolls, condensed (`@pramen/cms-editor`).** Scrolling a
+  media library past the first row used to take the header away, leaving a wall of thumbnails
+  with no title and no primary action. Sticky alone would be worse — a 190px banner pinned to
+  the top eats a third of the viewport on every scroll — so it condenses to a bar: same panel,
+  same artwork, same button, a third of the height. The two near-identical headers that used to
+  live one in `components.tsx` and one in `furniture.tsx` are now one `page-header.tsx` with a
+  size; a LEAF module, because `components.tsx` already imports from `furniture.tsx` and either
+  importing the other would have been a cycle.
+
+  Getting it to stop flickering took three things, and only the third is the real cause.
+  Hysteresis (condense above 120px, expand below 16px) because a single threshold toggles on
+  trackpad jitter. No transition on the type, because `transition-all` was tweening `font-size`
+  56px → 22px, relaying out the panel on every frame — of a STICKY element whose height feeds
+  back into the scroll position — while `display` (two stacked lines → one baseline row) cannot
+  be tweened and snapped mid-animation anyway. And **`overflow-anchor: none` on the scroller**,
+  which is what actually fixed it: condensing removes ~134px of layout ABOVE the viewport, and
+  scroll anchoring exists precisely to compensate for that, so the browser silently subtracted
+  the same 134px from `scrollY` — a new scroll position feeding the very condition that
+  condensed the header, which flips back, restores the height, and gets the offset returned.
+  Measured: asking for `scrollY` 121 settled at 17. Hysteresis cannot fix that, since the
+  compensation is the same size as the change; the dead band would have to be wider than the
+  collapse. Turning anchoring off also removed a second, separate bug — the page yanking by
+  134px on the scroll that crossed the threshold.
+
+- **Screen headers are cover panels with generated artwork (`@pramen/cms-editor`).** Six list
+  screens whose only difference is a word at the top read as one screen you keep landing on.
+  The header is now a panel carrying the title and the primary action over art DERIVED from
+  the screen's name: an FNV-1a hash seeds a PRNG, and the PRNG lays out a Truchet field — a
+  grid of quarter-circle arcs whose per-tile orientation is the only random thing about it —
+  under a colour wash. Same name, same picture, forever; a new collection gets its own without
+  anyone drawing one. Nothing to author, nothing to upload, no screen that looks like another.
+
+  Seeded on the header's `lead`, NOT its `em`. `lead` is the screen's NAME ("Media", a
+  collection's plural label) and `em` is its STATE ("None yet", "3 files") — seeding on what is
+  displayed would redraw the artwork every time someone uploaded a file, which is the one thing
+  a picture meant to make a screen recognisable must never do.
+
+  Two constraints shaped the rest, both from what the art sits under. Line work is
+  `currentColor` at low alpha, so it is dark on the light theme and light on the dark one BY
+  CONSTRUCTION — which matters specifically because podoba does not redefine its accent tokens
+  per theme, and a fixed accent stroke would be near-white mint on white, or near-black blue on
+  near-black. Colour therefore arrives as a wash, from a CLOSED list of mid-toned podoba tokens
+  rather than a free hue (a free hue puts colours in the chrome that exist nowhere else in the
+  product), with its origin pinned to the right half and a `from-surface-card` gradient over
+  the left, so 56px type never lands on pattern whatever the seed produced. One inline SVG
+  built during render: no dependency, no canvas, no image to load.
+
+- **The header's action is the button, not a pill around it (`@pramen/cms-editor`).** `Cta` —
+  a 360px mint pill carrying a sentence ("Let's upload something") wrapped around the actual
+  button — is gone from all four list headers. Once the header grew a cover, a saturated pill
+  on top of it was a panel inside a panel, two filled surfaces competing for the same corner;
+  and the sentence was by then the third telling of one fact, between a title reading "Media /
+  None yet" and an empty state reading "No media yet. Upload images to…".
+
+  It was also hiding a bug that only showed on the dark theme: the wrapper filled with
+  `brand-green` (#75e7b8) and podoba maps `brand-primary` — what a default `Button` fills with
+  — onto that same #75e7b8 in dark. Mint on mint, so the button had no edge and read as a run
+  of text. On `surface-card` it has the contrast podoba designed for it, in both themes.
+
+  Media's Upload control became a real `Button` driving a hidden input, replacing a `<label>`
+  painted to look like one: the lookalike restated podoba's primary fill by hand, and with the
+  wrapper gone the app's two primary actions were visibly different colours in dark —
+  `surface-inverted` (cream) there against `brand-primary` (mint) everywhere else.
+
+- **`BootstrapContext` carries `env` (`@pramen/server`).** A boot-time reconciler has no
+  request to carry a flag on, so the only gates it had were "always" and "never" — which is
+  the wrong pair for reference data that belongs in local dev and nowhere else. `env` is the
+  same widened bag a handler sees as `ctx.env`, on both boot paths (DO and D1). While
+  threading it through, `ensureD1Migrated` now takes `env` instead of the one boolean it used
+  to be handed: three call sites each re-deriving `PRAMEN_ALLOW_DESTRUCTIVE === "true"` was
+  one place too many for a flag whose whole job is to gate data loss.
+
+- **The example seeds a demo account, so `bun run dev` leads somewhere.** On a fresh store
+  there was no way IN: `signup` assigns the `user` role, which no CMS policy accepts, so the
+  editor's Setup screen — which asks for a bearer token and nothing else — could only be
+  satisfied by hand-signing a JWT with the dev `AUTH_SECRET`. `devUserBootstrap` in
+  `example/app.ts` now seeds **`pramen@local` / `pramen-dev`**, gated on `PRAMEN_DEV_SEED`
+  (set by `oblaka.ts` for the `local` env only — a known username with a known password is
+  exactly the reference data that must never reach a deployment, and `bun run deploy` ships
+  the same `app.ts`). It inserts only when the row is ABSENT: `bootstrap` runs every boot, so
+  writing the hash unconditionally would reset a changed password on every cold start, and
+  the existence check is a SELECT *before* `hashPassword` because PBKDF2 at 100k iterations
+  inside `blockConcurrencyWhile` is a multi-second stall in front of the first request.
+
+  Ten characters, not the obvious `pramen`: `login` parses its input with the same
+  `parseCreds` `signup` uses, which rejects anything under eight before it ever looks at a
+  hash. `example/site` gains `/admin/sign-in` and `admin: { signInUrl }` — the SITE owns the
+  sign-in screen, which is what keeps the editor BYO-IdP (it verifies a bearer token and knows
+  nothing about how one is obtained), and mirrors how a real deployment does it.
+  `tools/dev-token.ts` still mints a token for `/__admin?setup=1`, which is the way in when
+  there is no account to sign in as.
+
+- **The editor's icons are Phosphor, regular weight (`@pramen/cms-editor`).** One family,
+  chosen for plainness: at 15px in a nav rail an icon has to survive as a silhouette, and
+  Phosphor's regular weight is the simplest set that still reads at that size. It replaces two
+  half-families that had ended up side by side in a 240px column — podoba's own line set, which
+  does not cover a CMS's nouns (no taxonomy, no widget area, no redirect), and the glyphs the
+  editor had drawn by hand to fill those gaps. Two sets of hand-fitted curves next to each
+  other is the one outcome worse than either.
+
+  Everything the editor draws now comes from `cms-editor/src/icons.tsx`, aliased to names that
+  say what a glyph MEANS here rather than what it depicts (`MenuToggleIcon`, `GroupOpenIcon`,
+  `NAV_GLYPHS.taxonomies`). That is what keeps the family one decision in one file: changing it
+  — or moving it into `@podoba/react`, where it belongs once the design system adopts a set —
+  is this module's imports and nothing else, because no call site names a vendor. Costs ~45 KB
+  raw in the bundle (each Phosphor module carries all six weights).
+
+  A HOST's own icon stays a separate thing: `collection(..., { icon: "🎓" })` and
+  `adminPage(..., { icon: "🚚" })` go into the icon column verbatim. Resolving such a string
+  against Phosphor BY NAME is deliberately not offered — a by-name lookup needs the whole
+  3000-icon registry in the bundle, which is megabytes to let a deployment name one glyph it
+  can already supply directly.
+
+- **The editor mounts at `/__admin`, not `/_pramen/admin` (`@pramen/cms-astro`).** BREAKING for a
+  deployed site: the old path stops resolving, so update any bookmark, `signInUrl` target, or
+  access rule written against it. The old prefix named the framework in a URL an editor
+  bookmarks, types and reads out over the phone — the same mistake `brand` exists to undo, and
+  the name of the library the agency happened to build with belongs there no more than it does
+  in the wordmark. `__` is the settled "the framework serves this, not you" marker (`/_next`,
+  `/_nuxt`, `/_astro`, Cloudflare's `/__scheduled`, and pramen's own `/__migrations`), doubled to
+  keep clear of Astro's single-underscore conventions. A leading DOT (`/.admin`) was the shape to
+  avoid: dotfile protection is on by default in a great many static hosts, CDNs and reverse
+  proxies, so it is a path a share of deployments would simply 404 — `.well-known` needed an RFC
+  and per-server carve-outs to be reachable, which is the proof rather than the counterexample.
+  Still one constant feeding both the injected route pattern and the prefix stamped on the mount
+  node, so the router cannot end up mounted where the server does not serve.
+
 ### Fixed
 
 - **The D1 store's Worker boot could wedge an isolate for its lifetime (`@pramen/server`,

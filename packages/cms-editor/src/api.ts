@@ -2,7 +2,7 @@
 // same transport shape as @pramen/admin's api.ts. Config is persisted in localStorage.
 
 import type { AdminPageMeta, AdminPageResponse, AssembledPage, AuditEntry, BlockType, ContentType, Media, Menu, MenuItem, Page, Redirect, Taxonomy, Term, Widget, WidgetArea } from "./types";
-import type { DefaultBlockDefinition, FieldDefinition, RegionDefinition, RpcInput } from "./types";
+import type { DefaultBlockDefinition, FieldDefinition, MediaKind, MediaSort, RegionDefinition, RpcInput, TaxonomyTarget } from "./types";
 
 /** The payload `createBlockType` / `updateBlockType` take. `fieldsSchema` is the whole
  * point: a block type IS its field schema. */
@@ -173,7 +173,13 @@ export class Api {
   listPageAudit = (pageId: string) => this.call<AuditEntry[]>("listPageAudit", { pageId });
 
   // --- media ---
-  listMedia = (limit = 50, offset = 0) => this.call<Media[]>("listMedia", { limit, offset });
+  // `undefined` values are simply not serialized, so the absent narrowings need no
+  // conditional spreading — an omitted key and a key set to undefined reach the server the same.
+  /** Options rather than positionals: the library narrows by four independent things, and
+   * `listMedia(60, 0, sort, undefined, undefined, term)` is a call site nobody can read and
+   * everybody can get one argument out of step. */
+  listMedia = (opts: { limit?: number; offset?: number; sort?: MediaSort; kind?: MediaKind; q?: string; term?: string } = {}) =>
+    this.call<Media[]>("listMedia", { limit: opts.limit ?? 50, offset: opts.offset ?? 0, sort: opts.sort, kind: opts.kind, q: opts.q, term: opts.term });
   getMedia = (id: string) => this.call<Media | null>("getMedia", { id });
   updateMedia = (id: string, alt: string | null) => this.call<Media>("updateMedia", { id, alt });
   deleteMedia = (id: string) => this.call<{ ok: true }>("deleteMedia", { id });
@@ -209,10 +215,14 @@ export class Api {
     this.call<Redirect>("updateRedirect", { id, ...patch } as unknown as RpcInput);
   deleteRedirect = (id: string) => this.call<{ ok: true }>("deleteRedirect", { id });
 
-  listTaxonomies = () => this.call<Taxonomy[]>("listTaxonomies");
-  createTaxonomy = (input: { slug: string; label: string; pluralLabel?: string; description?: string; hierarchical?: boolean }) =>
-    this.call<Taxonomy>("createTaxonomy", input);
-  updateTaxonomy = (id: string, patch: { label?: string; pluralLabel?: string | null; description?: string | null; hierarchical?: boolean }) =>
+  /** Every vocabulary, or only those that classify `target`. The narrowing is the SERVER's —
+   * the page panel, the media panel and the write-side guard read one answer, so they cannot
+   * disagree about what a vocabulary applies to. The Taxonomies screen passes nothing: the one
+   * place that edits `appliesTo` has to see a vocabulary it has narrowed away. */
+  listTaxonomies = (target?: TaxonomyTarget) => this.call<Taxonomy[]>("listTaxonomies", { target });
+  createTaxonomy = (input: { slug: string; label: string; pluralLabel?: string; description?: string; hierarchical?: boolean; appliesTo?: TaxonomyTarget[] | null }) =>
+    this.call<Taxonomy>("createTaxonomy", { ...input, appliesTo: input.appliesTo ?? null });
+  updateTaxonomy = (id: string, patch: { label?: string; pluralLabel?: string | null; description?: string | null; hierarchical?: boolean; appliesTo?: TaxonomyTarget[] | null }) =>
     this.call<Taxonomy>("updateTaxonomy", { id, ...patch } as unknown as RpcInput);
   deleteTaxonomy = (id: string) => this.call<{ ok: true }>("deleteTaxonomy", { id });
 
@@ -224,8 +234,15 @@ export class Api {
     this.call<Term>("updateTerm", { id, ...patch } as unknown as RpcInput);
   deleteTerm = (id: string) => this.call<{ ok: true }>("deleteTerm", { id });
 
+  /** Mint a signed, self-expiring preview link for one page. Editor-gated to MINT; anyone
+   * holding the result can redeem it with no account, which is the point. */
+  signPagePreview = (pageId: string) => this.call<{ url: string; token: string; expiresAt: number }>("signPagePreview", { pageId });
+
   listPageTerms = (pageId: string) => this.call<Term[]>("listPageTerms", { pageId });
   setPageTerms = (pageId: string, termIds: string[]) => this.call<{ ok: true }>("setPageTerms", { pageId, termIds });
+
+  listMediaTerms = (mediaId: string) => this.call<Term[]>("listMediaTerms", { mediaId });
+  setMediaTerms = (mediaId: string, termIds: string[]) => this.call<{ ok: true }>("setMediaTerms", { mediaId, termIds });
 
   // --- Block Kit: custom admin pages ---
   /** The pages THIS caller may open. Filtered server-side, so a nav entry that 403s when

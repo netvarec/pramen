@@ -11,11 +11,25 @@
 //
 // `ADMIN_BASE` is a constant, not an option. It is the pattern passed to `injectRoute` AND
 // the prefix stamped onto the mount node, so the route and the router cannot disagree —
-// which is the entire failure mode a configurable prefix invites. The `_`-prefixed segment
+// which is the entire failure mode a configurable prefix invites. The `__`-prefixed segment
 // is a reserved namespace: the host keeps every ordinary path for its own pages.
+//
+// It does NOT name the framework. `/_pramen/admin` did, and that is the same mistake the
+// `brand` option exists to undo: this path is a client-facing URL — it is what an editor
+// bookmarks, types and reads out over the phone — and the name of the library the agency
+// happened to build with does not belong in it any more than it belongs in the wordmark.
+//
+// `__` rather than a single `_` or a leading dot. A dot-segment is the one shape to avoid:
+// dotfile protection is on by default in a great many static hosts, CDNs and reverse
+// proxies, so `/.admin` is a path a share of deployments will simply 404 — `.well-known`
+// needed a whole RFC and per-server carve-outs to be reachable, which is the proof, not the
+// counterexample. `__` is instead the settled marker for "the framework serves this, not
+// you": `/_next`, `/_nuxt`, `/_astro`, Cloudflare's `/__scheduled`, lopata's
+// `/__dashboard` — and pramen's own `/__migrations`. Doubling it keeps clear of Astro's own
+// single-underscore conventions.
 
 /** Where the editor is mounted on the host site. */
-export const ADMIN_BASE = "/_pramen/admin";
+export const ADMIN_BASE = "/__admin";
 
 /** The route pattern injected for it — one catch-all, so every in-app URL is a real server
  * route and a refresh or a deep link is served like any other page. */
@@ -46,6 +60,21 @@ export interface AdminRuntimeConfig {
   /** `order` places a link against `NAV_ORDER` (from @pramen/cms) instead of leaving it
    * after Settings — the documented example did not typecheck without it. */
   extraNav?: { label: string; href: string; target?: "_blank" | "_self"; order?: number }[];
+  /** Where YOUR SITE renders a page preview — e.g. `"/preview"`.
+   *
+   * `signPagePreview` mints a token and a RELATIVE url that the CMS Worker itself redeems,
+   * and that endpoint answers with JSON: the CMS is headless, so it has the draft but no
+   * idea what the page should look like. Unset, the editor's Preview link therefore opens a
+   * wall of JSON — correct, and useless to the stakeholder preview exists for.
+   *
+   * Point this at a route of your own that redeems the token (`client.getPreview(token)`)
+   * and renders it with the same components the published page uses; the editor appends
+   * `?token=…`. The same seam as `menuHref` and the sitemap's `pageUrl`: the CMS cannot know
+   * how a deployment routes, so the deployment says.
+   *
+   * PAGES only. A collection row has no canonical URL — the site decides what, if anything,
+   * one looks like — so `signCollectionPreview` keeps returning the backend's JSON. */
+  previewUrl?: string;
 }
 
 /** Options for the injected admin route. `true` is "mount it with the integration's own

@@ -50,7 +50,7 @@ import {
   resolveSecret,
   authorizeHandler,
 } from "@pramen/server";
-import type { HandlerContext, Policy, FileRef, BootstrapFn, JsonValue, SchemaDef, FieldDef, FieldType } from "@pramen/server";
+import type { HandlerContext, Policy, FileRef, BootstrapFn, DataMigration, MigrationContext, JsonValue, SchemaDef, FieldDef, FieldType, WhereClause } from "@pramen/server";
 import type { EnvBag } from "@pramen/server";
 import { isSafeHref, normalizeHref } from "./href";
 import { NAV_ORDER } from "./nav";
@@ -1023,6 +1023,18 @@ export const cmsSchema = {
     // Hierarchical vocabularies allow `parentId` on their terms; flat ones reject it on
     // write. Enforced in the handler, not the schema — one term table serves both.
     hierarchical: defaultTo(t.bool(), false),
+    // What this vocabulary classifies — a subset of `TAXONOMY_TARGETS`. NULL means EVERYTHING,
+    // which is both the backward-compatible reading for rows written before this column and a
+    // legitimate authored value ("Topics classifies whatever there is"). Without it a site with
+    // "Categories" for articles and tags for images offers both on both, so a photo can be
+    // filed under "Local news" and `getTermTree("category")` fills up with terms like "hero"
+    // that no page listing will ever use.
+    //
+    // A `t.json()` array rather than two booleans: the set of things a CMS classifies grows
+    // (collections are the obvious next one), and a column per target would need a migration
+    // each time. It is not queryable — JSON in a TEXT cell — but nothing pages by taxonomy:
+    // `listTaxonomies` reads them all and narrows in memory.
+    appliesTo: t.json(),
     createdAt: defaultTo(t.text(), expr.now()),
   })),
 
@@ -1045,6 +1057,7 @@ export const cmsSchema = {
       taxonomy: r.belongsTo("cms_taxonomies", "taxonomyId", { onDelete: "cascade" }),
       parent: r.belongsTo("cms_terms", "parentId", { onDelete: "setNull" }),
       pages: r.hasMany("cms_page_terms", "termId"),
+      media: r.hasMany("cms_media_terms", "termId"),
     }),
     // A slug identifies a term WITHIN its vocabulary — `/category/news` and `/tag/news`
     // are two different terms, and both are legitimate.
@@ -1067,6 +1080,28 @@ export const cmsSchema = {
     // One assignment per (page, term). Without it a double-submit leaves a page tagged
     // twice and every `with: { terms: true }` renders the term twice.
     { unique: [["pageId", "termId"]] },
+  ),
+
+  // The same junction for media. A SECOND table rather than one polymorphic
+  // `cms_object_terms(objectType, objectId, termId)`: a polymorphic key cannot carry a real
+  // foreign key, and the FKs are what does the work here — purging a media row or deleting a
+  // term takes its assignments with it, with no handler remembering to. A `where` traversal
+  // also needs a typed column to join on; `objectId` would have to be filtered by a
+  // discriminator the read engine has no way to require, so one forgotten `objectType`
+  // clause silently mixes a page's tags into a media query.
+  cms_media_terms: Entity(
+    (t) => ({
+      id: primaryKey(generated(t.uuid())),
+      mediaId: indexed(notNull(t.uuid())),
+      termId: indexed(notNull(t.uuid())),
+    }),
+    (r) => ({
+      // `cascade` on both ends, as on the page junction. Note this fires on PURGE, not on
+      // trashing: `deleteMedia` only stamps `deletedAt`, so a restored file keeps its tags.
+      media: r.belongsTo("cms_media", "mediaId", { onDelete: "cascade" }),
+      term: r.belongsTo("cms_terms", "termId", { onDelete: "cascade" }),
+    }),
+    { unique: [["mediaId", "termId"]] },
   ),
 
   // A named template region an admin fills without touching code — the sidebar, the footer
@@ -1092,16 +1127,177 @@ export const cmsSchema = {
 
   // Media: a fileRef column holds only R2 metadata; bytes live in R2, uploaded via
   // ctx.files + the Worker /files/* route. Block `fields` reference a media id.
-  cms_media: Entity((t) => ({
-    id: primaryKey(generated(t.uuid())),
-    file: t.fileRef(),
-    alt: t.text(),
-    // Soft delete, as on cms_pages. The R2 OBJECT is deliberately kept while a media row
-    // is trashed — deleting the bytes would make restore a lie. `purgeMedia` drops both.
-    deletedAt: indexed(t.text()),
-    createdAt: defaultTo(t.text(), expr.now()),
-  })),
+  cms_media: Entity(
+    (t) => ({
+      id: primaryKey(generated(t.uuid())),
+      file: t.fileRef(),
+      // The three fields the library SORTS and FILTERS by, projected out of `file` into real
+      // columns. `file` is a `t.fileRef()` — JSON in a TEXT cell — so its `filename`,
+      // `contentType` and `size` are invisible to `orderBy` and `where`, and sorting a library
+      // after the page has been fetched sorts one page, which is not sorting.
+      //
+      // A duplicate, deliberately, and the cost is named: they are written where a media row is
+      // CREATED and nowhere else (`updateMedia` never touches the file), so there is one writer
+      // and `file` stays the source of truth for serving. SQLite generated columns would remove
+      // the duplication outright — `GENERATED ALWAYS AS (json_extract(file,'$.filename'))` — but
+      // the schema DSL has no way to declare one, and `generated()` here means something else
+      // entirely (auto-mint a uuid on insert).
+      //
+      // Nullable, so adding them is a plain `ADD COLUMN` on an existing store rather than a
+      // gated table rebuild; `cmsMigrations` backfills what is already there.
+      filename: indexed(t.text()),
+      contentType: indexed(t.text()),
+      size: t.int(),
+      alt: t.text(),
+      // Soft delete, as on cms_pages. The R2 OBJECT is deliberately kept while a media row
+      // is trashed — deleting the bytes would make restore a lie. `purgeMedia` drops both.
+      deletedAt: indexed(t.text()),
+      createdAt: defaultTo(t.text(), expr.now()),
+    }),
+    (r) => ({
+      // Media is classified by the SAME vocabularies pages are, through the same `cms_terms`
+      // table — a deployment that declares "Topics" gets to tag a photo with one without
+      // declaring it twice, and the terms screen stays the one place a vocabulary is edited.
+      //
+      // The traversal is what makes tagging worth having: `where: { terms: { id } }` compiles
+      // to a subquery through the junction, so the library filters by term IN SQL like it
+      // filters by kind. A tag you cannot filter a paged library by is decoration.
+      terms: r.manyToMany("cms_terms", { through: "cms_media_terms", sourceColumn: "mediaId", targetColumn: "termId" }),
+    }),
+  ),
 };
+
+// --- media: what the library may be sorted and filtered by ---------------------------------
+//
+// A CLOSED vocabulary on the server, not a column name and a direction from the client. The
+// two inputs compile straight into `ORDER BY` and `WHERE`, so letting a caller name the column
+// would hand it the ability to order by — and therefore probe — any column on the table,
+// `alt` and `deletedAt` included. Six sorts and five kinds is what the screen offers.
+
+/** How a media list may be ordered. */
+export type MediaSort = "newest" | "oldest" | "name" | "name_desc" | "largest" | "smallest";
+
+/** …resolved to the order the read engine takes. `createdAt` is ISO-8601 TEXT (`expr.now()`),
+ * so a lexicographic sort on it IS chronological. */
+const MEDIA_SORTS: Record<MediaSort, { column: string; dir: "asc" | "desc" }> = {
+  newest: { column: "createdAt", dir: "desc" },
+  oldest: { column: "createdAt", dir: "asc" },
+  name: { column: "filename", dir: "asc" },
+  name_desc: { column: "filename", dir: "desc" },
+  largest: { column: "size", dir: "desc" },
+  smallest: { column: "size", dir: "asc" },
+};
+
+/** The coarse type buckets the library filters by — the first segment of a MIME type, which
+ * is the distinction someone browsing a library actually makes ("show me the images"). */
+export const MEDIA_KINDS = ["image", "video", "audio", "document", "other"] as const;
+export type MediaKind = (typeof MEDIA_KINDS)[number];
+
+/** MIME prefixes for the buckets that have one. `document` is a LIST rather than a prefix
+ * because the useful documents share no MIME family — a PDF is `application/pdf` and a Word
+ * file is `application/vnd.openxmlformats-…`. */
+const DOCUMENT_PREFIXES = ["application/pdf", "text/", "application/msword", "application/vnd."] as const;
+
+/** Trim and cap a search needle. Capped because it lands in a `LIKE` pattern: the engine
+ * escapes `%` and `_` for us, so this is not an injection guard — it is a bound on work a
+ * caller can ask the database to do per row. */
+function mediaQuery(raw: unknown): string | undefined {
+  const q = typeof raw === "string" ? raw.trim().slice(0, 120) : "";
+  return q === "" ? undefined : q;
+}
+
+/** Match a needle against the two fields that NAME a file: what it was uploaded as, and what
+ * an editor wrote about it. `alt` is included because it is the only human description a
+ * media row carries, and searching a library for "logo" should find the file somebody
+ * described as a logo even when the upload was called `IMG_2831.png`. */
+function mediaSearchWhere(q: string): WhereClause<typeof cmsSchema, "cms_media"> {
+  return { OR: [{ filename: { contains: q } }, { alt: { contains: q } }] };
+}
+
+/** The `where` clause for one bucket, or `undefined` for "everything".
+ *
+ * `other` is the interesting one: it is defined as NOT any of the buckets that have a
+ * definition, so a file type nobody anticipated still has exactly one home rather than
+ * disappearing from every filter. A row whose `contentType` is NULL — uploaded before the
+ * projection columns existed and never backfilled — lands there too, which is the honest
+ * place for it.
+ *
+ * That NULL case needs its OWN clause, and did not have one. SQL is three-valued: against a
+ * NULL column every `LIKE` is NULL, so the `OR` is NULL and `NOT NULL` is NULL — which is not
+ * TRUE, so the row is excluded. `other` therefore matched everything except the rows it
+ * documents as belonging there, and a legacy row was invisible under ALL FIVE chips, with only
+ * "clear the filter" to find it and nothing on screen saying why. Exactly the deployment that
+ * upgraded and did not spread `cmsMigrations`. */
+function mediaKindWhere(kind: MediaKind | undefined): WhereClause<typeof cmsSchema, "cms_media"> | undefined {
+  if (kind === undefined) return undefined;
+  if (kind === "image" || kind === "video" || kind === "audio") return { contentType: { startsWith: `${kind}/` } };
+  const documents = { OR: DOCUMENT_PREFIXES.map((p) => ({ contentType: { startsWith: p } })) };
+  if (kind === "document") return documents;
+  const known = { OR: [{ contentType: { startsWith: "image/" } }, { contentType: { startsWith: "video/" } }, { contentType: { startsWith: "audio/" } }, documents] };
+  return { OR: [{ contentType: { isNull: true } }, { NOT: known }] };
+}
+
+// --- taxonomies: what a vocabulary classifies ---------------------------------------------
+
+/** The object types a vocabulary can be applied to. A CLOSED vocabulary, like `MEDIA_KINDS`:
+ * it decides which panels offer a taxonomy AND which assignments are accepted, so an unknown
+ * value must not be storable. */
+export const TAXONOMY_TARGETS = ["page", "media"] as const;
+export type TaxonomyTarget = (typeof TAXONOMY_TARGETS)[number];
+
+/** Whether a vocabulary applies to `target`.
+ *
+ * The permissive readings all collapse to TRUE, deliberately: NULL (never narrowed, or written
+ * before the column existed), a non-array, an array of things that are not targets. A stored
+ * value nobody can interpret must not silently stop a vocabulary from working — the failure
+ * would be a taxonomy that has quietly vanished from every panel, with the row still there. */
+export function taxonomyApplies(row: { appliesTo?: unknown }, target: TaxonomyTarget): boolean {
+  const list = row.appliesTo;
+  if (!Array.isArray(list)) return true;
+  const targets = list.filter((v): v is TaxonomyTarget => (TAXONOMY_TARGETS as readonly unknown[]).includes(v));
+  return targets.length === 0 || targets.includes(target);
+}
+
+/** Parse an `appliesTo` input. `undefined` stays undefined (the field was not sent); `null`
+ * clears the narrowing back to "everything". An unknown target is a 400 rather than a silent
+ * drop — dropping it would store a NARROWER set than the caller asked for, which is the one
+ * direction that loses assignments. */
+function parseAppliesTo(raw: unknown): TaxonomyTarget[] | null | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === null) return null;
+  if (!Array.isArray(raw)) throw new BadRequest("appliesTo must be a list or null");
+  const out: TaxonomyTarget[] = [];
+  for (const v of raw) {
+    if (typeof v !== "string" || !(TAXONOMY_TARGETS as readonly string[]).includes(v)) {
+      throw new BadRequest(`appliesTo must contain only ${TAXONOMY_TARGETS.join(", ")}`);
+    }
+    if (!out.includes(v as TaxonomyTarget)) out.push(v as TaxonomyTarget);
+  }
+  // A vocabulary that classifies nothing is not a narrowing, it is a vocabulary nobody can
+  // reach — and it reads identically to NULL in storage, which means the opposite.
+  if (out.length === 0) throw new BadRequest("appliesTo must name at least one of " + TAXONOMY_TARGETS.join(", "));
+  return out;
+}
+
+/** Refuse term ids from a vocabulary that does not classify `target`.
+ *
+ * The write side, not just the UI. Hiding a vocabulary from a panel without changing what the
+ * server accepts is the `hideI18n` mistake this package already retired once: the control
+ * disappears, the request does not, and `appliesTo` becomes a hint rather than a rule. It also
+ * has to be here for the assignments the panel never made — a script, a migration, an older
+ * editor build that has not learned the capability.
+ *
+ * Reads the terms' taxonomies through `ctx.db`, so an unreadable vocabulary refuses the
+ * assignment rather than being waved through. */
+async function assertTermsApplyTo(db: CmsDb, termIds: readonly string[], target: TaxonomyTarget): Promise<void> {
+  if (termIds.length === 0) return;
+  const terms = await db.find({ from: "cms_terms", where: { id: { in: [...termIds] } }, select: ["id", "taxonomyId"], limit: termIds.length });
+  const taxIds = [...new Set(terms.map((t) => String(t.taxonomyId)))];
+  if (taxIds.length === 0) return;
+  const taxa = await db.find({ from: "cms_taxonomies", where: { id: { in: taxIds } }, select: ["id", "slug", "appliesTo"], limit: taxIds.length });
+  const bad = taxa.filter((t) => !taxonomyApplies(t, target));
+  if (bad[0]) throw new BadRequest(`vocabulary '${String(bad[0].slug)}' does not apply to ${target}`);
+}
 
 /** Block Kit — custom admin pages, described as JSON and rendered by the editor. See
  * `./blockkit`. Re-exported so a host imports `adminPage` beside `collection`. */
@@ -3103,11 +3299,36 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     // `parentId` on its terms; a flat one refuses it rather than storing something no
     // listing renders.
 
-    /** Every vocabulary. PUBLIC — like content types, a taxonomy's slug is structural (it
-     * is a URL segment) and a front end routes on it. */
-    listTaxonomies: query((ctx) => cdb(ctx).find({ from: "cms_taxonomies", orderBy: { column: "label" }, limit: PAGE_LIST_MAX_LIMIT })),
+    /** Every vocabulary, or just the ones that classify `target`. PUBLIC — like content
+     * types, a taxonomy's slug is structural (it is a URL segment) and a front end routes on
+     * it.
+     *
+     * Narrowed HERE rather than in each caller, so the page panel, the media panel and the
+     * write-side guard cannot disagree about what a vocabulary applies to. In memory, because
+     * `appliesTo` is a `t.json()` column that `where` cannot see into — which costs nothing:
+     * this handler already reads every taxonomy, and nothing pages by them.
+     *
+     * No `target` means EVERY vocabulary, which is what the Taxonomies screen needs: the one
+     * place that edits `appliesTo` must be able to see a vocabulary it has narrowed away. */
+    listTaxonomies: query(async (ctx, input: { target?: TaxonomyTarget }) => {
+      const rows = await cdb(ctx).find({ from: "cms_taxonomies", orderBy: { column: "label" }, limit: PAGE_LIST_MAX_LIMIT });
+      const target = input?.target;
+      return target === undefined ? rows : rows.filter((r) => taxonomyApplies(r, target));
+    }, {
+      input: (raw): { target?: TaxonomyTarget } => {
+        const t = asObj(raw).target;
+        // Unrecognised narrows to nothing rather than falling back to everything: this one
+        // decides what a panel OFFERS, and answering "all of them" to a question the server
+        // did not understand is how a media panel ends up listing page-only vocabularies.
+        if (t === undefined || t === null) return {};
+        if (typeof t !== "string" || !(TAXONOMY_TARGETS as readonly string[]).includes(t)) {
+          throw new BadRequest(`target must be one of ${TAXONOMY_TARGETS.join(", ")}`);
+        }
+        return { target: t as TaxonomyTarget };
+      },
+    }),
 
-    createTaxonomy: mutation(async (ctx, input: { slug: string; label: string; pluralLabel?: string; description?: string; hierarchical?: boolean }) => {
+    createTaxonomy: mutation(async (ctx, input: { slug: string; label: string; pluralLabel?: string; description?: string; hierarchical?: boolean; appliesTo?: TaxonomyTarget[] | null }) => {
       const db = cdb(ctx);
       const clash = await db.find({ from: "cms_taxonomies", where: { slug: input.slug }, select: ["id"], limit: 1 });
       if (clash[0]) throw new Conflict(`taxonomy '${input.slug}' already exists`);
@@ -3117,10 +3338,13 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
         pluralLabel: input.pluralLabel ?? null,
         description: input.description ?? null,
         hierarchical: input.hierarchical ?? false,
+        // Unsent means EVERY target, which is what a vocabulary created before this existed
+        // means too — one reading of NULL, so an old row and a new one behave alike.
+        appliesTo: input.appliesTo ?? null,
       });
     }, {
       ...editor,
-      input: (raw): { slug: string; label: string; pluralLabel?: string; description?: string; hierarchical?: boolean } => {
+      input: (raw): { slug: string; label: string; pluralLabel?: string; description?: string; hierarchical?: boolean; appliesTo?: TaxonomyTarget[] | null } => {
         const o = asObj(raw);
         return {
           slug: assertKey(o.slug, "taxonomy slug"),
@@ -3128,6 +3352,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
           pluralLabel: typeof o.pluralLabel === "string" ? o.pluralLabel : undefined,
           description: typeof o.description === "string" ? o.description : undefined,
           hierarchical: typeof o.hierarchical === "boolean" ? o.hierarchical : undefined,
+          appliesTo: parseAppliesTo(o.appliesTo),
         };
       },
     }),
@@ -3137,8 +3362,15 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
      *
      * Turning `hierarchical` OFF is refused while any term still has a parent. Allowing it
      * would leave a stored hierarchy that no reader renders and no writer can clear, and
-     * flattening the terms silently is a destructive edit behind a checkbox. */
-    updateTaxonomy: mutation(async (ctx, input: { id: string; label?: string; pluralLabel?: string | null; description?: string | null; hierarchical?: boolean }) => {
+     * flattening the terms silently is a destructive edit behind a checkbox.
+     *
+     * NARROWING `appliesTo` is refused on exactly the same grounds, and it is the same bug:
+     * dropping a target this vocabulary is already used for would strand those assignments —
+     * still stored, still returned by `listPageTerms`/`listMediaTerms`, but invisible in the
+     * panel that could remove them, because the panel only renders vocabularies that apply.
+     * Unassign them first; then the narrowing is a settings change rather than a silent
+     * orphaning. WIDENING is always fine — it strands nothing. */
+    updateTaxonomy: mutation(async (ctx, input: { id: string; label?: string; pluralLabel?: string | null; description?: string | null; hierarchical?: boolean; appliesTo?: TaxonomyTarget[] | null }) => {
       const db = cdb(ctx);
       const rows = await db.find({ from: "cms_taxonomies", where: { id: input.id }, limit: 1 });
       const row = rows[0];
@@ -3147,21 +3379,33 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
         const nested = await db.find({ from: "cms_terms", where: { taxonomyId: input.id, parentId: { isNull: false } }, select: ["id"], limit: 1 });
         if (nested[0]) throw new BadRequest("this vocabulary still has nested terms — move them to the top level before making it flat");
       }
+      if (input.appliesTo !== undefined && input.appliesTo !== null) {
+        const next = input.appliesTo;
+        for (const target of TAXONOMY_TARGETS) {
+          // Only a target this vocabulary applies to TODAY and would not after the patch.
+          if (next.includes(target) || !taxonomyApplies(row, target)) continue;
+          const junction = target === "page" ? "cms_page_terms" : "cms_media_terms";
+          const used = await db.find({ from: junction, where: { term: { taxonomyId: input.id } }, select: ["id"], limit: 1 });
+          if (used[0]) throw new BadRequest(`this vocabulary is still assigned to ${target === "page" ? "pages" : "media"} — remove those assignments before narrowing it`);
+        }
+      }
       const patch: Record<string, unknown> = {};
-      for (const k of ["label", "pluralLabel", "description", "hierarchical"] as const) {
+      for (const k of ["label", "pluralLabel", "description", "hierarchical", "appliesTo"] as const) {
         if (input[k] !== undefined) patch[k] = input[k];
       }
       return db.update("cms_taxonomies", input.id, patch);
     }, {
       ...editor,
-      input: (raw): { id: string; label?: string; pluralLabel?: string | null; description?: string | null; hierarchical?: boolean } => {
+      input: (raw): { id: string; label?: string; pluralLabel?: string | null; description?: string | null; hierarchical?: boolean; appliesTo?: TaxonomyTarget[] | null } => {
         const o = asObj(raw);
         if (typeof o.id !== "string" || o.id === "") throw new BadRequest("id is required");
-        const out: { id: string; label?: string; pluralLabel?: string | null; description?: string | null; hierarchical?: boolean } = { id: o.id };
+        const out: { id: string; label?: string; pluralLabel?: string | null; description?: string | null; hierarchical?: boolean; appliesTo?: TaxonomyTarget[] | null } = { id: o.id };
         if (o.label !== undefined) out.label = assertLabel(o.label, "taxonomy label");
         if (o.pluralLabel !== undefined) out.pluralLabel = typeof o.pluralLabel === "string" ? o.pluralLabel : null;
         if (o.description !== undefined) out.description = typeof o.description === "string" ? o.description : null;
         if (typeof o.hierarchical === "boolean") out.hierarchical = o.hierarchical;
+        const appliesTo = parseAppliesTo(o.appliesTo);
+        if (appliesTo !== undefined) out.appliesTo = appliesTo;
         return out;
       },
     }),
@@ -3330,6 +3574,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
         // uuid — the FK would catch it, but as a driver error with no HTTP status.
         const found = await db.find({ from: "cms_terms", where: { id: { in: [...wanted] } }, select: ["id"], limit: wanted.size });
         if (found.length !== wanted.size) throw new BadRequest("one or more termIds are not terms");
+        await assertTermsApplyTo(db, [...wanted], "page");
       }
       const existing = await db.find({ from: "cms_page_terms", where: { pageId: input.pageId }, select: ["id", "termId"], limit: MAX_TERMS });
       const have = new Map(existing.map((l) => [String(l.termId), String(l.id)]));
@@ -3512,7 +3757,15 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
         filename: input.ref.filename,
         uploadedAt: Date.now(),
       };
-      return cdb(ctx).insert("cms_media", { file, alt: input.alt ?? null });
+      // The projection columns go in beside `file`, from the SAME resolved values — never
+      // from `input`, which is the client's claim about a blob it has just uploaded.
+      return cdb(ctx).insert("cms_media", {
+        file,
+        filename: file.filename ?? null,
+        contentType: file.contentType ?? null,
+        size: file.size ?? null,
+        alt: input.alt ?? null,
+      });
     }, {
       ...editor,
       input: (raw): { ref: FileRef; alt?: string } => {
@@ -3531,11 +3784,45 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       },
     }),
 
-    listMedia: query((ctx, input: { limit?: number; offset?: number }) => {
+    listMedia: query((ctx, input: { limit?: number; offset?: number; sort?: MediaSort; kind?: MediaKind; q?: string; term?: string }) => {
       const limit = Math.min(Math.max(Math.trunc(Number(input?.limit ?? 50)) || 50, 1), 200);
       const offset = Math.max(Math.trunc(Number(input?.offset ?? 0)) || 0, 0);
-      return cdb(ctx).find({ from: "cms_media", orderBy: { column: "createdAt", dir: "desc" }, limit, offset });
-    }, viewer),
+      // The narrowings AND together — a search inside a type filter inside a tag is all
+      // three. Built as a list so none has to know whether the others are present.
+      const clauses = [
+        mediaKindWhere(input?.kind),
+        input?.q ? mediaSearchWhere(input.q) : undefined,
+        // A relation traversal, compiled to a subquery through `cms_media_terms`. Filtering
+        // by term therefore costs the same page of rows as filtering by kind — the whole
+        // reason the assignments are a junction rather than a JSON array on the media row.
+        input?.term ? { terms: { id: input.term } } : undefined,
+      ].filter(
+        (c): c is WhereClause<typeof cmsSchema, "cms_media"> => c !== undefined,
+      );
+      const where = clauses.length === 0 ? undefined : clauses.length === 1 ? clauses[0] : { AND: clauses };
+      return cdb(ctx).find({ from: "cms_media", where, orderBy: MEDIA_SORTS[input?.sort ?? "newest"], limit, offset });
+    }, {
+      ...viewer,
+      // Parsed, not cast: `sort` names an ORDER BY and `kind` a WHERE, and both arrive from a
+      // browser. Anything unrecognised falls back to the default rather than erroring — a
+      // stale bookmark carrying a sort this build dropped should show the library, not a 400.
+      input: (raw): { limit?: number; offset?: number; sort?: MediaSort; kind?: MediaKind; q?: string; term?: string } => {
+        const o = asObj(raw);
+        const sort = typeof o.sort === "string" && o.sort in MEDIA_SORTS ? (o.sort as MediaSort) : undefined;
+        const kind = typeof o.kind === "string" && (MEDIA_KINDS as readonly string[]).includes(o.kind) ? (o.kind as MediaKind) : undefined;
+        return {
+          limit: typeof o.limit === "number" ? o.limit : undefined,
+          offset: typeof o.offset === "number" ? o.offset : undefined,
+          sort,
+          kind,
+          q: mediaQuery(o.q),
+          // An id, not a slug: a slug identifies a term only within its vocabulary, and the
+          // filter has no vocabulary to resolve it against. An id that is not a term matches
+          // nothing, which is the same answer as a term with no files.
+          term: typeof o.term === "string" && o.term !== "" ? o.term : undefined,
+        };
+      },
+    }),
 
     getMedia: query(async (ctx, input: { id: string }) => {
       const rows = await cdb(ctx).find({ from: "cms_media", where: { id: input.id }, limit: 1 });
@@ -3560,6 +3847,63 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
         const o = asObj(raw);
         if (typeof o.id !== "string") throw new BadRequest("id is required");
         return { id: o.id, alt: typeof o.alt === "string" ? o.alt : null };
+      },
+    }),
+
+    /** A media asset's assigned terms.
+     *
+     * The media row is read FIRST, through `ctx.db`, so the caller's own scope decides
+     * whether this answers — the junction and `cms_terms` are granted unscoped, so without
+     * it anyone holding an id could read a TRASHED file's tags and the non-empty answer
+     * would confirm the file exists. Same rule as `listPageTerms`, for the same reason. */
+    listMediaTerms: query(async (ctx, input: { mediaId: string }): Promise<Term[]> => {
+      const db = cdb(ctx);
+      const media = await db.find({ from: "cms_media", where: { id: input.mediaId }, select: ["id"], limit: 1 });
+      if (!media[0]) return [];
+      const links = await db.find({ from: "cms_media_terms", where: { mediaId: input.mediaId }, select: ["termId"], limit: MAX_TERMS });
+      const ids = links.map((l) => String(l.termId));
+      if (ids.length === 0) return [];
+      const rows = await db.find({ from: "cms_terms", where: { id: { in: ids } }, orderBy: [{ column: "position" }, { column: "label" }], limit: ids.length });
+      return rows as unknown as Term[];
+    }, {
+      ...viewer,
+      input: (raw): { mediaId: string } => {
+        const id = asObj(raw).mediaId;
+        if (typeof id !== "string" || id === "") throw new BadRequest("mediaId is required");
+        return { mediaId: id };
+      },
+    }),
+
+    /** Replace a media asset's term assignments wholesale — set semantics, like
+     * `setPageTerms`, and for the same reason: the panel holds the whole selection, and two
+     * calls each patching one end of it race into a state neither asked for. */
+    setMediaTerms: mutation(async (ctx, input: { mediaId: string; termIds: string[] }) => {
+      const db = cdb(ctx);
+      const media = await db.find({ from: "cms_media", where: { id: input.mediaId }, select: ["id"], limit: 1 });
+      if (!media[0]) throw notFound("media");
+      const wanted = new Set(input.termIds);
+      if (wanted.size > 0) {
+        const found = await db.find({ from: "cms_terms", where: { id: { in: [...wanted] } }, select: ["id"], limit: wanted.size });
+        if (found.length !== wanted.size) throw new BadRequest("one or more termIds are not terms");
+        await assertTermsApplyTo(db, [...wanted], "media");
+      }
+      const existing = await db.find({ from: "cms_media_terms", where: { mediaId: input.mediaId }, select: ["id", "termId"], limit: MAX_TERMS });
+      const have = new Map(existing.map((l) => [String(l.termId), String(l.id)]));
+      for (const [termId, linkId] of have) if (!wanted.has(termId)) await db.delete("cms_media_terms", linkId);
+      for (const termId of wanted) if (!have.has(termId)) await db.insert("cms_media_terms", { mediaId: input.mediaId, termId });
+      return { ok: true as const, count: wanted.size };
+    }, {
+      ...editor,
+      input: (raw): { mediaId: string; termIds: string[] } => {
+        const o = asObj(raw);
+        if (typeof o.mediaId !== "string" || o.mediaId === "") throw new BadRequest("mediaId is required");
+        if (!Array.isArray(o.termIds)) throw new BadRequest("termIds must be a list");
+        const ids = o.termIds.map((v) => {
+          if (typeof v !== "string" || v === "") throw new BadRequest("termIds must be a list of ids");
+          return v;
+        });
+        if (ids.length > MAX_TERMS) throw new BadRequest(`a file may carry at most ${MAX_TERMS} terms`);
+        return { mediaId: o.mediaId, termIds: ids };
       },
     }),
 
@@ -3964,6 +4308,11 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       // the next cold start. That is GitHub #48 in the deployment that upgraded the editor to
       // fix it. Absent ⇒ the editor treats no type as code-defined, which is correct there.
       codeDefinedTypes: true as const,
+      // Media carries taxonomy terms, and `listMedia` understands `term`. Declared for the
+      // usual reason: an older server has neither handler, so the detail panel's Tags
+      // section would 404 on open and the library's tag filter would send an argument that
+      // is ignored — a filter that visibly does nothing. Absent ⇒ neither is drawn.
+      mediaTerms: true as const,
       // PER-CALLER, unlike everything else here. `viewer` is `editorRoles ∪ reviewerRoles`,
       // so a reviewer-only session reaches this handler and every read handler — but every
       // WRITE is `editorRoles`. Without this the editor renders the authoring surfaces
@@ -4579,7 +4928,7 @@ export function cmsPolicies(opts: CmsPolicyOpts = {}): { public: Policy[]; edito
     "cms_content_types", "cms_block_types", "cms_blocks", "cms_pages", "cms_page_blocks", "cms_page_revisions", "cms_media", "cms_audit",
     // Site furniture. Full CRUD for an editor, like every other cms_ table — the per-handler
     // `auth` gate is what separates editor from reviewer; this is the row scope.
-    "cms_menus", "cms_redirects", "cms_taxonomies", "cms_terms", "cms_page_terms", "cms_widget_areas",
+    "cms_menus", "cms_redirects", "cms_taxonomies", "cms_terms", "cms_page_terms", "cms_media_terms", "cms_widget_areas",
   ] as const;
   // Soft-deleted rows are filtered in the ACL, not in each handler. A read scope is
   // AND-merged into every `ctx.db` read, so one policy hides a trashed row from the public
@@ -4636,6 +4985,10 @@ export function cmsPolicies(opts: CmsPolicyOpts = {}): { public: Policy[]; edito
       policy(`${p}:public:taxonomies:read`, "cms_taxonomies", "read", allow()),
       policy(`${p}:public:terms:read`, "cms_terms", "read", allow()),
       policy(`${p}:public:page-terms:read`, "cms_page_terms", "read", allow()),
+      // The media junction, for the same reason as the page one: `where: { terms: … }` on a
+      // media row compiles to a subquery THROUGH it, so without the grant the library's tag
+      // filter matches nothing and reads as "no files carry this tag".
+      policy(`${p}:public:media-terms:read`, "cms_media_terms", "read", allow()),
       policy(`${p}:public:widget-areas:read`, "cms_widget_areas", "read", allow()),
     ],
     editor: editorPolicies,
@@ -5876,6 +6229,63 @@ export function createCollectionTasks(collections: readonly CollectionDef[]) {
  * between the revision insert and the page update leaves the page unpublished with an orphan
  * revision until the next at-least-once redelivery re-runs (the token still matches, so it
  * completes). Acceptable for a scheduled job; the interactive path is atomic. */
+/**
+ * The CMS's own data migrations — spread into `app.migrations`.
+ *
+ *     migrations: [...cmsMigrations]
+ *
+ * Opt-in like every other fragment this package ships (`cmsHandlers`, `cmsPolicies`,
+ * `cmsTasks`), and with the same consequence for forgetting it: nothing breaks loudly. Media
+ * rows written before the projection columns existed keep NULL `filename`/`contentType`, so
+ * they sort together under a name sort and answer only the `other` type filter. New uploads
+ * are unaffected — `createMedia` writes the columns itself.
+ */
+export const cmsMigrations: readonly DataMigration[] = [
+  {
+    // Fill the columns `cms_media` grew for sorting and filtering, out of the `file` JSON that
+    // has always held the same three values.
+    id: "cms:2026-09-04-media-projection-columns",
+    // `MigrationContext<typeof cmsSchema>` is what types `db` here — the `DataMigration`
+    // contract is schema-agnostic, so an unparameterized ctx hands back untyped rows.
+    async up({ db, driver }: MigrationContext<typeof cmsSchema>) {
+      const d = driver.dialect;
+      const t = d.id("cms_media");
+      const set = (c: string, path: string) => `${d.id(c)} = json_extract(${d.id("file")}, '$.${path}')`;
+      try {
+        // One statement for the whole table. `WHERE filename IS NULL` makes it cheap on a
+        // store that has nothing to do, and keeps it off rows a later upload already filled.
+        await driver.exec(
+          `UPDATE ${t} SET ${set("filename", "filename")}, ${set("contentType", "contentType")}, ${set("size", "size")} ` +
+            `WHERE ${d.id("filename")} IS NULL AND ${d.id("contentType")} IS NULL`,
+          [],
+        );
+        return;
+      } catch {
+        // `json_extract` is a JSON1 function. It is present in D1 and in every ordinary SQLite
+        // build, but nothing in this repo has depended on it before and DO SQLite is
+        // Cloudflare's own engine — so a missing function must not brick a tenant's boot,
+        // which is exactly what a data migration's fail-closed contract would otherwise do.
+        // The fallback walks the rows through the ORM, where the fileRef codec has already
+        // parsed the same JSON for us. Slower, and bounded by how many media a tenant has.
+      }
+      // No chunking: this runs inside `blockConcurrencyWhile` on a tenant's first fetch, so a
+      // very large library will stall that one request — which is still the right trade
+      // against leaving half the table unsorted forever, since a migration runs ONCE.
+      const rows = await db.find({ from: "cms_media", where: { filename: { isNull: true }, contentType: { isNull: true } } });
+      for (const row of rows) {
+        const file = row.file;
+        if (!file || typeof file !== "object" || Array.isArray(file)) continue;
+        const ref = file as { filename?: unknown; contentType?: unknown; size?: unknown };
+        await db.update("cms_media", String(row.id), {
+          filename: typeof ref.filename === "string" ? ref.filename : null,
+          contentType: typeof ref.contentType === "string" ? ref.contentType : null,
+          size: typeof ref.size === "number" ? ref.size : null,
+        });
+      }
+    },
+  },
+];
+
 export const cmsTasks = {
   "cms:publish": async (ctx: HandlerContext, payload: unknown) => {
     const { pageId, token } = asObj(payload) as { pageId?: string; token?: string };

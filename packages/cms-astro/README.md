@@ -61,7 +61,7 @@ still can.
 ## Serving the editor: `admin`
 
 Add `admin: true` and this site also serves the [visual editor](../cms-editor), at
-`/_pramen/admin`:
+`/__admin`:
 
 ```ts
 integrations: [pramenCms({ backend: { url: "https://cms.example.workers.dev" }, admin: true })],
@@ -74,7 +74,7 @@ something deployed beside it. What that buys, in order of how much time each use
   `editor.css` are imported by the injected route and go through this site's bundler, which
   emits and fingerprints them. A copied-in `index.html` could only ever reference them
   root-absolute, so it worked at the origin root and nowhere else.
-- **No SPA-fallback rewrite.** `/_pramen/admin/pages/:id` is a real server route: a deep
+- **No SPA-fallback rewrite.** `/__admin/pages/:id` is a real server route: a deep
   link or a refresh is served like any other page.
 - **No second hostname for the editor** — it is a route on this site, not a separate
   deploy pointed at a separate domain.
@@ -88,8 +88,14 @@ something deployed beside it. What that buys, in order of how much time each use
 
 The mount path is a constant, not an option: the same value is the injected route pattern
 *and* the prefix handed to the editor's router, so the two cannot drift into a router
-mounted where the server does not serve. `_pramen` is a reserved namespace — every ordinary
+mounted where the server does not serve. `__admin` is a reserved namespace — every ordinary
 path stays yours.
+
+It deliberately does **not** name the framework. This is a URL an editor bookmarks and reads
+out loud, so `pramen` has no more business in it than it has in the wordmark (which is what
+`brand` is for). `__` is the settled "the framework serves this" marker — `/_next`,
+`/_nuxt`, `/_astro`, `/__scheduled` — and it is not a dot-segment, which dotfile protection
+in common static hosts, CDNs and proxies would 404 outright.
 
 Pass an object instead of `true` to configure the editor itself (this replaces its old
 `/config.js`, and is typed):
@@ -102,9 +108,28 @@ pramenCms({
     signInUrl: "/signin/",                     // must be a page that EXISTS
     hidePages: true,                           // collections-only deployments
     extraNav: [{ label: "Curation", href: "/curate", target: "_self" }],
+    previewUrl: "/preview",                    // YOUR page that renders a draft
   },
 })
 ```
+
+### `previewUrl` — where a preview link opens
+
+The editor's **Preview link** button mints a signed, self-expiring token for the page. The
+CMS Worker will happily redeem it — and answer with **JSON**, because a headless CMS has the
+draft and no idea what it should look like. That is right for a machine and useless for the
+person a preview link is for: a stakeholder with no account, who opens a wall of braces.
+
+Point `previewUrl` at a route of your own and the editor appends `?token=…` to it instead.
+The route redeems the token with `client.getPreview(token)` and renders the draft **through
+the same components the published page uses** — a preview drawn by a second copy of the
+layout is a preview of the copy. `example/site/src/pages/preview.astro` is a complete one,
+banner and `noindex` included.
+
+This is the same seam as `menuHref` and the sitemap's `pageUrl`: the CMS cannot know how a
+deployment routes, so the deployment says. Leave it unset and nothing changes — the link
+still points at the CMS's own endpoint. **Pages only**: a collection row has no canonical
+URL, so `signCollectionPreview` keeps returning the backend's JSON.
 
 `extraNav` links open in a **new tab** by default, because the editor's catch-all route
 matches every same-origin path — a same-tab click would land on the editor's own 404 instead

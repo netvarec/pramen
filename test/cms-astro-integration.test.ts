@@ -135,6 +135,21 @@ describe("pramenCms({ admin })", () => {
     expect(adminCode).toBe("");
   });
 
+  test("the mount path is a URL, so its exact value is the contract", () => {
+    // Pinned to the literal, not derived: this is what an editor bookmarks and what a
+    // client's own redirects and access rules are written against, so it may not drift as a
+    // side effect of an edit somewhere else.
+    expect(ADMIN_BASE).toBe("/__admin");
+    // …and the two shapes it must never take again. It named the framework
+    // (`/_pramen/admin`), which is the same mistake `brand` exists to undo — a URL an
+    // editor reads out loud is no place for the name of the library the agency built with.
+    expect(ADMIN_BASE).not.toContain("pramen");
+    // A dot-segment is what dotfile protection in common static hosts, CDNs and proxies
+    // 404s outright, so a mount there would be unreachable on a share of deployments with
+    // nothing in the app to explain it.
+    expect(ADMIN_BASE.split("/").some((seg) => seg.startsWith("."))).toBe(false);
+  });
+
   test("one catch-all route, so a deep link and a refresh are served like any page", async () => {
     const { injected, logs } = await setup({ backend: { url: "https://cms.example.workers.dev" }, admin: true });
     expect(injected).toHaveLength(1);

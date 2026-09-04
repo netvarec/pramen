@@ -44,6 +44,12 @@ export default define(({ env }) => {
           // throws) — so a misconfigured prod can't silently stash emails in KV.
           APP_URL: "http://localhost:8787",
           MAIL_CAPTURE: "true",
+          // Seed the demo account `pramen@local` (see `devUserBootstrap` in example/app.ts),
+          // so `bun run dev` + the sign-in page lead somewhere on a fresh store. LOCAL ONLY,
+          // and gated rather than unconditional for the obvious reason: a known username with
+          // a known password is exactly the reference data that must never reach a
+          // deployment, and `bun run deploy` ships this same app.ts.
+          PRAMEN_DEV_SEED: "true",
         }
       : {
           // Production email (ctx.mail): set MAIL_FROM to an address on a domain

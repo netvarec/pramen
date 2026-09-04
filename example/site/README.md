@@ -1,7 +1,7 @@
 # example-site
 
 The Astro half of the example. It reads the example CMS backend (`example/app.ts`, served by
-`example/worker.ts`) **and serves that backend's editor**, at `/_pramen/admin`, from this
+`example/worker.ts`) **and serves that backend's editor**, at `/__admin`, from this
 same origin.
 
 ```bash
@@ -9,7 +9,15 @@ bun run dev                          # the pramen worker, on :8787
 bun run --cwd example/site dev       # this site, on :4321
 ```
 
-Then <http://localhost:4321> for the site and <http://localhost:4321/_pramen/admin> for the
+Sign in at <http://localhost:4321/admin/sign-in> as **`pramen@local`** / **`pramen-dev`** —
+seeded by `devUserBootstrap` in `example/app.ts` on first boot, and only when
+`PRAMEN_DEV_SEED` is set (`oblaka.ts` sets it for the `local` env and nowhere else). The
+password is ten characters rather than the obvious `pramen` because `login` parses its input
+with the same rule `signup` does and rejects anything under eight before it looks at a hash.
+`/__admin?setup=1` still opens the editor's own token screen; `bun tools/dev-token.ts` mints
+a token for it.
+
+Then <http://localhost:4321> for the site and <http://localhost:4321/__admin> for the
 editor. Sign in with an editor/reviewer JWT; the site tells the editor which Worker and
 tenant to call, so it does not ask.
 

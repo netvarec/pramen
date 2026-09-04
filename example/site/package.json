@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "The example Astro site: reads the example CMS backend, and serves its editor at /_pramen/admin.",
+  "description": "The example Astro site: reads the example CMS backend, and serves its editor at /__admin.",
   "scripts": {
     "dev": "astro dev",
     "build": "astro build",

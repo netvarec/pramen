@@ -74,6 +74,12 @@ export interface BootstrapContext<S extends SchemaDef = SchemaDef> {
   /** The partition being booted. On the DO path bootstrap runs ONLY for the default
    * partition (reference data lives there); on the D1 path it is always the default. */
   readonly partition: string;
+  /** The Worker/DO environment — bindings, vars and secrets, as a handler's `ctx.env` sees
+   * it. Reference data is not always unconditional: a seed that belongs in local dev and
+   * nowhere else (a demo account with a known password) has to be able to READ the flag that
+   * says which it is, and a boot-time reconciler has no request to carry one. Without this
+   * the only gates available were "always" and "never". */
+  readonly env: EnvBag;
 }
 
 /** An idempotent reconcile run once after `migrate()` on each boot (a DO's first fetch, or a

@@ -23,6 +23,7 @@
         "oblaka-iac": "^0.0.16",
         "oxlint": "1.79.0",
         "react": "^19.0.0",
+        "react-dom": "^19.0.0",
         "typescript": "^5.7.0",
         "wrangler": "^4.101.0",
       },
@@ -42,7 +43,7 @@
     },
     "packages/admin": {
       "name": "@pramen/admin",
-      "version": "0.0.52",
+      "version": "0.0.62",
       "dependencies": {
         "@podoba/react": "^0.0.34",
         "@podoba/tailwind": "^0.0.34",
@@ -60,18 +61,18 @@
     },
     "packages/auth": {
       "name": "@pramen/auth",
-      "version": "0.0.52",
+      "version": "0.0.62",
       "dependencies": {
         "@pramen/server": "workspace:*",
       },
     },
     "packages/client": {
       "name": "@pramen/client",
-      "version": "0.0.52",
+      "version": "0.0.62",
     },
     "packages/cms": {
       "name": "@pramen/cms",
-      "version": "0.0.52",
+      "version": "0.0.62",
       "bin": {
         "pramen-cms": "./dist/cli.js",
       },
@@ -90,7 +91,7 @@
     },
     "packages/cms-astro": {
       "name": "@pramen/cms-astro",
-      "version": "0.0.52",
+      "version": "0.0.62",
       "devDependencies": {
         "@pramen/cms-editor": "workspace:*",
       },
@@ -104,9 +105,10 @@
     },
     "packages/cms-editor": {
       "name": "@pramen/cms-editor",
-      "version": "0.0.52",
+      "version": "0.0.62",
       "dependencies": {
         "@buzola/router": "^0.0.12",
+        "@phosphor-icons/react": "^2.1.10",
         "@podoba/react": "^0.0.34",
         "@podoba/tailwind": "^0.0.34",
         "@podoba/tokens": "^0.0.34",
@@ -133,7 +135,7 @@
     },
     "packages/react": {
       "name": "@pramen/react",
-      "version": "0.0.52",
+      "version": "0.0.62",
       "dependencies": {
         "@pramen/client": "workspace:*",
       },
@@ -143,7 +145,7 @@
     },
     "packages/server": {
       "name": "@pramen/server",
-      "version": "0.0.52",
+      "version": "0.0.62",
       "bin": {
         "pramen": "./dist/cli.js",
       },
@@ -471,6 +473,8 @@
     "@parcel/watcher-win32-ia32": ["@parcel/watcher-win32-ia32@2.5.1", "", { "os": "win32", "cpu": "ia32" }, "sha512-c2KkcVN+NJmuA7CGlaGD1qJh1cLfDnQsHjE89E60vUEMlqduHGCdCLJCID5geFVM0dOtA3ZiIO8BoEQmzQVfpQ=="],
 
     "@parcel/watcher-win32-x64": ["@parcel/watcher-win32-x64@2.5.1", "", { "os": "win32", "cpu": "x64" }, "sha512-9lHBdJITeNR++EvSQVUcaZoWupyHfXe1jZvGZ06O/5MflPcuPLtEphScIBL+AiCWBO46tDSHzWyD0uDmmZqsgA=="],
+
+    "@phosphor-icons/react": ["@phosphor-icons/react@2.1.10", "", { "peerDependencies": { "react": ">= 16.8", "react-dom": ">= 16.8" } }, "sha512-vt8Tvq8GLjheAZZYa+YG/pW7HDbov8El/MANW8pOAz4eGxrwhnbfrQZq0Cp4q8zBEu8NIhHdnr+r8thnfRSNYA=="],
 
     "@podoba/react": ["@podoba/react@0.0.34", "", { "dependencies": { "@podoba/tailwind": "^0.0.34", "@podoba/tokens": "^0.0.34", "@radix-ui/react-slot": "1.2.4", "class-variance-authority": "0.7.1", "clsx": "2.1.1", "react-aria-components": "1.18.0", "tailwind-merge": "3.6.0" }, "peerDependencies": { "@tiptap/extension-highlight": "^3.27.4", "@tiptap/extension-placeholder": "^3.27.4", "@tiptap/extension-task-item": "^3.27.4", "@tiptap/extension-task-list": "^3.27.4", "@tiptap/pm": "^3.27.4", "@tiptap/react": "^3.27.4", "@tiptap/starter-kit": "^3.27.4", "react": ">=19", "react-dom": ">=19" }, "optionalPeers": ["@tiptap/extension-highlight", "@tiptap/extension-placeholder", "@tiptap/extension-task-item", "@tiptap/extension-task-list", "@tiptap/pm", "@tiptap/react", "@tiptap/starter-kit"] }, "sha512-BOra9P4RFxzi3kzdvQmZ1wg8swWBp5KHFCC21U/UHhIY3VlZwc14ajfoYrg1F1C1gykR6ntMZtmarNn5pMNDQg=="],
 

@@ -31,6 +31,7 @@ import {
   type EnvBag,
   type WhereClause,
   type MigrationContext,
+  type BootstrapFn,
   isoTimestampBackfill,
 } from "@pramen/server";
 import {
@@ -49,7 +50,7 @@ import {
   hashPassword,
 } from "@pramen/auth";
 // @pramen/cms — the block/page builder, wired as an ordinary app fragment.
-import { CMS_LEGACY_TIMESTAMP_COLUMNS, cmsSchema, cmsHandlers, cmsPolicies, cmsTasks, cmsRoutes, defineBlockType, defineContentType, cmsBootstrap, collection, createCollectionHandlers, createCollectionTasks, collectionPolicies, collectionPublicPolicies, adminPage, createAdminPageHandlers, NAV_ORDER } from "@pramen/cms";
+import { CMS_LEGACY_TIMESTAMP_COLUMNS, cmsSchema, cmsHandlers, cmsPolicies, cmsTasks, cmsRoutes, defineBlockType, defineContentType, cmsBootstrap, cmsMigrations, collection, createCollectionHandlers, createCollectionTasks, collectionPolicies, collectionPublicPolicies, adminPage, createAdminPageHandlers, NAV_ORDER } from "@pramen/cms";
 
 /** The columns `createNote` writes. `meta` is omitted (not null) when absent, so a
  * role with a restricted create-field list isn't tripped by an always-present column. */
@@ -1001,6 +1002,67 @@ const queues = {
 // they don't collide with the ones the cms e2e suite creates over RPC. The suite asserts a
 // fresh tenant is already seeded with `seeded_doc` before it creates anything — proving the
 // server invokes app.bootstrap after migration on boot.
+// A demo account, so `bun run dev` leads somewhere.
+//
+// On a fresh store there was no way IN. `signup` assigns the `user` role, which no CMS policy
+// accepts, so the editor's Setup screen — which asks for a bearer token and nothing else —
+// could only be satisfied by hand-signing a JWT with the dev AUTH_SECRET. That is a fine
+// escape hatch (`bun tools/dev-token.ts`) and a terrible front door.
+//
+// GATED on `PRAMEN_DEV_SEED`, which `oblaka.ts` sets for the `local` env and for no other.
+// The gate is the whole point: a known username and a known password reconciled onto every
+// boot is precisely the reference data that must never reach a deployment, and `bun run
+// deploy` runs this same file. Reading it needs `BootstrapContext.env` — a boot-time
+// reconciler has no request to carry a flag on, so before that existed the only gates
+// available were "always" and "never".
+const DEV_USER = "pramen@local";
+// Eight characters, because `login` parses its input with the same rule `signup` does and
+// rejects anything shorter before it ever looks at a hash — a 6-character demo password would
+// be unusable however it was stored. Override with PRAMEN_DEV_PASSWORD.
+const DEV_PASSWORD = "pramen-dev";
+
+const devUserBootstrap: BootstrapFn = async ({ db, env }) => {
+  if (env.PRAMEN_DEV_SEED !== "true") return;
+  // Present ⇒ leave it ALONE. `bootstrap` runs on every boot, so writing the hash
+  // unconditionally would silently reset a password someone had changed, every time the DO
+  // woke up — the reconcile-to-the-repo behaviour that is right for a block type and wrong
+  // for a credential.
+  // A SELECT before the hash, not `INSERT OR IGNORE`: `hashPassword` is PBKDF2 at 100k
+  // iterations — seconds of CPU — and this runs inside `blockConcurrencyWhile` on a tenant's
+  // first fetch. Paying that on every boot to discover there was nothing to insert would put
+  // a multi-second stall in front of the first request after every cold start.
+  const existing = await db.exec("SELECT username FROM auth_users WHERE username = ? LIMIT 1", DEV_USER);
+  if (existing.length > 0) return;
+  // An override is checked against the SAME rule the login path enforces, and refused OUT
+  // LOUD rather than silently: a 6-character `PRAMEN_DEV_PASSWORD` would otherwise seed an
+  // account whose password `login` rejects before it ever reaches the hash, and the only
+  // symptom would be a sign-in screen that says the credentials are wrong about credentials
+  // that are exactly what was configured.
+  const configured = String(env.PRAMEN_DEV_PASSWORD ?? "");
+  if (configured !== "" && configured.length < 8) {
+    console.warn(`[example] PRAMEN_DEV_PASSWORD is under the 8 characters \`login\` requires — seeding the default instead`);
+  }
+  const password = configured.length >= 8 ? configured : DEV_PASSWORD;
+  // Raw SQL, like `seedIdentityUser` above and for the same reason: a `BootstrapFn`'s `db` is
+  // schema-AGNOSTIC (the contract has to accept any app's), so the ORM's row types are not
+  // available here and `roles` — a `t.json()` column — is serialized by hand rather than by
+  // the codec at the `Db` chokepoint.
+  await db.exec(
+    "INSERT INTO auth_users (username, passwordHash, roles, email, emailVerified, active, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    DEV_USER,
+    await hashPassword(password),
+    // Every CMS role: the example defines `editor` and `reviewer` separately to demonstrate
+    // the workflow gate, and a demo account that can author but not publish looks broken to
+    // someone who came here to see the CMS.
+    JSON.stringify(["admin", "editor", "reviewer"]),
+    DEV_USER,
+    Date.now(), // emailVerified — nothing to confirm for an address that is not real
+    1, // active (SQLite has no boolean)
+    Date.now(),
+  );
+  console.warn(`[example] seeded the dev account ${DEV_USER} — local only, gated on PRAMEN_DEV_SEED`);
+};
+
 const seededNote = defineBlockType("seeded_note", [{ name: "body", type: "richtext" }] as const, { name: "Seeded Note" });
 const seededDoc = defineContentType("seeded_doc", {
   name: "Seeded Doc",
@@ -1018,6 +1080,9 @@ const seededDoc = defineContentType("seeded_doc", {
 // anyway: on the D1 store the ledger claim and the work are NOT atomic (D1 has no
 // interactive transactions), so a mid-flight failure releases the claim and re-runs.
 const migrations = [
+  // @pramen/cms's own, spread like every other fragment this package ships. Currently the
+  // backfill for the columns `cms_media` grew so the library can be sorted and filtered.
+  ...cmsMigrations,
   // The framework-supplied one: `expr.now()` used to emit the `datetime('now')` space form
   // and now emits ISO-8601, so any row this store wrote under an older build still holds the
   // old shape — and a same-day pair across the two sorts by its separator rather than its
@@ -1055,6 +1120,6 @@ export const app = {
   routes,
   tasks,
   queues,
-  bootstrap: [cmsBootstrap({ blockTypes: [seededNote], contentTypes: [seededDoc] })],
+  bootstrap: [cmsBootstrap({ blockTypes: [seededNote], contentTypes: [seededDoc] }), devUserBootstrap],
   migrations,
 };

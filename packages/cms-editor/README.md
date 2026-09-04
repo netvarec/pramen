@@ -53,7 +53,7 @@ A **host serves it**, from a shell it renders. For an Astro site that is one lin
 pramenCms({ backend: { url: "https://cms.example.workers.dev" }, admin: true })
 ```
 
-That injects a catch-all route at `/_pramen/admin`, so every view is a real server route on
+That injects a catch-all route at `/__admin`, so every view is a real server route on
 the site's own origin: no `dist/` to copy, no SPA-fallback rewrite, and no second hostname
 for the editor. The site's bundler emits and fingerprints `editor.js` / `editor.css` like
 any other asset, which is what makes serving it under a prefix work.
@@ -118,9 +118,24 @@ progress.
 > at a page you have already deployed. `?setup=1` always forces the built-in screen, for
 > pasting a first-admin JWT.
 
+**Each screen's header is a cover panel with generated artwork** (`src/cover.tsx`), derived
+from the screen's name: a hash seeds a PRNG that lays out a Truchet arc field under a colour
+wash drawn from a closed list of podoba accents. It exists because six list screens whose only
+difference is a word at the top read as one screen you keep landing on — and being derived
+means a new collection gets its own cover with nothing to author or upload. Seeded on the
+title's stable half, so adding a file does not redraw the picture.
+
+**Icons are [Phosphor](https://phosphoricons.com), regular weight**, in one place
+(`src/icons.tsx`) and aliased to names that say what they mean in this app rather than what
+they depict — so the family is a decision recorded in one file, and no call site names a
+vendor. A collection or a Block Kit page can still supply its own (`icon: "🎓"`), which goes
+into the rail's icon column verbatim; resolving such a string against Phosphor *by name* is
+deliberately not offered, because a by-name lookup needs the whole 3000-icon registry in the
+bundle to let a deployment name one glyph it can already pass directly.
+
 **Set `brand` when you deploy this for a client.** The editor ships as a package an agency
-installs on someone else's behalf, so the default wordmark — `pramen · cms editor`, in the
-topbar, on the Setup screen and in the browser tab — puts the framework's name where the
+installs on someone else's behalf, so the default wordmark — `pramen · cms editor`, at the head of the
+sidebar, on the Setup screen and in the browser tab — puts the framework's name where the
 client's belongs. `name` replaces it; `suffix: null` drops the `· cms` half entirely. A
 configured brand replaces the whole string, including the word "editor", so nothing English
 is appended to a client's name. Configure nothing and every surface renders exactly as it

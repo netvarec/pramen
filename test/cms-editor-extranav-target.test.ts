@@ -13,7 +13,7 @@
 import { describe, expect, test } from "bun:test";
 import { opensInSameTab, resolveBasePath } from "../packages/cms-editor/src/mount";
 
-const MOUNT = resolveBasePath("/_pramen/admin");
+const MOUNT = resolveBasePath("/__admin");
 /** Where the editor happens to be when the link is clicked — several segments deep, which
  * is exactly where resolving against the origin instead of the document goes wrong. */
 const DOC = `https://site.example${MOUNT}/pages/abc`;
@@ -41,7 +41,7 @@ describe("extraNav target", () => {
   });
 
   test("containment is anchored, so a path merely sharing the prefix is outside", () => {
-    expect(sameTab("/_pramen/adminate", "_self")).toBe(true);
+    expect(sameTab("/__adminate", "_self")).toBe(true);
   });
 
   // The bug the hand-copied predicate shared: `<a href>` is resolved by the browser against

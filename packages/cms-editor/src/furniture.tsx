@@ -11,29 +11,25 @@
 
 import { Button, Heading, Input } from "@podoba/react";
 import { useCallback, useEffect, useState } from "react";
-import { useUnsavedGuard } from "./app-context";
+import { useApp, useUnsavedGuard } from "./app-context";
 import type { Api } from "./api";
 import { CONTROL, RichText, slugify } from "./fields";
 import { ROW, WRAP } from "./chrome";
+import { useCrumb } from "./breadcrumb";
+import { PageHeader } from "./page-header";
 import type { CollectionMeta, Menu, MenuItem, MenuItemKind, Page, Redirect, RichTextDoc, Taxonomy, Term, Widget, WidgetArea } from "./types";
-import { MAX_MENU_DEPTH, REDIRECT_STATUSES } from "./types";
+import { MAX_MENU_DEPTH, REDIRECT_STATUSES, TAXONOMY_TARGET_LABELS, TAXONOMY_TARGETS } from "./types";
+import type { TaxonomyTarget } from "./types";
 
 
 export function errText(e: unknown): string {
   return String((e as Error)?.message ?? e);
 }
 
-function Head({ lead, em, children }: { lead: string; em: string; children?: React.ReactNode }) {
-  return (
-    <div className="mb-6 mt-6 flex items-end justify-between gap-6 max-[820px]:flex-col max-[820px]:items-start">
-      <h1 className="m-0 text-[40px] font-normal leading-[1.1] tracking-[-0.01em]">
-        <span className="block text-fg-subtle">{lead}</span>
-        <span className="block text-fg">{em}</span>
-      </h1>
-      {children}
-    </div>
-  );
-}
+/** The site-furniture screens' header. `Head` stays as the local name the four call sites
+ * below already use; it is the same component, at the same scale, as every other screen —
+ * see the note in `page-header.tsx` about why the smaller variant went away. */
+const Head = PageHeader;
 
 function Saved() {
   return <div className="rounded-lg border border-brand-green bg-brand-green/20 px-3.5 py-2.5 text-small text-fg">saved</div>;
@@ -84,9 +80,10 @@ export function MenusView({ api, onOpen, onError, canEdit }: { api: Api; onOpen:
   };
 
   return (
-    <div className={WRAP}>
+    <>
       <Head lead="Navigation" em={menus === null ? "Menus" : menus.length === 1 ? "1 menu" : `${menus.length} menus`} />
-      <div className="flex flex-col gap-2">
+      <div className={WRAP}>
+        <div className="flex flex-col gap-2">
         {menus === null ? <p className="text-fg-subtle">Loading…</p> : null}
         {menus?.length === 0 ? <p className="text-fg-subtle">No menus yet. A menu is read by name — <code>getMenu(&quot;primary&quot;)</code> — from your layout.</p> : null}
         {(menus ?? []).map((m) => (
@@ -110,7 +107,8 @@ export function MenusView({ api, onOpen, onError, canEdit }: { api: Api; onOpen:
           <Button className="mt-3" onPress={create} isDisabled={busy || !label.trim() || !name.trim()}>Create menu</Button>
         </div>
       ) : null}
-    </div>
+      </div>
+    </>
   );
 }
 
@@ -166,6 +164,9 @@ export function MenuEditor({ api, name, collections, onBack, onDeleted, onError,
 }) {
   const [menu, setMenu] = useState<Menu | null>(null);
   const [items, setItems] = useState<MenuItem[]>([]);
+  // The app bar's trailing crumb — the menu's LABEL once it has loaded, not the `name` key in
+  // the URL, which is what a layout gets to publish and is not what an editor calls it.
+  useCrumb(menu?.label);
   const [label, setLabel] = useState("");
   // The whole tree is edited locally and written only by "Save menu", so leaving the screen
   // discards it. Nothing prompted before this — `PageEditor` was the only screen that ever
@@ -440,9 +441,10 @@ export function RedirectsView({ api, onError, canEdit }: { api: Api; onError: (s
   };
 
   return (
-    <div className={WRAP}>
+    <>
       <Head lead="Old URLs, kept alive" em={rows === null ? "Redirects" : rows.length === 1 ? "1 redirect" : `${rows.length} redirects`} />
-      <p className="mb-4 max-w-[62ch] text-sm text-fg-muted">
+      <div className={WRAP}>
+        <p className="mb-4 max-w-[62ch] text-sm text-fg-muted">
         Changing a page&apos;s slug changes a live URL and breaks every link to it. A redirect is how the old one keeps working.
         Disabling one keeps the record of what the old URL was, which deleting it does not.
       </p>
@@ -486,11 +488,55 @@ export function RedirectsView({ api, onError, canEdit }: { api: Api; onError: (s
           <Button className="mt-3" onPress={create} isDisabled={busy || !from.trim() || !to.trim()}>Add redirect</Button>
         </div>
       ) : null}
-    </div>
+      </div>
+    </>
   );
 }
 
 // --- taxonomies -----------------------------------------------------------------------
+
+/** What a vocabulary classifies. `null` is EVERYTHING, and it is a real state rather than a
+ * shorthand for "all boxes ticked": a vocabulary that was never narrowed keeps applying to
+ * whatever the CMS grows next, where an explicit `["page","media"]` freezes it at today's two.
+ * So "Everything" is its own option, not the all-checked case. */
+function AppliesToField({ value, onChange, disabled }: { value: TaxonomyTarget[] | null; onChange: (v: TaxonomyTarget[] | null) => void; disabled?: boolean }) {
+  const toggle = (t: TaxonomyTarget) => {
+    const next = (value ?? []).includes(t) ? (value ?? []).filter((x) => x !== t) : [...(value ?? []), t];
+    // Unchecking the last one would mean a vocabulary nothing can use, which the server
+    // refuses — so it lands back on "Everything", the nearest thing the person meant.
+    onChange(next.length === 0 ? null : next);
+  };
+  return (
+    <div className="mt-3">
+      <span className="text-caption text-fg-subtle">Applies to</span>
+      {/* "Everything" gets its own line rather than sitting in the row as a third peer: a radio
+          beside two checkboxes reads as one group with mismatched controls, when it is actually
+          the choice ABOVE them — pick everything, or pick which. */}
+      <div className="mt-1 flex flex-col gap-1">
+        <label className="flex items-center gap-2">
+          <input type="radio" checked={value === null} disabled={disabled} onChange={() => onChange(null)} />
+          <span className="text-sm text-fg">Everything</span>
+        </label>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 pl-5">
+          {TAXONOMY_TARGETS.map((t) => (
+            <label key={t} className="flex items-center gap-2">
+              <input type="checkbox" checked={(value ?? []).includes(t)} disabled={disabled} onChange={() => toggle(t)} />
+              <span className="text-sm text-fg">{TAXONOMY_TARGET_LABELS[t]}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** How a vocabulary's scope reads in a list row. */
+function appliesToText(t: Taxonomy): string {
+  const list = t.appliesTo;
+  if (!Array.isArray(list) || list.length === 0) return "everything";
+  return list.map((x) => TAXONOMY_TARGET_LABELS[x] ?? x).join(" + ").toLowerCase();
+}
+
 
 export function TaxonomiesView({ api, onOpen, onError, canEdit }: { api: Api; onOpen: (slug: string) => void; onError: (s: string) => void; canEdit: boolean }) {
   const [taxa, setTaxa] = useState<Taxonomy[] | null>(null);
@@ -498,9 +544,20 @@ export function TaxonomiesView({ api, onOpen, onError, canEdit }: { api: Api; on
   const [slug, setSlug] = useState("");
   const [slugTouched, setSlugTouched] = useState(false);
   const [hierarchical, setHierarchical] = useState(false);
+  // `null` is "everything", which is also what an un-narrowed vocabulary stores — so the
+  // default here is the same value the server would have written anyway.
+  const [appliesTo, setAppliesTo] = useState<TaxonomyTarget[] | null>(null);
   const [busy, setBusy] = useState(false);
+  // Scoping a vocabulary and media tagging shipped together, and the flag is the same one for
+  // that reason: a server either has both or neither, and a second capability for the same
+  // release would be one that can never be false on its own. On an older server the field is
+  // hidden rather than offered and silently dropped.
+  const { cms: { mediaTerms: scopable } } = useApp();
 
   const refresh = useCallback(() => {
+    // No target: this is the screen that EDITS the scope, so it has to show a vocabulary it
+    // has narrowed away — otherwise narrowing one to Media would remove it from the only
+    // place that could widen it again.
     api.listTaxonomies().then(setTaxa).catch((e) => { setTaxa([]); onError(errText(e)); });
   }, [api, onError]);
   useEffect(refresh, [refresh]);
@@ -508,16 +565,19 @@ export function TaxonomiesView({ api, onOpen, onError, canEdit }: { api: Api; on
   const create = async () => {
     setBusy(true);
     try {
-      const created = await api.createTaxonomy({ slug, label, hierarchical });
-      setLabel(""); setSlug(""); setSlugTouched(false); setHierarchical(false);
+      // On a server that cannot scope a vocabulary, `null` is what it would store anyway —
+      // so this sends the same value the field's default means rather than a conditional key.
+      const created = await api.createTaxonomy({ slug, label, hierarchical, appliesTo: scopable ? appliesTo : null });
+      setLabel(""); setSlug(""); setSlugTouched(false); setHierarchical(false); setAppliesTo(null);
       onOpen(created.slug);
     } catch (e) { onError(errText(e)); } finally { setBusy(false); }
   };
 
   return (
-    <div className={WRAP}>
+    <>
       <Head lead="How this site" em="is classified" />
-      <p className="mb-4 max-w-[62ch] text-sm text-fg-muted">
+      <div className={WRAP}>
+        <p className="mb-4 max-w-[62ch] text-sm text-fg-muted">
         A vocabulary is a way of grouping pages — categories, tags, regions. There are no built-in ones:
         a deployment declares what it sorts by, the same way it declares its content types.
       </p>
@@ -529,6 +589,7 @@ export function TaxonomiesView({ api, onOpen, onError, canEdit }: { api: Api; on
             <span className="min-w-0 flex-1 truncate font-medium">{t.label}</span>
             <span className="shrink-0 truncate text-fg-subtle">{t.slug}</span>
             <span className="shrink-0 text-caption text-fg-subtle">{t.hierarchical ? "nested" : "flat"}</span>
+            {scopable ? <span className="shrink-0 text-caption text-fg-subtle">{appliesToText(t)}</span> : null}
           </div>
         ))}
       </div>
@@ -546,10 +607,12 @@ export function TaxonomiesView({ api, onOpen, onError, canEdit }: { api: Api; on
             <input type="checkbox" checked={hierarchical} onChange={(e) => setHierarchical(e.target.checked)} />
             <span className="text-sm text-fg">Terms can nest (categories rather than tags)</span>
           </label>
+          {scopable ? <AppliesToField value={appliesTo} onChange={setAppliesTo} /> : null}
           <Button className="mt-3" onPress={create} isDisabled={busy || !label.trim() || !slug.trim()}>Create vocabulary</Button>
         </div>
       ) : null}
-    </div>
+      </div>
+    </>
   );
 }
 
@@ -569,6 +632,7 @@ export function TaxonomyEditor({ api, slug, onBack, onDeleted, onError, canEdit 
   const [termSlugTouched, setTermSlugTouched] = useState(false);
   const [parentId, setParentId] = useState("");
   const [busy, setBusy] = useState(false);
+  const { cms: { mediaTerms: scopable } } = useApp();
 
   const refreshTerms = useCallback(() => {
     api.getTermTree(slug).then(setTree).catch((e) => { setTree([]); onError(errText(e)); });
@@ -606,6 +670,23 @@ export function TaxonomyEditor({ api, slug, onBack, onDeleted, onError, canEdit 
     if (label === t.label) return;
     try { await api.updateTerm(t.id, { label }); refreshTerms(); } catch (e) { onError(errText(e)); }
   };
+  /** Saved on change rather than behind a Save button, because a narrowing can be REFUSED —
+   * the server rejects one that would strand existing assignments — and a refusal has to be
+   * visible while the choice that caused it is still on screen. On refusal the field goes back
+   * to what is stored, so it never shows a scope the server did not accept. */
+  const setAppliesTo = async (next: TaxonomyTarget[] | null) => {
+    if (!tax) return;
+    const previous = tax.appliesTo ?? null;
+    setTax({ ...tax, appliesTo: next });
+    try {
+      onError("");
+      await api.updateTaxonomy(tax.id, { appliesTo: next });
+    } catch (e) {
+      setTax({ ...tax, appliesTo: previous });
+      onError(errText(e));
+    }
+  };
+
   const delTaxonomy = async () => {
     if (!tax || !confirm(`Delete the vocabulary “${tax.label}”? Every term in it goes too, along with every page's assignments.`)) return;
     try { await api.deleteTaxonomy(tax.id); onDeleted(); } catch (e) { onError(errText(e)); }
@@ -665,6 +746,17 @@ export function TaxonomyEditor({ api, slug, onBack, onDeleted, onError, canEdit 
           </div>
         ) : null}
 
+        {canEdit && scopable ? (
+          <div className="rounded-lg border border-border bg-surface-muted p-4">
+            <Heading level="2" className="mb-1 font-normal">Where this vocabulary is offered</Heading>
+            <p className="max-w-[62ch] text-caption text-fg-subtle">
+              Narrowing is refused while the vocabulary is still assigned to something it would stop applying to —
+              remove those assignments first, so nothing is left tagged with a vocabulary you can no longer see.
+            </p>
+            <AppliesToField value={tax.appliesTo ?? null} onChange={setAppliesTo} />
+          </div>
+        ) : null}
+
         {canEdit ? <Button variant="ghost" className="self-start text-danger" onPress={delTaxonomy}>Delete this vocabulary</Button> : null}
       </div>
     </div>
@@ -706,9 +798,10 @@ export function WidgetAreasView({ api, onOpen, onError, canEdit }: { api: Api; o
   };
 
   return (
-    <div className={WRAP}>
+    <>
       <Head lead="Parts of the layout" em="you can fill in" />
-      <p className="mb-4 max-w-[62ch] text-sm text-fg-muted">
+      <div className={WRAP}>
+        <p className="mb-4 max-w-[62ch] text-sm text-fg-muted">
         A widget area is a named slot in your layout — a sidebar, a footer column — that an editor fills without touching code.
         Your layout reads one by name: <code>getWidgetArea(&quot;sidebar&quot;)</code>.
       </p>
@@ -736,7 +829,8 @@ export function WidgetAreasView({ api, onOpen, onError, canEdit }: { api: Api; o
           <Button className="mt-3" onPress={create} isDisabled={busy || !label.trim() || !name.trim()}>Create widget area</Button>
         </div>
       ) : null}
-    </div>
+      </div>
+    </>
   );
 }
 

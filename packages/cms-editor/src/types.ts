@@ -209,6 +209,11 @@ export interface CmsCapabilities {
    * configured. Without it a reviewer-only session gets the authoring nav and every screen
    * 403s on its first save. */
   canEdit: boolean;
+  /** The server has `listMediaTerms`/`setMediaTerms`, and `listMedia` understands `term`.
+   * Declared like `siteFurniture`: on an older server the detail panel's Tags section would
+   * 404 the moment a file is opened, and the library's tag filter would send an argument
+   * that is silently ignored — a control that visibly does nothing. */
+  mediaTerms: boolean;
 }
 
 /**
@@ -244,6 +249,7 @@ export const DEFAULT_CAPABILITIES: CmsCapabilities = {
   pagesByType: false,
   siteFurniture: false,
   codeDefinedTypes: false,
+  mediaTerms: false,
   // Fails OPEN, unlike its neighbours. An older server sends no `canEdit`, and hiding
   // every authoring control from a real editor is unrecoverable from inside the editor;
   // showing one that 403s is a legible error with a way forward. The server is the
@@ -371,7 +377,24 @@ export interface Taxonomy {
   pluralLabel?: string | null;
   description?: string | null;
   hierarchical?: boolean;
+  /** What this vocabulary classifies. `null`/absent means EVERYTHING — a vocabulary that was
+   * never narrowed, and the reading for a row written before the column existed. */
+  appliesTo?: TaxonomyTarget[] | null;
 }
+
+/** Mirror of @pramen/cms `TAXONOMY_TARGETS` — the object types a vocabulary can classify.
+ * Mirrored rather than imported for the reason at the top of this file: the editor is a
+ * standalone browser app with no server-package dependency. The server is the authority; an
+ * unknown value here would just render an unchecked box it refuses to save. */
+export const TAXONOMY_TARGETS = ["page", "media"] as const;
+export type TaxonomyTarget = (typeof TAXONOMY_TARGETS)[number];
+
+/** What each target is called on screen — plural, because each names the SET of things the
+ * vocabulary would classify. */
+export const TAXONOMY_TARGET_LABELS = {
+  page: "Pages",
+  media: "Media",
+} satisfies Record<TaxonomyTarget, string>;
 
 export interface Term {
   id: string;
@@ -459,3 +482,42 @@ export interface AdminPageMeta {
   icon?: string;
   navOrder?: number;
 }
+
+// --- media sorting and filtering -----------------------------------------------------------
+//
+// Mirrors of the vocabularies `listMedia` accepts in @pramen/cms. Mirrored rather than
+// imported for the reason at the top of this file — the editor is a standalone browser app
+// with no server-package dependency — and checked against the originals in
+// `test/cms-editor-mirrors.test.ts`, because a duplicate nobody verifies is a latent bug with
+// a comment on it.
+//
+// The server treats an unrecognised value as absent, so a drift here degrades to the default
+// order rather than to an error. That is the failure worth having, and it is still a failure:
+// a sort the editor offers and the server drops is a control that silently does nothing.
+
+/** How the media library may be ordered. */
+export const MEDIA_SORTS = ["newest", "oldest", "name", "name_desc", "largest", "smallest"] as const;
+export type MediaSort = (typeof MEDIA_SORTS)[number];
+
+/** What each sort is called on screen. */
+export const MEDIA_SORT_LABELS = {
+  newest: "Newest first",
+  oldest: "Oldest first",
+  name: "Name A–Z",
+  name_desc: "Name Z–A",
+  largest: "Largest first",
+  smallest: "Smallest first",
+} satisfies Record<MediaSort, string>;
+
+/** The coarse type buckets the library filters by. */
+export const MEDIA_KINDS = ["image", "video", "audio", "document", "other"] as const;
+export type MediaKind = (typeof MEDIA_KINDS)[number];
+
+/** …and their labels. Plural, because each names a SET the filter narrows to. */
+export const MEDIA_KIND_LABELS = {
+  image: "Images",
+  video: "Video",
+  audio: "Audio",
+  document: "Documents",
+  other: "Other",
+} satisfies Record<MediaKind, string>;

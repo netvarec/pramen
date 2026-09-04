@@ -231,13 +231,13 @@ export function makeWorker(app: PramenApp) {
   // runBootstrap(), run once per isolate after migration. D1 is a single shared store (no
   // partition split), so every reconciler runs under the default partition. SYSTEM-scoped
   // Db (ACL bypassed), triggers suppressed; a failing reconciler is logged, never fatal.
-  const runBootstrapD1 = async (driver: Driver): Promise<void> => {
+  const runBootstrapD1 = async (driver: Driver, env: Env): Promise<void> => {
     const fns = app.bootstrap;
     if (!fns?.length) return;
     const db = new Db(driver, { acl: d1Acl, identity: { roles: ["admin"] }, system: true, schema: app.schema, suppressTriggers: true }, app.schema);
     for (const fn of fns) {
       try {
-        await driver.transaction(() => Promise.resolve(fn({ db, driver, schema: app.schema, partition: DEFAULT_PARTITION })));
+        await driver.transaction(() => Promise.resolve(fn({ db, driver, schema: app.schema, partition: DEFAULT_PARTITION, env: envBag(env) })));
       } catch (e) {
         console.error("[pramen] bootstrap failed (d1):", e);
       }
@@ -301,7 +301,7 @@ export function makeWorker(app: PramenApp) {
     }
     const driver = new D1Driver(env.DB, { start: opts.start });
     const files = createFiles({ tenant: opts.tenant, secret: filesSecret(env), adapter: new R2Adapter(env.FILES) });
-    await ensureD1Migrated(driver, env.PRAMEN_ALLOW_DESTRUCTIVE === "true", ctx);
+    await ensureD1Migrated(driver, env, ctx);
     let dispatched;
     try {
       dispatched = await dispatch(
@@ -357,14 +357,18 @@ export function makeWorker(app: PramenApp) {
    * `ctx` is the CALLING invocation's context: when this call is the one that starts the
    * boot, the boot is put under its `waitUntil` so a disconnecting caller cannot cancel a
    * boot everyone else is waiting on. Pass it from every entry that has one. */
-  const ensureD1Migrated = (driver: Driver, allowDestructive: boolean, ctx?: ExecutionContext): Promise<void> =>
+  // Takes `env` rather than the one flag it used to read off it: `runBootstrapD1` now hands
+  // the environment to each reconciler (see `BootstrapContext.env`), and three call sites
+  // each re-deriving `PRAMEN_ALLOW_DESTRUCTIVE === "true"` was already one place too many for
+  // a flag whose whole job is to gate data loss.
+  const ensureD1Migrated = (driver: Driver, env: Env, ctx?: ExecutionContext): Promise<void> =>
     d1Boot.ensure(
       (progress) => {
         const d = observeDriver(driver, progress);
-        return migrate(d, app.schema, { allowDestructive })
+        return migrate(d, app.schema, { allowDestructive: env.PRAMEN_ALLOW_DESTRUCTIVE === "true" })
           .then(() => runDataMigrationsD1(d)) // imperative, recorded backfills (fail closed)
           .then(() => ensureOutbox(d)) // the deferred-tasks table also lives in D1
-          .then(() => runBootstrapD1(d)) // converge code-defined reference data
+          .then(() => runBootstrapD1(d, env)) // converge code-defined reference data
           .then(() => undefined);
       },
       ctx ? (p) => ctx.waitUntil(p) : undefined,
@@ -397,7 +401,7 @@ export function makeWorker(app: PramenApp) {
     // The drain reads due tasks then writes their status — pin the primary so it sees
     // and updates current outbox state (not a lagging replica).
     const driver = new D1Driver(env.DB, { start: "first-primary" });
-    await ensureD1Migrated(driver, env.PRAMEN_ALLOW_DESTRUCTIVE === "true", ctx);
+    await ensureD1Migrated(driver, env, ctx);
     const result = await drainOutbox(driver, bindTasks(app.tasks, d1TaskCtx(driver, env)), Date.now());
     if (source === "request" && shouldWarnMissingCron({ cronSeen, warned: warnedNoCron, nextRunAt: result.nextRunAt, now: Date.now() })) {
       warnedNoCron = true;
@@ -416,7 +420,7 @@ export function makeWorker(app: PramenApp) {
     if (!env.DB) throw new Error("D1 store is not configured");
     // Inspection listing — pin the primary so it reflects current outbox state.
     const driver = new D1Driver(env.DB, { start: "first-primary" });
-    await ensureD1Migrated(driver, env.PRAMEN_ALLOW_DESTRUCTIVE === "true", ctx);
+    await ensureD1Migrated(driver, env, ctx);
     return listTasks(driver, { status, limit });
   };
 

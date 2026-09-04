@@ -126,6 +126,34 @@ entry, so doing it there made the returned array stop matching the `as const` li
   the tenant's `media/` prefix); the client PUTs the bytes, then `createMedia({ ref, alt? })`
   confirms the blob is in R2 and persists a `cms_media` row. `listMedia`/`getMedia`/`deleteMedia`
   (deleteMedia also removes the R2 blob) round it out. Editor-gated.
+- **Browsing:** `listMedia({ limit, offset, q?, sort?, kind?, term? })`. `q` matches the filename **or**
+  the alt text (case-insensitive; a `%` or `_` in the needle is a literal), `sort` is one of
+  `newest`/`oldest`/`name`/`name_desc`/`largest`/`smallest`, and `kind` narrows to
+  `image`/`video`/`audio`/`document`/`other`. All three are applied in SQL rather than to the
+  page that arrived, so they mean what they say on a library larger than one page. `sort` and
+  `kind` are closed vocabularies — a caller never names a column — and an unrecognised value
+  falls back to the default instead of erroring.
+
+  This is what `cms_media.filename`/`contentType`/`size` are for: `file` is a `fileRef` (JSON in
+  a TEXT cell), which `orderBy` and `where` cannot see into, so the three fields the library
+  queries by are projected onto indexed columns when a row is created. **Spread `cmsMigrations`
+  into `app.migrations`** to backfill rows written before those columns existed — without it
+  they keep NULL, sort together under a name sort, and answer only the `other` filter.
+- **Tagging:** files carry taxonomy terms from the same `cms_taxonomies`/`cms_terms` tables pages
+  use, through a `cms_media_terms` junction — one vocabulary, edited in one place, applied to
+  whichever of the two it declares. A vocabulary carries **`appliesTo`** — `["page"]`,
+  `["media"]`, both, or `null` for everything (which is what an un-narrowed one, and every row
+  written before the column existed, means). `listTaxonomies({ target })` narrows to it, and
+  `setPageTerms`/`setMediaTerms` REFUSE a term from a vocabulary that does not apply, so it is a
+  rule rather than a UI hint. Narrowing a vocabulary away from something it is still assigned to
+  is refused too — those assignments would stay stored and stop being reachable from the panel
+  that could remove them. `listMediaTerms({ mediaId })` reads a file's terms and `setMediaTerms({ mediaId, termIds })`
+  replaces them wholesale (set semantics, like `setPageTerms`); `listMedia({ term })` filters by
+  one, ANDed with `kind` and `q`. The filter is a relation traversal compiled to a subquery, so
+  it narrows in SQL like every other option here. Deleting a term takes its assignments with it
+  (a real `ON DELETE CASCADE`), and trashing a file does NOT — only `purgeMedia` does, so a
+  restored file keeps its tags. Declared to the editor as
+  `listCmsCapabilities().mediaTerms`.
 - **Reference from a block:** a `"media"` field stores a `cms_media` id. At assemble/publish time
   the id is resolved (recursively, through group/repeater nesting) to a `ResolvedMedia`
   `{ id, key, url, alt, contentType, filename }` in the snapshot — so the content API returns a
@@ -194,6 +222,12 @@ Minting is editor-gated; **redeeming needs no session** — the signature is the
 authorization. Spread `cmsRoutes()` into `app.routes` to serve `GET /cms/preview`, which
 verifies the token in the Worker before any read and returns the live draft with
 `isPreview: true` and `Cache-Control: private, no-store`.
+
+That route answers with **JSON** — this CMS is headless, so it has the draft and no idea what
+it should look like. Your site renders it: redeem the same token with `client.getPreview(token)`
+(`@pramen/cms-astro`) from a route of your own, through the same components the published page
+uses, and point the editor's Preview link button at it with `admin.previewUrl`. A working one
+is `example/site/src/pages/preview.astro`.
 
 If you pass custom roles to `createCmsHandlers`, hand `cmsRoutes` the **same options
 object** — it derives the route's identity from them, so the two cannot drift:

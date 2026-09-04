@@ -13,6 +13,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { ADMIN_BASE } from "../packages/cms-astro/src/admin";
 
 const ROOT = join(import.meta.dir, "..");
 const SITE = join(ROOT, "example/site");
@@ -20,7 +21,12 @@ const CMS_PORT = 8790;
 const SITE_PORT = 8791;
 const SITE_BASE = `http://localhost:${SITE_PORT}`;
 const CMS_URL = `http://localhost:${CMS_PORT}`;
-const ADMIN = "/_pramen/admin";
+// IMPORTED, not written out again. A second copy of the mount path is a second thing to
+// remember to change, and the one time it was one, the whole admin half of this file went red
+// against a site that was serving the editor perfectly well. `cms-astro-integration.test.ts`
+// is where the literal value is pinned; here it only has to be the SAME value the integration
+// injected.
+const ADMIN = ADMIN_BASE;
 
 /** One published article, in the shape `getPage` returns. */
 const PAGE = {
@@ -54,6 +60,22 @@ const PAGE = {
   },
 };
 
+/** The same page as an unpublished DRAFT, in the shape `/cms/preview` returns — a bare
+ * `AssembledPage` with `isPreview`, not the `{ ok, result }` envelope /rpc uses. */
+const DRAFT = {
+  ...PAGE,
+  page: { ...PAGE.page, title: "Work in progress", status: "draft" },
+  regions: {
+    main: [
+      {
+        ...PAGE.regions.main[0],
+        fields: { body: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "Unpublished body." }] }] } },
+      },
+    ],
+  },
+  isPreview: true,
+};
+
 /** A stub of the CMS's public content API — the two calls `cmsLoader` makes at build time.
  * A stub rather than the real Worker so this test costs a build and not a wrangler boot;
  * `test/suites/cms.ts` is where the real handlers are exercised. */
@@ -65,6 +87,14 @@ function stubCms() {
       const json = (result: unknown) => Response.json({ ok: true, result });
       if (pathname === "/rpc/listPublishedPages") return json([{ slug: PAGE.page.slug, locale: PAGE.page.locale, contentType: "article", updatedAt: "2026-08-30T00:00:00.000Z" }]);
       if (pathname === "/rpc/getPage") return json(PAGE);
+      // The preview redemption route — NOT an /rpc call and not an envelope: the real one is
+      // public, pre-auth, and answers with the assembled draft directly. `good` stands in for
+      // a valid signature; anything else is what an expired or forged token gets.
+      if (pathname === "/cms/preview") {
+        const token = new URL(req.url).searchParams.get("token");
+        if (token !== "good") return Response.json({ error: "invalid preview link", code: "forbidden" }, { status: 403 });
+        return Response.json(DRAFT);
+      }
       return Response.json({ ok: false, code: "not_found" }, { status: 404 });
     },
   });
@@ -152,6 +182,51 @@ describe("example site: content", () => {
     // Mapped, so the placeholder for an unknown block type is NOT what rendered.
     expect(html).not.toContain("Unknown block type");
     expect(html).toContain('content="An example article."');
+  });
+});
+
+// The half a headless CMS cannot supply. `/cms/preview` answers with JSON, because the
+// server has the draft and no idea what it should look like; the SITE renders it, through
+// the same layout the published route uses — a preview drawn by a second copy of the markup
+// is a preview of the copy.
+describe("example site: preview links", () => {
+  test("a valid token renders the DRAFT, through the site's own layout", async () => {
+    const res = await fetch(`${SITE_BASE}/preview?token=good`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain("Work in progress");
+    expect(html).toContain("Unpublished body.");
+    // The same components as the published route: the block rendered, rather than falling
+    // through to the unknown-type placeholder.
+    expect(html).not.toContain("Unknown block type");
+  });
+
+  test("it says it is a draft, and refuses to be indexed", async () => {
+    const html = await (await fetch(`${SITE_BASE}/preview?token=good`)).text();
+    expect(html).toContain("Draft preview");
+    expect(html).toContain('name="robots"');
+    expect(html).toContain("noindex");
+  });
+
+  test("a draft is never cached — not by the browser and not in between", async () => {
+    const res = await fetch(`${SITE_BASE}/preview?token=good`);
+    expect(res.headers.get("cache-control")).toContain("no-store");
+  });
+
+  test("a bad or absent token is an ordinary 404, saying nothing about what exists", async () => {
+    for (const path of ["/preview?token=forged", "/preview"]) {
+      const res = await fetch(`${SITE_BASE}${path}`);
+      expect(res.status).toBe(404);
+      // Uniform: a distinct "expired" would confirm a page id to anyone spraying tokens.
+      expect(await res.text()).not.toContain("Work in progress");
+    }
+  });
+
+  test("the published route is unaffected — no draft leaks into a static page", async () => {
+    const html = await (await fetch(`${SITE_BASE}/${PAGE.page.slug}`)).text();
+    expect(html).toContain("Hello world");
+    expect(html).not.toContain("Draft preview");
+    expect(html).not.toContain("Unpublished body.");
   });
 });
 
