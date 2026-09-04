@@ -60,6 +60,21 @@ export interface AdminRuntimeConfig {
   /** `order` places a link against `NAV_ORDER` (from @pramen/cms) instead of leaving it
    * after Settings — the documented example did not typecheck without it. */
   extraNav?: { label: string; href: string; target?: "_blank" | "_self"; order?: number }[];
+  /** Where YOUR SITE renders a page preview — e.g. `"/preview"`.
+   *
+   * `signPagePreview` mints a token and a RELATIVE url that the CMS Worker itself redeems,
+   * and that endpoint answers with JSON: the CMS is headless, so it has the draft but no
+   * idea what the page should look like. Unset, the editor's Preview link therefore opens a
+   * wall of JSON — correct, and useless to the stakeholder preview exists for.
+   *
+   * Point this at a route of your own that redeems the token (`client.getPreview(token)`)
+   * and renders it with the same components the published page uses; the editor appends
+   * `?token=…`. The same seam as `menuHref` and the sitemap's `pageUrl`: the CMS cannot know
+   * how a deployment routes, so the deployment says.
+   *
+   * PAGES only. A collection row has no canonical URL — the site decides what, if anything,
+   * one looks like — so `signCollectionPreview` keeps returning the backend's JSON. */
+  previewUrl?: string;
 }
 
 /** Options for the injected admin route. `true` is "mount it with the integration's own

@@ -108,9 +108,28 @@ pramenCms({
     signInUrl: "/signin/",                     // must be a page that EXISTS
     hidePages: true,                           // collections-only deployments
     extraNav: [{ label: "Curation", href: "/curate", target: "_self" }],
+    previewUrl: "/preview",                    // YOUR page that renders a draft
   },
 })
 ```
+
+### `previewUrl` — where a preview link opens
+
+The editor's **Preview link** button mints a signed, self-expiring token for the page. The
+CMS Worker will happily redeem it — and answer with **JSON**, because a headless CMS has the
+draft and no idea what it should look like. That is right for a machine and useless for the
+person a preview link is for: a stakeholder with no account, who opens a wall of braces.
+
+Point `previewUrl` at a route of your own and the editor appends `?token=…` to it instead.
+The route redeems the token with `client.getPreview(token)` and renders the draft **through
+the same components the published page uses** — a preview drawn by a second copy of the
+layout is a preview of the copy. `example/site/src/pages/preview.astro` is a complete one,
+banner and `noindex` included.
+
+This is the same seam as `menuHref` and the sitemap's `pageUrl`: the CMS cannot know how a
+deployment routes, so the deployment says. Leave it unset and nothing changes — the link
+still points at the CMS's own endpoint. **Pages only**: a collection row has no canonical
+URL, so `signCollectionPreview` keeps returning the backend's JSON.
 
 `extraNav` links open in a **new tab** by default, because the editor's catch-all route
 matches every same-origin path — a same-tab click would land on the editor's own 404 instead

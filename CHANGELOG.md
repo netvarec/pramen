@@ -155,6 +155,34 @@ there are no backward-compatibility guarantees yet.
   Nothing to migrate — a new table is additive, `migrate()` creates it, and `appliesTo` is a
   nullable `ADD COLUMN`.
 
+- **Preview links reach a page you can actually look at (`@pramen/cms-editor`,
+  `@pramen/cms-astro`, `example/site`).** Two halves were missing and the feature fell through
+  the gap between them.
+
+  The page editor never minted one. `signPagePreview` has existed on the server, tested end to
+  end, since preview stopped being a role check — and no editor screen called it, so the only
+  way to get a link was to write the RPC by hand. The collection editor has had its button
+  since `supports: ["preview"]`; the page half now has the same one, in the Workflow panel.
+  It is not keyed to the status, because a published page is exactly what you preview before
+  changing it and a draft is exactly what you send for comment.
+
+  And the link opened JSON. The CMS redeems the token itself and answers with the assembled
+  draft, because a headless CMS has the content and no idea what it should look like —
+  correct for a machine, useless for the stakeholder without an account who a preview link is
+  FOR. A host can now declare **`admin.previewUrl`**: a route of its own that the editor sends
+  the token to instead. Same seam as `menuHref` and the sitemap's `pageUrl` — the CMS cannot
+  know how a deployment routes, so the deployment says. Unset, nothing changes.
+
+  `example/site` ships the other end: `src/pages/preview.astro` redeems the token with
+  `client.getPreview(token)` and renders the draft through the SAME `Article.astro` the
+  published route uses — the layout was extracted for exactly this reason, since a preview
+  drawn by a second copy of the markup is a preview of the copy. It carries a draft banner,
+  `noindex`, `no-store`, and answers a forged or expired token with a 404 indistinguishable
+  from a missing page, so spraying tokens at it confirms nothing.
+
+  Pages only. A collection row has no canonical URL — the site decides what one looks like, if
+  anything — so `signCollectionPreview` keeps pointing at the backend.
+
 - **The screen header stays as the page scrolls, condensed (`@pramen/cms-editor`).** Scrolling a
   media library past the first row used to take the header away, leaving a wall of thumbnails
   with no title and no primary action. Sticky alone would be worse — a 190px banner pinned to

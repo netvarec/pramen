@@ -1,0 +1,44 @@
+---
+// Redeem a signed preview link and render the DRAFT with the site's own layout.
+//
+// This is the half the CMS cannot supply. `signPagePreview` mints a token; the Worker's
+// `/cms/preview` route verifies the signature and answers with the assembled draft as JSON,
+// because a headless CMS has the content and no idea what it should look like. Somebody has
+// to render it, and that somebody is the site — through the SAME `Article.astro` the
+// published route uses, so what a reviewer approves is what ships.
+//
+// The editor points its "Preview link" button here via `admin.previewUrl` in
+// `astro.config.mjs`.
+import type { RenderedBlock } from "@pramen/cms-astro";
+import { client } from "pramen:cms";
+import Article from "../components/Article.astro";
+
+// On demand, not prerendered: the token arrives in the request, and a draft must never be
+// baked into the build output.
+export const prerender = false;
+
+const token = Astro.url.searchParams.get("token");
+// The signature IS the authorization — there is no session to check here, and deliberately
+// no account required, because the person a preview exists for is the stakeholder who has
+// none. An absent, forged or expired token comes back as `null`.
+const preview = token ? await client.getPreview(token) : null;
+
+// Deliberately indistinguishable from a bad token: a distinct "expired" would confirm that
+// a page id exists to anyone spraying tokens at this route.
+if (!preview) {
+  return new Response("This preview link is not valid — it may have expired.", {
+    status: 404,
+    headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "private, no-store" },
+  });
+}
+
+// Regions in declaration order, flattened the way `cmsLoader` flattens a published page —
+// the layout takes one list of blocks and does not need to know how they were grouped.
+const blocks: RenderedBlock[] = Object.values(preview.regions ?? {}).flat();
+const description = typeof preview.page.seo?.metaDescription === "string" ? preview.page.seo.metaDescription : undefined;
+
+// A draft is per-viewer and short-lived; nothing between here and the browser may keep it.
+Astro.response.headers.set("cache-control", "private, no-store");
+---
+
+<Article title={preview.page.title} {blocks} {description} draft />

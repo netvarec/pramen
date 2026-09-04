@@ -223,6 +223,12 @@ authorization. Spread `cmsRoutes()` into `app.routes` to serve `GET /cms/preview
 verifies the token in the Worker before any read and returns the live draft with
 `isPreview: true` and `Cache-Control: private, no-store`.
 
+That route answers with **JSON** — this CMS is headless, so it has the draft and no idea what
+it should look like. Your site renders it: redeem the same token with `client.getPreview(token)`
+(`@pramen/cms-astro`) from a route of your own, through the same components the published page
+uses, and point the editor's Preview link button at it with `admin.previewUrl`. A working one
+is `example/site/src/pages/preview.astro`.
+
 If you pass custom roles to `createCmsHandlers`, hand `cmsRoutes` the **same options
 object** — it derives the route's identity from them, so the two cannot drift:
 

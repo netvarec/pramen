@@ -234,6 +234,10 @@ export class Api {
     this.call<Term>("updateTerm", { id, ...patch } as unknown as RpcInput);
   deleteTerm = (id: string) => this.call<{ ok: true }>("deleteTerm", { id });
 
+  /** Mint a signed, self-expiring preview link for one page. Editor-gated to MINT; anyone
+   * holding the result can redeem it with no account, which is the point. */
+  signPagePreview = (pageId: string) => this.call<{ url: string; token: string; expiresAt: number }>("signPagePreview", { pageId });
+
   listPageTerms = (pageId: string) => this.call<Term[]>("listPageTerms", { pageId });
   setPageTerms = (pageId: string, termIds: string[]) => this.call<{ ok: true }>("setPageTerms", { pageId, termIds });
 

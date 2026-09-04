@@ -1,0 +1,42 @@
+---
+// The article layout, shared by the published route and the preview route.
+//
+// SHARED on purpose, and it is the whole point of a preview: a preview rendered by its own
+// copy of the markup is a preview of the copy. The two callers differ only in where the
+// content came from — a build-time content collection, or a signed link redeemed on demand.
+import type { RenderedBlock } from "@pramen/cms-astro";
+import BlockRenderer from "@pramen/cms-astro/BlockRenderer.astro";
+import RichText from "./blocks/RichText.astro";
+
+interface Props {
+  title: string;
+  blocks: RenderedBlock[];
+  description?: string | null;
+  /** Renders the draft banner. The CMS flags a redeemed preview `isPreview`, and saying so
+   * on screen is what stops someone screenshotting an unpublished page as if it were live. */
+  draft?: boolean;
+}
+
+const { title, blocks, description, draft = false } = Astro.props;
+// One map, so an unmapped block type renders the same placeholder in both routes.
+const components = { rich_text: RichText };
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    {description ? <meta name="description" content={description} /> : null}
+    {/* A draft must never end up in an index — the link is unlisted, but a crawler that is
+        handed one anyway should refuse it rather than rely on the URL staying secret. */}
+    {draft ? <meta name="robots" content="noindex, nofollow" /> : null}
+  </head>
+  <body>
+    {draft ? <p><strong>Draft preview</strong> — this is unpublished content.</p> : null}
+    <h1>{title}</h1>
+    <BlockRenderer blocks={blocks} {components} />
+    <p><a href="/">Back</a></p>
+  </body>
+</html>

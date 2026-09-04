@@ -36,6 +36,10 @@ declare global {
        * own CMS was greeted by "pramen". Set `name` (and optionally `suffix`) to the
        * deployment's own; `suffix: null` drops the "· cms" half entirely. */
       brand?: BrandConfig;
+      /** Where THIS SITE renders a page preview (e.g. `/preview`). The editor appends
+       * `?token=…`. Unset, a preview link points at the CMS's own redeem endpoint, which
+       * answers with JSON — see `preview.ts`. */
+      previewUrl?: string;
     };
   }
 }

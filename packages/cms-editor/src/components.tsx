@@ -9,6 +9,7 @@ import { CONTROL, FieldForm, formatWhen, fromLocalInput, slugify, toLocalInput }
 import { ROW, WRAP } from "./chrome";
 import { useCrumb } from "./breadcrumb";
 import { PageHeader } from "./page-header";
+import { pagePreviewHref, sitePreviewUrl } from "./preview";
 import type { Config } from "./api";
 import { useApp, type Me } from "./app-context";
 import { isRichTextDoc, richTextToPlainText } from "./rich-text";
@@ -1365,6 +1366,11 @@ function SeoPanel({ api, page, onError }: { api: Api; page: Page; onError: (s: s
 }
 
 function Workflow({ api, page, onChanged, onError }: { api: Api; page: Page; onChanged: (p: Page) => void; onError: (s: string) => void }) {
+  // The minted link, revealed after the click. Held rather than opened for you: the point of
+  // a preview link is to SEND it, and a popup blocker eating the one action that produced it
+  // would leave nothing to copy.
+  const [preview, setPreview] = useState<string | null>(null);
+  const [minting, setMinting] = useState(false);
   const act = async (name: string, input?: unknown) => {
     try {
       const r = await api.call<{ page?: Page }>(name, { pageId: page.id, ...(input as object) });
@@ -1378,6 +1384,22 @@ function Workflow({ api, page, onChanged, onError }: { api: Api; page: Page; onC
   // server still enforces role gates; this just stops the UI from offering dead-end actions.
   // `publish` = publishPage (any → published, reviewer/admin) — the one-click path for a solo
   // operator; `approve` is the reviewer step of the two-actor review pipeline.
+  const mintPreview = async () => {
+    setMinting(true);
+    try {
+      const minted = await api.signPagePreview(page.id);
+      const href = pagePreviewHref(minted, { siteUrl: sitePreviewUrl(), resolve: (p) => api.resolve(p) });
+      setPreview(href);
+      // Best-effort: the clipboard needs a secure context and a permission, and the link is
+      // rendered either way.
+      await navigator.clipboard?.writeText(href).catch(() => {});
+    } catch (e) {
+      onError(errMsg(e));
+    } finally {
+      setMinting(false);
+    }
+  };
+
   const status = String(page.status);
   const buttons: Array<{ label: string; action: string; variant?: "secondary" | "ghost" }> =
     status === "review"
@@ -1404,7 +1426,21 @@ function Workflow({ api, page, onChanged, onError }: { api: Api; page: Page; onC
         {buttons.map((b) => (
           <Button key={b.action} variant={b.variant} onPress={() => act(b.action)}>{b.label}</Button>
         ))}
+        {/* Not a workflow TRANSITION, so it is always available rather than keyed to the
+            status — a published page is exactly what you preview before changing it, and a
+            draft is exactly what you send for comment. The collection editor has had this
+            button since `supports: ["preview"]`; the page half minted nothing, so
+            `signPagePreview` existed and could not be reached. */}
+        <Button variant="ghost" isDisabled={minting} onPress={() => void mintPreview()}>
+          {minting ? "Minting…" : "Preview link"}
+        </Button>
       </div>
+      {preview ? (
+        <div className="mt-3 border-t border-border pt-3 text-sm">
+          <span className="text-fg-subtle">Preview link (copied): </span>
+          <a className="break-all underline" href={preview} target="_blank" rel="noreferrer">{preview}</a>
+        </div>
+      ) : null}
       <p className="mt-2.5 text-fg-subtle">Publish needs a reviewer/admin role; submit-for-review is editor-gated.</p>
     </div>
   );
