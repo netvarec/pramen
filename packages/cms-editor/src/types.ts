@@ -477,24 +477,24 @@ export const MEDIA_SORTS = ["newest", "oldest", "name", "name_desc", "largest", 
 export type MediaSort = (typeof MEDIA_SORTS)[number];
 
 /** What each sort is called on screen. */
-export const MEDIA_SORT_LABELS: Record<MediaSort, string> = {
+export const MEDIA_SORT_LABELS = {
   newest: "Newest first",
   oldest: "Oldest first",
   name: "Name A–Z",
   name_desc: "Name Z–A",
   largest: "Largest first",
   smallest: "Smallest first",
-};
+} satisfies Record<MediaSort, string>;
 
 /** The coarse type buckets the library filters by. */
 export const MEDIA_KINDS = ["image", "video", "audio", "document", "other"] as const;
 export type MediaKind = (typeof MEDIA_KINDS)[number];
 
 /** …and their labels. Plural, because each names a SET the filter narrows to. */
-export const MEDIA_KIND_LABELS: Record<MediaKind, string> = {
+export const MEDIA_KIND_LABELS = {
   image: "Images",
   video: "Video",
   audio: "Audio",
   document: "Documents",
   other: "Other",
-};
+} satisfies Record<MediaKind, string>;

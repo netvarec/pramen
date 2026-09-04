@@ -415,8 +415,8 @@ export async function runCms(base: string): Promise<void> {
   // The library is PAGED, so sorting and filtering have to happen in SQL — which they can only
   // do against real columns, because `file` is a fileRef (JSON in a TEXT cell) and `orderBy`
   // cannot see inside it. These assert the projection actually lands on the row.
-  const listed = await call("listMedia", { limit: 50 }, admin);
-  const row = (listed.body.result as Array<{ id: string; filename?: string; contentType?: string; size?: number }>).find((m) => m.id === mediaId);
+  const mediaListed = await call("listMedia", { limit: 50 }, admin);
+  const row = (mediaListed.body.result as Array<{ id: string; filename?: string; contentType?: string; size?: number }>).find((m) => m.id === mediaId);
   assert(row?.filename === "logo.png", "cms: createMedia projects filename onto a queryable column");
   assert(row?.contentType === "image/png", "cms: …and contentType");
   assert(row?.size === bytes.length, "cms: …and size, from the STORED blob rather than the client's claim");
@@ -448,9 +448,9 @@ export async function runCms(base: string): Promise<void> {
     (byAlt.body.result as Array<{ id: string }>).some((m) => m.id === mediaId),
     "cms: …and matches the alt text, the only human description a media row carries",
   );
-  const narrowed = await call("listMedia", { limit: 50, q: "logo", kind: "document" }, admin);
+  const mediaNarrowed = await call("listMedia", { limit: 50, q: "logo", kind: "document" }, admin);
   assert(
-    !(narrowed.body.result as Array<{ id: string }>).some((m) => m.id === mediaId),
+    !(mediaNarrowed.body.result as Array<{ id: string }>).some((m) => m.id === mediaId),
     "cms: a search inside a type filter is ANDed, not ORed",
   );
   // The needle goes into a LIKE pattern, so its wildcards must be literal — otherwise "%"
