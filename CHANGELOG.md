@@ -105,6 +105,13 @@ there are no backward-compatibility guarantees yet.
   Cloudflare's own engine — a missing function must not brick a tenant's boot, which is
   precisely what a data migration's fail-closed contract would otherwise do.
 
+  The `other` bucket needs its own NULL clause, and shipped without one. SQL is three-valued:
+  against a NULL `contentType` every `LIKE` is NULL, so `NOT (… OR …)` is NULL rather than
+  TRUE and the row is excluded. `other` therefore matched everything except the rows it is
+  defined to hold, and a legacy row — the deployment that upgraded and did not spread
+  `cmsMigrations` — was invisible under all five chips, findable only by clearing the filter
+  and with nothing on screen saying why.
+
   `sort` and `kind` are a CLOSED vocabulary on the server, never a column name and a direction
   from the client: both compile straight into `ORDER BY` and `WHERE`, so accepting a column
   would hand a caller the ability to order by — and therefore probe — `alt` or `deletedAt`. An
@@ -178,6 +185,20 @@ there are no backward-compatibility guarantees yet.
   twice. The rail card and the inspector's status row are gone, and the editor no longer
   publishes a detail crumb: the toolbar names the page.
 
+  A narrowed rail no longer strands a phone. The narrow look is expressed entirely in
+  `md:`-scoped classes, so it exists only at desktop widths — while the choice behind it is
+  persisted per browser and travels to every viewport that browser opens. A rail narrowed on a
+  laptop came back "narrowed" on a phone, where those classes are inert: the rows kept their
+  labels and full width, while the JS gated on the stored choice removed all four group
+  headings, and the hairline that stands in for one at 56px is `md:`-only too. One
+  undifferentiated column of a dozen rows, with the toggle that would undo it
+  `hidden md:inline-flex` — no way back from that viewport. `railIsNarrow(choice, wide)` is
+  now the one rule, and JS agrees with the breakpoint instead of ignoring it.
+
+  The media library also stops claiming to be empty when a filter simply matched nothing:
+  "No media yet. Upload images…" is a claim about the library, and search/type/tag are all
+  narrowings of it. It says "No matches" with a **Clear filters** button instead.
+
   **The 260px left rail held three lines you could not click**, and is gone. It became an
   outline first, which was the wrong answer to the same question: it is a table of contents for
   a document that is almost never longer than the screen, printing the same region names in the
@@ -212,6 +233,12 @@ there are no backward-compatibility guarantees yet.
   FOR. A host can now declare **`admin.previewUrl`**: a route of its own that the editor sends
   the token to instead. Same seam as `menuHref` and the sitemap's `pageUrl` — the CMS cannot
   know how a deployment routes, so the deployment says. Unset, nothing changes.
+
+  The link it copies is ABSOLUTE. `previewUrl` is normally written as a path, so the
+  configured — recommended — path put `/preview?token=…` in the clipboard: dead the moment it
+  is pasted into Slack, which is half of what the button is for. The new tab hid it, because a
+  blank window opened by the editor inherits its base URL and resolves a relative href
+  perfectly well.
 
   The button OPENS it, in a new tab, and still shows and copies the link — "look at my draft"
   and "send this to someone" are both what it is for, and only one of them ends in the new tab.

@@ -431,6 +431,36 @@ export async function runCms(base: string): Promise<void> {
     !(docs.body.result as Array<{ id: string }>).some((m) => m.id === mediaId),
     "cms: …and kind: document does not",
   );
+
+  // A LEGACY row: projection columns never backfilled, so `contentType` is NULL. Reached
+  // through /admin/data because `createMedia` cannot produce one — its parser defaults the
+  // content type — and this is exactly the row a deployment that upgraded without spreading
+  // `cmsMigrations` is full of.
+  //
+  // SQL is three-valued, so `NOT (col LIKE … OR …)` is NULL against a NULL column, not TRUE:
+  // `other` excluded the very rows its own doc comment says belong there, and the row was
+  // invisible under ALL FIVE chips with only "clear the filter" to find it.
+  const legacyUp = await call("signMediaUpload", { contentType: "image/png", filename: "legacy.png" }, admin);
+  await fetch(`${base}${legacyUp.body.result.url}`, { method: "PUT", headers: { "content-type": "image/png" }, body: new Uint8Array([137, 80, 78, 71, 7]) });
+  const legacy = await call("createMedia", { ref: legacyUp.body.result.ref }, admin);
+  const legacyId = legacy.body.result.id as string;
+  await fetch(`${base}/admin/data`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${admin}` },
+    body: JSON.stringify({ tenant: TENANT, table: "cms_media", op: "update", id: legacyId, patch: { contentType: null } }),
+  });
+  const other = await call("listMedia", { limit: 200, kind: "other" }, admin);
+  assert(
+    (other.body.result as Array<{ id: string }>).some((m) => m.id === legacyId),
+    "cms: a row with no contentType lands in `other`, not in nothing",
+  );
+  for (const k of ["image", "video", "audio", "document"]) {
+    const bucket = await call("listMedia", { limit: 200, kind: k }, admin);
+    assert(
+      !(bucket.body.result as Array<{ id: string }>).some((m) => m.id === legacyId),
+      `cms: …and not in ${k}`,
+    );
+  }
   // A sort this build does not know must degrade to the default order, not 400: a bookmark
   // outliving a rename should show the library.
   const bogus = await call("listMedia", { limit: 1, sort: "'; DROP TABLE cms_media --" }, admin);

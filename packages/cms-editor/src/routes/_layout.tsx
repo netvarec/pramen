@@ -39,7 +39,7 @@ import { pagesHidden, splitsByType } from "../components";
 import { APP_BAR_H } from "../chrome";
 import { DarkThemeIcon, GroupFoldedIcon, GroupOpenIcon, LightThemeIcon, MenuToggleIcon, NAV_GLYPHS, RailToggleIcon, SettingsIcon, SignOutIcon } from "../icons";
 import { opensInSameTab } from "../mount";
-import { buildNav, NAV_SECTION_IDS, navSections, navSectionsAreLabelled, type ExtraNavLink, type NavIcon, type NavSectionId } from "../nav";
+import { buildNav, NAV_SECTION_IDS, navSections, navSectionsAreLabelled, railIsNarrow, type ExtraNavLink, type NavIcon, type NavSectionId } from "../nav";
 
 const THEME_KEY = "pramen.cms.theme";
 /** Which nav groups this browser has folded away. Per-browser, like the theme — it is a
@@ -48,6 +48,37 @@ const COLLAPSED_KEY = "pramen.cms.nav.collapsed";
 /** …and whether the whole rail is down to icons. Same reasoning, separate key: folding a
  * group and narrowing the rail are different decisions and a reader makes them separately. */
 const RAIL_KEY = "pramen.cms.nav.rail";
+
+/** Tailwind's `md`. The rail's narrow state is expressed entirely in `md:`-scoped classes, so
+ * JS has to agree with the same number or the two describe different rails. */
+const RAIL_BREAKPOINT = "(min-width: 48rem)";
+
+/**
+ * Whether a media query matches, kept in sync as the viewport changes.
+ *
+ * SSR-safe and paranoid about the API: `matchMedia` is absent in a non-browser render and has
+ * been present-but-partial (no `addEventListener`, only the deprecated `addListener`) in
+ * browsers this editor still meets. Defaults to TRUE, which is the desktop reading — the same
+ * direction the layout already fails in, and the one where every control is on screen.
+ */
+function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = useState(() => {
+    try {
+      return globalThis.matchMedia?.(query).matches ?? true;
+    } catch {
+      return true;
+    }
+  });
+  useEffect(() => {
+    const mql = globalThis.matchMedia?.(query);
+    if (!mql) return;
+    const onChange = () => setMatches(mql.matches);
+    onChange();
+    mql.addEventListener?.("change", onChange);
+    return () => mql.removeEventListener?.("change", onChange);
+  }, [query]);
+  return matches;
+}
 
 /** Whether this browser last left the rail narrowed.
  *
@@ -151,16 +182,24 @@ export default function RootLayout() {
 
   // The rail, narrowed to its icon column. Remembered like the folds: someone who works in a
   // three-column page editor wants the width back, and wants it back tomorrow too.
-  const [railNarrow, setRailNarrow] = useState(readRail);
+  const [railChoice, setRailChoice] = useState(readRail);
   useEffect(() => {
     try {
-      localStorage.setItem(RAIL_KEY, railNarrow ? "narrow" : "wide");
+      localStorage.setItem(RAIL_KEY, railChoice ? "narrow" : "wide");
     } catch {
       /* a private window that refuses writes costs the memory of the choice, nothing else */
     }
-  }, [railNarrow]);
+  }, [railChoice]);
   // Below `md` the rail is already a disclosure under the wordmark — a width it does not have
-  // there. Narrowing is a desktop affordance, and the classes below are all `md:`-scoped.
+  // there. Narrowing is a desktop affordance, and every class that expresses it is `md:`-scoped.
+  //
+  // Which is why the STORED CHOICE is not the same thing as being narrowed, and JS has to know
+  // the difference. The choice is per-browser and persisted, so a rail narrowed on a laptop
+  // came back narrowed on a phone — where the `md:` classes do nothing, so the rows kept their
+  // labels, but the JS gate below removed every group heading AND the hairline that stands in
+  // for one is `md:`-only too. That left one undifferentiated column of a dozen rows, with the
+  // toggle that would undo it `hidden md:inline-flex`: no way back from that viewport.
+  const railNarrow = railIsNarrow(railChoice, useMediaQuery(RAIL_BREAKPOINT));
 
   // The active collection slug, if we're under /collections/:slug(/...).
   const collectionSlug = segmentAt(pathname, "/collections/");
@@ -350,7 +389,7 @@ export default function RootLayout() {
             aria-label={railNarrow ? "Expand the sidebar" : "Collapse the sidebar"}
             aria-expanded={!railNarrow}
             className="-ml-2 hidden rounded-md px-2 py-1.5 text-fg-muted hover:text-fg md:inline-flex"
-            onPress={() => setRailNarrow((narrow) => !narrow)}
+            onPress={() => setRailChoice((narrow) => !narrow)}
           >
             <RailToggleIcon className="h-[17px] w-[17px]" />
           </Button>

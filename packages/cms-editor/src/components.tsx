@@ -802,7 +802,7 @@ function PageToolbar({ page, dirtyCount, onBack, backLabel, onAct, busy }: {
     const tab = window.open("", "_blank");
     try {
       const minted = await api.signPagePreview(page.id);
-      const href = pagePreviewHref(minted, { siteUrl: sitePreviewUrl(), resolve: (path) => api.resolve(path) });
+      const href = pagePreviewHref(minted, { siteUrl: sitePreviewUrl(), origin: window.location.href, resolve: (path) => api.resolve(path) });
       setPreview(href);
       // `replace`, so the blank placeholder is not a history entry the new tab's Back button
       // can return to.
@@ -1728,6 +1728,17 @@ const PAGE_SIZE = 60;
 /** How long typing has to pause before the library is re-queried. Long enough that a typed
  * word is one request rather than five, short enough that it still reads as live. */
 const SEARCH_DEBOUNCE_MS = 250;
+/** What the header says about the count.
+ *
+ * Split out because the zero case is two different sentences: an empty LIBRARY, and a filter
+ * that matched nothing. The header used to say "None yet" for both, which reads as "this CMS
+ * has no media" while sixty files sit one cleared chip away. */
+function mediaCountLabel(count: number, hasMore: boolean, narrowed: boolean): string {
+  if (count === 0) return narrowed ? "No matches" : "None yet";
+  const suffix = hasMore ? "+" : "";
+  return count === 1 && !hasMore ? "1 file" : `${count}${suffix} files`;
+}
+
 /** The tag menu's "no filter" row. A menu item needs an id and `null` is not one, so the
  * clear option carries a sentinel — safe against a real term id, which is a uuid. */
 const ALL_TAGS = "__all";
@@ -1789,6 +1800,8 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
   // Flattened for the filter menu, which is one list rather than a tree: a menu has no room
   // for indentation to read as hierarchy, so the vocabulary is spelled out per row instead.
   const taggable = taxa.flatMap((t) => (terms[t.slug] ?? []).map((x) => ({ id: x.id, label: x.label, group: t.label })));
+  /** Whether what is on screen is a NARROWING of the library rather than the library. */
+  const narrowed = kind !== null || term !== null || search !== "";
 
   const load = useCallback(
     (off: number) => {
@@ -1847,7 +1860,7 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
 
   return (
     <>
-      <Hero lead="Media" em={media.length === 0 ? "None yet" : media.length === 1 ? "1 file" : `${media.length}${hasMore ? "+" : ""} files`}>
+      <Hero lead="Media" em={mediaCountLabel(media.length, hasMore, narrowed)}>
         {/* A real `Button` driving a hidden input, not a `<label>` painted to look like one.
             The lookalike had to restate podoba's primary fill by hand, and once the mint
             wrapper was gone the two "primary" actions in this app were visibly different
@@ -1923,7 +1936,19 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
           </div>
         </div>
         {media.length === 0 ? (
-          <p className="text-fg-subtle">No media yet. Upload images to use them in blocks and SEO.</p>
+          // "No media yet" is a claim about the LIBRARY, and this list is a narrowing of it.
+          // Search, type and tag are all new, so this is a state the screen could not reach
+          // before: typing "logo" or picking Documents on an image-only library told you the
+          // CMS was empty and asked you to upload, when the answer was that the filter matched
+          // nothing — and the way out is to clear it, not to upload a file.
+          narrowed ? (
+            <div className="flex flex-wrap items-center gap-3">
+              <p className="text-fg-subtle">No files match this filter.</p>
+              <Button variant="secondary" size="sm" onPress={() => { setQuery(""); setSearch(""); setKind(null); setTerm(null); }}>Clear filters</Button>
+            </div>
+          ) : (
+            <p className="text-fg-subtle">No media yet. Upload images to use them in blocks and SEO.</p>
+          )
         ) : (
           <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-2.5">
             {media.map((m) => (

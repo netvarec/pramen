@@ -247,3 +247,22 @@ export function navSections(entries: NavEntry[]): NavSection[] {
 export function navSectionsAreLabelled(sections: NavSection[]): boolean {
   return sections.length > 1;
 }
+
+/**
+ * Is the rail ACTUALLY narrowed?
+ *
+ * A named function for `choice && wide`, because conflating those two is what broke it. The
+ * choice is per-browser and persisted; narrowing is expressed entirely in `md:`-scoped
+ * classes, so it only exists at desktop widths. A rail narrowed on a laptop therefore came
+ * back "narrowed" on a phone, where every one of those classes is inert — the rows kept their
+ * labels and their full width, while the JS gated on the stored choice removed all four group
+ * headings, and the hairline that stands in for a heading at 56px is `md:`-only too. One
+ * undifferentiated column of a dozen rows, and the toggle that would undo it is
+ * `hidden md:inline-flex`: no way back from that viewport.
+ *
+ * So JS has to agree with the breakpoint rather than ignore it, and everything conditional —
+ * headings, folding, the hairline — reads this instead of the stored value.
+ */
+export function railIsNarrow(choice: boolean, wideViewport: boolean): boolean {
+  return choice && wideViewport;
+}

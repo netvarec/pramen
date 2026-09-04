@@ -1220,13 +1220,21 @@ function mediaSearchWhere(q: string): WhereClause<typeof cmsSchema, "cms_media">
  * definition, so a file type nobody anticipated still has exactly one home rather than
  * disappearing from every filter. A row whose `contentType` is NULL — uploaded before the
  * projection columns existed and never backfilled — lands there too, which is the honest
- * place for it. */
+ * place for it.
+ *
+ * That NULL case needs its OWN clause, and did not have one. SQL is three-valued: against a
+ * NULL column every `LIKE` is NULL, so the `OR` is NULL and `NOT NULL` is NULL — which is not
+ * TRUE, so the row is excluded. `other` therefore matched everything except the rows it
+ * documents as belonging there, and a legacy row was invisible under ALL FIVE chips, with only
+ * "clear the filter" to find it and nothing on screen saying why. Exactly the deployment that
+ * upgraded and did not spread `cmsMigrations`. */
 function mediaKindWhere(kind: MediaKind | undefined): WhereClause<typeof cmsSchema, "cms_media"> | undefined {
   if (kind === undefined) return undefined;
   if (kind === "image" || kind === "video" || kind === "audio") return { contentType: { startsWith: `${kind}/` } };
   const documents = { OR: DOCUMENT_PREFIXES.map((p) => ({ contentType: { startsWith: p } })) };
   if (kind === "document") return documents;
-  return { NOT: { OR: [{ contentType: { startsWith: "image/" } }, { contentType: { startsWith: "video/" } }, { contentType: { startsWith: "audio/" } }, documents] } };
+  const known = { OR: [{ contentType: { startsWith: "image/" } }, { contentType: { startsWith: "video/" } }, { contentType: { startsWith: "audio/" } }, documents] };
+  return { OR: [{ contentType: { isNull: true } }, { NOT: known }] };
 }
 
 // --- taxonomies: what a vocabulary classifies ---------------------------------------------

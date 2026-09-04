@@ -30,13 +30,23 @@ export function sitePreviewUrl(host: PreviewHost = globalThis as PreviewHost): s
   return trimmed === "" ? undefined : trimmed;
 }
 
-/** Build the href for a minted PAGE preview.
+/** Build the href for a minted PAGE preview. ALWAYS ABSOLUTE.
  *
  * `resolve` is the fallback: the backend-relative url the mint returned, made absolute
- * against the CMS origin — exactly what this did before a site route could be declared. */
+ * against the CMS origin — exactly what this did before a site route could be declared.
+ *
+ * Absolute because the result is not only navigated to, it is COPIED and shown: half the
+ * reason the button exists is to send the link to someone who has no account. `previewUrl` is
+ * normally written as a path (`"/preview"`), so the configured — recommended — path was the
+ * one that produced `/preview?token=…` in the clipboard: dead the moment it is pasted into
+ * Slack. The new tab hid it, because a blank window opened by this document inherits its base
+ * URL and resolves the relative href perfectly well.
+ *
+ * `origin` is passed rather than read from `location` so this stays a pure function that can
+ * be tested; an already-absolute `siteUrl` is left alone by `new URL`. */
 export function pagePreviewHref(
   minted: { url: string; token: string },
-  opts: { siteUrl?: string; resolve: (path: string) => string },
+  opts: { siteUrl?: string; origin: string; resolve: (path: string) => string },
 ): string {
   const site = opts.siteUrl;
   if (!site) return opts.resolve(minted.url);
@@ -44,5 +54,12 @@ export function pagePreviewHref(
   // separator is decided rather than assumed — `?` twice is a link that silently drops the
   // token into a parameter name.
   const sep = site.includes("?") ? "&" : "?";
-  return `${site}${sep}token=${encodeURIComponent(minted.token)}`;
+  const href = `${site}${sep}token=${encodeURIComponent(minted.token)}`;
+  try {
+    return new URL(href, opts.origin).href;
+  } catch {
+    // An unparseable origin (or a `previewUrl` that is not a URL at all) must not throw in
+    // the middle of minting — the relative href is what this returned before and still opens.
+    return href;
+  }
 }

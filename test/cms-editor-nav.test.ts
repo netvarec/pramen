@@ -9,7 +9,7 @@
 // ordering rule is a pure function of the session's facts, and a DOM adds nothing to it.
 
 import { describe, expect, test } from "bun:test";
-import { buildNav, NAV_SECTION_IDS, navSections, navSectionsAreLabelled, type NavInput } from "../packages/cms-editor/src/nav";
+import { buildNav, NAV_SECTION_IDS, navSections, navSectionsAreLabelled, railIsNarrow, type NavInput } from "../packages/cms-editor/src/nav";
 import { DEFAULT_CAPABILITIES, NAV_ORDER, type CollectionMeta, type ContentType } from "../packages/cms-editor/src/types";
 
 const TYPES: ContentType[] = [
@@ -260,5 +260,25 @@ describe("section ids", () => {
       }),
     ).map((s) => s.id);
     expect(produced).toEqual([...NAV_SECTION_IDS]);
+  });
+});
+
+// A stored preference is not a state. The rail's narrow look is expressed entirely in
+// `md:`-scoped classes, so it exists only at desktop widths — while the choice behind it is
+// persisted per browser and travels to every viewport that browser opens.
+describe("whether the rail is actually narrowed", () => {
+  test("only when the viewport is wide enough for narrowing to mean anything", () => {
+    expect(railIsNarrow(true, true)).toBe(true);
+    // The bug: a rail narrowed on a laptop came back "narrowed" on a phone, where the classes
+    // are inert. The rows kept their labels and full width while the JS gated on the stored
+    // choice removed every group heading — and the hairline that stands in for one at 56px is
+    // `md:`-only too. One undifferentiated column, with the toggle that would undo it
+    // `hidden md:inline-flex`: no way back from that viewport.
+    expect(railIsNarrow(true, false)).toBe(false);
+  });
+
+  test("a wide viewport alone narrows nothing", () => {
+    expect(railIsNarrow(false, true)).toBe(false);
+    expect(railIsNarrow(false, false)).toBe(false);
   });
 });
