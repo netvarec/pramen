@@ -1023,6 +1023,18 @@ export const cmsSchema = {
     // Hierarchical vocabularies allow `parentId` on their terms; flat ones reject it on
     // write. Enforced in the handler, not the schema — one term table serves both.
     hierarchical: defaultTo(t.bool(), false),
+    // What this vocabulary classifies — a subset of `TAXONOMY_TARGETS`. NULL means EVERYTHING,
+    // which is both the backward-compatible reading for rows written before this column and a
+    // legitimate authored value ("Topics classifies whatever there is"). Without it a site with
+    // "Categories" for articles and tags for images offers both on both, so a photo can be
+    // filed under "Local news" and `getTermTree("category")` fills up with terms like "hero"
+    // that no page listing will ever use.
+    //
+    // A `t.json()` array rather than two booleans: the set of things a CMS classifies grows
+    // (collections are the obvious next one), and a column per target would need a migration
+    // each time. It is not queryable — JSON in a TEXT cell — but nothing pages by taxonomy:
+    // `listTaxonomies` reads them all and narrows in memory.
+    appliesTo: t.json(),
     createdAt: defaultTo(t.text(), expr.now()),
   })),
 
@@ -1215,6 +1227,68 @@ function mediaKindWhere(kind: MediaKind | undefined): WhereClause<typeof cmsSche
   const documents = { OR: DOCUMENT_PREFIXES.map((p) => ({ contentType: { startsWith: p } })) };
   if (kind === "document") return documents;
   return { NOT: { OR: [{ contentType: { startsWith: "image/" } }, { contentType: { startsWith: "video/" } }, { contentType: { startsWith: "audio/" } }, documents] } };
+}
+
+// --- taxonomies: what a vocabulary classifies ---------------------------------------------
+
+/** The object types a vocabulary can be applied to. A CLOSED vocabulary, like `MEDIA_KINDS`:
+ * it decides which panels offer a taxonomy AND which assignments are accepted, so an unknown
+ * value must not be storable. */
+export const TAXONOMY_TARGETS = ["page", "media"] as const;
+export type TaxonomyTarget = (typeof TAXONOMY_TARGETS)[number];
+
+/** Whether a vocabulary applies to `target`.
+ *
+ * The permissive readings all collapse to TRUE, deliberately: NULL (never narrowed, or written
+ * before the column existed), a non-array, an array of things that are not targets. A stored
+ * value nobody can interpret must not silently stop a vocabulary from working — the failure
+ * would be a taxonomy that has quietly vanished from every panel, with the row still there. */
+export function taxonomyApplies(row: { appliesTo?: unknown }, target: TaxonomyTarget): boolean {
+  const list = row.appliesTo;
+  if (!Array.isArray(list)) return true;
+  const targets = list.filter((v): v is TaxonomyTarget => (TAXONOMY_TARGETS as readonly unknown[]).includes(v));
+  return targets.length === 0 || targets.includes(target);
+}
+
+/** Parse an `appliesTo` input. `undefined` stays undefined (the field was not sent); `null`
+ * clears the narrowing back to "everything". An unknown target is a 400 rather than a silent
+ * drop — dropping it would store a NARROWER set than the caller asked for, which is the one
+ * direction that loses assignments. */
+function parseAppliesTo(raw: unknown): TaxonomyTarget[] | null | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === null) return null;
+  if (!Array.isArray(raw)) throw new BadRequest("appliesTo must be a list or null");
+  const out: TaxonomyTarget[] = [];
+  for (const v of raw) {
+    if (typeof v !== "string" || !(TAXONOMY_TARGETS as readonly string[]).includes(v)) {
+      throw new BadRequest(`appliesTo must contain only ${TAXONOMY_TARGETS.join(", ")}`);
+    }
+    if (!out.includes(v as TaxonomyTarget)) out.push(v as TaxonomyTarget);
+  }
+  // A vocabulary that classifies nothing is not a narrowing, it is a vocabulary nobody can
+  // reach — and it reads identically to NULL in storage, which means the opposite.
+  if (out.length === 0) throw new BadRequest("appliesTo must name at least one of " + TAXONOMY_TARGETS.join(", "));
+  return out;
+}
+
+/** Refuse term ids from a vocabulary that does not classify `target`.
+ *
+ * The write side, not just the UI. Hiding a vocabulary from a panel without changing what the
+ * server accepts is the `hideI18n` mistake this package already retired once: the control
+ * disappears, the request does not, and `appliesTo` becomes a hint rather than a rule. It also
+ * has to be here for the assignments the panel never made — a script, a migration, an older
+ * editor build that has not learned the capability.
+ *
+ * Reads the terms' taxonomies through `ctx.db`, so an unreadable vocabulary refuses the
+ * assignment rather than being waved through. */
+async function assertTermsApplyTo(db: CmsDb, termIds: readonly string[], target: TaxonomyTarget): Promise<void> {
+  if (termIds.length === 0) return;
+  const terms = await db.find({ from: "cms_terms", where: { id: { in: [...termIds] } }, select: ["id", "taxonomyId"], limit: termIds.length });
+  const taxIds = [...new Set(terms.map((t) => String(t.taxonomyId)))];
+  if (taxIds.length === 0) return;
+  const taxa = await db.find({ from: "cms_taxonomies", where: { id: { in: taxIds } }, select: ["id", "slug", "appliesTo"], limit: taxIds.length });
+  const bad = taxa.filter((t) => !taxonomyApplies(t, target));
+  if (bad[0]) throw new BadRequest(`vocabulary '${String(bad[0].slug)}' does not apply to ${target}`);
 }
 
 /** Block Kit — custom admin pages, described as JSON and rendered by the editor. See
@@ -3217,11 +3291,36 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     // `parentId` on its terms; a flat one refuses it rather than storing something no
     // listing renders.
 
-    /** Every vocabulary. PUBLIC — like content types, a taxonomy's slug is structural (it
-     * is a URL segment) and a front end routes on it. */
-    listTaxonomies: query((ctx) => cdb(ctx).find({ from: "cms_taxonomies", orderBy: { column: "label" }, limit: PAGE_LIST_MAX_LIMIT })),
+    /** Every vocabulary, or just the ones that classify `target`. PUBLIC — like content
+     * types, a taxonomy's slug is structural (it is a URL segment) and a front end routes on
+     * it.
+     *
+     * Narrowed HERE rather than in each caller, so the page panel, the media panel and the
+     * write-side guard cannot disagree about what a vocabulary applies to. In memory, because
+     * `appliesTo` is a `t.json()` column that `where` cannot see into — which costs nothing:
+     * this handler already reads every taxonomy, and nothing pages by them.
+     *
+     * No `target` means EVERY vocabulary, which is what the Taxonomies screen needs: the one
+     * place that edits `appliesTo` must be able to see a vocabulary it has narrowed away. */
+    listTaxonomies: query(async (ctx, input: { target?: TaxonomyTarget }) => {
+      const rows = await cdb(ctx).find({ from: "cms_taxonomies", orderBy: { column: "label" }, limit: PAGE_LIST_MAX_LIMIT });
+      const target = input?.target;
+      return target === undefined ? rows : rows.filter((r) => taxonomyApplies(r, target));
+    }, {
+      input: (raw): { target?: TaxonomyTarget } => {
+        const t = asObj(raw).target;
+        // Unrecognised narrows to nothing rather than falling back to everything: this one
+        // decides what a panel OFFERS, and answering "all of them" to a question the server
+        // did not understand is how a media panel ends up listing page-only vocabularies.
+        if (t === undefined || t === null) return {};
+        if (typeof t !== "string" || !(TAXONOMY_TARGETS as readonly string[]).includes(t)) {
+          throw new BadRequest(`target must be one of ${TAXONOMY_TARGETS.join(", ")}`);
+        }
+        return { target: t as TaxonomyTarget };
+      },
+    }),
 
-    createTaxonomy: mutation(async (ctx, input: { slug: string; label: string; pluralLabel?: string; description?: string; hierarchical?: boolean }) => {
+    createTaxonomy: mutation(async (ctx, input: { slug: string; label: string; pluralLabel?: string; description?: string; hierarchical?: boolean; appliesTo?: TaxonomyTarget[] | null }) => {
       const db = cdb(ctx);
       const clash = await db.find({ from: "cms_taxonomies", where: { slug: input.slug }, select: ["id"], limit: 1 });
       if (clash[0]) throw new Conflict(`taxonomy '${input.slug}' already exists`);
@@ -3231,10 +3330,13 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
         pluralLabel: input.pluralLabel ?? null,
         description: input.description ?? null,
         hierarchical: input.hierarchical ?? false,
+        // Unsent means EVERY target, which is what a vocabulary created before this existed
+        // means too — one reading of NULL, so an old row and a new one behave alike.
+        appliesTo: input.appliesTo ?? null,
       });
     }, {
       ...editor,
-      input: (raw): { slug: string; label: string; pluralLabel?: string; description?: string; hierarchical?: boolean } => {
+      input: (raw): { slug: string; label: string; pluralLabel?: string; description?: string; hierarchical?: boolean; appliesTo?: TaxonomyTarget[] | null } => {
         const o = asObj(raw);
         return {
           slug: assertKey(o.slug, "taxonomy slug"),
@@ -3242,6 +3344,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
           pluralLabel: typeof o.pluralLabel === "string" ? o.pluralLabel : undefined,
           description: typeof o.description === "string" ? o.description : undefined,
           hierarchical: typeof o.hierarchical === "boolean" ? o.hierarchical : undefined,
+          appliesTo: parseAppliesTo(o.appliesTo),
         };
       },
     }),
@@ -3251,8 +3354,15 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
      *
      * Turning `hierarchical` OFF is refused while any term still has a parent. Allowing it
      * would leave a stored hierarchy that no reader renders and no writer can clear, and
-     * flattening the terms silently is a destructive edit behind a checkbox. */
-    updateTaxonomy: mutation(async (ctx, input: { id: string; label?: string; pluralLabel?: string | null; description?: string | null; hierarchical?: boolean }) => {
+     * flattening the terms silently is a destructive edit behind a checkbox.
+     *
+     * NARROWING `appliesTo` is refused on exactly the same grounds, and it is the same bug:
+     * dropping a target this vocabulary is already used for would strand those assignments —
+     * still stored, still returned by `listPageTerms`/`listMediaTerms`, but invisible in the
+     * panel that could remove them, because the panel only renders vocabularies that apply.
+     * Unassign them first; then the narrowing is a settings change rather than a silent
+     * orphaning. WIDENING is always fine — it strands nothing. */
+    updateTaxonomy: mutation(async (ctx, input: { id: string; label?: string; pluralLabel?: string | null; description?: string | null; hierarchical?: boolean; appliesTo?: TaxonomyTarget[] | null }) => {
       const db = cdb(ctx);
       const rows = await db.find({ from: "cms_taxonomies", where: { id: input.id }, limit: 1 });
       const row = rows[0];
@@ -3261,21 +3371,33 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
         const nested = await db.find({ from: "cms_terms", where: { taxonomyId: input.id, parentId: { isNull: false } }, select: ["id"], limit: 1 });
         if (nested[0]) throw new BadRequest("this vocabulary still has nested terms — move them to the top level before making it flat");
       }
+      if (input.appliesTo !== undefined && input.appliesTo !== null) {
+        const next = input.appliesTo;
+        for (const target of TAXONOMY_TARGETS) {
+          // Only a target this vocabulary applies to TODAY and would not after the patch.
+          if (next.includes(target) || !taxonomyApplies(row, target)) continue;
+          const junction = target === "page" ? "cms_page_terms" : "cms_media_terms";
+          const used = await db.find({ from: junction, where: { term: { taxonomyId: input.id } }, select: ["id"], limit: 1 });
+          if (used[0]) throw new BadRequest(`this vocabulary is still assigned to ${target === "page" ? "pages" : "media"} — remove those assignments before narrowing it`);
+        }
+      }
       const patch: Record<string, unknown> = {};
-      for (const k of ["label", "pluralLabel", "description", "hierarchical"] as const) {
+      for (const k of ["label", "pluralLabel", "description", "hierarchical", "appliesTo"] as const) {
         if (input[k] !== undefined) patch[k] = input[k];
       }
       return db.update("cms_taxonomies", input.id, patch);
     }, {
       ...editor,
-      input: (raw): { id: string; label?: string; pluralLabel?: string | null; description?: string | null; hierarchical?: boolean } => {
+      input: (raw): { id: string; label?: string; pluralLabel?: string | null; description?: string | null; hierarchical?: boolean; appliesTo?: TaxonomyTarget[] | null } => {
         const o = asObj(raw);
         if (typeof o.id !== "string" || o.id === "") throw new BadRequest("id is required");
-        const out: { id: string; label?: string; pluralLabel?: string | null; description?: string | null; hierarchical?: boolean } = { id: o.id };
+        const out: { id: string; label?: string; pluralLabel?: string | null; description?: string | null; hierarchical?: boolean; appliesTo?: TaxonomyTarget[] | null } = { id: o.id };
         if (o.label !== undefined) out.label = assertLabel(o.label, "taxonomy label");
         if (o.pluralLabel !== undefined) out.pluralLabel = typeof o.pluralLabel === "string" ? o.pluralLabel : null;
         if (o.description !== undefined) out.description = typeof o.description === "string" ? o.description : null;
         if (typeof o.hierarchical === "boolean") out.hierarchical = o.hierarchical;
+        const appliesTo = parseAppliesTo(o.appliesTo);
+        if (appliesTo !== undefined) out.appliesTo = appliesTo;
         return out;
       },
     }),
@@ -3444,6 +3566,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
         // uuid — the FK would catch it, but as a driver error with no HTTP status.
         const found = await db.find({ from: "cms_terms", where: { id: { in: [...wanted] } }, select: ["id"], limit: wanted.size });
         if (found.length !== wanted.size) throw new BadRequest("one or more termIds are not terms");
+        await assertTermsApplyTo(db, [...wanted], "page");
       }
       const existing = await db.find({ from: "cms_page_terms", where: { pageId: input.pageId }, select: ["id", "termId"], limit: MAX_TERMS });
       const have = new Map(existing.map((l) => [String(l.termId), String(l.id)]));
@@ -3754,6 +3877,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       if (wanted.size > 0) {
         const found = await db.find({ from: "cms_terms", where: { id: { in: [...wanted] } }, select: ["id"], limit: wanted.size });
         if (found.length !== wanted.size) throw new BadRequest("one or more termIds are not terms");
+        await assertTermsApplyTo(db, [...wanted], "media");
       }
       const existing = await db.find({ from: "cms_media_terms", where: { mediaId: input.mediaId }, select: ["id", "termId"], limit: MAX_TERMS });
       const have = new Map(existing.map((l) => [String(l.termId), String(l.id)]));

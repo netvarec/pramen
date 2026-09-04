@@ -1097,12 +1097,49 @@ export async function runCms(base: string): Promise<void> {
   const bogusTag = await call("listMedia", { limit: 50, term: "not-a-term" }, admin);
   assert(bogusTag.body.ok === true && !(bogusTag.body.result as Array<{ id: string }>).some((m) => m.id === taggedId), "cms: an unknown term id narrows to nothing");
 
+  // --- what a vocabulary is offered for -----------------------------------------------------
+  // `category` above was created without `appliesTo`, i.e. it classifies EVERYTHING — which is
+  // also how a row written before the column existed reads. Both assignments above therefore
+  // had to be accepted, and were.
+  const catAll = await call("listTaxonomies", { target: "media" });
+  assert((catAll.body.result as Array<{ slug: string }>).some((t) => t.slug === "category"), "cms: an un-narrowed vocabulary applies to everything");
+
+  const shots = await call("createTaxonomy", { slug: "shot-type", label: "Shot type", appliesTo: ["media"] }, admin);
+  assert(shots.body.ok, "cms: createTaxonomy takes appliesTo");
+  const shotTerm = await call("createTerm", { taxonomy: "shot-type", slug: "closeup", label: "Close-up" }, admin);
+  const forMedia = await call("listTaxonomies", { target: "media" });
+  const forPages = await call("listTaxonomies", { target: "page" });
+  assert((forMedia.body.result as Array<{ slug: string }>).some((t) => t.slug === "shot-type"), "cms: listTaxonomies(media) offers a media vocabulary");
+  assert(!(forPages.body.result as Array<{ slug: string }>).some((t) => t.slug === "shot-type"), "cms: …and listTaxonomies(page) does not");
+  const unfiltered = await call("listTaxonomies", {});
+  assert((unfiltered.body.result as Array<{ slug: string }>).some((t) => t.slug === "shot-type"), "cms: an unfiltered list still shows it — the screen that edits the scope must see it");
+
+  // The write side, not just the UI: hiding the vocabulary from a panel without refusing the
+  // assignment would make appliesTo a hint, and leave every non-panel caller unguarded.
+  const wrongTarget = await call("setPageTerms", { pageId: menuPageId, termIds: [shotTerm.body.result.id] }, admin);
+  assert(wrongTarget.status === 400, "cms: assigning a media-only term to a PAGE is refused");
+  assert((await call("setMediaTerms", { mediaId: taggedId, termIds: [shotTerm.body.result.id] }, admin)).body.ok, "cms: …and the same term on a file is fine");
+
+  // Narrowing away a target that is still in use would strand those assignments: still stored,
+  // still returned, invisible in the panel that could remove them.
+  const narrowUsed = await call("updateTaxonomy", { id: shots.body.result.id, appliesTo: ["page"] }, admin);
+  assert(narrowUsed.status === 400, "cms: narrowing a vocabulary away from something it is assigned to is refused");
+  // Widening strands nothing, so it is always allowed.
+  assert((await call("updateTaxonomy", { id: shots.body.result.id, appliesTo: ["page", "media"] }, admin)).body.ok, "cms: widening is allowed");
+  assert((await call("createTaxonomy", { slug: "bad-scope", label: "Bad", appliesTo: ["collection"] }, admin)).status === 400, "cms: an unknown target is refused, not dropped");
+  assert((await call("createTaxonomy", { slug: "empty-scope", label: "Empty", appliesTo: [] }, admin)).status === 400, "cms: a vocabulary that classifies nothing is refused");
+
   // Deleting a term takes its assignments with it — a real ON DELETE CASCADE, so the
   // cleanup cannot be half-done by a handler that threw between two writes.
   assert((await call("deleteTerm", { id: newsId }, admin)).body.ok, "cms: deleteTerm ok");
   assert(((await call("listPageTerms", { pageId: menuPageId })).body.result as unknown[]).length === 0, "cms: the term's page assignments went with it");
   assert((await call("deleteTerm", { id: localId }, admin)).body.ok, "cms: deleteTerm ok (the media-tagged one)");
-  assert(((await call("listMediaTerms", { mediaId: taggedId }, admin)).body.result as unknown[]).length === 0, "cms: …and the term's MEDIA assignments went with it too");
+  // The DELETED term specifically, not "the list is empty" — the file also carries the
+  // shot-type term by now, and an emptiness check would pass for the wrong reason if the
+  // cascade ever took the wrong rows.
+  const afterCascade = (await call("listMediaTerms", { mediaId: taggedId }, admin)).body.result as Array<{ id: string }>;
+  assert(!afterCascade.some((t) => t.id === localId), "cms: …and the term's MEDIA assignments went with it too");
+  assert(afterCascade.some((t) => t.id === shotTerm.body.result.id), "cms: …while the file's other tags are untouched");
 
   const area = await call("createWidgetArea", { name: "sidebar", label: "Sidebar" }, admin);
   assert(area.body.ok, "cms: createWidgetArea ok");

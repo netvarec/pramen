@@ -136,7 +136,24 @@ there are no backward-compatibility guarantees yet.
   section would 404 on open and the library's tag filter would send an argument that is silently
   ignored, i.e. a control that visibly does nothing.
 
-  Nothing to migrate — a new table is additive, and `migrate()` creates it.
+  A vocabulary now declares **`appliesTo`** (`["page"]`, `["media"]`, both, or `null` for
+  everything), because reusing the page vocabularies wholesale meant offering all of them in
+  both places: a photo filed under "Local news", and `getTermTree("category")` filling up with
+  terms like "hero" that no page listing will ever use. `listTaxonomies({ target })` narrows to
+  it — server-side, so the page panel, the media panel and the write-side guard read one answer
+  and cannot disagree.
+
+  It is enforced on the WRITE, not just in the UI. Hiding a vocabulary from a panel without
+  refusing the assignment is the `hideI18n` mistake this package already retired once: the
+  control disappears, the request does not. And narrowing a vocabulary away from something it is
+  still assigned to is refused, on the same grounds the `hierarchical` flag already refuses being
+  turned off under nested terms — the assignments would stay stored and returned while
+  disappearing from the only panel that could remove them.
+
+  `null` is the un-narrowed state and the reading for every row written before the column
+  existed, so an existing vocabulary keeps applying to everything and both stores behave alike.
+  Nothing to migrate — a new table is additive, `migrate()` creates it, and `appliesTo` is a
+  nullable `ADD COLUMN`.
 
 - **The screen header stays as the page scrolls, condensed (`@pramen/cms-editor`).** Scrolling a
   media library past the first row used to take the header away, leaving a wall of thumbnails

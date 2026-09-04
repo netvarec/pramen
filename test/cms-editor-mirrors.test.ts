@@ -24,6 +24,7 @@ import {
   MEDIA_KINDS,
   NAV_ORDER,
   REDIRECT_STATUSES,
+  TAXONOMY_TARGETS,
 } from "../packages/cms/src/index";
 import {
   MAX_MENU_DEPTH as EDITOR_MAX_MENU_DEPTH,
@@ -33,6 +34,8 @@ import {
   MEDIA_SORTS as EDITOR_MEDIA_SORTS,
   NAV_ORDER as EDITOR_NAV_ORDER,
   REDIRECT_STATUSES as EDITOR_REDIRECT_STATUSES,
+  TAXONOMY_TARGET_LABELS,
+  TAXONOMY_TARGETS as EDITOR_TAXONOMY_TARGETS,
 } from "../packages/cms-editor/src/types";
 import { FIELD_TYPES as EDITOR_FIELD_TYPES } from "../packages/cms-editor/src/schema-builder";
 
@@ -87,5 +90,19 @@ describe("the media library's sort and filter vocabularies", () => {
     // array, because the server's is a Record's keys and the ORDER of that Record is what the
     // editor's menu shows — pinning the list pins the menu.
     expect([...EDITOR_MEDIA_SORTS]).toEqual(["newest", "oldest", "name", "name_desc", "largest", "smallest"]);
+  });
+});
+
+describe("what a vocabulary may be scoped to", () => {
+  test("the targets match exactly", () => {
+    // The editor renders one checkbox per target and sends the array back; the server REFUSES
+    // an unknown one rather than dropping it, so a target the editor offers and the server
+    // does not is a 400 on save — and one the server knows and the editor does not is a scope
+    // nobody can set from the UI.
+    expect([...EDITOR_TAXONOMY_TARGETS]).toEqual([...TAXONOMY_TARGETS]);
+  });
+
+  test("every target has a label", () => {
+    for (const t of EDITOR_TAXONOMY_TARGETS) expect(TAXONOMY_TARGET_LABELS[t]).toBeTruthy();
   });
 });

@@ -141,7 +141,13 @@ entry, so doing it there made the returned array stop matching the `as const` li
   they keep NULL, sort together under a name sort, and answer only the `other` filter.
 - **Tagging:** files carry taxonomy terms from the same `cms_taxonomies`/`cms_terms` tables pages
   use, through a `cms_media_terms` junction — one vocabulary, edited in one place, applied to
-  both. `listMediaTerms({ mediaId })` reads a file's terms and `setMediaTerms({ mediaId, termIds })`
+  whichever of the two it declares. A vocabulary carries **`appliesTo`** — `["page"]`,
+  `["media"]`, both, or `null` for everything (which is what an un-narrowed one, and every row
+  written before the column existed, means). `listTaxonomies({ target })` narrows to it, and
+  `setPageTerms`/`setMediaTerms` REFUSE a term from a vocabulary that does not apply, so it is a
+  rule rather than a UI hint. Narrowing a vocabulary away from something it is still assigned to
+  is refused too — those assignments would stay stored and stop being reachable from the panel
+  that could remove them. `listMediaTerms({ mediaId })` reads a file's terms and `setMediaTerms({ mediaId, termIds })`
   replaces them wholesale (set semantics, like `setPageTerms`); `listMedia({ term })` filters by
   one, ANDed with `kind` and `q`. The filter is a relation traversal compiled to a subquery, so
   it narrows in SQL like every other option here. Deleting a term takes its assignments with it

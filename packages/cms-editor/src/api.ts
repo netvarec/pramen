@@ -2,7 +2,7 @@
 // same transport shape as @pramen/admin's api.ts. Config is persisted in localStorage.
 
 import type { AdminPageMeta, AdminPageResponse, AssembledPage, AuditEntry, BlockType, ContentType, Media, Menu, MenuItem, Page, Redirect, Taxonomy, Term, Widget, WidgetArea } from "./types";
-import type { DefaultBlockDefinition, FieldDefinition, MediaKind, MediaSort, RegionDefinition, RpcInput } from "./types";
+import type { DefaultBlockDefinition, FieldDefinition, MediaKind, MediaSort, RegionDefinition, RpcInput, TaxonomyTarget } from "./types";
 
 /** The payload `createBlockType` / `updateBlockType` take. `fieldsSchema` is the whole
  * point: a block type IS its field schema. */
@@ -215,10 +215,14 @@ export class Api {
     this.call<Redirect>("updateRedirect", { id, ...patch } as unknown as RpcInput);
   deleteRedirect = (id: string) => this.call<{ ok: true }>("deleteRedirect", { id });
 
-  listTaxonomies = () => this.call<Taxonomy[]>("listTaxonomies");
-  createTaxonomy = (input: { slug: string; label: string; pluralLabel?: string; description?: string; hierarchical?: boolean }) =>
-    this.call<Taxonomy>("createTaxonomy", input);
-  updateTaxonomy = (id: string, patch: { label?: string; pluralLabel?: string | null; description?: string | null; hierarchical?: boolean }) =>
+  /** Every vocabulary, or only those that classify `target`. The narrowing is the SERVER's —
+   * the page panel, the media panel and the write-side guard read one answer, so they cannot
+   * disagree about what a vocabulary applies to. The Taxonomies screen passes nothing: the one
+   * place that edits `appliesTo` has to see a vocabulary it has narrowed away. */
+  listTaxonomies = (target?: TaxonomyTarget) => this.call<Taxonomy[]>("listTaxonomies", { target });
+  createTaxonomy = (input: { slug: string; label: string; pluralLabel?: string; description?: string; hierarchical?: boolean; appliesTo?: TaxonomyTarget[] | null }) =>
+    this.call<Taxonomy>("createTaxonomy", { ...input, appliesTo: input.appliesTo ?? null });
+  updateTaxonomy = (id: string, patch: { label?: string; pluralLabel?: string | null; description?: string | null; hierarchical?: boolean; appliesTo?: TaxonomyTarget[] | null }) =>
     this.call<Taxonomy>("updateTaxonomy", { id, ...patch } as unknown as RpcInput);
   deleteTaxonomy = (id: string) => this.call<{ ok: true }>("deleteTaxonomy", { id });
 

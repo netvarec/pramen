@@ -377,7 +377,24 @@ export interface Taxonomy {
   pluralLabel?: string | null;
   description?: string | null;
   hierarchical?: boolean;
+  /** What this vocabulary classifies. `null`/absent means EVERYTHING — a vocabulary that was
+   * never narrowed, and the reading for a row written before the column existed. */
+  appliesTo?: TaxonomyTarget[] | null;
 }
+
+/** Mirror of @pramen/cms `TAXONOMY_TARGETS` — the object types a vocabulary can classify.
+ * Mirrored rather than imported for the reason at the top of this file: the editor is a
+ * standalone browser app with no server-package dependency. The server is the authority; an
+ * unknown value here would just render an unchecked box it refuses to save. */
+export const TAXONOMY_TARGETS = ["page", "media"] as const;
+export type TaxonomyTarget = (typeof TAXONOMY_TARGETS)[number];
+
+/** What each target is called on screen — plural, because each names the SET of things the
+ * vocabulary would classify. */
+export const TAXONOMY_TARGET_LABELS = {
+  page: "Pages",
+  media: "Media",
+} satisfies Record<TaxonomyTarget, string>;
 
 export interface Term {
   id: string;

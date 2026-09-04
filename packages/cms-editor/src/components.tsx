@@ -1465,7 +1465,9 @@ function PageTerms({ api, pageId, canEdit, onError }: { api: Api; pageId: string
     let live = true;
     (async () => {
       try {
-        const list = await api.listTaxonomies();
+        // Only the vocabularies that classify PAGES. The narrowing is the server's, so this
+        // panel and `setPageTerms`' own guard cannot disagree about what applies here.
+        const list = await api.listTaxonomies("page");
         if (!live) return;
         setTaxa(list);
         // In parallel, and alongside the page's own assignments. Awaiting one vocabulary at
@@ -1503,7 +1505,10 @@ function PageTerms({ api, pageId, canEdit, onError }: { api: Api; pageId: string
   };
 
   if (taxa === null) return <p className="text-fg-subtle">Loading…</p>;
-  if (taxa.length === 0) return <p className="text-fg-subtle">No vocabularies defined yet.</p>;
+  // Not "none defined": the list is narrowed to the vocabularies that apply to PAGES, so a
+  // site whose only vocabulary is media-only would read as having none — and send an editor
+  // off to create a duplicate of the one it already has.
+  if (taxa.length === 0) return <p className="text-fg-subtle">No vocabularies apply to pages yet — set one up under Taxonomies.</p>;
 
   return (
     <div className="flex flex-col gap-4">
@@ -1619,7 +1624,7 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
     let live = true;
     (async () => {
       try {
-        const list = await api.listTaxonomies();
+        const list = await api.listTaxonomies("media");
         const trees = await Promise.all(list.map(async (t) => [t.slug, flattenTerms(await api.getTermTree(t.slug)).map((f) => f.term)] as const));
         if (!live) return;
         setTaxa(list);

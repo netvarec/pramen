@@ -11,14 +11,15 @@
 
 import { Button, Heading, Input } from "@podoba/react";
 import { useCallback, useEffect, useState } from "react";
-import { useUnsavedGuard } from "./app-context";
+import { useApp, useUnsavedGuard } from "./app-context";
 import type { Api } from "./api";
 import { CONTROL, RichText, slugify } from "./fields";
 import { ROW, WRAP } from "./chrome";
 import { useCrumb } from "./breadcrumb";
 import { PageHeader } from "./page-header";
 import type { CollectionMeta, Menu, MenuItem, MenuItemKind, Page, Redirect, RichTextDoc, Taxonomy, Term, Widget, WidgetArea } from "./types";
-import { MAX_MENU_DEPTH, REDIRECT_STATUSES } from "./types";
+import { MAX_MENU_DEPTH, REDIRECT_STATUSES, TAXONOMY_TARGET_LABELS, TAXONOMY_TARGETS } from "./types";
+import type { TaxonomyTarget } from "./types";
 
 
 export function errText(e: unknown): string {
@@ -494,15 +495,69 @@ export function RedirectsView({ api, onError, canEdit }: { api: Api; onError: (s
 
 // --- taxonomies -----------------------------------------------------------------------
 
+/** What a vocabulary classifies. `null` is EVERYTHING, and it is a real state rather than a
+ * shorthand for "all boxes ticked": a vocabulary that was never narrowed keeps applying to
+ * whatever the CMS grows next, where an explicit `["page","media"]` freezes it at today's two.
+ * So "Everything" is its own option, not the all-checked case. */
+function AppliesToField({ value, onChange, disabled }: { value: TaxonomyTarget[] | null; onChange: (v: TaxonomyTarget[] | null) => void; disabled?: boolean }) {
+  const toggle = (t: TaxonomyTarget) => {
+    const next = (value ?? []).includes(t) ? (value ?? []).filter((x) => x !== t) : [...(value ?? []), t];
+    // Unchecking the last one would mean a vocabulary nothing can use, which the server
+    // refuses — so it lands back on "Everything", the nearest thing the person meant.
+    onChange(next.length === 0 ? null : next);
+  };
+  return (
+    <div className="mt-3">
+      <span className="text-caption text-fg-subtle">Applies to</span>
+      {/* "Everything" gets its own line rather than sitting in the row as a third peer: a radio
+          beside two checkboxes reads as one group with mismatched controls, when it is actually
+          the choice ABOVE them — pick everything, or pick which. */}
+      <div className="mt-1 flex flex-col gap-1">
+        <label className="flex items-center gap-2">
+          <input type="radio" checked={value === null} disabled={disabled} onChange={() => onChange(null)} />
+          <span className="text-sm text-fg">Everything</span>
+        </label>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 pl-5">
+          {TAXONOMY_TARGETS.map((t) => (
+            <label key={t} className="flex items-center gap-2">
+              <input type="checkbox" checked={(value ?? []).includes(t)} disabled={disabled} onChange={() => toggle(t)} />
+              <span className="text-sm text-fg">{TAXONOMY_TARGET_LABELS[t]}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** How a vocabulary's scope reads in a list row. */
+function appliesToText(t: Taxonomy): string {
+  const list = t.appliesTo;
+  if (!Array.isArray(list) || list.length === 0) return "everything";
+  return list.map((x) => TAXONOMY_TARGET_LABELS[x] ?? x).join(" + ").toLowerCase();
+}
+
+
 export function TaxonomiesView({ api, onOpen, onError, canEdit }: { api: Api; onOpen: (slug: string) => void; onError: (s: string) => void; canEdit: boolean }) {
   const [taxa, setTaxa] = useState<Taxonomy[] | null>(null);
   const [label, setLabel] = useState("");
   const [slug, setSlug] = useState("");
   const [slugTouched, setSlugTouched] = useState(false);
   const [hierarchical, setHierarchical] = useState(false);
+  // `null` is "everything", which is also what an un-narrowed vocabulary stores — so the
+  // default here is the same value the server would have written anyway.
+  const [appliesTo, setAppliesTo] = useState<TaxonomyTarget[] | null>(null);
   const [busy, setBusy] = useState(false);
+  // Scoping a vocabulary and media tagging shipped together, and the flag is the same one for
+  // that reason: a server either has both or neither, and a second capability for the same
+  // release would be one that can never be false on its own. On an older server the field is
+  // hidden rather than offered and silently dropped.
+  const { cms: { mediaTerms: scopable } } = useApp();
 
   const refresh = useCallback(() => {
+    // No target: this is the screen that EDITS the scope, so it has to show a vocabulary it
+    // has narrowed away — otherwise narrowing one to Media would remove it from the only
+    // place that could widen it again.
     api.listTaxonomies().then(setTaxa).catch((e) => { setTaxa([]); onError(errText(e)); });
   }, [api, onError]);
   useEffect(refresh, [refresh]);
@@ -510,8 +565,10 @@ export function TaxonomiesView({ api, onOpen, onError, canEdit }: { api: Api; on
   const create = async () => {
     setBusy(true);
     try {
-      const created = await api.createTaxonomy({ slug, label, hierarchical });
-      setLabel(""); setSlug(""); setSlugTouched(false); setHierarchical(false);
+      // On a server that cannot scope a vocabulary, `null` is what it would store anyway —
+      // so this sends the same value the field's default means rather than a conditional key.
+      const created = await api.createTaxonomy({ slug, label, hierarchical, appliesTo: scopable ? appliesTo : null });
+      setLabel(""); setSlug(""); setSlugTouched(false); setHierarchical(false); setAppliesTo(null);
       onOpen(created.slug);
     } catch (e) { onError(errText(e)); } finally { setBusy(false); }
   };
@@ -532,6 +589,7 @@ export function TaxonomiesView({ api, onOpen, onError, canEdit }: { api: Api; on
             <span className="min-w-0 flex-1 truncate font-medium">{t.label}</span>
             <span className="shrink-0 truncate text-fg-subtle">{t.slug}</span>
             <span className="shrink-0 text-caption text-fg-subtle">{t.hierarchical ? "nested" : "flat"}</span>
+            {scopable ? <span className="shrink-0 text-caption text-fg-subtle">{appliesToText(t)}</span> : null}
           </div>
         ))}
       </div>
@@ -549,6 +607,7 @@ export function TaxonomiesView({ api, onOpen, onError, canEdit }: { api: Api; on
             <input type="checkbox" checked={hierarchical} onChange={(e) => setHierarchical(e.target.checked)} />
             <span className="text-sm text-fg">Terms can nest (categories rather than tags)</span>
           </label>
+          {scopable ? <AppliesToField value={appliesTo} onChange={setAppliesTo} /> : null}
           <Button className="mt-3" onPress={create} isDisabled={busy || !label.trim() || !slug.trim()}>Create vocabulary</Button>
         </div>
       ) : null}
@@ -573,6 +632,7 @@ export function TaxonomyEditor({ api, slug, onBack, onDeleted, onError, canEdit 
   const [termSlugTouched, setTermSlugTouched] = useState(false);
   const [parentId, setParentId] = useState("");
   const [busy, setBusy] = useState(false);
+  const { cms: { mediaTerms: scopable } } = useApp();
 
   const refreshTerms = useCallback(() => {
     api.getTermTree(slug).then(setTree).catch((e) => { setTree([]); onError(errText(e)); });
@@ -610,6 +670,23 @@ export function TaxonomyEditor({ api, slug, onBack, onDeleted, onError, canEdit 
     if (label === t.label) return;
     try { await api.updateTerm(t.id, { label }); refreshTerms(); } catch (e) { onError(errText(e)); }
   };
+  /** Saved on change rather than behind a Save button, because a narrowing can be REFUSED —
+   * the server rejects one that would strand existing assignments — and a refusal has to be
+   * visible while the choice that caused it is still on screen. On refusal the field goes back
+   * to what is stored, so it never shows a scope the server did not accept. */
+  const setAppliesTo = async (next: TaxonomyTarget[] | null) => {
+    if (!tax) return;
+    const previous = tax.appliesTo ?? null;
+    setTax({ ...tax, appliesTo: next });
+    try {
+      onError("");
+      await api.updateTaxonomy(tax.id, { appliesTo: next });
+    } catch (e) {
+      setTax({ ...tax, appliesTo: previous });
+      onError(errText(e));
+    }
+  };
+
   const delTaxonomy = async () => {
     if (!tax || !confirm(`Delete the vocabulary “${tax.label}”? Every term in it goes too, along with every page's assignments.`)) return;
     try { await api.deleteTaxonomy(tax.id); onDeleted(); } catch (e) { onError(errText(e)); }
@@ -666,6 +743,17 @@ export function TaxonomyEditor({ api, slug, onBack, onDeleted, onError, canEdit 
               </label>
             ) : null}
             <Button className="mt-3" onPress={addTerm} isDisabled={busy || !termLabel.trim() || !termSlug.trim()}>Add term</Button>
+          </div>
+        ) : null}
+
+        {canEdit && scopable ? (
+          <div className="rounded-lg border border-border bg-surface-muted p-4">
+            <Heading level="2" className="mb-1 font-normal">Where this vocabulary is offered</Heading>
+            <p className="max-w-[62ch] text-caption text-fg-subtle">
+              Narrowing is refused while the vocabulary is still assigned to something it would stop applying to —
+              remove those assignments first, so nothing is left tagged with a vocabulary you can no longer see.
+            </p>
+            <AppliesToField value={tax.appliesTo ?? null} onChange={setAppliesTo} />
           </div>
         ) : null}
 
