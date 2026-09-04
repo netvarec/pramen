@@ -339,8 +339,11 @@ export default function RootLayout() {
             is why it is not in the screen header — and why it survives a narrowed rail, where
             the sign-out and theme controls used to live and no longer fit. Sticky at the top of
             the content column; `page-header.tsx` pins the screen header directly beneath it,
-            both off the one height in `chrome.ts`. */}
-        <div className={`sticky top-0 z-30 flex ${APP_BAR_H} items-center gap-2 border-b border-border bg-surface px-7`}>
+            both off the one height in `chrome.ts`. No rule under it, and the header below has no
+            padding above it: the two read as one block of chrome rather than a bar with a
+            panel parked beneath it. `bg-surface` is what keeps content from scrolling
+            through — the border was never what did that. */}
+        <div className={`sticky top-0 z-30 flex ${APP_BAR_H} items-center gap-2 bg-surface px-7`}>
           <Button
             variant="ghost"
             size="sm"

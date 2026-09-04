@@ -91,9 +91,15 @@ export function PageHeader({
     // through the 28px of page margin either side of it and out the rounded corners. `bg-surface`
     // on this wrapper is therefore load-bearing, not decoration.
     //
+    // NO padding above: the panel meets the app bar directly, so the two read as one block of
+    // chrome rather than a bar with a panel parked under it. That also leaves nothing on this
+    // wrapper that changes between the two states, which is why the collapse transition lives
+    // only on the panel below — a transition on an element whose padding is constant is dead
+    // code that looks load-bearing.
+    //
     // `z-20` sits above the list and below the rail's mobile disclosure (which is in flow above
     // it) and every modal overlay (z-50).
-    <div className={`sticky ${BELOW_APP_BAR} z-20 mx-auto max-w-[1200px] bg-surface px-7 pb-4 transition-[padding] duration-150 ease-out ${condensed ? "pt-3" : "pt-6"}`}>
+    <div className={`sticky ${BELOW_APP_BAR} z-20 mx-auto max-w-[1200px] bg-surface px-7 pb-4`}>
       <div className="relative isolate overflow-hidden rounded-panel border border-border bg-surface-card">
         <CoverArt seed={lead} />
         <div className="absolute inset-0 bg-gradient-to-r from-surface-card via-surface-card/70 to-transparent" />
