@@ -209,6 +209,11 @@ export interface CmsCapabilities {
    * configured. Without it a reviewer-only session gets the authoring nav and every screen
    * 403s on its first save. */
   canEdit: boolean;
+  /** The server has `listMediaTerms`/`setMediaTerms`, and `listMedia` understands `term`.
+   * Declared like `siteFurniture`: on an older server the detail panel's Tags section would
+   * 404 the moment a file is opened, and the library's tag filter would send an argument
+   * that is silently ignored — a control that visibly does nothing. */
+  mediaTerms: boolean;
 }
 
 /**
@@ -244,6 +249,7 @@ export const DEFAULT_CAPABILITIES: CmsCapabilities = {
   pagesByType: false,
   siteFurniture: false,
   codeDefinedTypes: false,
+  mediaTerms: false,
   // Fails OPEN, unlike its neighbours. An older server sends no `canEdit`, and hiding
   // every authoring control from a real editor is unrecoverable from inside the editor;
   // showing one that 403s is a legible error with a way forward. The server is the

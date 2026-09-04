@@ -1074,10 +1074,35 @@ export async function runCms(base: string): Promise<void> {
   const byTerm = await call("listPagesByTerm", { taxonomy: "category", term: "news" });
   assert((byTerm.body.result as Array<{ id: string }>).some((p) => p.id === menuPageId), "cms: listPagesByTerm traverses the junction under the public page scope");
 
+  // Media carries the SAME vocabularies through its own junction. Its own upload, so these
+  // do not depend on the lifecycle of the library row above (which is purged by here).
+  const tagUp = await call("signMediaUpload", { contentType: "image/png", filename: "tagged.png" }, admin);
+  await fetch(`${base}${tagUp.body.result.url}`, { method: "PUT", headers: { "content-type": "image/png" }, body: new Uint8Array([137, 80, 78, 71, 9]) });
+  const tagged = await call("createMedia", { ref: tagUp.body.result.ref, alt: "Tagged file" }, admin);
+  const taggedId = tagged.body.result.id as string;
+  const newsId = termNews.body.result.id as string;
+  const localId = termLocal.body.result.id as string;
+
+  assert((await call("setMediaTerms", { mediaId: taggedId, termIds: [localId] }, admin)).body.ok, "cms: setMediaTerms assigns a term to a file");
+  const mediaTerms = await call("listMediaTerms", { mediaId: taggedId }, admin);
+  assert((mediaTerms.body.result as Array<{ slug: string }>).map((t) => t.slug).join() === "local", "cms: listMediaTerms reads them back");
+  // The point of the junction: the library narrows by term IN SQL, like it narrows by kind.
+  const byTag = await call("listMedia", { limit: 50, term: localId }, admin);
+  assert((byTag.body.result as Array<{ id: string }>).some((m) => m.id === taggedId), "cms: listMedia(term) traverses the junction");
+  const byOtherTag = await call("listMedia", { limit: 50, term: newsId }, admin);
+  assert(!(byOtherTag.body.result as Array<{ id: string }>).some((m) => m.id === taggedId), "cms: …and a term the file does not carry excludes it");
+  const tagAndKind = await call("listMedia", { limit: 50, term: localId, kind: "document" }, admin);
+  assert(!(tagAndKind.body.result as Array<{ id: string }>).some((m) => m.id === taggedId), "cms: a tag filter ANDs with the type filter");
+  // A term id that is not a term matches nothing rather than erroring or matching everything.
+  const bogusTag = await call("listMedia", { limit: 50, term: "not-a-term" }, admin);
+  assert(bogusTag.body.ok === true && !(bogusTag.body.result as Array<{ id: string }>).some((m) => m.id === taggedId), "cms: an unknown term id narrows to nothing");
+
   // Deleting a term takes its assignments with it — a real ON DELETE CASCADE, so the
   // cleanup cannot be half-done by a handler that threw between two writes.
-  assert((await call("deleteTerm", { id: termNews.body.result.id }, admin)).body.ok, "cms: deleteTerm ok");
+  assert((await call("deleteTerm", { id: newsId }, admin)).body.ok, "cms: deleteTerm ok");
   assert(((await call("listPageTerms", { pageId: menuPageId })).body.result as unknown[]).length === 0, "cms: the term's page assignments went with it");
+  assert((await call("deleteTerm", { id: localId }, admin)).body.ok, "cms: deleteTerm ok (the media-tagged one)");
+  assert(((await call("listMediaTerms", { mediaId: taggedId }, admin)).body.result as unknown[]).length === 0, "cms: …and the term's MEDIA assignments went with it too");
 
   const area = await call("createWidgetArea", { name: "sidebar", label: "Sidebar" }, admin);
   assert(area.body.ok, "cms: createWidgetArea ok");

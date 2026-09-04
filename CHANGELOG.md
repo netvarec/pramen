@@ -114,6 +114,30 @@ there are no backward-compatibility guarantees yet.
   one even when the upload was called `IMG_2831.png`; the needle's `%` and `_` are escaped to
   literals by the read engine, which `test/suites/cms.ts` asserts.
 
+- **Media carries taxonomy terms (`@pramen/cms`, `@pramen/cms-editor`).** Files are tagged with
+  the SAME vocabularies pages are — `cms_taxonomies` / `cms_terms`, through a new
+  `cms_media_terms` junction — so a deployment that declares "Topics" tags a photo with one
+  without declaring it twice, and the Taxonomies screen stays the one place a vocabulary is
+  edited. `listMediaTerms` / `setMediaTerms` mirror the page pair (set semantics: the panel
+  holds the whole selection, and two calls each patching one end of it race into a state
+  neither asked for), and `listMedia` gains `term`, which ANDs with `kind` and `q`.
+
+  A second junction rather than one polymorphic `cms_object_terms(objectType, objectId, …)`: a
+  polymorphic key cannot carry a real foreign key, and the FKs are what does the work — purging
+  a file or deleting a term takes its assignments with it, with no handler remembering to. The
+  `where` traversal needs a typed column to join on too; `objectId` would have to be filtered by
+  a discriminator the read engine cannot require, so one forgotten `objectType` clause would
+  silently mix a page's tags into a media query.
+
+  Filtering by term is a relation traversal compiled to a subquery, so it costs the same page of
+  rows as filtering by kind — which is the whole reason the assignments are a junction and not a
+  JSON array on the media row. A tag you cannot filter a paged library by is decoration.
+  `listCmsCapabilities().mediaTerms` declares it: on an older server the detail panel's Tags
+  section would 404 on open and the library's tag filter would send an argument that is silently
+  ignored, i.e. a control that visibly does nothing.
+
+  Nothing to migrate — a new table is additive, and `migrate()` creates it.
+
 - **The screen header stays as the page scrolls, condensed (`@pramen/cms-editor`).** Scrolling a
   media library past the first row used to take the header away, leaving a wall of thumbnails
   with no title and no primary action. Sticky alone would be worse — a 190px banner pinned to

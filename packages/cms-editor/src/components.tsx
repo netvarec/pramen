@@ -1574,8 +1574,12 @@ const PAGE_SIZE = 60;
 /** How long typing has to pause before the library is re-queried. Long enough that a typed
  * word is one request rather than five, short enough that it still reads as live. */
 const SEARCH_DEBOUNCE_MS = 250;
+/** The tag menu's "no filter" row. A menu item needs an id and `null` is not one, so the
+ * clear option carries a sentinel — safe against a real term id, which is a uuid. */
+const ALL_TAGS = "__all";
 
 export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) => void }) {
+  const { cms: { mediaTerms, canEdit } } = useApp();
   const [media, setMedia] = useState<Media[]>([]);
   const [offset, setOffset] = useState(0);
   const [hasMore, setHasMore] = useState(false);
@@ -1602,11 +1606,40 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
     const t = setTimeout(() => setSearch(query.trim()), SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(t);
   }, [query]);
+  // Tags. The vocabularies are loaded ONCE here rather than in the detail modal: the filter
+  // above the grid and the checkboxes inside a file both need the same list, and fetching it
+  // per opened file would be a round trip on every click for data that changes on the terms
+  // screen. `term` filters server-side like `kind` — it is a relation traversal, not a
+  // client-side pass over the page that happened to arrive.
+  const [term, setTerm] = useState<string | null>(null);
+  const [taxa, setTaxa] = useState<Taxonomy[]>([]);
+  const [terms, setTerms] = useState<Record<string, Term[]>>({});
+  useEffect(() => {
+    if (!mediaTerms) return;
+    let live = true;
+    (async () => {
+      try {
+        const list = await api.listTaxonomies();
+        const trees = await Promise.all(list.map(async (t) => [t.slug, flattenTerms(await api.getTermTree(t.slug)).map((f) => f.term)] as const));
+        if (!live) return;
+        setTaxa(list);
+        setTerms(Object.fromEntries(trees));
+      } catch {
+        // Non-fatal, deliberately: tagging is one control on this screen, and a vocabulary
+        // fetch that fails should cost the tag filter, not the media library.
+        if (live) { setTaxa([]); setTerms({}); }
+      }
+    })();
+    return () => { live = false; };
+  }, [api, mediaTerms]);
+  // Flattened for the filter menu, which is one list rather than a tree: a menu has no room
+  // for indentation to read as hierarchy, so the vocabulary is spelled out per row instead.
+  const taggable = taxa.flatMap((t) => (terms[t.slug] ?? []).map((x) => ({ id: x.id, label: x.label, group: t.label })));
 
   const load = useCallback(
     (off: number) => {
       api
-        .listMedia(PAGE_SIZE, off, sort, kind ?? undefined, search || undefined)
+        .listMedia({ limit: PAGE_SIZE, offset: off, sort, kind: kind ?? undefined, q: search || undefined, term: term ?? undefined })
         .then((rows) => {
           setMedia((prev) => (off === 0 ? rows : [...prev, ...rows]));
           setHasMore(rows.length === PAGE_SIZE);
@@ -1614,9 +1647,10 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
         })
         .catch((e) => onError(errMsg(e)));
     },
-    // Changing either resets to page 0 through the effect below — appending a differently
-    // ordered page onto the one already on screen would interleave two orderings.
-    [api, onError, sort, kind, search],
+    // Changing any of them resets to page 0 through the effect below — appending a
+    // differently ordered or narrowed page onto the one already on screen would interleave
+    // two orderings, or show files the current filter excludes.
+    [api, onError, sort, kind, search, term],
   );
   const loadTrash = useCallback(() => {
     api.listTrash().then((r) => setTrash(r.media ?? [])).catch((e) => onError(errMsg(e)));
@@ -1700,6 +1734,27 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
               ))}
             </DropdownMenu>
           </DropdownMenuTrigger>
+          {/* A menu rather than chips, unlike `kind`: the buckets are a closed set of five that
+              fits on the row, where terms are however many an editor has authored. It sits
+              BESIDE the sort menu rather than after the chips, so the row groups by control
+              type — two triggers, then the chip bar — instead of trailing a seventh pill that
+              reads as another type bucket. Drawn only once a vocabulary HAS a term: a filter
+              offering nothing to filter by can only disappoint. */}
+          {mediaTerms && taggable.length > 0 ? (
+            <DropdownMenuTrigger>
+              <Button variant="secondary" size="sm" className="shrink-0 px-3 py-1 text-compact">
+                {term ? (taggable.find((t) => t.id === term)?.label ?? "Tag") : "All tags"}
+              </Button>
+              <DropdownMenu aria-label="Filter media by tag" onAction={(k) => setTerm(k === ALL_TAGS ? null : String(k))}>
+                <DropdownMenuItem id={ALL_TAGS}>All tags</DropdownMenuItem>
+                {/* Qualified by vocabulary here, where a flat menu gives hierarchy nowhere to
+                    show; the trigger stays the bare term, which is what the row is filtered by. */}
+                {taggable.map((t) => (
+                  <DropdownMenuItem key={t.id} id={t.id}>{t.group} · {t.label}</DropdownMenuItem>
+                ))}
+              </DropdownMenu>
+            </DropdownMenuTrigger>
+          ) : null}
           {/* Buttons, not a second dropdown: five buckets is few enough to show, and a filter
               you can see the state of without opening it is the point of a filter bar. "All"
               is `null` rather than a sixth kind — the server's absent-means-everything, said
@@ -1758,9 +1813,16 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
           <MediaDetail
             api={api}
             media={selected}
+            taxa={mediaTerms ? taxa : []}
+            terms={terms}
+            canEdit={canEdit}
             onClose={() => setSelected(null)}
             onSaved={(m) => { setSelected(m); setMedia((prev) => prev.map((x) => (x.id === m.id ? m : x))); }}
             onDeleted={(id) => { setSelected(null); setMedia((prev) => prev.filter((x) => x.id !== id)); loadTrash(); }}
+            // Only while a tag filter is on, and only then: retagging the open file can move
+            // it out of (or into) the current narrowing, so leaving the grid alone would show
+            // a file the filter excludes. Unfiltered, nothing on screen changed.
+            onTermsSaved={() => { if (term) load(0); }}
             onError={onError}
           />
         ) : null}
@@ -1769,7 +1831,7 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
   );
 }
 
-function MediaDetail({ api, media, onClose, onSaved, onDeleted, onError }: { api: Api; media: Media; onClose: () => void; onSaved: (m: Media) => void; onDeleted: (id: string) => void; onError: (s: string) => void }) {
+function MediaDetail({ api, media, taxa, terms, canEdit, onClose, onSaved, onDeleted, onTermsSaved, onError }: { api: Api; media: Media; taxa: Taxonomy[]; terms: Record<string, Term[]>; canEdit: boolean; onClose: () => void; onSaved: (m: Media) => void; onDeleted: (id: string) => void; onTermsSaved: () => void; onError: (s: string) => void }) {
   const [alt, setAlt] = useState(media.alt ?? "");
   const [busy, setBusy] = useState(false);
   useEffect(() => setAlt(media.alt ?? ""), [media]);
@@ -1820,6 +1882,7 @@ function MediaDetail({ api, media, onClose, onSaved, onDeleted, onError }: { api
           <a className="underline underline-offset-2" href={url} target="_blank" rel="noreferrer">/media/{media.file.key}</a>
         </span>
       </KV>
+      {taxa.length > 0 ? <MediaTerms api={api} mediaId={media.id} taxa={taxa} terms={terms} canEdit={canEdit} onSaved={onTermsSaved} onError={onError} /> : null}
       <div className="mt-3.5 flex items-center gap-2">
         <Button onPress={save} isDisabled={busy || alt === (media.alt ?? "")}>Save</Button>
         <Button variant="secondary" size="sm" onPress={() => navigator.clipboard?.writeText(url)}>Copy URL</Button>
@@ -1828,6 +1891,85 @@ function MediaDetail({ api, media, onClose, onSaved, onDeleted, onError }: { api
         <Button variant="ghost" onPress={onClose}>Close</Button>
       </div>
     </Modal>
+  );
+}
+
+/** A file's taxonomy terms, inside the detail modal.
+ *
+ * The vocabularies arrive as props — the library loaded them once for its filter, and this
+ * panel opens and closes per file. Only the ASSIGNMENTS are fetched here, because they are
+ * the part that is per-file.
+ *
+ * Saved as a set, like `setPageTerms`: the panel holds the whole selection, and two calls
+ * each patching one end of it race into a state neither asked for.
+ */
+function MediaTerms({ api, mediaId, taxa, terms, canEdit, onSaved, onError }: { api: Api; mediaId: string; taxa: Taxonomy[]; terms: Record<string, Term[]>; canEdit: boolean; onSaved: () => void; onError: (s: string) => void }) {
+  const [selected, setSelected] = useState<Set<string> | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [ok, setOk] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    setSelected(null);
+    api
+      .listMediaTerms(mediaId)
+      .then((rows) => { if (live) setSelected(new Set(rows.map((t) => t.id))); })
+      .catch((e) => { if (live) { setSelected(new Set()); onError(errMsg(e)); } });
+    return () => { live = false; };
+  }, [api, mediaId, onError]);
+
+  const toggle = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev ?? []);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      await api.setMediaTerms(mediaId, [...(selected ?? [])]);
+      setOk(true);
+      setTimeout(() => setOk(false), 1200);
+      onSaved();
+    } catch (e) { onError(errMsg(e)); } finally { setBusy(false); }
+  };
+
+  // Until the assignments arrive the checkboxes would all read unchecked, and a save from
+  // that state would silently clear every tag the file has.
+  if (selected === null) return <div className="mt-4 border-t border-border pt-3.5 text-small text-fg-subtle">Loading tags…</div>;
+
+  return (
+    <div className="mt-4 border-t border-border pt-3.5">
+      <Section>Tags</Section>
+      {ok ? <Banner ok>saved</Banner> : null}
+      <div className="flex flex-col gap-2.5">
+        {taxa.map((t) => {
+          const list = terms[t.slug] ?? [];
+          return (
+            <div key={t.id}>
+              <div className="mb-1 text-caption text-fg-subtle">{t.label}</div>
+              {list.length === 0 ? (
+                <span className="text-caption text-fg-subtle">No terms yet.</span>
+              ) : (
+                <div className="flex flex-wrap gap-x-4 gap-y-1">
+                  {list.map((term) => (
+                    <label key={term.id} className="flex items-center gap-2">
+                      {/* `setMediaTerms` is editor-gated, so without this a reviewer gets live
+                          checkboxes and a Save that 403s — the same gap `PageTerms` closed. */}
+                      <input type="checkbox" disabled={!canEdit} checked={selected.has(term.id)} onChange={() => toggle(term.id)} />
+                      <span className="text-sm text-fg">{term.label}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {canEdit ? <Button size="sm" variant="secondary" className="mt-2.5 self-start" onPress={save} isDisabled={busy}>{busy ? "Saving…" : "Save tags"}</Button> : null}
+    </div>
   );
 }
 

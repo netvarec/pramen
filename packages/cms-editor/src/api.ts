@@ -175,8 +175,11 @@ export class Api {
   // --- media ---
   // `undefined` values are simply not serialized, so the absent narrowings need no
   // conditional spreading — an omitted key and a key set to undefined reach the server the same.
-  listMedia = (limit = 50, offset = 0, sort?: MediaSort, kind?: MediaKind, q?: string) =>
-    this.call<Media[]>("listMedia", { limit, offset, sort, kind, q });
+  /** Options rather than positionals: the library narrows by four independent things, and
+   * `listMedia(60, 0, sort, undefined, undefined, term)` is a call site nobody can read and
+   * everybody can get one argument out of step. */
+  listMedia = (opts: { limit?: number; offset?: number; sort?: MediaSort; kind?: MediaKind; q?: string; term?: string } = {}) =>
+    this.call<Media[]>("listMedia", { limit: opts.limit ?? 50, offset: opts.offset ?? 0, sort: opts.sort, kind: opts.kind, q: opts.q, term: opts.term });
   getMedia = (id: string) => this.call<Media | null>("getMedia", { id });
   updateMedia = (id: string, alt: string | null) => this.call<Media>("updateMedia", { id, alt });
   deleteMedia = (id: string) => this.call<{ ok: true }>("deleteMedia", { id });
@@ -229,6 +232,9 @@ export class Api {
 
   listPageTerms = (pageId: string) => this.call<Term[]>("listPageTerms", { pageId });
   setPageTerms = (pageId: string, termIds: string[]) => this.call<{ ok: true }>("setPageTerms", { pageId, termIds });
+
+  listMediaTerms = (mediaId: string) => this.call<Term[]>("listMediaTerms", { mediaId });
+  setMediaTerms = (mediaId: string, termIds: string[]) => this.call<{ ok: true }>("setMediaTerms", { mediaId, termIds });
 
   // --- Block Kit: custom admin pages ---
   /** The pages THIS caller may open. Filtered server-side, so a nav entry that 403s when
