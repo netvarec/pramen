@@ -178,9 +178,14 @@ there are no backward-compatibility guarantees yet.
   twice. The rail card and the inspector's status row are gone, and the editor no longer
   publishes a detail crumb: the toolbar names the page.
 
-  **The 260px left rail held three lines you could not click.** It is now an outline that jumps
-  to a region, and it renders only when there is more than one region to navigate between —
-  with a single region it described a canvas that was already showing everything.
+  **The 260px left rail held three lines you could not click**, and is gone. It became an
+  outline first, which was the wrong answer to the same question: it is a table of contents for
+  a document that is almost never longer than the screen, printing the same region names in the
+  same order as the canvas one column away, and its only extra — a block count — is what "is
+  this region empty" looks like when you look at it. Its one real service, jumping to a far
+  region, is scrolling on a page you are already scrolling. The region headings are sticky
+  instead, so on a long page the slot you are editing is always named — which is the
+  orientation an outline was standing in for.
 
   Smaller, in passing: the page-fields heading says "Page fields", because a region is very
   often named `content` and the two headings sat one above the other both reading CONTENT;

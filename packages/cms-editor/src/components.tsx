@@ -1007,36 +1007,20 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, backLabe
     }
   };
 
-  // The outline rail earns its 220px only when there is something to navigate BETWEEN. With
-  // one region it listed that region and its count beside a canvas already showing both, and
-  // repeated the title and status the toolbar now carries — a third of the width spent on
-  // three lines you cannot click.
-  const showOutline = regions.length > 1;
 
   return (
     <div className="px-7 pb-16">
       <PageToolbar page={page} dirtyCount={dirtyCount} busy={acting} onAct={act} backLabel={backLabel} onBack={() => { if (confirmLeave()) onBack(); }} />
       {err ? <Banner>{err}</Banner> : null}
 
-      <div className={`mt-4 grid items-start gap-6 max-[980px]:grid-cols-1 ${showOutline ? "grid-cols-[200px_minmax(0,1fr)_340px]" : "grid-cols-[minmax(0,1fr)_340px]"}`}>
-      {!showOutline ? null : (
-      // An OUTLINE, not a summary: every row jumps to its region. The counts stay because
-      // "which region is the empty one" is the question this list is read for.
-      <nav className={`sticky ${BELOW_PAGE_TOOLBAR} hidden flex-col gap-1 min-[981px]:flex`} aria-label="Regions">
-        <Section>Regions</Section>
-        {regions.map((r) => (
-          <button
-            key={r.name}
-            type="button"
-            className="flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-left text-sm text-fg-muted hover:bg-surface-muted hover:text-fg"
-            onClick={() => document.getElementById(regionDomId(r.name))?.scrollIntoView({ behavior: "smooth", block: "start" })}
-          >
-            <span className="min-w-0 flex-1 truncate">{r.label ?? r.name}</span>
-            <span className="shrink-0 text-caption text-fg-subtle">{(assembled?.regions[r.name] ?? []).length}</span>
-          </button>
-        ))}
-      </nav>
-      )}
+      {/* Two columns, always. There was a third — an outline listing each region and its block
+          count — and it was a table of contents for a document that is almost never longer
+          than the screen: the canvas already prints the same region names, in the same order,
+          a column away, and the count it added is what "is this region empty" looks like when
+          you look at it. Its one real service, jumping to a far region, is scrolling on a page
+          you are already scrolling. The region headings below are sticky instead, which is the
+          orientation an outline was standing in for. */}
+      <div className="mt-4 grid items-start gap-6 grid-cols-[minmax(0,1fr)_340px] max-[980px]:grid-cols-1">
 
       {/* The canvas: one inline document. `pl-8` reserves the left gutter that each
           block's drag handle occupies on hover. Regions are titled sections. */}
@@ -1051,10 +1035,11 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, backLabe
           const blocks = assembled?.regions[r.name] ?? [];
           const allowed = r.allowedTypes && r.allowedTypes.length ? r.allowedTypes : blockTypes.map((b) => b.slug);
           return (
-            // `scroll-mt` clears the two sticky bars above, so the outline's jump lands the
-            // heading under them rather than behind them.
-            <div className="mb-10 scroll-mt-[7rem]" id={regionDomId(r.name)} key={r.name}>
-              <div className="mb-1 text-caption font-medium uppercase tracking-wide text-fg-subtle">{r.label ?? r.name}</div>
+            <div className="mb-10" key={r.name}>
+              {/* Sticky, under the app bar + toolbar: on a long page the heading is the only
+                  thing that says which slot of the layout you are editing, and scrolling used
+                  to take it away. `bg-surface` because it now passes over content. */}
+              <div className={`sticky ${BELOW_PAGE_TOOLBAR} z-10 -mx-2 mb-1 bg-surface px-2 py-1 text-caption font-medium uppercase tracking-wide text-fg-subtle`}>{r.label ?? r.name}</div>
               {blocks.map((b, i) => (
                 <div key={b.id}>
                   {/* Between-blocks insert point — a hover "+" that adds AT index i. */}
@@ -1118,10 +1103,6 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, backLabe
   );
 }
 
-/** The DOM id the outline jumps to. One function, so the anchor and the link agree. */
-function regionDomId(region: string): string {
-  return `region-${region}`;
-}
 
 // A single block, edited inline: the block IS its editor. Fields render in place (rich text
 // as the WYSIWYG, media as a thumbnail picker). Edits are held locally and committed only on
