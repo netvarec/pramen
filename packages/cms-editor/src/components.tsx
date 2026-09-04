@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { Api, ApiError } from "./api";
 import { CONTROL, FieldForm, formatWhen, fromLocalInput, slugify, toLocalInput } from "./fields";
 import { ROW, WRAP } from "./chrome";
+import { useCrumb } from "./breadcrumb";
 import { PageHeader } from "./page-header";
 import type { Config } from "./api";
 import { useApp, type Me } from "./app-context";
@@ -606,6 +607,15 @@ export function CollectionEditor({ api, def, id, onSaved, onDeleted, onBack, onE
   const [values, setValues] = useState<FieldValues>({});
   const [loading, setLoading] = useState(!isNew);
   const [missing, setMissing] = useState(false);
+  // The app bar's trailing crumb. A new row is named before it exists, from the collection's
+  // own singular label; an existing one takes its title field, and `undefined` while that is
+  // still loading leaves the bar showing the section rather than a "Loading…" that then
+  // changes under the reader's eye.
+  // Through `cellText`, the same function the LIST renders this very column with — so the
+  // crumb and the row a reader clicked to get here say the same thing, rather than two
+  // renderings of one `FieldValue` that can disagree about a rich-text or array cell.
+  const title = cellText(values[def.titleField]);
+  useCrumb(isNew ? `New ${def.label.toLowerCase()}` : title || undefined);
   const [busy, setBusy] = useState(false);
   const [ok, setOk] = useState(false);
 
@@ -690,6 +700,10 @@ export function CollectionEditor({ api, def, id, onSaved, onDeleted, onBack, onE
 
 export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange, registerGuard }: { api: Api; page: Page; blockTypes: BlockType[]; tab: InspectorTab; onTab: (t: InspectorTab) => void; onBack: () => void; onChange: (p: Page) => void; registerGuard: (fn: (() => boolean) | null) => void }) {
   const { cms: { multilingual, siteFurniture, canEdit } } = useApp();
+  // The app bar's trailing crumb. This editor has no screen header at all — three columns of
+  // panels under a "← all pages" button — so the trail is the only thing on screen naming
+  // which page is open.
+  useCrumb(page.title);
   const [ct, setCt] = useState<ContentType | null>(null);
   const [assembled, setAssembled] = useState<AssembledPage | null>(null);
   const [err, setErr] = useState("");

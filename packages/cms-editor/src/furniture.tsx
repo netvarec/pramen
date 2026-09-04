@@ -15,6 +15,7 @@ import { useUnsavedGuard } from "./app-context";
 import type { Api } from "./api";
 import { CONTROL, RichText, slugify } from "./fields";
 import { ROW, WRAP } from "./chrome";
+import { useCrumb } from "./breadcrumb";
 import { PageHeader } from "./page-header";
 import type { CollectionMeta, Menu, MenuItem, MenuItemKind, Page, Redirect, RichTextDoc, Taxonomy, Term, Widget, WidgetArea } from "./types";
 import { MAX_MENU_DEPTH, REDIRECT_STATUSES } from "./types";
@@ -161,6 +162,9 @@ export function MenuEditor({ api, name, collections, onBack, onDeleted, onError,
 }) {
   const [menu, setMenu] = useState<Menu | null>(null);
   const [items, setItems] = useState<MenuItem[]>([]);
+  // The app bar's trailing crumb — the menu's LABEL once it has loaded, not the `name` key in
+  // the URL, which is what a layout gets to publish and is not what an editor calls it.
+  useCrumb(menu?.label);
   const [label, setLabel] = useState("");
   // The whole tree is edited locally and written only by "Save menu", so leaving the screen
   // discards it. Nothing prompted before this — `PageEditor` was the only screen that ever

@@ -32,7 +32,9 @@ import { Outlet, useNavigate, useRoute, useRouter } from "@buzola/router";
 import { Avatar, Button, Card, Text, UserMenu, UserMenuItem } from "@podoba/react";
 import { useEffect, useState, type ReactNode } from "react";
 import { useApp, type Me } from "../app-context";
+import { BreadcrumbProvider } from "../breadcrumb";
 import { BRAND } from "../brand";
+import { GroupFoldedIcon as CrumbSeparatorIcon } from "../icons";
 import { pagesHidden, splitsByType } from "../components";
 import { APP_BAR_H } from "../chrome";
 import { DarkThemeIcon, GroupFoldedIcon, GroupOpenIcon, LightThemeIcon, MenuToggleIcon, NAV_GLYPHS, RailToggleIcon, SettingsIcon, SignOutIcon } from "../icons";
@@ -193,8 +195,16 @@ export default function RootLayout() {
   const hidePages = pagesHidden();
   // Same rule as the landing redirect and the page editor's back target — see `splitsByType`.
   const splitByType = splitsByType(contentTypes, cms, hidePages);
-  const sections = navSections(buildNav({ collections, adminPages, contentTypes, cms, hidePages, splitByType, isAdmin, extraNav }));
+  const nav = buildNav({ collections, adminPages, contentTypes, cms, hidePages, splitByType, isAdmin, extraNav });
+  const sections = navSections(nav);
   const labelled = navSectionsAreLabelled(sections);
+  // The section half of the breadcrumb, and the way back to its list. Taken from the entry
+  // that is LIT rather than re-derived from the path: the nav already answered "where am I",
+  // and a second answer computed differently is a second answer that can disagree.
+  const activeEntry = nav.find((e) => e.key === active);
+  const sectionCrumb = activeEntry?.kind === "route" ? activeEntry : undefined;
+  // …and the detail half, published by whatever screen is mounted (see `breadcrumb.tsx`).
+  const [crumb, setCrumb] = useState<string | null>(null);
 
   // See the extraNav comment in `NavLink`. The rules live in `mount.ts` beside the
   // containment they depend on; what this supplies is the URL the BROWSER will resolve a
@@ -341,7 +351,39 @@ export default function RootLayout() {
           >
             <RailToggleIcon className="h-[17px] w-[17px]" />
           </Button>
-          <div className="ml-auto">
+          {/* The trail. The section is a BUTTON while a detail crumb is showing and plain text
+              otherwise — a link to the page you are already on is a link that does nothing,
+              and the only thing more annoying than no breadcrumb is one that lies about being
+              navigable. */}
+          <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1 text-compact">
+            {sectionCrumb ? (
+              crumb ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="max-w-[220px] shrink-0 truncate rounded-md px-2 py-1 text-fg-muted hover:text-fg"
+                  onPress={guarded(() =>
+                    navigate(sectionCrumb.page as never, sectionCrumb.params ? ({ params: sectionCrumb.params } as never) : (undefined as never)),
+                  )}
+                >
+                  {sectionCrumb.label}
+                </Button>
+              ) : (
+                <span className="max-w-[220px] truncate px-2 py-1 text-fg-muted">{sectionCrumb.label}</span>
+              )
+            ) : null}
+            {crumb ? (
+              <>
+                <CrumbSeparatorIcon aria-hidden="true" className="h-3 w-3 shrink-0 text-fg-subtle" />
+                {/* `aria-current="page"` so the trailing crumb is announced as where you are,
+                    not as one more thing to visit. */}
+                <span aria-current="page" className="min-w-0 truncate px-1 py-1 font-medium text-fg">
+                  {crumb}
+                </span>
+              </>
+            ) : null}
+          </nav>
+          <div className="ml-auto pl-4">
             <AccountMenu
               me={me}
               theme={theme}
@@ -358,7 +400,9 @@ export default function RootLayout() {
             </Text>
           </Card>
         ) : null}
-        <Outlet />
+        <BreadcrumbProvider publish={setCrumb}>
+          <Outlet />
+        </BreadcrumbProvider>
       </div>
     </div>
   );
