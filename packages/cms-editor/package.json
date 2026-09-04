@@ -1,7 +1,7 @@
 {
   "name": "@pramen/cms-editor",
   "version": "0.0.62",
-  "description": "Visual block/page editor for @pramen/cms \u2014 a standalone React SPA that talks to the CMS handlers over HTTP.",
+  "description": "Visual block/page editor for @pramen/cms — a standalone React SPA that talks to the CMS handlers over HTTP.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -27,6 +27,7 @@
   },
   "dependencies": {
     "@buzola/router": "^0.0.12",
+    "@phosphor-icons/react": "^2.1.10",
     "@podoba/react": "^0.0.34",
     "@podoba/tailwind": "^0.0.34",
     "@podoba/tokens": "^0.0.34",

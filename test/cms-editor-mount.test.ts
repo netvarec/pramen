@@ -11,7 +11,7 @@ import { Router, buildRouteTree, createMemoryNavigationAdapter, type RouteConfig
 import { describe, expect, test } from "bun:test";
 import { isWithinBasePath, readBackend, readBasePath, resolveBasePath, scopeToBasePath } from "../packages/cms-editor/src/mount";
 
-const BASE = "/_pramen/admin";
+const BASE = "/__admin";
 
 /** The shape that matters from `buzola.gen.ts`: a layout, a couple of pages, and the
  * catch-all `_404.tsx` registers — which is what makes EVERY same-origin path match. */
@@ -63,7 +63,7 @@ describe("cms-editor mount path", () => {
   // them verbatim: `//host` prepends an origin, a query swallows the rest of every href,
   // and a backslash resolves off-site while looking local.
   test("a value that is not a rooted path is refused, not mounted", () => {
-    for (const bad of ["//cdn.example.com", "//admin", "/admin?x=1", "/admin#x", "/admin\\evil", "https://host/admin", "admin", "_pramen/admin"]) {
+    for (const bad of ["//cdn.example.com", "//admin", "/admin?x=1", "/admin#x", "/admin\\evil", "https://host/admin", "admin", "__admin"]) {
       expect(resolveBasePath(bad)).toBe("");
     }
   });
@@ -132,7 +132,7 @@ describe("cms-editor mounted under a prefix", () => {
   // address bar still reads /blog.
   test("navigating OUTSIDE the prefix is left to the browser", async () => {
     const { inner, router, stop } = mount(`http://host${BASE}/`);
-    for (const outside of ["/blog", "/media", "/_pramen/adminmedia", "/"]) {
+    for (const outside of ["/blog", "/media", "/__adminmedia", "/"]) {
       inner.navigate(outside);
       await settle();
       expect(router.getState().location.pathname).toBe(`${BASE}/`);

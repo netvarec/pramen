@@ -2,11 +2,12 @@
 // route modules under `routes/` are thin adapters: they pull `api`/`me`/`setError` from
 // the app context and wire URL params + navigation into these components.
 
-import { Button, Heading, Input, ModalDialog, ModalOverlay, ModalSurface, Textarea } from "@podoba/react";
+import { Button, Dialog, type DialogSize, Input, Textarea } from "@podoba/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Api, ApiError } from "./api";
 import { CONTROL, FieldForm, formatWhen, fromLocalInput, slugify, toLocalInput } from "./fields";
 import { ROW, WRAP } from "./chrome";
+import { PageHeader } from "./page-header";
 import type { Config } from "./api";
 import { useApp, type Me } from "./app-context";
 import { isRichTextDoc, richTextToPlainText } from "./rich-text";
@@ -56,28 +57,25 @@ export function splitsByType(contentTypes: ContentType[] | null, cms: CmsCapabil
 // --- presentational primitives (podoba tokens; replaces styles.ts classes) ---
 
 
-function Hero({ lead, em, children }: { lead: string; em: string; children?: ReactNode }) {
-  return (
-    <div className="mx-auto grid max-w-[1200px] grid-cols-[1fr_auto] items-center gap-6 px-7 pb-6 pt-8 max-[820px]:grid-cols-1">
-      <h1 className="m-0 text-[56px] font-normal leading-[1.05] tracking-[-0.01em] max-[820px]:text-[40px]">
-        <span className="block text-fg-subtle">{lead}</span>
-        <span className="block text-fg">{em}</span>
-      </h1>
-      {children}
-    </div>
-  );
-}
+/** The library screens' header. See `page-header.tsx`; `Hero` stays as the local name the
+ * five call sites below already use. */
+const Hero = PageHeader;
 
-function Cta({ text, em, children }: { text: string; em: string; children: ReactNode }) {
-  return (
-    <div className="flex min-w-[360px] items-center gap-4 rounded-full bg-brand-green py-3 pl-7 pr-3 max-[820px]:min-w-0">
-      <span className="text-callout text-fg-on-brand">
-        {text} <span className="font-semibold">{em}</span>
-      </span>
-      {children}
-    </div>
-  );
-}
+// `Cta` used to live here: a 360px-wide mint pill carrying a sentence ("Let's upload
+// something") wrapped around the actual button. It is gone, and the header's action is now
+// just the button.
+//
+// The header grew a cover (see `Hero`), and a saturated pill on top of it was a panel inside
+// a panel — a second filled surface competing with the artwork for the same corner. The
+// sentence went with it because by then it was the third telling of one fact: the title above
+// says "Media / None yet", the empty state below says "No media yet. Upload images to…", and
+// the button itself says "+ Upload".
+//
+// It also carried a real bug, visible only on the dark theme. The wrapper was `bg-brand-green`
+// (#75e7b8) and podoba maps `brand-primary` — what a default `Button` fills with — onto
+// #75e7b8 in dark. Mint on mint: the button had no edge at all, and read as a run of text.
+// Sitting directly on `surface-card` it has proper contrast in both themes, which is the
+// contrast podoba designed for it.
 
 function Section({ children }: { children: ReactNode }) {
   return <div className="mb-2 mt-[18px] text-sm text-fg-subtle first:mt-0">{children}</div>;
@@ -97,24 +95,36 @@ function Pill({ status, children }: { status?: string; children: ReactNode }) {
   return <span className={`inline-block whitespace-nowrap rounded-full border px-2.5 py-0.5 text-caption font-medium ${tone}`}>{children}</span>;
 }
 
-// Modal chrome on podoba's shared overlay: focus trap, Esc-to-close, backdrop
-// dismiss, the token blur-scrim and enter/exit animation — all for free. The caller
-// API (conditionally mounted + `onClose`) is preserved, so call sites don't change.
-function Modal({ onClose, wide, children }: { onClose: () => void; wide?: boolean; children: ReactNode }) {
+/**
+ * A modal, on podoba's `Dialog`.
+ *
+ * It used to hand-compose `ModalOverlay` + `ModalSurface` + `ModalDialog` with its own
+ * max-widths — the raw primitives podoba documents for "edge-to-edge / split modal
+ * compositions", which a form dialog is not. What that cost was everything `Dialog` puts
+ * around the content: the ✕ (this app's modals could only be left by finding the word
+ * "cancel", or by guessing that Esc works), the labelling `<Heading slot="title">`, the
+ * `description` block, and the size presets — including `full`, the near-fullscreen canvas.
+ *
+ * `size` is passed straight through, so picking a modal's weight is one prop rather than a
+ * `wide` boolean that meant 680px and nothing else.
+ */
+function Modal({
+  onClose,
+  size,
+  title,
+  description,
+  children,
+}: {
+  onClose: () => void;
+  size?: DialogSize;
+  title?: ReactNode;
+  description?: ReactNode;
+  children: ReactNode;
+}) {
   return (
-    <ModalOverlay isOpen isDismissable onOpenChange={(open) => !open && onClose()}>
-      <ModalSurface className={`w-full px-9 py-8 ${wide ? "max-w-[680px]" : "max-w-[520px]"}`}>
-        <ModalDialog className="max-h-[86vh] overflow-auto outline-none">{children}</ModalDialog>
-      </ModalSurface>
-    </ModalOverlay>
-  );
-}
-
-function ModalTitle({ children }: { children: ReactNode }) {
-  return (
-    <Heading level="1" className="mb-5 font-normal">
+    <Dialog isOpen isDismissable size={size} title={title} description={description} onOpenChange={(open) => !open && onClose()}>
       {children}
-    </Heading>
+    </Dialog>
   );
 }
 
@@ -218,9 +228,7 @@ export function PageList({ api, type, onOpen, onError }: { api: Api; type?: Cont
   return (
     <>
       <Hero lead={type?.name ?? "Pages"} em={loading && pages.length === 0 ? "Loading…" : count}>
-        <Cta text="Let's" em="create something">
-          <Button className="shrink-0" onPress={() => setCreating(true)}>+ New page</Button>
-        </Cta>
+        <Button className="shrink-0" onPress={() => setCreating(true)}>+ New page</Button>
       </Hero>
       <div className={WRAP}>
         <div className="flex flex-col gap-2">
@@ -272,15 +280,27 @@ function CreatePage({ api, type, onClose, onCreated, onError }: { api: Api; type
     }
   };
   return (
-    <Modal onClose={onClose}>
-      {/* Name the type when the picker is hidden. Otherwise the whole modal says "page" and
-          nothing on it says WHICH type the page is being filed under — on a per-type list
-          that is the one fact the screen is supposed to be carrying. */}
-      <ModalTitle>
-        Create a <Dim>new page</Dim>
-        {type ? <> in <Dim>{type.name}</Dim></> : null} and define the essentials<Dim>.</Dim>
-      </ModalTitle>
-      <div className="flex flex-col gap-4">
+    // `full`: creating a page is the one thing this screen exists to start, and the header's
+    // action should open a room rather than a panel. The form is centred and capped inside it
+    // — a canvas is what the takeover is for, not a reason to stretch two inputs across it.
+    //
+    // Name the type when the picker is hidden. Otherwise the whole modal says "page" and
+    // nothing on it says WHICH type the page is being filed under — on a per-type list that is
+    // the one fact the screen is supposed to be carrying.
+    <Modal
+      onClose={onClose}
+      size="full"
+      title={
+        <>
+          Create a <Dim>new page</Dim>
+          {type ? <> in <Dim>{type.name}</Dim></> : null} and define the essentials<Dim>.</Dim>
+        </>
+      }
+    >
+      {/* `m-auto`, not `mx-auto`: `size="full"` makes the dialog body a flex column, so auto
+          margins on both axes centre the form IN the canvas. Pinned to the top it read as a
+          small form that had lost its modal. */}
+      <div className="m-auto flex w-full max-w-[560px] flex-col gap-4">
         <div className={`w-full flex-col gap-2 ${type ? "hidden" : "flex"}`}>
           <span className="text-sm font-medium text-fg">Content type</span>
           {/* Visible cards, not a dropdown: the type is an easy-to-miss choice, and picking the
@@ -373,9 +393,7 @@ export function CollectionList({ api, def, onOpen, onNew, onError }: { api: Api;
   return (
     <>
       <Hero lead={def.pluralLabel} em={rows.length === 0 ? "None yet" : rows.length === 1 ? `1 ${def.label.toLowerCase()}` : `${rows.length}${hasMore ? "+" : ""} ${def.pluralLabel.toLowerCase()}`}>
-        <Cta text="Let's" em={`add a ${def.label.toLowerCase()}`}>
-          <Button className="shrink-0" onPress={onNew}>+ New {def.label.toLowerCase()}</Button>
-        </Cta>
+        <Button className="shrink-0" onPress={onNew}>+ New {def.label.toLowerCase()}</Button>
       </Hero>
       <div className={WRAP}>
         <div className="flex flex-col gap-2">
@@ -829,7 +847,11 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
   return (
     // With no regions the left rail would be a 260px column holding just a back button,
     // so it collapses and the content column takes the space.
-    <div className={`grid min-h-[calc(100vh-68px)] gap-5 px-7 pb-7 pt-2 max-[820px]:grid-cols-1 ${regions.length ? "grid-cols-[260px_1fr_400px]" : "grid-cols-[1fr_400px]"}`}>
+    //
+    // The height budget is what the chrome above this takes: below `md` that is the
+    // sidebar's collapsed brand row (`h-14`, 56px), and from `md` up the nav is a COLUMN
+    // beside this one, so there is nothing above it and the editor gets the whole viewport.
+    <div className={`grid min-h-[calc(100vh-56px)] gap-5 px-7 pb-7 pt-2 max-[820px]:grid-cols-1 md:min-h-screen ${regions.length ? "grid-cols-[260px_1fr_400px]" : "grid-cols-[1fr_400px]"}`}>
       {regions.length === 0 ? null : (
       <div className="overflow-auto rounded-panel bg-surface-muted p-[18px]">
         <Button variant="ghost" size="sm" onPress={() => { if (confirmLeave()) onBack(); }}>← all pages</Button>
@@ -1524,6 +1546,9 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
   const [hasMore, setHasMore] = useState(false);
   const [selected, setSelected] = useState<Media | null>(null);
   const [busy, setBusy] = useState(false);
+  // The file input the header's Upload button drives. It stays in the DOM (hidden) rather
+  // than being created per click, so the picker's `change` handler is the ordinary React one.
+  const fileInput = useRef<HTMLInputElement>(null);
   // Trashed files. Deleting no longer removes the R2 object, so without this the bytes stay
   // publicly fetchable with no way to reach purgeMedia — the case a takedown request needs.
   const [trash, setTrash] = useState<Media[]>([]);
@@ -1584,12 +1609,15 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
   return (
     <>
       <Hero lead="Media" em={media.length === 0 ? "None yet" : media.length === 1 ? "1 file" : `${media.length}${hasMore ? "+" : ""} files`}>
-        <Cta text="Let's" em="upload something">
-          <label className={`inline-flex shrink-0 cursor-pointer items-center rounded-full bg-surface-inverted px-6 py-3 text-compact text-fg-inverted ${busy ? "pointer-events-none opacity-50" : ""}`}>
-            {busy ? "Uploading…" : "+ Upload"}
-            <input type="file" multiple hidden disabled={busy} onChange={(e) => { upload(e.target.files); e.target.value = ""; }} />
-          </label>
-        </Cta>
+        {/* A real `Button` driving a hidden input, not a `<label>` painted to look like one.
+            The lookalike had to restate podoba's primary fill by hand, and once the mint
+            wrapper was gone the two "primary" actions in this app were visibly different
+            colours on the dark theme — `surface-inverted` (cream) here, `brand-primary`
+            (mint) everywhere else. */}
+        <input ref={fileInput} type="file" multiple hidden disabled={busy} onChange={(e) => { upload(e.target.files); e.target.value = ""; }} />
+        <Button className="shrink-0" isDisabled={busy} onPress={() => fileInput.current?.click()}>
+          {busy ? "Uploading…" : "+ Upload"}
+        </Button>
       </Hero>
       <div className={WRAP}>
         {media.length === 0 ? (
@@ -1678,8 +1706,7 @@ function MediaDetail({ api, media, onClose, onSaved, onDeleted, onError }: { api
   };
 
   return (
-    <Modal onClose={onClose} wide>
-      <ModalTitle><Dim>Media</Dim> {media.file.filename ?? ""}</ModalTitle>
+    <Modal onClose={onClose} size="lg" title={<><Dim>Media</Dim> {media.file.filename ?? ""}</>}>
       {isImage(media) ? (
         <img className="mx-auto mb-3.5 block max-h-[340px] max-w-full rounded-lg bg-surface-muted object-contain" src={url} alt={media.alt ?? ""} />
       ) : (
@@ -1761,9 +1788,7 @@ export function UsersView({ api, me, onError }: { api: Api; me: Me | null; onErr
   return (
     <>
       <Hero lead="Users" em={users.length === 0 ? "None yet" : users.length === 1 ? "1 account" : `${users.length} accounts`}>
-        <Cta text="Let's" em="invite someone">
-          <Button className="shrink-0" onPress={() => setInviting(true)}>+ Invite</Button>
-        </Cta>
+        <Button className="shrink-0" onPress={() => setInviting(true)}>+ Invite</Button>
       </Hero>
       <div className={WRAP}>
         <div className="flex flex-col gap-2">
@@ -1841,9 +1866,11 @@ function InviteUser({ api, onClose, onInvited, onError }: { api: Api; onClose: (
     }
   };
   return (
-    <Modal onClose={onClose}>
-      <ModalTitle>Invite an <Dim>editor</Dim> or teammate</ModalTitle>
-      <p className="-mt-2 mb-4 text-fg-subtle">They&apos;ll get a one-time magic link that logs them in and creates their account.</p>
+    <Modal
+      onClose={onClose}
+      title={<>Invite an <Dim>editor</Dim> or teammate</>}
+      description="They'll get a one-time magic link that logs them in and creates their account."
+    >
       <div className="flex flex-col gap-4">
         <Input label="Email" type="email" autoFocus value={email} onChange={setEmail} placeholder="them@example.com" />
         <Input label="Roles (comma-separated — e.g. editor, reviewer, admin)" value={roles} onChange={setRoles} placeholder="editor" />

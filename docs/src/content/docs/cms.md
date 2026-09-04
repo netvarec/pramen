@@ -270,9 +270,34 @@ widget is resolved inline by `getWidgetArea`, so a whole sidebar is one call.
 
 ### Nav placement
 
-The editor's primary nav is ordered by a number, not by the sequence it is written in. Every
-built-in has a position in `NAV_ORDER` (spaced 100 apart), and a collection or a host link
-can declare its own:
+The editor's primary nav is a **left sidebar**, shaped like Notion's: its own ground tone, a
+dense icon-and-label row per destination, and collapsible groups. It was a row of tabs in the
+topbar, which stopped working at about the point a real deployment reaches — Pages (or one
+tab per content type), N collections, Media, Menus, Taxonomies, Widgets, Redirects, any
+Block Kit page, Types, Users, Settings and whatever `extraNav` adds is a dozen-plus
+destinations, and past six or seven the tabs became a dense ribbon and then a horizontal
+scroller, i.e. a nav you have to scroll to discover. A column holds all of them at once.
+Below `md` it collapses to a disclosure under the wordmark.
+
+The groups — **Content**, **Site**, **Apps**, **System** — are bands of `order`, not a
+hand-written list of sections, so the one contract below still decides everything: an entry
+placed at 250 is Content, at 450 it is Site. Groups with nothing in them are not rendered,
+and a deployment with only one group gets no headings at all.
+
+Each group **folds**, and the fold is remembered per browser (`localStorage`). That is the
+"put some of it behind a submenu" answer without the click a submenu costs on the way *in*:
+everything stays one click away by default, and a deployment that never opens Site or System
+folds them away once.
+
+Each row carries an icon, from [Phosphor](https://phosphoricons.com) at regular weight — one
+family, chosen because at 15px an icon has to survive as a silhouette. A collection or a Block
+Kit page that declares its own (`icon: "🎓"`) gets it in the icon column instead — it used to
+be prepended to the label, where it read as part of the words — and anything that declares
+none gets its section's glyph.
+
+The nav is ordered by a number, not by the sequence it is written in. Every built-in has a
+position in `NAV_ORDER` (spaced 100 apart), and a collection or a host link can declare its
+own:
 
 ```ts
 import { NAV_ORDER, collection } from "@pramen/cms";
@@ -405,7 +430,7 @@ schema-driven field forms (incl. a media picker, date/datetime pickers, repeater
 and inspector panels for SEO / workflow / i18n / audit. It mutates through the semantic
 handlers (so all validation and gates apply).
 
-**Your Astro site serves it**, at `/_pramen/admin` — one line in the integration:
+**Your Astro site serves it**, at `/__admin` — one line in the integration:
 
 ```js
 pramenCms({ backend: { url: "https://cms.example.workers.dev" }, admin: true })
@@ -422,6 +447,15 @@ This moves where the editor is SERVED, not where the API lives: it still calls
 `backend.url`, so a CMS on its own Worker remains cross-origin and still needs
 `CORS_ORIGINS` set to your site. Co-deploy the CMS into the site's Worker and that goes
 away too.
+
+**Signing in is the SITE's job.** The editor verifies a bearer token and knows nothing about
+how one is obtained — that is what keeps it BYO-IdP — so a real deployment points it at its
+own screen with `admin: { signInUrl: "/admin/sign-in" }`, and that page calls `login` (or
+`loginWithMagicLink`), writes the token into `localStorage["pramen.cmsEditor"]`, and
+redirects into the editor. `example/site/src/pages/admin/sign-in.astro` is the whole pattern
+in one file. Without `signInUrl` the built-in screen asks for an editor/reviewer JWT instead,
+which `/__admin?setup=1` always forces — the way in when there is no account to sign in as
+yet.
 
 `admin` also carries the editor's own configuration, replacing the old `/config.js`:
 

@@ -1,6 +1,6 @@
 ---
 /**
- * The CMS editor's shell — injected at `/_pramen/admin/[...path]` by
+ * The CMS editor's shell — injected at `/__admin/[...path]` by
  * `pramenCms({ admin: … })`. See `admin.ts` for why this is a route and not an index.html.
  *
  * Everything the SPA needs to boot, and nothing it could get wrong:
@@ -13,7 +13,7 @@
  *  - The runtime config is an inline script written from typed integration options, ahead
  *    of the module script that reads it.
  *
- * A catch-all pattern, so `/_pramen/admin/pages/:id` is a real server route: a deep link or
+ * A catch-all pattern, so `/__admin/pages/:id` is a real server route: a deep link or
  * a refresh is served like any other page, with no SPA-fallback rewrite for the host to
  * configure (and to get wrong for its own 404s).
  */

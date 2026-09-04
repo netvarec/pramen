@@ -44,6 +44,7 @@
     "oblaka-iac": "^0.0.16",
     "oxlint": "1.79.0",
     "react": "^19.0.0",
+    "react-dom": "^19.0.0",
     "typescript": "^5.7.0",
     "wrangler": "^4.101.0"
   }

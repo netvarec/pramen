@@ -15,6 +15,7 @@ import { useUnsavedGuard } from "./app-context";
 import type { Api } from "./api";
 import { CONTROL, RichText, slugify } from "./fields";
 import { ROW, WRAP } from "./chrome";
+import { PageHeader } from "./page-header";
 import type { CollectionMeta, Menu, MenuItem, MenuItemKind, Page, Redirect, RichTextDoc, Taxonomy, Term, Widget, WidgetArea } from "./types";
 import { MAX_MENU_DEPTH, REDIRECT_STATUSES } from "./types";
 
@@ -23,16 +24,10 @@ export function errText(e: unknown): string {
   return String((e as Error)?.message ?? e);
 }
 
-function Head({ lead, em, children }: { lead: string; em: string; children?: React.ReactNode }) {
-  return (
-    <div className="mb-6 mt-6 flex items-end justify-between gap-6 max-[820px]:flex-col max-[820px]:items-start">
-      <h1 className="m-0 text-[40px] font-normal leading-[1.1] tracking-[-0.01em]">
-        <span className="block text-fg-subtle">{lead}</span>
-        <span className="block text-fg">{em}</span>
-      </h1>
-      {children}
-    </div>
-  );
+/** The site-furniture screens' header — the same panel as the library screens, at the
+ * quieter type scale these have always used. See `page-header.tsx`. */
+function Head(props: { lead: string; em: string; children?: React.ReactNode }) {
+  return <PageHeader {...props} size="md" />;
 }
 
 function Saved() {

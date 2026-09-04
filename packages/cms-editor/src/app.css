@@ -10,3 +10,51 @@
  * it explicitly (paths are relative to this file). */
 @source "./**/*.{ts,tsx}";
 @source "../node_modules/@podoba/react/src/**/*.{ts,tsx}";
+
+/* Buttons look clickable.
+ *
+ * podoba's `Button` sets no `cursor`, and a real `<button>` gets the default arrow from the
+ * UA sheet — so every button in this app has been showing an arrow, which reads as "not
+ * interactive" to anyone who has used the web. It went unnoticed while the header's Upload
+ * control was a hand-styled `<label>` carrying its own `cursor-pointer`; swapping that for the
+ * design system's Button is what surfaced it.
+ *
+ * In the BASE layer on purpose: Tailwind emits utilities after base, so a component that means
+ * something else by its cursor still wins — podoba's own `data-[pending]:cursor-progress` on a
+ * submitting button, for one. Scoped away from disabled controls, where an arrow is the
+ * correct signal.
+ *
+ * The right home for this is @podoba/react's Button. Until it lands there, one rule here
+ * covers the app rather than every call site remembering. */
+@layer base {
+  button:not(:disabled):not([aria-disabled="true"]),
+  [role="button"]:not([aria-disabled="true"]),
+  label:has(> input[type="file"]) {
+    cursor: pointer;
+  }
+}
+
+/* Turn OFF scroll anchoring for the page scroller.
+ *
+ * This is the fix for a self-referential loop, not a preference. The screen header condenses
+ * once the page is scrolled, which removes ~134px of layout ABOVE the viewport — and scroll
+ * anchoring exists precisely to compensate for that, so the browser silently subtracts the
+ * same 134px from `scrollY` to keep the visible content still. That new scroll position is an
+ * input to the condition that condensed the header, so it flips back, restores the 134px, and
+ * the browser gives the scroll offset back: the header oscillates while the reader is not
+ * touching anything. Hysteresis alone cannot fix it — the compensation is the same size as the
+ * change, so the dead band would have to be wider than the collapse itself, which just moves
+ * the loop further down the page.
+ *
+ * What anchoring buys HERE is close to nothing, which is what makes this trade cheap: the
+ * lists load in explicit "load more" pages appended BELOW the viewport, and every media cell is
+ * a fixed 130px box, so no image settling reflows content above where you are reading.
+ *
+ * On the scroller, because that is the only place it works — `overflow-anchor: none` on an
+ * element merely excludes THAT element from being chosen as the anchor, and the header is not
+ * the anchor here; the list below it is. */
+@layer base {
+  html {
+    overflow-anchor: none;
+  }
+}

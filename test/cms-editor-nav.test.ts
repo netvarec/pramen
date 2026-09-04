@@ -9,7 +9,7 @@
 // ordering rule is a pure function of the session's facts, and a DOM adds nothing to it.
 
 import { describe, expect, test } from "bun:test";
-import { buildNav, type NavInput } from "../packages/cms-editor/src/nav";
+import { buildNav, NAV_SECTION_IDS, navSections, navSectionsAreLabelled, type NavInput } from "../packages/cms-editor/src/nav";
 import { DEFAULT_CAPABILITIES, NAV_ORDER, type CollectionMeta, type ContentType } from "../packages/cms-editor/src/types";
 
 const TYPES: ContentType[] = [
@@ -115,5 +115,150 @@ describe("what the nav shows at all", () => {
   test("hiding the page builder hides Pages and Types with it", () => {
     const keys = nav({ hidePages: true, collections: [col("lectures")] });
     expect(keys).toEqual(["col:lectures", "media", "settings"]);
+  });
+});
+
+// --- icons ------------------------------------------------------------------------------
+
+/** The full entry objects, not just the keys — the icon tests are about the payload. */
+const entries = (over: Partial<NavInput> = {}) =>
+  buildNav({
+    collections: [],
+    adminPages: [],
+    contentTypes: TYPES,
+    cms: { ...DEFAULT_CAPABILITIES, canEdit: false },
+    hidePages: false,
+    splitByType: false,
+    isAdmin: false,
+    extraNav: [],
+    ...over,
+  });
+
+describe("nav icons", () => {
+  test("every entry carries one, so the rail has no ragged icon column", () => {
+    // A missing icon is not a missing decoration: the label would start where every other
+    // label's ICON starts, and the column stops reading as a column.
+    const all = entries({
+      collections: [col("lectures")],
+      adminPages: [{ slug: "dispatch", label: "Dispatch" }],
+      cms: { ...DEFAULT_CAPABILITIES, siteFurniture: true, canEdit: true },
+      isAdmin: true,
+      extraNav: [{ label: "Curate", href: "/curate" }],
+    });
+    expect(all.length).toBeGreaterThan(8);
+    for (const e of all) expect(e.icon).toBeDefined();
+  });
+
+  test("a server-declared icon goes in the ICON slot, not into the label", () => {
+    // It used to be prepended to the label, where it read as part of the words and wrapped
+    // with them. Two assertions, because getting the icon right while leaving the emoji in
+    // the label would render it twice.
+    const [, lectures] = entries({ collections: [{ ...col("lectures"), icon: "🎓", pluralLabel: "Lectures" }] });
+    expect(lectures?.icon).toEqual({ kind: "emoji", char: "🎓" });
+    expect(lectures?.kind === "route" ? lectures.label : "").toBe("Lectures");
+  });
+
+  test("a Block Kit page's icon works the same way", () => {
+    const page = entries({ adminPages: [{ slug: "dispatch", label: "Dispatch", icon: "🚚" }] }).find((e) => e.key === "app:dispatch");
+    expect(page?.icon).toEqual({ kind: "emoji", char: "🚚" });
+    expect(page?.kind === "route" ? page.label : "").toBe("Dispatch");
+  });
+
+  test("with no declared icon the section's own glyph stands in", () => {
+    expect(entries({ collections: [col("lectures")] })[1]?.icon).toEqual({ kind: "glyph", name: "collection" });
+    expect(entries({ adminPages: [{ slug: "dispatch", label: "Dispatch" }] }).find((e) => e.key === "app:dispatch")?.icon)
+      .toEqual({ kind: "glyph", name: "app" });
+  });
+
+  test("a blank declared icon is not an icon", () => {
+    // `icon: ""` (or a whitespace string) is what a template that resolved to nothing
+    // produces; an empty box in the icon column is worse than the glyph it replaced.
+    expect(entries({ collections: [{ ...col("lectures"), icon: "  " }] })[1]?.icon).toEqual({ kind: "glyph", name: "collection" });
+  });
+});
+
+// --- sections ---------------------------------------------------------------------------
+
+const sections = (over: Partial<NavInput> = {}) =>
+  navSections(entries(over)).map((s) => [s.id, ...s.entries.map((e) => e.key)]);
+
+describe("nav sections", () => {
+  test("the built-ins group the way a reader would look for them", () => {
+    expect(
+      sections({
+        collections: [col("lectures")],
+        adminPages: [{ slug: "dispatch", label: "Dispatch" }],
+        cms: { ...DEFAULT_CAPABILITIES, siteFurniture: true, canEdit: true },
+        isAdmin: true,
+      }),
+    ).toEqual([
+      ["content", "pages", "col:lectures", "media"],
+      ["site", "menus", "taxonomies", "widgets", "redirects"],
+      ["apps", "app:dispatch"],
+      ["system", "types", "users", "settings"],
+    ]);
+  });
+
+  test("an empty section is dropped, not rendered as a heading over nothing", () => {
+    // The common deployment: no site furniture, no Block Kit pages.
+    expect(sections()).toEqual([["content", "pages", "media"], ["system", "settings"]]);
+  });
+
+  test("a section is where its ORDER says, not where its kind says", () => {
+    // The one contract this module has is that position is a number a host sets. A
+    // collection placed before Pages is Content; one placed among the furniture is Site.
+    expect(sections({ collections: [col("lectures", NAV_ORDER.menus + 10)] })).toEqual([
+      ["content", "pages", "media"],
+      ["site", "col:lectures"],
+      ["system", "settings"],
+    ]);
+    expect(sections({ extraNav: [{ label: "Curate", href: "/curate", order: NAV_ORDER.adminPages + 10 }] })).toEqual([
+      ["content", "pages", "media"],
+      ["apps", "extra:/curate|Curate"],
+      ["system", "settings"],
+    ]);
+  });
+
+  test("a host link with no order lands in System, where it has always rendered last", () => {
+    expect(sections({ extraNav: [{ label: "Curate", href: "/curate" }] })).toEqual([
+      ["content", "pages", "media"],
+      ["system", "settings", "extra:/curate|Curate"],
+    ]);
+  });
+
+  test("headings appear only once there is more than one group to tell apart", () => {
+    // A single heading over the whole rail captions a list with no sibling to distinguish
+    // it from. A collections-only deployment genuinely is one group.
+    const collectionsOnly = navSections(entries({ hidePages: true, collections: [col("lectures")] }));
+    expect(collectionsOnly.map((s) => s.id)).toEqual(["content", "system"]);
+    expect(navSectionsAreLabelled(collectionsOnly)).toBe(true);
+    expect(navSectionsAreLabelled([{ id: "content", label: "Content", entries: [] }])).toBe(false);
+  });
+});
+
+describe("section ids", () => {
+  test("every band is enumerated, in rail order", () => {
+    // The layout persists FOLDS by id and parses what comes back out of localStorage against
+    // this list. A band missing here is a group that can never stay folded; an id here with
+    // no band is one the reader can fold and never unfold.
+    expect(NAV_SECTION_IDS).toEqual(["content", "site", "apps", "system"]);
+  });
+
+  test("the ids cover every section the nav can actually produce", () => {
+    // Derived from the same `BANDS` the grouping uses, so this is an identity — asserted
+    // because the two would otherwise be free to drift into a group with no id.
+    const produced = navSections(
+      buildNav({
+        collections: [col("lectures")],
+        adminPages: [{ slug: "dispatch", label: "Dispatch" }],
+        contentTypes: TYPES,
+        cms: { ...DEFAULT_CAPABILITIES, siteFurniture: true, canEdit: true },
+        hidePages: false,
+        splitByType: false,
+        isAdmin: true,
+        extraNav: [],
+      }),
+    ).map((s) => s.id);
+    expect(produced).toEqual([...NAV_SECTION_IDS]);
   });
 });

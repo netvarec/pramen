@@ -13,6 +13,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { ADMIN_BASE } from "../packages/cms-astro/src/admin";
 
 const ROOT = join(import.meta.dir, "..");
 const SITE = join(ROOT, "example/site");
@@ -20,7 +21,12 @@ const CMS_PORT = 8790;
 const SITE_PORT = 8791;
 const SITE_BASE = `http://localhost:${SITE_PORT}`;
 const CMS_URL = `http://localhost:${CMS_PORT}`;
-const ADMIN = "/_pramen/admin";
+// IMPORTED, not written out again. A second copy of the mount path is a second thing to
+// remember to change, and the one time it was one, the whole admin half of this file went red
+// against a site that was serving the editor perfectly well. `cms-astro-integration.test.ts`
+// is where the literal value is pinned; here it only has to be the SAME value the integration
+// injected.
+const ADMIN = ADMIN_BASE;
 
 /** One published article, in the shape `getPage` returns. */
 const PAGE = {

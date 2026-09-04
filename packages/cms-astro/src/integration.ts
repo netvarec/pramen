@@ -62,7 +62,7 @@ export interface PramenCmsOptions {
   /** Restrict every generated collection to one locale. Omit to load all of them. */
   locale?: string;
   /**
-   * Serve the visual editor from this site, at `/_pramen/admin`.
+   * Serve the visual editor from this site, at `/__admin`.
    *
    * `true` mounts it against the same `backend` the collections load from; an object also
    * carries the editor's own configuration (`brand`, `signInUrl`, `hidePages`, `extraNav`).
