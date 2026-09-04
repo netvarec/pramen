@@ -25,11 +25,10 @@ export function errText(e: unknown): string {
   return String((e as Error)?.message ?? e);
 }
 
-/** The site-furniture screens' header — the same panel as the library screens, at the
- * quieter type scale these have always used. See `page-header.tsx`. */
-function Head(props: { lead: string; em: string; children?: React.ReactNode }) {
-  return <PageHeader {...props} size="md" />;
-}
+/** The site-furniture screens' header. `Head` stays as the local name the four call sites
+ * below already use; it is the same component, at the same scale, as every other screen —
+ * see the note in `page-header.tsx` about why the smaller variant went away. */
+const Head = PageHeader;
 
 function Saved() {
   return <div className="rounded-lg border border-brand-green bg-brand-green/20 px-3.5 py-2.5 text-small text-fg">saved</div>;
@@ -80,9 +79,10 @@ export function MenusView({ api, onOpen, onError, canEdit }: { api: Api; onOpen:
   };
 
   return (
-    <div className={WRAP}>
+    <>
       <Head lead="Navigation" em={menus === null ? "Menus" : menus.length === 1 ? "1 menu" : `${menus.length} menus`} />
-      <div className="flex flex-col gap-2">
+      <div className={WRAP}>
+        <div className="flex flex-col gap-2">
         {menus === null ? <p className="text-fg-subtle">Loading…</p> : null}
         {menus?.length === 0 ? <p className="text-fg-subtle">No menus yet. A menu is read by name — <code>getMenu(&quot;primary&quot;)</code> — from your layout.</p> : null}
         {(menus ?? []).map((m) => (
@@ -106,7 +106,8 @@ export function MenusView({ api, onOpen, onError, canEdit }: { api: Api; onOpen:
           <Button className="mt-3" onPress={create} isDisabled={busy || !label.trim() || !name.trim()}>Create menu</Button>
         </div>
       ) : null}
-    </div>
+      </div>
+    </>
   );
 }
 
@@ -439,9 +440,10 @@ export function RedirectsView({ api, onError, canEdit }: { api: Api; onError: (s
   };
 
   return (
-    <div className={WRAP}>
+    <>
       <Head lead="Old URLs, kept alive" em={rows === null ? "Redirects" : rows.length === 1 ? "1 redirect" : `${rows.length} redirects`} />
-      <p className="mb-4 max-w-[62ch] text-sm text-fg-muted">
+      <div className={WRAP}>
+        <p className="mb-4 max-w-[62ch] text-sm text-fg-muted">
         Changing a page&apos;s slug changes a live URL and breaks every link to it. A redirect is how the old one keeps working.
         Disabling one keeps the record of what the old URL was, which deleting it does not.
       </p>
@@ -485,7 +487,8 @@ export function RedirectsView({ api, onError, canEdit }: { api: Api; onError: (s
           <Button className="mt-3" onPress={create} isDisabled={busy || !from.trim() || !to.trim()}>Add redirect</Button>
         </div>
       ) : null}
-    </div>
+      </div>
+    </>
   );
 }
 
@@ -514,9 +517,10 @@ export function TaxonomiesView({ api, onOpen, onError, canEdit }: { api: Api; on
   };
 
   return (
-    <div className={WRAP}>
+    <>
       <Head lead="How this site" em="is classified" />
-      <p className="mb-4 max-w-[62ch] text-sm text-fg-muted">
+      <div className={WRAP}>
+        <p className="mb-4 max-w-[62ch] text-sm text-fg-muted">
         A vocabulary is a way of grouping pages — categories, tags, regions. There are no built-in ones:
         a deployment declares what it sorts by, the same way it declares its content types.
       </p>
@@ -548,7 +552,8 @@ export function TaxonomiesView({ api, onOpen, onError, canEdit }: { api: Api; on
           <Button className="mt-3" onPress={create} isDisabled={busy || !label.trim() || !slug.trim()}>Create vocabulary</Button>
         </div>
       ) : null}
-    </div>
+      </div>
+    </>
   );
 }
 
@@ -705,9 +710,10 @@ export function WidgetAreasView({ api, onOpen, onError, canEdit }: { api: Api; o
   };
 
   return (
-    <div className={WRAP}>
+    <>
       <Head lead="Parts of the layout" em="you can fill in" />
-      <p className="mb-4 max-w-[62ch] text-sm text-fg-muted">
+      <div className={WRAP}>
+        <p className="mb-4 max-w-[62ch] text-sm text-fg-muted">
         A widget area is a named slot in your layout — a sidebar, a footer column — that an editor fills without touching code.
         Your layout reads one by name: <code>getWidgetArea(&quot;sidebar&quot;)</code>.
       </p>
@@ -735,7 +741,8 @@ export function WidgetAreasView({ api, onOpen, onError, canEdit }: { api: Api; o
           <Button className="mt-3" onPress={create} isDisabled={busy || !label.trim() || !name.trim()}>Create widget area</Button>
         </div>
       ) : null}
-    </div>
+      </div>
+    </>
   );
 }
 
