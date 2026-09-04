@@ -29,3 +29,15 @@ export const APP_BAR_H = "h-11";
 
 /** …and the sticky offset anything pinned beneath it must use. Same 44px. */
 export const BELOW_APP_BAR = "top-11";
+
+// --- the page editor's own toolbar ---------------------------------------------------------
+//
+// Same "two classes for one number" rule as the app bar above, one level deeper. The editor's
+// toolbar is sticky BELOW the app bar, and the inspector column is sticky below THAT — three
+// elements, two of which need to know the height of what is above them.
+
+/** The page editor's toolbar height. */
+export const PAGE_TOOLBAR_H = "h-14";
+
+/** …and the offset for anything pinned beneath it: the app bar (44px) plus the toolbar (56). */
+export const BELOW_PAGE_TOOLBAR = "top-[6.25rem]";

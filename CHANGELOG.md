@@ -155,6 +155,41 @@ there are no backward-compatibility guarantees yet.
   Nothing to migrate — a new table is additive, `migrate()` creates it, and `appliesTo` is a
   nullable `ADD COLUMN`.
 
+- **The page editor is rebuilt around a toolbar (`@pramen/cms-editor`).** It opened onto
+  three columns of panels with no header, and everything you came to do was somewhere you
+  would not look for it.
+
+  **Publishing was behind a tab called "workflow"** — a lowercase ghost button among five that
+  read as filter chips, so the point of the screen required knowing that word. The transitions
+  now live in a sticky toolbar beside the status they act on: the obvious next move is the
+  primary button (Publish on a draft, Approve on one in review, Unpublish on a live page) and
+  the rest are in a `⋯` menu. `pageWorkflowActions(status)` is a pure table, so that ORDER is
+  asserted rather than read out of a component.
+
+  **There were three save models on one screen**: an unlabelled "Save" on the canvas, an
+  identically unlabelled one in the inspector saving the other half, and blocks in between
+  autosaving silently. The page's own fields are content, exactly like a block, so they
+  autosave on the same 800 ms debounce and the toolbar carries one line of truth about it.
+  Title and slug keep an explicit **Save settings** — a slug is the page's URL, and autosaving
+  one keystroke at a time would publish `/ab`, `/abo`, `/abou` and race the uniqueness check on
+  each — now disabled until something actually differs.
+
+  **The title appeared three times** (app-bar crumb, a rail card, the inspector) and the status
+  twice. The rail card and the inspector's status row are gone, and the editor no longer
+  publishes a detail crumb: the toolbar names the page.
+
+  **The 260px left rail held three lines you could not click.** It is now an outline that jumps
+  to a region, and it renders only when there is more than one region to navigate between —
+  with a single region it described a canvas that was already showing everything.
+
+  Smaller, in passing: the page-fields heading says "Page fields", because a region is very
+  often named `content` and the two headings sat one above the other both reading CONTENT;
+  inspector tabs are a real tab strip with written-out labels (a CSS `capitalize` rendered
+  "seo" as "Seo"); the back button names its destination, which on a per-type deployment is
+  that type's list and not a pooled "Pages" the deployment does not have; and a breadcrumb
+  separator no longer leads the trail when a screen publishes a detail crumb from a route no
+  nav entry matches.
+
 - **Preview links reach a page you can actually look at (`@pramen/cms-editor`,
   `@pramen/cms-astro`, `example/site`).** Two halves were missing and the feature fell through
   the gap between them.

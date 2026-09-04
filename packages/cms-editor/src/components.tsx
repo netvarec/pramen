@@ -6,7 +6,7 @@ import { Button, Dialog, type DialogSize, DropdownMenu, DropdownMenuItem, Dropdo
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Api, ApiError } from "./api";
 import { CONTROL, FieldForm, formatWhen, fromLocalInput, slugify, toLocalInput } from "./fields";
-import { ROW, WRAP } from "./chrome";
+import { BELOW_APP_BAR, BELOW_PAGE_TOOLBAR, PAGE_TOOLBAR_H, ROW, WRAP } from "./chrome";
 import { useCrumb } from "./breadcrumb";
 import { PageHeader } from "./page-header";
 import { pagePreviewHref, sitePreviewUrl } from "./preview";
@@ -17,8 +17,59 @@ import { flattenTerms } from "./furniture";
 import type { AssembledPage, AuditEntry, BlockType, CmsCapabilities, CollectionMeta, ContentType, FieldDefinition, FieldValue, FieldValues, Media, MediaKind, MediaSort, Page, RegionDefinition, RenderedBlock, Taxonomy, Term } from "./types";
 import { MEDIA_KIND_LABELS, MEDIA_KINDS, MEDIA_SORT_LABELS, MEDIA_SORTS } from "./types";
 
-export type InspectorTab = "settings" | "seo" | "workflow" | "i18n" | "terms" | "audit";
-export const INSPECTOR_TABS: InspectorTab[] = ["settings", "seo", "workflow", "i18n", "terms", "audit"];
+export type InspectorTab = "settings" | "seo" | "i18n" | "terms" | "audit";
+// `workflow` is deliberately NOT here any more. Publishing is what someone opened the editor
+// to do, and it was a lowercase ghost button among five that looked like filter chips — you
+// had to know the word "workflow" meant "publish". The transitions now live in the toolbar,
+// where the state they act on is already shown.
+export const INSPECTOR_TABS: InspectorTab[] = ["settings", "seo", "i18n", "terms", "audit"];
+
+/** What each tab is called on screen. A table rather than a CSS `capitalize`, which renders
+ * "seo" as "Seo" and "i18n" as "I18n" — both wrong, and wrong in the one place a reader is
+ * scanning for the word they want. */
+export const INSPECTOR_TAB_LABELS = {
+  settings: "Settings",
+  seo: "SEO",
+  i18n: "Translations",
+  terms: "Terms",
+  audit: "History",
+} satisfies Record<InspectorTab, string>;
+
+/** One workflow transition the page can make from where it is. */
+export interface PageAction {
+  label: string;
+  /** The RPC handler name — `publishPage`, `approve`, … */
+  action: string;
+}
+
+/**
+ * The transitions valid FROM `status`, most-expected first.
+ *
+ * The head of the list is the toolbar's primary button and the tail goes in its menu, so the
+ * ORDER is the contract: a draft's obvious next move is Publish, a page in review is waiting
+ * for Approve, and a published page's only move is to take it down. Showing transitions the
+ * server would reject (an "Approve" on a draft) is how a UI teaches someone that its buttons
+ * lie; the server still enforces the role gate on every one of these.
+ */
+export function pageWorkflowActions(status: string): PageAction[] {
+  switch (status) {
+    case "review":
+      return [
+        { label: "Approve & publish", action: "approve" },
+        { label: "Reject", action: "reject" },
+        // The solo operator's escape from the two-actor pipeline — same endpoint the draft
+        // path offers, kept reachable so a reviewer is not forced through their own review.
+        { label: "Publish directly", action: "publishPage" },
+      ];
+    case "published":
+      return [{ label: "Unpublish", action: "unpublishPage" }];
+    default: // draft | rejected | archived
+      return [
+        { label: "Publish", action: "publishPage" },
+        { label: "Submit for review", action: "submitForReview" },
+      ];
+  }
+}
 
 /** The tabs a deployment actually shows. ONE definition, used by the tab bar, the panel
  * switch and the route's deep-link fallback — three places that previously each re-derived
@@ -700,12 +751,100 @@ export function CollectionEditor({ api, def, id, onSaved, onDeleted, onBack, onE
 
 // --- page editor -------------------------------------------------------------
 
-export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange, registerGuard }: { api: Api; page: Page; blockTypes: BlockType[]; tab: InspectorTab; onTab: (t: InspectorTab) => void; onBack: () => void; onChange: (p: Page) => void; registerGuard: (fn: (() => boolean) | null) => void }) {
+/**
+ * The page editor's toolbar: where you are, what state the page is in, and the three things
+ * you came to do.
+ *
+ * It exists because none of that was anywhere. The editor opened onto three columns of panels
+ * with no header; the status appeared twice (a rail card and an inspector row) and the actions
+ * that change it were behind a tab labelled "workflow", rendered as a lowercase ghost button
+ * among five that read as filter chips. Publishing — the point of the screen — required
+ * knowing that word.
+ *
+ * Sticky, because a long page scrolls away from it and the save state has to stay visible.
+ */
+function PageToolbar({ page, dirtyCount, onBack, backLabel, onAct, busy }: {
+  page: Page;
+  dirtyCount: number;
+  onBack: () => void;
+  /** The list this page belongs to — "Pages", or the content type's own name on a
+   * per-type deployment, where back goes to that type's list and not the pooled one. */
+  backLabel: string;
+  onAct: (action: string) => void;
+  busy: boolean;
+}) {
+  const [preview, setPreview] = useState<string | null>(null);
+  const [minting, setMinting] = useState(false);
+  const { api } = useApp();
+  const actions = pageWorkflowActions(String(page.status));
+  const [primary, ...rest] = actions;
+
+  const mintPreview = async () => {
+    setMinting(true);
+    try {
+      const minted = await api.signPagePreview(page.id);
+      const href = pagePreviewHref(minted, { siteUrl: sitePreviewUrl(), resolve: (path) => api.resolve(path) });
+      setPreview(href);
+      // Best-effort: the clipboard needs a secure context and a permission, and the link is
+      // rendered either way.
+      await navigator.clipboard?.writeText(href).catch(() => {});
+    } catch {
+      setPreview(null);
+    } finally {
+      setMinting(false);
+    }
+  };
+
+  return (
+    <>
+    <div className={`sticky ${BELOW_APP_BAR} z-20 -mx-7 flex ${PAGE_TOOLBAR_H} items-center gap-3 border-b border-border bg-surface px-7`}>
+      <Button variant="ghost" size="sm" className="shrink-0" onPress={onBack}>← {backLabel}</Button>
+      <span className="min-w-0 truncate font-medium text-fg">{page.title}</span>
+      {/* Beside the title, because it is a fact ABOUT the page — among the buttons it read as
+          another control. */}
+      <Pill status={page.status}>{page.status}</Pill>
+      <span className="flex-1" />
+      {/* ONE line of truth about saving. Page fields and blocks autosave; this says so, and
+          says when they have not finished — replacing two identically-labelled "Save" buttons
+          that saved different halves of the screen and a third surface that saved silently. */}
+      <span className="shrink-0 text-caption text-fg-subtle">
+        {dirtyCount > 0 ? <span className="text-accent-strong">● saving {dirtyCount} change{dirtyCount === 1 ? "" : "s"}…</span> : "all changes saved"}
+      </span>
+      <Button variant="secondary" size="sm" className="shrink-0" isDisabled={minting} onPress={() => void mintPreview()}>
+        {minting ? "Minting…" : "Preview"}
+      </Button>
+      {primary ? <Button size="sm" className="shrink-0" isDisabled={busy} onPress={() => onAct(primary.action)}>{primary.label}</Button> : null}
+      {rest.length > 0 ? (
+        <DropdownMenuTrigger>
+          <Button variant="ghost" size="sm" className="shrink-0 px-2" aria-label="More actions">⋯</Button>
+          <DropdownMenu aria-label="More page actions" onAction={(k) => onAct(String(k))}>
+            {rest.map((a) => <DropdownMenuItem key={a.action} id={a.action}>{a.label}</DropdownMenuItem>)}
+          </DropdownMenu>
+        </DropdownMenuTrigger>
+      ) : null}
+    </div>
+    {/* The minted link is REVEALED rather than opened: the point of a preview link is to
+        SEND it, and a popup blocker eating the click that produced it would leave nothing to
+        copy. In flow rather than floating under the sticky bar, where it covered the first
+        thing on the canvas with no way to move it — and dismissible, because it is a
+        transient answer, not a permanent row. */}
+    {preview ? (
+      <div className="mt-3 flex items-center gap-2 rounded-lg bg-surface-muted px-3 py-2 text-caption">
+        <span className="shrink-0 text-fg-subtle">Preview link (copied):</span>
+        <a className="min-w-0 flex-1 truncate underline" href={preview} target="_blank" rel="noreferrer">{preview}</a>
+        <Button variant="ghost" size="sm" className="shrink-0 px-2" aria-label="Hide the preview link" onPress={() => setPreview(null)}>✕</Button>
+      </div>
+    ) : null}
+    </>
+  );
+}
+
+export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, backLabel, onChange, registerGuard }: { api: Api; page: Page; blockTypes: BlockType[]; tab: InspectorTab; onTab: (t: InspectorTab) => void; onBack: () => void; backLabel: string; onChange: (p: Page) => void; registerGuard: (fn: (() => boolean) | null) => void }) {
   const { cms: { multilingual, siteFurniture, canEdit } } = useApp();
-  // The app bar's trailing crumb. This editor has no screen header at all — three columns of
-  // panels under a "← all pages" button — so the trail is the only thing on screen naming
-  // which page is open.
-  useCrumb(page.title);
+  // NO detail crumb, deliberately. The toolbar below names the page and carries its status,
+  // so publishing one put the title in the app bar 40px above where the toolbar already says
+  // it — the "title in three places" this redesign removed. The section crumb stays; it names
+  // the list you came from, which the toolbar's back button only points at.
   const [ct, setCt] = useState<ContentType | null>(null);
   const [assembled, setAssembled] = useState<AssembledPage | null>(null);
   const [err, setErr] = useState("");
@@ -854,50 +993,54 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
     reorder(region, ids);
   };
 
-  // Shown wherever the back button is — including the no-regions layout, whose only editable
-  // surface is PageFields, so the rail that used to carry this badge isn't rendered at all.
-  const dirtyBadge = dirtyCount > 0
-    ? <span className="text-[11px] text-accent-strong">● {dirtyCount} unsaved change{dirtyCount === 1 ? "" : "s"}</span>
-    : null;
+  const [acting, setActing] = useState(false);
+  /** Run a workflow transition from the toolbar. */
+  const act = async (name: string) => {
+    setActing(true);
+    try {
+      const r = await api.call<{ page?: Page }>(name, { pageId: page.id });
+      if (r?.page) onChange(r.page);
+    } catch (e) {
+      setErr(errMsg(e));
+    } finally {
+      setActing(false);
+    }
+  };
+
+  // The outline rail earns its 220px only when there is something to navigate BETWEEN. With
+  // one region it listed that region and its count beside a canvas already showing both, and
+  // repeated the title and status the toolbar now carries — a third of the width spent on
+  // three lines you cannot click.
+  const showOutline = regions.length > 1;
 
   return (
-    // With no regions the left rail would be a 260px column holding just a back button,
-    // so it collapses and the content column takes the space.
-    //
-    // The height budget is what the chrome above this takes: below `md` that is the
-    // sidebar's collapsed brand row (`h-14`, 56px), and from `md` up the nav is a COLUMN
-    // beside this one, so there is nothing above it and the editor gets the whole viewport.
-    <div className={`grid min-h-[calc(100vh-56px)] gap-5 px-7 pb-7 pt-2 max-[820px]:grid-cols-1 md:min-h-screen ${regions.length ? "grid-cols-[260px_1fr_400px]" : "grid-cols-[1fr_400px]"}`}>
-      {regions.length === 0 ? null : (
-      <div className="overflow-auto rounded-panel bg-surface-muted p-[18px]">
-        <Button variant="ghost" size="sm" onPress={() => { if (confirmLeave()) onBack(); }}>← all pages</Button>
-        {dirtyBadge ? <p className="mt-2">{dirtyBadge}</p> : null}
+    <div className="px-7 pb-16">
+      <PageToolbar page={page} dirtyCount={dirtyCount} busy={acting} onAct={act} backLabel={backLabel} onBack={() => { if (confirmLeave()) onBack(); }} />
+      {err ? <Banner>{err}</Banner> : null}
+
+      <div className={`mt-4 grid items-start gap-6 max-[980px]:grid-cols-1 ${showOutline ? "grid-cols-[200px_minmax(0,1fr)_340px]" : "grid-cols-[minmax(0,1fr)_340px]"}`}>
+      {!showOutline ? null : (
+      // An OUTLINE, not a summary: every row jumps to its region. The counts stay because
+      // "which region is the empty one" is the question this list is read for.
+      <nav className={`sticky ${BELOW_PAGE_TOOLBAR} hidden flex-col gap-1 min-[981px]:flex`} aria-label="Regions">
         <Section>Regions</Section>
         {regions.map((r) => (
-          <div key={r.name} className={`${ROW} mb-2`}>
-            <span className="flex-1 truncate font-medium">{r.label ?? r.name}</span>
-            <span className="text-fg-subtle">{(assembled?.regions[r.name] ?? []).length}</span>
-          </div>
+          <button
+            key={r.name}
+            type="button"
+            className="flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-left text-sm text-fg-muted hover:bg-surface-muted hover:text-fg"
+            onClick={() => document.getElementById(regionDomId(r.name))?.scrollIntoView({ behavior: "smooth", block: "start" })}
+          >
+            <span className="min-w-0 flex-1 truncate">{r.label ?? r.name}</span>
+            <span className="shrink-0 text-caption text-fg-subtle">{(assembled?.regions[r.name] ?? []).length}</span>
+          </button>
         ))}
-        <Section>Status</Section>
-        <div className={ROW}>
-          <span className="flex-1 truncate font-medium">{page.title}</span>
-          <Pill status={page.status}>{page.status}</Pill>
-        </div>
-      </div>
+      </nav>
       )}
 
       {/* The canvas: one inline document. `pl-8` reserves the left gutter that each
           block's drag handle occupies on hover. Regions are titled sections. */}
-      <div className="overflow-auto py-1.5 pl-8 pr-2">
-        {err ? <Banner>{err}</Banner> : null}
-        {regions.length === 0 ? (
-          <div className="mb-2 flex items-center gap-2">
-            <Button variant="ghost" size="sm" onPress={() => { if (confirmLeave()) onBack(); }}>← all pages</Button>
-            <Pill status={page.status}>{page.status}</Pill>
-            {dirtyBadge}
-          </div>
-        ) : null}
+      <div className="min-w-0 py-1.5 pl-8 pr-2">
         {/* The page's own fields are CONTENT, so they belong on the canvas at full width —
             not in the inspector. For a content type with no regions (a fixed layout, all
             of it page fields) this is the entire editor; the canvas is never empty. */}
@@ -908,7 +1051,9 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
           const blocks = assembled?.regions[r.name] ?? [];
           const allowed = r.allowedTypes && r.allowedTypes.length ? r.allowedTypes : blockTypes.map((b) => b.slug);
           return (
-            <div className="mb-10" key={r.name}>
+            // `scroll-mt` clears the two sticky bars above, so the outline's jump lands the
+            // heading under them rather than behind them.
+            <div className="mb-10 scroll-mt-[7rem]" id={regionDomId(r.name)} key={r.name}>
               <div className="mb-1 text-caption font-medium uppercase tracking-wide text-fg-subtle">{r.label ?? r.name}</div>
               {blocks.map((b, i) => (
                 <div key={b.id}>
@@ -946,21 +1091,36 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, onChange
           : null}
       </div>
 
-      <div className="overflow-auto rounded-panel border border-border bg-surface-card p-5">
-        <div className="mb-3 flex gap-1">
+      <aside className={`sticky ${BELOW_PAGE_TOOLBAR} max-h-[calc(100vh-8rem)] overflow-auto rounded-panel border border-border bg-surface-card p-5`}>
+        {/* A real tab strip, not five ghost buttons that read as filter chips: the selected
+            one is underlined and Capitalised, so which panel you are in is visible without
+            comparing background tints. */}
+        <div className="-mt-1 mb-4 flex gap-1 border-b border-border">
           {visibleTabs(multilingual, siteFurniture).map((t) => (
-            <Button key={t} variant="ghost" size="sm" className={tab === t ? "bg-surface-muted text-fg" : "text-fg-muted"} onPress={() => onTab(t)}>{t}</Button>
+            <button
+              key={t}
+              type="button"
+              className={`-mb-px border-b-2 px-2 pb-2 pt-1 text-sm ${tab === t ? "border-fg font-medium text-fg" : "border-transparent text-fg-muted hover:text-fg"}`}
+              onClick={() => onTab(t)}
+            >
+              {INSPECTOR_TAB_LABELS[t]}
+            </button>
           ))}
         </div>
         {tab === "settings" ? <PageMeta api={api} page={page} onSaved={onChange} onError={setErr} /> : null}
         {tab === "seo" ? <SeoPanel api={api} page={page} onError={setErr} /> : null}
-        {tab === "workflow" ? <Workflow api={api} page={page} onChanged={(p) => { onChange(p); }} onError={setErr} /> : null}
         {tab === "i18n" && multilingual ? <I18n api={api} page={page} onError={setErr} /> : null}
         {tab === "terms" ? <PageTerms api={api} pageId={page.id} canEdit={canEdit} onError={setErr} /> : null}
         {tab === "audit" ? <AuditLog api={api} pageId={page.id} onError={setErr} /> : null}
+      </aside>
       </div>
     </div>
   );
+}
+
+/** The DOM id the outline jumps to. One function, so the anchor and the link agree. */
+function regionDomId(region: string): string {
+  return `region-${region}`;
 }
 
 // A single block, edited inline: the block IS its editor. Fields render in place (rich text
@@ -1226,6 +1386,10 @@ function PageMeta({ api, page, onSaved, onError }: { api: Api; page: Page; onSav
 
   useEffect(() => { setTitle(page.title); setSlug(page.slug); setLocale(page.locale); }, [page.id, page.title, page.slug, page.locale]);
 
+  // Disabled until something actually differs, so the button says whether there is anything
+  // to save rather than inviting a no-op write on every visit to the tab.
+  const changed = title !== page.title || slug.trim() !== page.slug || (multilingual && locale !== page.locale);
+
   const save = async () => {
     setBusy(true);
     try {
@@ -1249,7 +1413,6 @@ function PageMeta({ api, page, onSaved, onError }: { api: Api; page: Page; onSav
 
   return (
     <div className="flex flex-col gap-4">
-      <Section>Page</Section>
       {ok ? <Banner ok>saved</Banner> : null}
       <Input label="Title" value={title} onChange={setTitle} />
       <Input label="Slug" value={slug} onChange={setSlug} />
@@ -1265,8 +1428,13 @@ function PageMeta({ api, page, onSaved, onError }: { api: Api; page: Page; onSav
           </select>
         </label>
       ) : null}
-      <Button onPress={save} isDisabled={busy || !title.trim() || !slug.trim()}>{busy ? "Saving…" : "Save"}</Button>
-      <KV><span>Status</span><span>{page.status}</span></KV>
+      {/* Explicit, unlike the canvas — a slug is the page's URL, and autosaving one keystroke
+          at a time would publish `/ab`, `/abo`, `/abou` as real addresses and race the
+          uniqueness check on every one. Named for what it saves, since it is no longer the
+          only Save on screen by accident. */}
+      <Button onPress={save} isDisabled={busy || !changed || !title.trim() || !slug.trim()}>
+        {busy ? "Saving…" : "Save settings"}
+      </Button>
     </div>
   );
 }
@@ -1274,8 +1442,7 @@ function PageMeta({ api, page, onSaved, onError }: { api: Api; page: Page; onSav
 /** The page's own FIELDS — its content. Rendered in the canvas, at full width. */
 function PageFields({ api, page, schema, initialFields, onDirtyChange, onError }: { api: Api; page: Page; schema: FieldDefinition[]; initialFields: FieldValues; onDirtyChange: (id: string, dirty: boolean) => void; onError: (s: string) => void }) {
   const [fields, setFields] = useState<FieldValues>(initialFields);
-  const [ok, setOk] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
 
   // Dirty is DERIVED from a snapshot of what's persisted, the way BlockCard does it — not a
   // one-way flag set on every keystroke. Typing a character and deleting it again leaves the
@@ -1301,33 +1468,49 @@ function PageFields({ api, page, schema, initialFields, onDirtyChange, onError }
   useEffect(() => { onDirtyChange("page", dirty); }, [dirty, onDirtyChange]);
   useEffect(() => () => { onDirtyChange("page", false); }, [onDirtyChange]);
 
-  const save = async () => {
+  // AUTOSAVED, on the same 800ms debounce a block uses — because this is the same thing a
+  // block is: content on the canvas. It used to carry its own "Save" button, which sat a
+  // column away from the inspector's identically-labelled one and saved the other half of the
+  // screen, while the blocks between them saved silently. Three save models on one screen.
+  const save = useCallback(async () => {
     // Snapshot BEFORE the round trip: an edit made while it's in flight must stay dirty.
     const snapshot = JSON.stringify(fields);
-    setBusy(true);
+    if (snapshot === saved.current) return;
+    setSaveState("saving");
     try {
       await api.call("updatePage", { pageId: page.id, fields });
       saved.current = snapshot;
-      setOk(true);
-      setTimeout(() => setOk(false), 1500);
+      setSaveState("saved");
+      setTimeout(() => setSaveState((st) => (st === "saved" ? "idle" : st)), 1500);
     } catch (e) {
       onError(errMsg(e));
-    } finally {
-      setBusy(false);
+      setSaveState("idle");
     }
-  };
+  }, [api, page.id, fields, onError]);
+
+  // Keyed on `fields`, so it fires only on an actual edit: a failed save leaves them
+  // unchanged and does NOT auto-retry (no hot loop) — the next edit does. The leave guard
+  // above still covers the debounce window.
+  const saveRef = useRef(save);
+  saveRef.current = save;
+  useEffect(() => {
+    if (!dirty) return;
+    const t = setTimeout(() => void saveRef.current(), 800);
+    return () => clearTimeout(t);
+  }, [fields, dirty]);
 
   return (
     <div className="mb-10">
       <div className="mb-1 flex items-center gap-2">
-        <span className="text-caption font-medium uppercase tracking-wide text-fg-subtle">Content</span>
-        {dirty ? <span className="text-[11px] text-accent-strong">● unsaved</span> : null}
+        {/* NOT "Content". A region is very often named `content`, and the two headings then
+            sat one above the other on the same canvas, both reading CONTENT and meaning
+            different things. These are the page's OWN fields. */}
+        <span className="text-caption font-medium uppercase tracking-wide text-fg-subtle">Page fields</span>
+        <span className={`text-caption ${dirty && saveState !== "saving" ? "text-accent-strong" : "text-fg-subtle"}`}>
+          {saveState === "saving" ? "saving…" : saveState === "saved" ? "saved ✓" : dirty ? "● unsaved" : ""}
+        </span>
       </div>
-      {ok ? <Banner ok>saved</Banner> : null}
       <FieldForm schema={schema} value={fields} onChange={setFields} api={api} />
-      <div className="mt-3">
-        <Button onPress={save} isDisabled={busy}>{busy ? "Saving…" : "Save"}</Button>
-      </div>
     </div>
   );
 }
@@ -1361,87 +1544,6 @@ function SeoPanel({ api, page, onError }: { api: Api; page: Page; onError: (s: s
       {F("ogTitle", "OG title")}
       {F("ogDescription", "OG description", true)}
       <Button className="w-full" onPress={save}>Save SEO</Button>
-    </div>
-  );
-}
-
-function Workflow({ api, page, onChanged, onError }: { api: Api; page: Page; onChanged: (p: Page) => void; onError: (s: string) => void }) {
-  // The minted link, revealed after the click. Held rather than opened for you: the point of
-  // a preview link is to SEND it, and a popup blocker eating the one action that produced it
-  // would leave nothing to copy.
-  const [preview, setPreview] = useState<string | null>(null);
-  const [minting, setMinting] = useState(false);
-  const act = async (name: string, input?: unknown) => {
-    try {
-      const r = await api.call<{ page?: Page }>(name, { pageId: page.id, ...(input as object) });
-      if (r?.page) onChanged(r.page);
-    } catch (e) {
-      onError(errMsg(e));
-    }
-  };
-  // Show only the transitions valid FROM the current status, so a draft never surfaces a
-  // primary "Approve" that the server rejects (approve requires status === "review"). The
-  // server still enforces role gates; this just stops the UI from offering dead-end actions.
-  // `publish` = publishPage (any → published, reviewer/admin) — the one-click path for a solo
-  // operator; `approve` is the reviewer step of the two-actor review pipeline.
-  const mintPreview = async () => {
-    setMinting(true);
-    try {
-      const minted = await api.signPagePreview(page.id);
-      const href = pagePreviewHref(minted, { siteUrl: sitePreviewUrl(), resolve: (p) => api.resolve(p) });
-      setPreview(href);
-      // Best-effort: the clipboard needs a secure context and a permission, and the link is
-      // rendered either way.
-      await navigator.clipboard?.writeText(href).catch(() => {});
-    } catch (e) {
-      onError(errMsg(e));
-    } finally {
-      setMinting(false);
-    }
-  };
-
-  const status = String(page.status);
-  const buttons: Array<{ label: string; action: string; variant?: "secondary" | "ghost" }> =
-    status === "review"
-      ? [
-          { label: "Approve (publish)", action: "approve" },
-          { label: "Reject", action: "reject", variant: "secondary" },
-          { label: "Publish directly", action: "publishPage", variant: "secondary" },
-        ]
-      : status === "published"
-        ? [{ label: "Unpublish", action: "unpublishPage", variant: "secondary" }]
-        : // draft | rejected | archived
-          [
-            { label: "Publish", action: "publishPage" },
-            { label: "Submit for review", action: "submitForReview", variant: "secondary" },
-          ];
-  return (
-    <div>
-      <Section>Workflow</Section>
-      <div className="mb-3 flex items-center gap-2 text-[13px] text-fg-muted">
-        <span className="text-fg-subtle">Status</span>
-        <Pill status={page.status}>{page.status}</Pill>
-      </div>
-      <div className="flex flex-col gap-2">
-        {buttons.map((b) => (
-          <Button key={b.action} variant={b.variant} onPress={() => act(b.action)}>{b.label}</Button>
-        ))}
-        {/* Not a workflow TRANSITION, so it is always available rather than keyed to the
-            status — a published page is exactly what you preview before changing it, and a
-            draft is exactly what you send for comment. The collection editor has had this
-            button since `supports: ["preview"]`; the page half minted nothing, so
-            `signPagePreview` existed and could not be reached. */}
-        <Button variant="ghost" isDisabled={minting} onPress={() => void mintPreview()}>
-          {minting ? "Minting…" : "Preview link"}
-        </Button>
-      </div>
-      {preview ? (
-        <div className="mt-3 border-t border-border pt-3 text-sm">
-          <span className="text-fg-subtle">Preview link (copied): </span>
-          <a className="break-all underline" href={preview} target="_blank" rel="noreferrer">{preview}</a>
-        </div>
-      ) : null}
-      <p className="mt-2.5 text-fg-subtle">Publish needs a reviewer/admin role; submit-for-review is editor-gated.</p>
     </div>
   );
 }

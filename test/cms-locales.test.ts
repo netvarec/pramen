@@ -99,7 +99,15 @@ describe("the editor's visible inspector tabs", () => {
   });
 
   test("hiding i18n removes exactly that tab, in order", () => {
-    expect(visibleTabs(false, true)).toEqual(["settings", "seo", "workflow", "terms", "audit"]);
+    expect(visibleTabs(false, true)).toEqual(["settings", "seo", "terms", "audit"]);
+  });
+
+  // `workflow` used to be one of these. Publishing is what someone opened the editor to do,
+  // and it sat behind a lowercase ghost button among five that read as filter chips — you had
+  // to know the word meant "publish". The transitions moved to the toolbar, beside the status
+  // they act on; the tab is gone rather than emptied.
+  test("workflow is NOT a tab — publishing lives in the toolbar", () => {
+    expect(visibleTabs(true, true)).not.toContain("workflow");
   });
 
   // Same rule, the other optional panel: `terms` assigns taxonomy terms to the page, and on
@@ -107,7 +115,7 @@ describe("the editor's visible inspector tabs", () => {
   test("terms is shown only where the server has the site-furniture handlers", () => {
     expect(visibleTabs(true, false)).not.toContain("terms");
     expect(visibleTabs(false, true)).toContain("terms");
-    expect(visibleTabs(false, false)).toEqual(["settings", "seo", "workflow", "audit"]);
+    expect(visibleTabs(false, false)).toEqual(["settings", "seo", "audit"]);
   });
 
   // Until the server answers — and on a server too old to have the handler — the editor

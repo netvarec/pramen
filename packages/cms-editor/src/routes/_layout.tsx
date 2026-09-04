@@ -377,7 +377,10 @@ export default function RootLayout() {
             ) : null}
             {crumb ? (
               <>
-                <CrumbSeparatorIcon aria-hidden="true" className="h-3 w-3 shrink-0 text-fg-subtle" />
+                {/* Only BETWEEN two crumbs. A screen can publish a detail crumb from a route
+                    no nav entry matches (a per-content-type deployment's `/pages/:id`), and
+                    the separator then led the trail with a stray "›". */}
+                {sectionCrumb ? <CrumbSeparatorIcon aria-hidden="true" className="h-3 w-3 shrink-0 text-fg-subtle" /> : null}
                 {/* `aria-current="page"` so the trailing crumb is announced as where you are,
                     not as one more thing to visit. */}
                 <span aria-current="page" className="min-w-0 truncate px-1 py-1 font-medium text-fg">

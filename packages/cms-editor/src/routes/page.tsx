@@ -73,6 +73,10 @@ export default createPage()
         tab={tab}
         onTab={setTab}
         onBack={backToList}
+        // Named for where it actually goes. On a per-type deployment `backToList` lands in
+        // this page's OWN type list, and a button labelled "Pages" then named a pooled list
+        // that deployment does not have.
+        backLabel={splitsByType(contentTypes, cms) && ownType ? ownType.name : "Pages"}
         onChange={setPage}
         registerGuard={setNavGuard}
       />
