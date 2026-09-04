@@ -816,13 +816,23 @@ export async function runCms(base: string): Promise<void> {
   const badOrder = await call("schedulePage", { pageId, publishAt: Date.now() + 1000, unpublishAt: Date.now() + 500 }, admin);
   assert(badOrder.status === 400 && badOrder.body.ok === false, "cms: schedulePage rejects unpublishAt <= publishAt (400)");
 
+  // --- scheduling does not publish: a FUTURE schedule, so nothing can drain it ---
+  //
+  // This used to be asserted against a schedule due NOW, one HTTP call after arming it — and
+  // the DO self-drains via an alarm set to the next due time, so it was asserting that the
+  // race went its way. It held locally and lost in CI. Split in two instead, so neither half
+  // races: the "does not publish" claim is made about a schedule that CANNOT be due yet, and
+  // the "drain publishes it" claim below only ever asserts the state AFTER the drain, which is
+  // the same whether the alarm or the explicit drain got there first.
+  const pending = await call("createPage", { typeId: ct.body.result.id, title: "Pending", slug: "pending-launch" }, admin);
+  await call("schedulePage", { pageId: pending.body.result.id, publishAt: Date.now() + 3_600_000 }, admin);
+  assert((await call("getPage", { slug: "pending-launch" })).status === 404, "cms: a scheduled page is not public before its instant");
+
   // --- scheduled publish, end-to-end via a drain (intent-validated outbox task) ---
   const launch = await call("createPage", { typeId: ct.body.result.id, title: "Launch", slug: "launch" }, admin);
   const launchId = launch.body.result.id as string;
   await call("addBlock", { pageId: launchId, blockTypeSlug: "rich_text", region: "content", fields: { body: rt("Launch!") } }, admin);
   await call("schedulePage", { pageId: launchId, publishAt: Date.now() }, admin);
-  const beforeDrain = await call("getPage", { slug: "launch" });
-  assert(beforeDrain.status === 404, "cms: a scheduled page is not public until the task drains");
   await drain(base, admin);
   const afterDrain = await call("getPage", { slug: "launch" });
   assert(afterDrain.body.ok && (afterDrain.body.result.regions.content as unknown[]).length === 1, "cms: after drain, the scheduled page is published with its block");
