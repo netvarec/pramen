@@ -29,12 +29,13 @@
 // / `border`). What changed is the chrome's LAYOUT and DENSITY, not the design system.
 
 import { Outlet, useNavigate, useRoute, useRouter } from "@buzola/router";
-import { Button, Card, Text } from "@podoba/react";
+import { Avatar, Button, Card, Text, UserMenu, UserMenuItem } from "@podoba/react";
 import { useEffect, useState, type ReactNode } from "react";
-import { useApp } from "../app-context";
+import { useApp, type Me } from "../app-context";
 import { BRAND } from "../brand";
 import { pagesHidden, splitsByType } from "../components";
-import { DarkThemeIcon, GroupFoldedIcon, GroupOpenIcon, LightThemeIcon, MenuToggleIcon, NAV_GLYPHS, SignOutIcon } from "../icons";
+import { APP_BAR_H } from "../chrome";
+import { DarkThemeIcon, GroupFoldedIcon, GroupOpenIcon, LightThemeIcon, MenuToggleIcon, NAV_GLYPHS, RailToggleIcon, SettingsIcon, SignOutIcon } from "../icons";
 import { opensInSameTab } from "../mount";
 import { buildNav, NAV_SECTION_IDS, navSections, navSectionsAreLabelled, type ExtraNavLink, type NavIcon, type NavSectionId } from "../nav";
 
@@ -42,6 +43,23 @@ const THEME_KEY = "pramen.cms.theme";
 /** Which nav groups this browser has folded away. Per-browser, like the theme — it is a
  * reading preference, not deployment configuration, and nothing server-side should carry it. */
 const COLLAPSED_KEY = "pramen.cms.nav.collapsed";
+/** …and whether the whole rail is down to icons. Same reasoning, separate key: folding a
+ * group and narrowing the rail are different decisions and a reader makes them separately. */
+const RAIL_KEY = "pramen.cms.nav.rail";
+
+/** Whether this browser last left the rail narrowed.
+ *
+ * `try`/`catch` and no `typeof` guard, matching `readCollapsed` below: referencing an absent
+ * `localStorage` throws a ReferenceError the catch already handles, and the catch additionally
+ * covers the case a `typeof` check cannot — a browser that HAS the object and throws on access
+ * (a private window with site data blocked). One shape for both readers. */
+function readRail(): boolean {
+  try {
+    return localStorage.getItem(RAIL_KEY) === "narrow";
+  } catch {
+    return false;
+  }
+}
 
 /** The folded groups, tolerating every shape localStorage can be in (absent, another
  * version's value, hand-edited, a private window that throws on read). A bad value costs an
@@ -83,7 +101,7 @@ export function segmentAt(pathname: string, prefix: string): string | undefined 
 }
 
 export default function RootLayout() {
-  const { isAdmin, collections, adminPages, contentTypes, cms, error, reconfigure, confirmNavigation } = useApp();
+  const { isAdmin, me, collections, adminPages, contentTypes, cms, error, reconfigure, confirmNavigation } = useApp();
   const navigate = useNavigate();
   const { pathname } = useRoute();
 
@@ -128,6 +146,19 @@ export default function RootLayout() {
   }, [collapsed]);
   const toggleSection = (id: NavSectionId) =>
     setCollapsed((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
+
+  // The rail, narrowed to its icon column. Remembered like the folds: someone who works in a
+  // three-column page editor wants the width back, and wants it back tomorrow too.
+  const [railNarrow, setRailNarrow] = useState(readRail);
+  useEffect(() => {
+    try {
+      localStorage.setItem(RAIL_KEY, railNarrow ? "narrow" : "wide");
+    } catch {
+      /* a private window that refuses writes costs the memory of the choice, nothing else */
+    }
+  }, [railNarrow]);
+  // Below `md` the rail is already a disclosure under the wordmark — a width it does not have
+  // there. Narrowing is a desktop affordance, and the classes below are all `md:`-scoped.
 
   // The active collection slug, if we're under /collections/:slug(/...).
   const collectionSlug = segmentAt(pathname, "/collections/");
@@ -178,7 +209,7 @@ export default function RootLayout() {
     // COLUMN rather than a fixed overlay, so the content column needs no compensating offset
     // and the document keeps its own scroll (which is what the page editor's full-height
     // grid and every in-page anchor already assume).
-    <div className="min-h-screen bg-surface text-fg md:grid md:grid-cols-[15rem_1fr]">
+    <div className={`min-h-screen bg-surface text-fg md:grid ${railNarrow ? "md:grid-cols-[3.5rem_1fr]" : "md:grid-cols-[15rem_1fr]"}`}>
       {/* The rail's own ground. `border-r` is unconditional and the tone is not, because in
           DARK podoba maps `surface-card` onto `surface` — the hairline is the only separation
           left there, and a border that appeared only in one theme would be a rule with no
@@ -188,7 +219,7 @@ export default function RootLayout() {
         className="border-b border-border bg-surface-card md:sticky md:top-0 md:h-screen md:self-start md:overflow-y-auto md:border-b-0 md:border-r"
       >
         <div className="flex min-h-full flex-col">
-          <div className="flex h-12 shrink-0 items-center gap-1 px-2">
+          <div className={`flex h-12 shrink-0 items-center gap-1 ${railNarrow ? "md:justify-center md:px-0" : ""} px-2`}>
             {/* The workspace row: the wordmark is the way back to the top of the admin, as it
                 is on every other site — a `button` (not an `<a>`) so the SPA router handles
                 it — and it reads as a row of the rail rather than a masthead above one. */}
@@ -196,7 +227,7 @@ export default function RootLayout() {
               type="button"
               onClick={guarded(() => navigate("home"))}
               aria-label={`${BRAND.spoken} — home`}
-              className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-surface-muted"
+              className={`flex min-w-0 items-center gap-2 rounded-md py-1.5 text-left transition-colors hover:bg-surface-muted ${railNarrow ? "md:flex-none md:px-1.5" : "flex-1 px-2"}`}
             >
               {/* The mark. One letter of the deployment's own name, which is the only glyph
                   available for a wordmark a host supplies at runtime. */}
@@ -206,8 +237,10 @@ export default function RootLayout() {
               >
                 {BRAND.name.slice(0, 1).toUpperCase()}
               </span>
-              <span className="min-w-0 truncate text-compact font-medium leading-4 text-fg">{BRAND.name}</span>
-              {BRAND.suffix ? <span className="shrink-0 text-caption text-fg-subtle">{BRAND.suffix}</span> : null}
+              {/* The wordmark itself is what a 56px rail cannot hold; the mark stays, because a
+                  narrowed rail still has to say whose admin this is. */}
+              <span className={`min-w-0 truncate text-compact font-medium leading-4 text-fg ${railNarrow ? "md:hidden" : ""}`}>{BRAND.name}</span>
+              {BRAND.suffix ? <span className={`shrink-0 text-caption text-fg-subtle ${railNarrow ? "md:hidden" : ""}`}>{BRAND.suffix}</span> : null}
             </button>
             <Button
               variant="ghost"
@@ -223,19 +256,30 @@ export default function RootLayout() {
           </div>
 
           <div id="pramen-cms-nav" className={`${menuOpen ? "flex" : "hidden"} flex-1 flex-col md:flex`}>
-            <nav aria-label="Primary" className="flex flex-col px-2 pb-2">
+            <nav aria-label="Primary" className={`flex flex-col pb-2 ${railNarrow ? "md:px-1.5" : ""} px-2`}>
               {sections.map((section) => {
                 // Only a LABELLED group can be folded: the header is the control, so without
                 // one there would be no way back — and an unlabelled rail is the
                 // single-group case, where there is nothing to fold away from anyway.
-                const foldable = labelled;
+                // Narrowed, a group cannot be folded: the heading IS the control, and at 56px
+                // there is no room for one. The rows show instead — hiding them behind a
+                // control that is not on screen would strand a section with no way back.
+                const foldable = labelled && !railNarrow;
                 const open = !foldable || !collapsed.includes(section.id);
                 return (
                   // The space between groups lives on the GROUP, not on its heading: a
                   // heading is the first child of its own wrapper, so `first:` there matches
                   // every one of them and the gap silently never appears.
-                  <div key={section.id} className="flex flex-col gap-px pt-4 first:pt-1">
-                    {labelled ? (
+                  <div
+                    key={section.id}
+                    className={`flex flex-col gap-px pt-4 first:pt-1 ${
+                      // A hairline stands in for the heading at 56px: the grouping is still
+                      // information, and dropping it would leave one undifferentiated column
+                      // of a dozen icons.
+                      railNarrow ? "md:mt-2 md:border-t md:border-border md:pt-2 md:first:mt-0 md:first:border-t-0 md:first:pt-1" : ""
+                    }`}
+                  >
+                    {foldable ? (
                       <SectionHeader
                         label={section.label}
                         open={open}
@@ -253,6 +297,7 @@ export default function RootLayout() {
                             key={entry.key}
                             icon={entry.icon}
                             label={entry.label}
+                            narrow={railNarrow}
                             active={active === entry.key}
                             onPress={guarded(() => navigate(entry.page as never, entry.params ? ({ params: entry.params } as never) : undefined as never))}
                           />
@@ -261,6 +306,7 @@ export default function RootLayout() {
                             key={entry.key}
                             link={entry.link}
                             icon={entry.icon}
+                            narrow={railNarrow}
                             sameTab={opensInSameTab(entry.link.href, entry.link.target, basePath, documentUrl)}
                             confirm={confirmNavigation}
                           />
@@ -272,24 +318,6 @@ export default function RootLayout() {
               })}
             </nav>
 
-            {/* The session cluster, at the foot of the rail. The tenant is deployment
-                configuration, not something an editor acts on — it stays visible on the
-                Settings page (Connection), not in the chrome. */}
-            <div className="mt-auto flex shrink-0 items-center gap-1 border-t border-border px-2 py-2">
-              <Button variant="ghost" size="sm" className={`${ROW} flex-1 text-fg-muted hover:text-fg`} onPress={guarded(reconfigure)}>
-                <SignOutIcon className="h-[15px] w-[15px] shrink-0" />
-                <span className="min-w-0 truncate">sign out</span>
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-                className="shrink-0 rounded-md px-2 py-1.5 text-fg-muted hover:text-fg"
-                onPress={() => setTheme(theme === "dark" ? "light" : "dark")}
-              >
-                {theme === "dark" ? <LightThemeIcon className="h-[15px] w-[15px]" /> : <DarkThemeIcon className="h-[15px] w-[15px]" />}
-              </Button>
-            </div>
           </div>
         </div>
       </aside>
@@ -297,6 +325,32 @@ export default function RootLayout() {
       {/* `min-w-0`, because a grid column's default `min-width: auto` lets a wide child (a
           table, a long slug) push the column past its track and squeeze the rail. */}
       <div className="min-w-0">
+        {/* The app bar. Everything here belongs to the SESSION rather than to the screen, which
+            is why it is not in the screen header — and why it survives a narrowed rail, where
+            the sign-out and theme controls used to live and no longer fit. Sticky at the top of
+            the content column; `page-header.tsx` pins the screen header directly beneath it,
+            both off the one height in `chrome.ts`. */}
+        <div className={`sticky top-0 z-30 flex ${APP_BAR_H} items-center gap-2 border-b border-border bg-surface px-7`}>
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-label={railNarrow ? "Expand the sidebar" : "Collapse the sidebar"}
+            aria-expanded={!railNarrow}
+            className="-ml-2 hidden rounded-md px-2 py-1.5 text-fg-muted hover:text-fg md:inline-flex"
+            onPress={() => setRailNarrow((narrow) => !narrow)}
+          >
+            <RailToggleIcon className="h-[17px] w-[17px]" />
+          </Button>
+          <div className="ml-auto">
+            <AccountMenu
+              me={me}
+              theme={theme}
+              onTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
+              onSettings={guarded(() => navigate("settings"))}
+              onSignOut={guarded(reconfigure)}
+            />
+          </div>
+        </div>
         {error ? (
           <Card variant="outlined" padding="none" className="mx-7 mt-2 border-danger px-4 py-2.5">
             <Text size="small" className="text-danger">
@@ -378,20 +432,80 @@ function SectionHeader({ label, open, controls, onPress }: { label: string; open
  * has ONE muted-surface token, so hover and active would otherwise be the same pixel, and
  * "where am I" would vanish under the cursor.
  */
-function NavItem({ icon, label, active, onPress }: { icon: NavIcon; label: string; active: boolean; onPress: () => void }) {
+function NavItem({ icon, label, narrow, active, onPress }: { icon: NavIcon; label: string; narrow: boolean; active: boolean; onPress: () => void }) {
   return (
     <Button
       variant="ghost"
       size="sm"
-      className={`${ROW} ${active ? "bg-surface-muted font-medium text-fg" : "text-fg-muted hover:text-fg"}`}
+      // Narrowed, the label is gone from the screen but not from the accessible name — the
+      // row is still "Media", not an unnamed button with a picture in it.
+      {...(narrow ? { "aria-label": label } : {})}
+      className={`${ROW} ${narrow ? "md:justify-center md:px-0" : ""} ${active ? "bg-surface-muted font-medium text-fg" : "text-fg-muted hover:text-fg"}`}
       {...(active ? { "aria-current": "page" as const } : {})}
       onPress={onPress}
     >
       <NavIconSlot icon={icon} />
       {/* The tooltip rides the SPAN, not the button: react-aria's `Button` filters `title`
-          out of the DOM props it forwards, so it would silently never render. */}
-      <span title={label} className="min-w-0 truncate">{label}</span>
+          out of the DOM props it forwards, so it would silently never render. It is also the
+          only thing naming a narrowed row on hover, so it is not optional there. */}
+      <span title={label} className={`min-w-0 truncate ${narrow ? "md:hidden" : ""}`}>{label}</span>
     </Button>
+  );
+}
+
+/**
+ * The account cluster in the app bar.
+ *
+ * podoba's `UserMenu` (a React Aria `Menu`), so the popover, roving focus, typeahead and
+ * dismissal are the design system's rather than three more hand-rolled handlers. It carries
+ * what the rail's foot used to: the theme, the way out, and now Settings and who you are —
+ * which is the half of this that a narrowed rail has no room for at all.
+ */
+function AccountMenu({
+  me,
+  theme,
+  onTheme,
+  onSettings,
+  onSignOut,
+}: {
+  me: Me | null;
+  theme: string;
+  onTheme: () => void;
+  onSettings: () => void;
+  onSignOut: () => void;
+}) {
+  // The server-resolved identity, which is a username rather than a display name — this app
+  // has no profile. Falling back to "account" keeps the avatar's initials from reading as "?"
+  // in the window between boot and the `me` call landing.
+  const who = me?.userId ?? "account";
+  return (
+    <UserMenu
+      triggerLabel={`Account — ${who}`}
+      trigger={
+        <>
+          <Avatar name={who} size="sm" ring={false} />
+          <span className="max-w-[180px] truncate text-compact text-fg-muted max-[560px]:hidden">{who}</span>
+        </>
+      }
+      onAction={(key) => {
+        if (key === "theme") onTheme();
+        else if (key === "settings") onSettings();
+        else if (key === "signout") onSignOut();
+      }}
+    >
+      <UserMenuItem id="theme" className="gap-2.5">
+        {theme === "dark" ? <LightThemeIcon className="h-[15px] w-[15px]" /> : <DarkThemeIcon className="h-[15px] w-[15px]" />}
+        {theme === "dark" ? "Light theme" : "Dark theme"}
+      </UserMenuItem>
+      <UserMenuItem id="settings" className="gap-2.5">
+        <SettingsIcon className="h-[15px] w-[15px]" />
+        Settings
+      </UserMenuItem>
+      <UserMenuItem id="signout" className="gap-2.5">
+        <SignOutIcon className="h-[15px] w-[15px]" />
+        Sign out
+      </UserMenuItem>
+    </UserMenu>
   );
 }
 
@@ -406,7 +520,7 @@ function NavItem({ icon, label, active, onPress }: { icon: NavIcon; label: strin
  * and differ only in label or target — keyed on href alone React reconciles them together
  * and the rendered label can end up on the other one's anchor.
  */
-function NavLink({ link, icon, sameTab, confirm }: { link: ExtraNavLink; icon: NavIcon; sameTab: boolean; confirm: () => boolean }) {
+function NavLink({ link, icon, narrow, sameTab, confirm }: { link: ExtraNavLink; icon: NavIcon; narrow: boolean; sameTab: boolean; confirm: () => boolean }) {
   return (
     <a
       href={link.href}
@@ -414,10 +528,11 @@ function NavLink({ link, icon, sameTab, confirm }: { link: ExtraNavLink; icon: N
       // Only the same-tab case unloads this document, so only it consults the guard.
       onClick={sameTab ? (e) => { if (!confirm()) e.preventDefault(); } : undefined}
       {...(sameTab ? {} : { target: "_blank" })}
-      className={`${ROW} text-compact text-fg-muted no-underline transition-colors hover:bg-surface-muted hover:text-fg`}
+      {...(narrow ? { "aria-label": link.label } : {})}
+      className={`${ROW} ${narrow ? "md:justify-center md:px-0" : ""} text-compact text-fg-muted no-underline transition-colors hover:bg-surface-muted hover:text-fg`}
     >
       <NavIconSlot icon={icon} />
-      <span title={link.label} className="min-w-0 truncate">{link.label}</span>
+      <span title={link.label} className={`min-w-0 truncate ${narrow ? "md:hidden" : ""}`}>{link.label}</span>
     </a>
   );
 }

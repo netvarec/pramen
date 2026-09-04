@@ -33,6 +33,7 @@ import {
   ListDashesIcon,
   ListIcon,
   MoonIcon,
+  SidebarSimpleIcon,
   SignOutIcon,
   SquaresFourIcon,
   StackIcon,
@@ -54,6 +55,11 @@ export type { Icon };
 
 /** Opens the collapsed rail below `md`. */
 export const MenuToggleIcon = ListIcon;
+/** Collapses the rail to icons, and brings it back. ONE glyph for both directions: the
+ * button is a toggle, and swapping the picture per state makes the reader decide what the
+ * new picture means before they can decide whether to press it. `aria-expanded` carries the
+ * state, which is where a state belongs. */
+export const RailToggleIcon = SidebarSimpleIcon;
 /** A group that is open — points down, as every file tree has agreed. */
 export const GroupOpenIcon = CaretDownIcon;
 /** …and one that is folded. */
@@ -64,6 +70,8 @@ export const LightThemeIcon = SunIcon;
 export const DarkThemeIcon = MoonIcon;
 /** Drop the session. */
 export { SignOutIcon };
+/** The account menu's settings entry — the same glyph the nav's Settings row uses. */
+export { GearIcon as SettingsIcon };
 
 // --- the nav's destinations ---------------------------------------------------------------
 

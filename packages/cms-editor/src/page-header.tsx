@@ -14,6 +14,7 @@
 // of the height — which is the only version of "keep it" that a long list can afford.
 
 import { useEffect, useState, type ReactNode } from "react";
+import { BELOW_APP_BAR } from "./chrome";
 import { CoverArt } from "./cover";
 
 /** The two type scales the app's screens use. `lg` is a library (Pages, Media, a collection);
@@ -92,7 +93,7 @@ export function PageHeader({
     //
     // `z-20` sits above the list and below the rail's mobile disclosure (which is in flow above
     // it) and every modal overlay (z-50).
-    <div className={`sticky top-0 z-20 mx-auto max-w-[1200px] bg-surface px-7 pb-4 transition-[padding] duration-150 ease-out ${condensed ? "pt-3" : "pt-6"}`}>
+    <div className={`sticky ${BELOW_APP_BAR} z-20 mx-auto max-w-[1200px] bg-surface px-7 pb-4 transition-[padding] duration-150 ease-out ${condensed ? "pt-3" : "pt-6"}`}>
       <div className="relative isolate overflow-hidden rounded-panel border border-border bg-surface-card">
         <CoverArt seed={lead} />
         <div className="absolute inset-0 bg-gradient-to-r from-surface-card via-surface-card/70 to-transparent" />
