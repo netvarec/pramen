@@ -213,6 +213,14 @@ there are no backward-compatibility guarantees yet.
   the token to instead. Same seam as `menuHref` and the sitemap's `pageUrl` — the CMS cannot
   know how a deployment routes, so the deployment says. Unset, nothing changes.
 
+  The button OPENS it, in a new tab, and still shows and copies the link — "look at my draft"
+  and "send this to someone" are both what it is for, and only one of them ends in the new tab.
+  The tab is opened synchronously before the round trip and pointed at the link afterwards,
+  because `window.open` called after an `await` has lost the user gesture that authorised it
+  and every popup blocker takes it; a blocked one falls back to the revealed link, which is
+  still a working answer. A mint that fails now closes the placeholder tab and says why,
+  rather than leaving a stray `about:blank` and a button that looked like it did nothing.
+
   `example/site` ships the other end: `src/pages/preview.astro` redeems the token with
   `client.getPreview(token)` and renders the draft through the SAME `Article.astro` the
   published route uses — the layout was extracted for exactly this reason, since a preview

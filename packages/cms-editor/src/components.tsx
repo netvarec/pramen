@@ -775,21 +775,51 @@ function PageToolbar({ page, dirtyCount, onBack, backLabel, onAct, busy }: {
 }) {
   const [preview, setPreview] = useState<string | null>(null);
   const [minting, setMinting] = useState(false);
-  const { api } = useApp();
+  const { api, setError } = useApp();
   const actions = pageWorkflowActions(String(page.status));
   const [primary, ...rest] = actions;
 
+  /**
+   * Mint a preview link, open it, and leave it on screen to be copied.
+   *
+   * The tab is opened SYNCHRONOUSLY, before the round trip, and pointed at the link
+   * afterwards. `window.open` called after an `await` has lost the user gesture that
+   * authorised it and is blocked by every browser's popup blocker — which is exactly why this
+   * used to only reveal a link and make you click it a second time.
+   *
+   * The link is still shown, and still copied: "look at my draft" and "send this to someone
+   * for comment" are both what the button is for, and only one of them ends in the new tab.
+   */
   const mintPreview = async () => {
     setMinting(true);
+    // `null` when the browser blocked it — the revealed link below is then the whole answer,
+    // which is the state this had before and is still a working one.
+    //
+    // No `noopener` FEATURE, deliberately: passing it makes `window.open` return null by
+    // spec, and the handle is the entire point here. The reference is severed after the
+    // navigation instead, which gets the same guarantee — the preview page can never reach
+    // back into the editor through `window.opener`.
+    const tab = window.open("", "_blank");
     try {
       const minted = await api.signPagePreview(page.id);
       const href = pagePreviewHref(minted, { siteUrl: sitePreviewUrl(), resolve: (path) => api.resolve(path) });
       setPreview(href);
+      // `replace`, so the blank placeholder is not a history entry the new tab's Back button
+      // can return to.
+      if (tab) {
+        tab.opener = null;
+        tab.location.replace(href);
+      }
       // Best-effort: the clipboard needs a secure context and a permission, and the link is
       // rendered either way.
       await navigator.clipboard?.writeText(href).catch(() => {});
-    } catch {
+    } catch (e) {
+      // Close the placeholder rather than stranding an about:blank tab, and SAY what went
+      // wrong: minting fails closed when no preview secret is configured, and swallowing that
+      // left a button that looked like it did nothing.
+      tab?.close();
       setPreview(null);
+      setError(errMsg(e));
     } finally {
       setMinting(false);
     }
@@ -830,7 +860,7 @@ function PageToolbar({ page, dirtyCount, onBack, backLabel, onAct, busy }: {
         transient answer, not a permanent row. */}
     {preview ? (
       <div className="mt-3 flex items-center gap-2 rounded-lg bg-surface-muted px-3 py-2 text-caption">
-        <span className="shrink-0 text-fg-subtle">Preview link (copied):</span>
+        <span className="shrink-0 text-fg-subtle">Preview opened in a new tab — link copied:</span>
         <a className="min-w-0 flex-1 truncate underline" href={preview} target="_blank" rel="noreferrer">{preview}</a>
         <Button variant="ghost" size="sm" className="shrink-0 px-2" aria-label="Hide the preview link" onPress={() => setPreview(null)}>✕</Button>
       </div>
