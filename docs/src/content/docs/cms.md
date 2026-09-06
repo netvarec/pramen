@@ -468,8 +468,29 @@ function Curation({ api, basePath, theme, setError }) {
   // …an ordinary screen: local state, focus that survives typing, a dialog, a date input
 }
 
-globalThis.PRAMEN_CMS_EDITOR_RUNTIME.registerPanel({ slug: "curation", render: Curation });
+globalThis.PRAMEN_CMS_EDITOR_RUNTIME.registerPanel({
+  slug: "curation",
+  contract: 1,                          // the panel runtime contract you built against
+  render: Curation,
+});
 ```
+
+`contract` is required, and it is a **literal you write**, not a value read off the runtime.
+Your bundle is compiled against whichever React you have installed and linked, at runtime,
+against the React the editor loaded — and nothing in between notices if those disagree: the
+import map resolves, the shims hand over a perfectly good React, and the mismatch surfaces as
+a missing export or a hook that behaves differently, deep inside your minified bundle. The
+number is the only fact about your build that survives into it, so the editor asks for it and
+**refuses a panel that does not match**, with a message naming the slug and the fix — shown on
+the panel's own route, not only in the console. (Reading it back off
+`PRAMEN_CMS_EDITOR_RUNTIME` would be the editor comparing its number to its own, which is why
+it is not published there.)
+
+The number moves when a React major lands in `@pramen/cms-editor`, when `PanelProps` or
+`PanelApi` loses a key or one changes meaning, or when a name leaves the published runtime.
+It does **not** move for anything else this package releases. When it does move, the fix is to
+rebuild the bundle and then change the literal — in that order; changing the literal alone is
+the one edit that fixes nothing.
 
 A panel is handed four things, and only these:
 

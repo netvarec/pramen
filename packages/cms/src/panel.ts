@@ -38,6 +38,11 @@
 // neither is a sandbox — a panel is part of the admin, not a guest in it. That is the reason
 // `adminPage()` remains the first thing to reach for and this the second.
 //
+// The same reconciliation is written from the other side at the top of `blockkit.ts` — why
+// "do not ship the component tree" and this are one position rather than two, and which of
+// the pair to reach for first. Read together; changing one without the other leaves the
+// framework arguing with itself.
+//
 // A LEAF module, like `href.ts` and `nav.ts`: `blockkit.ts` imports it to widen the
 // registry, and it imports nothing back.
 

@@ -12,9 +12,13 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+  contractRefusal,
   getPanel,
   loadPanelBundles,
+  PANEL_RUNTIME_CONTRACT,
+  PANEL_RUNTIME_REACT_MAJOR,
   panelBundleUrl,
+  panelRefusal,
   panelsSettled,
   panelsVersion,
   readPanelUrls,
@@ -44,7 +48,7 @@ afterEach(() => resetPanels());
 
 describe("registering", () => {
   test("a panel is found by the slug the server listed", () => {
-    registerPanel({ slug: "curation", render: Screen });
+    registerPanel({ slug: "curation", contract: PANEL_RUNTIME_CONTRACT, render: Screen });
     expect(getPanel("curation")?.render).toBe(Screen);
     expect(getPanel("nope")).toBeUndefined();
   });
@@ -53,38 +57,38 @@ describe("registering", () => {
     const before = panelsVersion();
     let woken = 0;
     const stop = subscribePanels(() => void (woken += 1));
-    registerPanel({ slug: "curation", render: Screen });
+    registerPanel({ slug: "curation", contract: PANEL_RUNTIME_CONTRACT, render: Screen });
     expect(woken).toBe(1);
     expect(panelsVersion()).toBeGreaterThan(before);
     stop();
-    registerPanel({ slug: "rota", render: Screen });
+    registerPanel({ slug: "rota", contract: PANEL_RUNTIME_CONTRACT, render: Screen });
     // Unsubscribed means unsubscribed: a torn-down route must not be woken.
     expect(woken).toBe(1);
   });
 
   test("a slug is trimmed, so a stray space in app.ts does not orphan the component", () => {
-    registerPanel({ slug: "  curation  ", render: Screen });
+    registerPanel({ slug: "  curation  ", contract: PANEL_RUNTIME_CONTRACT, render: Screen });
     expect(getPanel("curation")?.slug).toBe("curation");
   });
 
   test("only the slug and the component are kept", () => {
     // A bundle that declares a label or a position is asserting placement with nothing to
     // check it against — those are the server's, and they stay the server's.
-    registerPanel({ slug: "curation", render: Screen, label: "Mine", navOrder: 1 } as never);
+    registerPanel({ slug: "curation", contract: PANEL_RUNTIME_CONTRACT, render: Screen, label: "Mine", navOrder: 1 } as never);
     expect(Object.keys(getPanel("curation")!).sort()).toEqual(["render", "slug"]);
   });
 
   test("a registration with no slug is refused, loudly", () => {
     const { warn, seen } = sink();
-    registerPanel({ slug: "   ", render: Screen }, warn);
-    registerPanel({ render: Screen } as never, warn);
+    registerPanel({ slug: "   ", contract: PANEL_RUNTIME_CONTRACT, render: Screen }, warn);
+    registerPanel({ render: Screen, contract: PANEL_RUNTIME_CONTRACT } as never, warn);
     expect(seen).toHaveLength(2);
     expect(seen[0]).toMatch(/no slug/);
   });
 
   test("a registration whose render is not a function is refused", () => {
     const { warn, seen } = sink();
-    registerPanel({ slug: "curation", render: "<div/>" } as never, warn);
+    registerPanel({ slug: "curation", contract: PANEL_RUNTIME_CONTRACT, render: "<div/>" } as never, warn);
     expect(getPanel("curation")).toBeUndefined();
     expect(seen[0]).toMatch(/must be a React component/);
   });
@@ -97,10 +101,159 @@ describe("registering", () => {
     // behaves.
     const Other = () => null;
     const { warn, seen } = sink();
-    registerPanel({ slug: "curation", render: Screen }, warn);
-    registerPanel({ slug: "curation", render: Other }, warn);
+    registerPanel({ slug: "curation", contract: PANEL_RUNTIME_CONTRACT, render: Screen }, warn);
+    registerPanel({ slug: "curation", contract: PANEL_RUNTIME_CONTRACT, render: Other }, warn);
     expect(getPanel("curation")?.render).toBe(Other);
     expect(seen[0]).toMatch(/registered twice/);
+  });
+});
+
+// --- the runtime contract ----------------------------------------------------------------
+//
+// A panel bundle is compiled at the consumer's build, against whichever React they had, and
+// linked at runtime against the React THIS editor loaded. Nothing in the loading path notices
+// a mismatch: the import map resolves, the shims hand over a perfectly good React, and the
+// failure arrives as a missing export or a differently-behaving hook inside a stranger's
+// minified bundle. The contract number is the only fact about the build that survives into
+// the bundle, so it is the only thing there is to check — and the check is worth as much as
+// the sentence it produces, which is why the wording is asserted and not just the refusal.
+
+describe("the runtime contract", () => {
+  const ahead = PANEL_RUNTIME_CONTRACT + 1;
+
+  test("a bundle built against this editor registers", () => {
+    const { warn, seen } = sink();
+    registerPanel({ slug: "curation", contract: PANEL_RUNTIME_CONTRACT, render: Screen }, warn);
+    expect(getPanel("curation")?.render).toBe(Screen);
+    expect(seen).toEqual([]);
+    expect(panelRefusal("curation")).toBeUndefined();
+  });
+
+  test("a bundle BEHIND this editor is refused, and told to rebuild", () => {
+    // Exercised through `contractRefusal` with the implemented number handed in, because at
+    // contract 1 there is no legal number below ours — and this is the branch the whole
+    // mechanism was built for, so it must not ship with a typecheck as its only evidence.
+    const message = contractRefusal("curation", 1, 2);
+    // Everything a reader needs to act: which panel, which two numbers, and the two steps —
+    // rebuild the bundle, then move the literal. A message missing the second sends someone
+    // to edit the number alone, which is the one fix that changes nothing.
+    expect(message).toContain("'curation'");
+    expect(message).toContain("contract 1");
+    expect(message).toContain("implements 2");
+    expect(message).toMatch(/Rebuild the bundle/);
+    expect(message).toContain("contract: 2");
+    // …and the same number is fine against an editor that implements it.
+    expect(contractRefusal("curation", 2, 2)).toBeUndefined();
+  });
+
+  test("a bundle AHEAD of this editor is refused too, and the fix is the other one", () => {
+    // Not a bundle that is wrong — a deployment that is. The panel was built for a newer
+    // editor than the shell is serving, and rendering it would link it against a runtime
+    // missing whatever the newer contract added. Waving it through because "newer is
+    // probably fine" is how a version check becomes decorative.
+    const { warn, seen } = sink();
+    registerPanel({ slug: "curation", contract: ahead, render: Screen } as never, warn);
+    expect(getPanel("curation")).toBeUndefined();
+    expect(seen).toHaveLength(1);
+    // The console half carries the package prefix; the screen half does not — same sentence,
+    // two readers, and the prefix is a log convention rather than something to show a person
+    // looking at the admin.
+    expect(seen[0]!.startsWith("pramen/cms-editor: The 'curation' panel")).toBe(true);
+    expect(seen[0]).toContain(`contract ${ahead}`);
+    expect(seen[0]).toMatch(/Upgrade @pramen\/cms-editor/);
+    expect(seen[0]).toContain(`implementing contract ${ahead}`);
+  });
+
+  test("a bundle that states nothing is refused — the default that would have waved it through", () => {
+    // The whole set the check exists for: every bundle built before the field existed says
+    // nothing here. Defaulting an absent contract to the current one would admit exactly
+    // those, which is to say all of the ones that are actually stale.
+    const { warn, seen } = sink();
+    registerPanel({ slug: "curation", render: Screen } as never, warn);
+    expect(getPanel("curation")).toBeUndefined();
+    expect(seen[0]).toMatch(/did not state which panel runtime contract/);
+    expect(seen[0]).toContain(`contract: ${PANEL_RUNTIME_CONTRACT}`);
+    expect(seen[0]).toContain(`React ${PANEL_RUNTIME_REACT_MAJOR}`);
+  });
+
+  test("a contract that is not a whole positive number states nothing either", () => {
+    // `"1"` is what a hand-edited config produces, `1.5` and `0` are what a clever
+    // interpolation produces, and `NaN` is what `Number(undefined)` produces. None of them is
+    // a version, and each would otherwise slip past a bare `<` / `>` comparison: `NaN` fails
+    // both, and `"1"` coerces to the right answer for the wrong reason.
+    for (const bad of [undefined, null, "1", 1.5, 0, -1, Number.NaN, Number.POSITIVE_INFINITY, {}]) {
+      expect(contractRefusal("curation", bad)).toMatch(/did not state which panel runtime contract/);
+    }
+    expect(contractRefusal("curation", PANEL_RUNTIME_CONTRACT)).toBeUndefined();
+  });
+
+  test("the refusal is readable where the panel should have been, not only in the console", () => {
+    // `/apps/curation` would otherwise say "no panel is registered — check that the bundle is
+    // listed and calls registerPanel", every clause of which is false here: it is listed, it
+    // loaded, it ran, and it called. The route reads this and shows it instead.
+    const { warn } = sink();
+    registerPanel({ slug: "curation", contract: ahead, render: Screen } as never, warn);
+    expect(panelRefusal("curation")).toContain("'curation'");
+    expect(panelRefusal("curation")).not.toContain("pramen/cms-editor:");
+    expect(panelRefusal("rota")).toBeUndefined();
+  });
+
+  test("a refusal wakes the route, which is otherwise still showing a spinner", () => {
+    const { warn } = sink();
+    let woken = 0;
+    subscribePanels(() => void (woken += 1));
+    registerPanel({ slug: "curation", contract: ahead, render: Screen } as never, warn);
+    expect(woken).toBe(1);
+    expect(panelsVersion()).toBeGreaterThan(0);
+  });
+
+  test("a later good registration clears the refusal — a dev loop must not keep the old message", () => {
+    const { warn } = sink();
+    registerPanel({ slug: "curation", contract: ahead, render: Screen } as never, warn);
+    registerPanel({ slug: "curation", contract: PANEL_RUNTIME_CONTRACT, render: Screen }, warn);
+    expect(getPanel("curation")?.render).toBe(Screen);
+    expect(panelRefusal("curation")).toBeUndefined();
+  });
+
+  test("a render that is not a component is recorded the same way", () => {
+    // Same class of mistake as a bad contract — the bundle ran and was turned away — so it
+    // gets the same treatment, and the route stops claiming nothing registered.
+    const { warn } = sink();
+    registerPanel({ slug: "curation", contract: PANEL_RUNTIME_CONTRACT, render: "<div/>" } as never, warn);
+    expect(panelRefusal("curation")).toMatch(/must be a React component, and this one is of type string/);
+  });
+
+  test("resetPanels clears refusals, or one test's bad bundle is every later test's", () => {
+    const { warn } = sink();
+    registerPanel({ slug: "curation", contract: ahead, render: Screen } as never, warn);
+    resetPanels();
+    expect(panelRefusal("curation")).toBeUndefined();
+  });
+
+  test("the number is pinned, because every deployed bundle has it typed into its source", async () => {
+    // The one constant in this package a consumer COPIES rather than imports. Moving it
+    // invalidates every panel bundle in the field at once — they are all refused until each
+    // is rebuilt — so it must not be possible to move it as a passing edit. And the two
+    // places that tell people what to type are checked against it, since a doc that still
+    // says `contract: 1` after a bump hands every reader the number that will be refused.
+    expect(PANEL_RUNTIME_CONTRACT).toBe(1);
+    for (const doc of ["../docs/src/content/docs/cms.md", "../packages/cms-editor/README.md"]) {
+      const text = await Bun.file(new URL(doc, import.meta.url)).text();
+      expect(text).toContain(`contract: ${PANEL_RUNTIME_CONTRACT},`);
+      expect(text).not.toMatch(new RegExp(`contract: (?!${PANEL_RUNTIME_CONTRACT},)\\d`));
+    }
+  });
+
+  test("the contract records which React major it stands for, and the manifest cannot drift from it", async () => {
+    // The rule that gets missed. A React major upgrade is a line in package.json, nowhere
+    // near panels.ts, done for reasons that have nothing to do with panels — and it moves
+    // every panel bundle ever built onto a React it was not compiled against. So the number
+    // the contract stands for is written down and pinned HERE: bump react and this goes red,
+    // which is the only place the decision to bump the contract can be forced.
+    const manifest = (await import("../packages/cms-editor/package.json")) as { default: { dependencies: Record<string, string> } };
+    const range = manifest.default.dependencies.react!;
+    const major = Number(/(\d+)/.exec(range)?.[1]);
+    expect(major).toBe(PANEL_RUNTIME_REACT_MAJOR);
   });
 });
 
@@ -180,7 +333,7 @@ describe("loading bundles", () => {
     const blocked = new Promise<void>((r) => { release = r; });
     const loading = loadPanelBundles(["/a.js"], async () => {
       await blocked;
-      registerPanel({ slug: "curation", render: Screen });
+      registerPanel({ slug: "curation", contract: PANEL_RUNTIME_CONTRACT, render: Screen });
     });
     // While it is in flight the route must say "Loading…", not "no panel is registered" —
     // this is the whole reason the count exists.
@@ -200,7 +353,7 @@ describe("loading bundles", () => {
       ["/bad.js", "/good.js"],
       async (url) => {
         if (url === "/bad.js") throw new Error("404");
-        registerPanel({ slug: "curation", render: Screen });
+        registerPanel({ slug: "curation", contract: PANEL_RUNTIME_CONTRACT, render: Screen });
       },
       warn,
     );
@@ -260,6 +413,7 @@ describe("PanelProps", () => {
     const api: PanelApi = { call: async () => null, resolve: (p) => `https://cms.example${p}` };
     registerPanel({
       slug: "curation",
+      contract: PANEL_RUNTIME_CONTRACT,
       render: (props) => {
         handed = props;
         return createElement("p", null, `${props.theme} @ ${props.basePath} → ${props.api.resolve("/m/1.jpg")}`);

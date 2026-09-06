@@ -116,8 +116,19 @@ import { useState } from "react";
 
 function Curation({ api, basePath, theme, setError }) { /* ordinary React */ }
 
-globalThis.PRAMEN_CMS_EDITOR_RUNTIME.registerPanel({ slug: "curation", render: Curation });
+globalThis.PRAMEN_CMS_EDITOR_RUNTIME.registerPanel({
+  slug: "curation",
+  contract: 1,          // the panel runtime contract this bundle was BUILT against
+  render: Curation,
+});
 ```
+
+`contract` is required and is a literal you write. Your bundle is compiled against your React
+and linked against the editor's, and nothing in the loading path notices if those disagree —
+so the editor asks which contract you built against and **refuses a mismatch**, naming the
+slug and the fix on the panel's own route. It is not readable off the runtime on purpose:
+that would be this editor checking its own number. `PANEL_RUNTIME_CONTRACT` in `src/panels.ts`
+is the current value and the list of what bumps it.
 
 Build it with **react, react-dom and both JSX runtimes external** — that is the whole
 contract:

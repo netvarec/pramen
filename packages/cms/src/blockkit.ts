@@ -21,6 +21,46 @@
 // `FieldDefinition[]` -> `FieldForm` is already "server-described form, host-rendered". Block
 // Kit is those two taken all the way: arbitrary admin PAGES, not just forms over rows.
 //
+// AND YET `adminPanel()` SHIPS BESIDE IT, WHICH IS PROJECT CODE IN THE BROWSER
+//
+// It does, and the paragraph above is not quietly wrong — the two are one position, not two.
+// What that paragraph rejects is publishing the EDITOR'S COMPONENT LIBRARY so that every
+// project assembles its own admin out of it: that is what makes N forks of the same 80%,
+// because each project then owns the chrome, the nav, the page list, the login and the media
+// browser, and every fix has to be made N times. A panel is the opposite trade — ONE SCREEN,
+// rendered inside chrome that is still ours, at a route that is still ours, from a registry
+// entry that is still the server's. No component API is published: a panel is handed React,
+// four props and nothing else (`panel-runtime.ts` in @pramen/cms-editor is a long argument
+// about what is deliberately absent from that list), so there is nothing to reassemble an
+// admin out of and no reason to fork one.
+//
+// What the objection DOES carry over is version skew, and it is not waved away: a panel is
+// compiled at the project's build, against whichever React they had, and linked at runtime
+// against whichever React the editor loaded. That is why the seam is a numbered contract a
+// bundle must STATE and the editor refuses on mismatch, rather than a promise in a README.
+// Skew becomes one refusal naming the slug and the fix, on the screen the panel should have
+// been — which is precisely what "N per-project forks" never had.
+//
+// WHICH TO REACH FOR, AND WHAT THE SECOND ONE COSTS
+//
+// `adminPage()` for a list-and-form screen: rows, filters, a form, a confirm. No build step,
+// no bundle to keep deployed in step with the admin, no React version to keep aligned, and no
+// project code in the browser at all. `adminPanel()` when the screen IS the interaction —
+// something that responds as you type, a row that expands, a dialog, a canvas, a date input.
+// Those are not elements Block Kit happens to be missing; they are things a server-driven
+// vocabulary cannot express, and the list does not shrink by adding blocks.
+//
+// The cost, stated plainly, because it is what makes that order more than a preference: A
+// PANEL IS TRUSTED CODE. Its bundle runs in the editor's own page with the editor's own
+// session in scope — it can read the stored token, make any call the caller could make, and
+// render anything anywhere on the page. `roles` on `adminPanel()` decides who is SHOWN the
+// screen and the ACL still bounds what the server will do for whoever is asking, but neither
+// constrains the bundle. `PanelApi` is a CONVENIENCE — the one obvious way to make an
+// authenticated call — and not a sandbox; there is no sandbox to be had short of a
+// cross-origin iframe, which would give up the shared chrome that is the entire point. Ship a
+// panel you wrote, from your own origin, and treat its bundle as part of the admin. Block
+// Kit's headline property is that none of this paragraph is ever needed.
+//
 // WHAT IT IS NOT
 //
 // It is not a way to reach past the ACL. A page's `render` is an ordinary handler body: it

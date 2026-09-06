@@ -30,7 +30,10 @@
 //     from the consumer's own node_modules and quietly bundles a second React, which is the
 //     exact failure this whole mechanism exists to prevent, arriving on the one build where
 //     nobody is looking for it.
-//   - `registerPanel` — the registration itself.
+//   - `registerPanel` — the registration itself, and the gate: it refuses a bundle whose
+//     stated contract is not the one this editor implements, naming the slug and the fix.
+//     See `PANEL_RUNTIME_CONTRACT` in `panels.ts` for what bumps that number, and the note
+//     below for why the number itself is not published here.
 //
 // Not published, and each for a reason: the `Api` class (a panel gets the narrow `PanelApi`
 // through props — see `panels.ts`), the router (a panel owns its own screen, not the
@@ -43,7 +46,7 @@ import * as react from "react";
 import * as reactDom from "react-dom";
 import * as jsxRuntime from "react/jsx-runtime";
 import * as jsxDevRuntime from "react/jsx-dev-runtime";
-import { registerPanel, type PanelDefinition } from "./panels";
+import { registerPanel, type PanelRegistration } from "./panels";
 
 /** Where the runtime is published. Namespaced away from `PRAMEN_CMS_EDITOR`, which is the
  * SHELL's config: that object is written by the server and read by the editor, this one is
@@ -51,18 +54,22 @@ import { registerPanel, type PanelDefinition } from "./panels";
  * shell to think it may set part of this. */
 export const PANEL_RUNTIME_GLOBAL = "PRAMEN_CMS_EDITOR_RUNTIME";
 
-/** Bumped only when a published name changes meaning or disappears. A panel bundle built
- * against an older editor can read it and say so, instead of failing at whichever import
- * happens to be first. */
-export const PANEL_RUNTIME_CONTRACT = 1;
+// THE CONTRACT NUMBER IS NOT ON THIS OBJECT, and that omission is the point of the check
+// rather than a gap in it. A panel must state the contract it was BUILT against; publishing
+// ours would put the answer key beside the question, since
+// `PRAMEN_CMS_EDITOR_RUNTIME.contract` is shorter to write than the literal and would satisfy
+// every editor forever — the check would then be this editor comparing its number to its
+// number. The number a panel states is `PANEL_RUNTIME_CONTRACT` in `panels.ts`, taken from
+// the docs or from a refusal message, which prints both sides. It was published here once,
+// read by nothing, and that is exactly what a version guarantee looks like when it is only a
+// field.
 
 export interface PanelRuntime {
-  readonly contract: number;
   readonly react: typeof react;
   readonly reactDom: typeof reactDom;
   readonly jsxRuntime: typeof jsxRuntime;
   readonly jsxDevRuntime: typeof jsxDevRuntime;
-  registerPanel(def: PanelDefinition): void;
+  registerPanel(def: PanelRegistration): void;
 }
 
 /** The host object a panel runtime is published on. */
@@ -72,7 +79,6 @@ export interface PanelRuntimeHost {
 
 export function panelRuntime(): PanelRuntime {
   return {
-    contract: PANEL_RUNTIME_CONTRACT,
     react,
     reactDom,
     jsxRuntime,

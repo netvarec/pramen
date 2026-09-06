@@ -18,7 +18,7 @@ import { useApp } from "../app-context";
 import { AdminPageView } from "../blockkit";
 import { Notice } from "../components";
 import { PanelBoundary } from "../panel-boundary";
-import { getPanel, panelsSettled, panelsVersion, subscribePanels, type PanelProps } from "../panels";
+import { getPanel, panelRefusal, panelsSettled, panelsVersion, subscribePanels, type PanelProps } from "../panels";
 import { useTheme } from "../theme";
 import { adminPageKind } from "../types";
 import { Button } from "@podoba/react";
@@ -67,17 +67,30 @@ function PanelRoute({ slug }: { slug: string }) {
   const panel = useMemo(() => getPanel(slug), [slug, version]);
 
   if (!panel) {
-    // Two different situations, and the second is worth naming rather than spinning on
-    // forever: the server listed this panel (it is in `adminPages`, so the caller may open
+    // Three different situations, and only the first is a spinner.
+    //
+    // A REFUSAL comes first because it is the one the generic message would actively mislead
+    // about: the bundle is listed, it loaded, it ran, and it called `registerPanel` — telling
+    // the reader to go and check those four things sends them past the actual answer. The
+    // registry already holds a sentence naming the slug and the fix (a contract built against
+    // a different editor, a `render` that is not a component), so it is shown verbatim.
+    //
+    // Otherwise: the server listed this panel (it is in `adminPages`, so the caller may open
     // it), which means the bundle either has not landed yet or landed and never registered
-    // this slug. The second is a deployment mistake — a missing `panels` entry, a bundle
-    // built without the `registerPanel` call, a slug typo between `app.ts` and the bundle —
-    // and it is one nobody can diagnose from a spinner.
+    // this slug. The last is a deployment mistake — a missing `panels` entry, a bundle built
+    // without the `registerPanel` call, a slug typo between `app.ts` and the bundle — and it
+    // is one nobody can diagnose from a spinner.
+    //
+    // Read during render, not through a second store: a refusal calls the same `notify` a
+    // registration does, so `version` above is already the subscription that brings this
+    // component back when one is recorded.
+    const refused = panelRefusal(slug);
     return (
       <Notice>
-        {panelsSettled()
-          ? `No panel is registered for '${slug}'. Check that this deployment's panel bundle is listed in the admin's \`panels\` config and calls registerPanel({ slug: "${slug}", … }).`
-          : "Loading…"}
+        {refused ??
+          (panelsSettled()
+            ? `No panel is registered for '${slug}'. Check that this deployment's panel bundle is listed in the admin's \`panels\` config and calls registerPanel({ slug: "${slug}", … }).`
+            : "Loading…")}
       </Notice>
     );
   }

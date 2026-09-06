@@ -28,8 +28,8 @@ import * as jsxRuntime from "react/jsx-runtime";
 import * as jsxDevRuntime from "react/jsx-dev-runtime";
 import * as reactDom from "react-dom";
 import { exportableNames, panelShimSource, PANEL_GLOBAL_SHIMS, type ModuleNamespace, type PanelGlobalShim } from "../packages/cms-editor/src/panel-globals";
-import { PANEL_RUNTIME_CONTRACT, PANEL_RUNTIME_GLOBAL, panelRuntime, type PanelRuntimeHost } from "../packages/cms-editor/src/panel-runtime";
-import { getPanel, registerPanel, resetPanels, type PanelDefinition } from "../packages/cms-editor/src/panels";
+import { PANEL_RUNTIME_GLOBAL, panelRuntime, type PanelRuntimeHost } from "../packages/cms-editor/src/panel-runtime";
+import { getPanel, PANEL_RUNTIME_CONTRACT, registerPanel, resetPanels, type PanelRegistration } from "../packages/cms-editor/src/panels";
 
 /** The namespace behind one shim's runtime key — the same four the editor publishes. */
 function namespaceFor(key: PanelGlobalShim["runtimeKey"]): ModuleNamespace {
@@ -178,7 +178,7 @@ describe("a panel bundle built against the editor's React", () => {
        export const portalSeen = createPortal;
        function Curation() { const [n] = useState(0); return <div>{n}</div>; }
        export const element = <Curation />;
-       globalThis.${PANEL_RUNTIME_GLOBAL}.registerPanel({ slug: "${name}", render: Curation });
+       globalThis.${PANEL_RUNTIME_GLOBAL}.registerPanel({ slug: "${name}", contract: ${PANEL_RUNTIME_CONTRACT}, render: Curation });
       `,
     );
     const built = await Bun.build({
@@ -238,8 +238,16 @@ describe("the published runtime", () => {
   test("is the names a panel needs, and no more", () => {
     // Every key here is something this package can never move again, so the set is pinned:
     // adding one is a decision, and this test is where it gets made rather than noticed.
-    expect(Object.keys(panelRuntime()).sort()).toEqual(["contract", "jsxDevRuntime", "jsxRuntime", "react", "reactDom", "registerPanel"]);
-    expect(panelRuntime().contract).toBe(PANEL_RUNTIME_CONTRACT);
+    expect(Object.keys(panelRuntime()).sort()).toEqual(["jsxDevRuntime", "jsxRuntime", "react", "reactDom", "registerPanel"]);
+  });
+
+  test("does NOT publish the contract number — that would be the answer key", () => {
+    // A panel has to state the contract it was BUILT against, and the only statement about
+    // the build that survives into a bundle is a literal in its source. Published here, the
+    // number would be one property access away from being passed straight back into
+    // `registerPanel`, and the check would be this editor comparing its number to its own —
+    // green against every editor forever, which is the hole it exists to close.
+    expect("contract" in panelRuntime()).toBe(false);
   });
 
   test("hands out the same React the editor renders with", () => {
@@ -260,8 +268,8 @@ describe("the published runtime", () => {
     const intercepted: string[] = [];
     const rt = panelRuntime();
     const Screen = () => null;
-    rt.registerPanel({ slug: "seam", render: Screen });
-    (rt.registerPanel as (d: PanelDefinition, w: (m: string) => void) => void)({ slug: "seam", render: Screen }, (m) => void intercepted.push(m));
+    rt.registerPanel({ slug: "seam", contract: PANEL_RUNTIME_CONTRACT, render: Screen });
+    (rt.registerPanel as (d: PanelRegistration, w: (m: string) => void) => void)({ slug: "seam", contract: PANEL_RUNTIME_CONTRACT, render: Screen }, (m) => void intercepted.push(m));
     // The duplicate above WOULD have warned; it went to the console, not to the sink a
     // bundle handed in.
     expect(intercepted).toEqual([]);

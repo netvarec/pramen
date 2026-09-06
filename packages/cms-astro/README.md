@@ -138,7 +138,9 @@ For the admin screen Block Kit (`adminPage()`) cannot describe — one that need
 interaction, a dialog, a redirect — declare an `adminPanel()` in `app.ts` and point this at
 the built bundle. The entry stays a server fact (label, position, `roles`, so the role filter
 is the same one Block Kit pages get); the bundle supplies only the component, through
-`globalThis.PRAMEN_CMS_EDITOR_RUNTIME.registerPanel({ slug, render })`.
+`globalThis.PRAMEN_CMS_EDITOR_RUNTIME.registerPanel({ slug, contract, render })` — where
+`contract` is the panel runtime contract the bundle was built against, a literal the editor
+refuses on mismatch.
 
 Build it with `react`, `react-dom`, `react/jsx-runtime` and `react/jsx-dev-runtime` marked
 **external**: the shell emits an import map that resolves them to the React the editor already

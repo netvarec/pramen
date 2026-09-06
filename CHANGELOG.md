@@ -68,6 +68,25 @@ there are no backward-compatibility guarantees yet.
   a bad panel does not break a screen, it blanks the admin: no sidebar, and no way off the route
   that is failing. The fallback names the panel and the failure; the chrome survives.
 
+  A registration must **state the runtime contract it was built against** (`contract: 1`), and a
+  mismatch is REFUSED. A panel bundle is compiled at the project's build against whichever React
+  it has installed and linked at runtime against the React the editor loaded; nothing in the
+  loading path notices when those disagree, so a React major in `@pramen/cms-editor` would move
+  every existing bundle onto a React it was never built for, surfacing as a missing export or a
+  differently-behaving hook inside a stranger's minified bundle. The number is the only fact
+  about the BUILD that survives into it — which is also why it is a literal in the bundle's
+  source and is deliberately **not** published on `PRAMEN_CMS_EDITOR_RUNTIME`: a number read off
+  the runtime and passed back would be the editor comparing its own value to itself, green
+  against every editor forever. Both directions are refused (a stale bundle is told to rebuild,
+  a bundle built for a newer editor is told the deployment is out of step), and the refusal is
+  rendered on the panel's own route naming the slug and the fix, rather than only warned to the
+  console under the generic "no panel is registered for this slug" — which would be true and
+  useless, since the bundle is listed, loaded, ran and called `registerPanel`. What bumps the
+  number is written down at `PANEL_RUNTIME_CONTRACT` (a React major here, a change to what a
+  panel is handed, a name leaving the published runtime — and nothing else), and a test pins it
+  to the `react` range in the package manifest so a React upgrade cannot silently leave it
+  behind.
+
   **ACTION REQUIRED (none for existing deployments; one for anyone reading `listAdminPages`).**
   `AdminPageMeta` now carries `kind: "blocks" | "panel"`. Every existing `adminPage()` reports
   `"blocks"`, and the editor treats an absent or unrecognised kind as `"blocks"`, so an older
