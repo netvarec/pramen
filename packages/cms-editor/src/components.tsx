@@ -47,9 +47,21 @@ export interface PageAction {
  *
  * The head of the list is the toolbar's primary button and the tail goes in its menu, so the
  * ORDER is the contract: a draft's obvious next move is Publish, a page in review is waiting
- * for Approve, and a published page's only move is to take it down. Showing transitions the
- * server would reject (an "Approve" on a draft) is how a UI teaches someone that its buttons
- * lie; the server still enforces the role gate on every one of these.
+ * for Approve, and a page that is already live is one someone came back to in order to
+ * change it. Showing transitions the server would reject (an "Approve" on a draft) is how a
+ * UI teaches someone that its buttons lie; the server still enforces the role gate on every
+ * one of these.
+ *
+ * `published` used to offer Unpublish and nothing else, on the reading that publishing is a
+ * one-way status flip and a live page has nowhere left to go. That reading is wrong about
+ * what `publishPage` DOES: it bakes the assembled page into a revision and points
+ * `currentRevisionId` at it, and that snapshot — not the row the editor has been writing to
+ * — is what the public content API serves. So an edit to a live page saves, versions,
+ * shows in History, and is invisible on the site, with no button anywhere that would put it
+ * there. The only way through was Unpublish followed by Publish, which takes the page OFF
+ * the internet to push a typo fix. Re-publishing is idempotent (`doPublish` re-snapshots and
+ * writes an audit row), so it is offered first and Unpublish moves to the menu, where a
+ * destructive action belongs anyway.
  */
 export function pageWorkflowActions(status: string): PageAction[] {
   switch (status) {
@@ -62,7 +74,12 @@ export function pageWorkflowActions(status: string): PageAction[] {
         { label: "Publish directly", action: "publishPage" },
       ];
     case "published":
-      return [{ label: "Unpublish", action: "unpublishPage" }];
+      return [
+        // "changes", not "Publish": the page is already published, so the bare verb would
+        // read as a no-op and leave the button looking like it belongs to some other page.
+        { label: "Publish changes", action: "publishPage" },
+        { label: "Unpublish", action: "unpublishPage" },
+      ];
     default: // draft | rejected | archived
       return [
         { label: "Publish", action: "publishPage" },

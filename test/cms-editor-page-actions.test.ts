@@ -27,8 +27,27 @@ describe("what a page can do from where it is", () => {
     expect(handlers("review")).toContain("reject");
   });
 
-  test("a published page's only move is to take it down", () => {
-    expect(handlers("published")).toEqual(["unpublishPage"]);
+  test("a live page can be re-published — that is how an edit reaches the site", () => {
+    // The public content API serves the revision snapshot `publishPage` bakes, NOT the page
+    // row. Without this action an edit to a live page saves, versions and shows in History
+    // while the site keeps serving the text it had at first publish, and the only way
+    // through is Unpublish → Publish, which takes the page off the internet to fix a typo.
+    expect(handlers("published")[0]).toBe("publishPage");
+    expect(labels("published")[0]).toBe("Publish changes");
+  });
+
+  test("taking a live page down is still offered, but not as the primary button", () => {
+    // Unpublish is the destructive half of this pair and it is no longer what the toolbar
+    // pushes at you; it stays reachable in the overflow menu.
+    expect(handlers("published")).toContain("unpublishPage");
+    expect(handlers("published")[0]).not.toBe("unpublishPage");
+  });
+
+  test("the live page's primary label does not read as a no-op", () => {
+    // A bare "Publish" on a page that is already published reads as a button belonging to
+    // some other page. The word that carries the meaning is what is being published.
+    expect(labels("published")[0]).not.toBe("Publish");
+    expect(labels("published")[0]).toContain("changes");
   });
 
   test("rejected and archived get the draft actions — they are editable again", () => {
