@@ -20,7 +20,8 @@ import { useCallback, useEffect, useState } from "react";
 import type { Api } from "./api";
 import { CONTROL } from "./fields";
 import { WRAP } from "./chrome";
-import type { AdminBlock, AdminElement, AdminInput, AdminPageResponse, JsonValue } from "./types";
+import { ADMIN_ELEMENT_TYPES } from "./types";
+import type { AdminBlock, AdminCell, AdminElement, AdminInput, AdminPageResponse, JsonValue } from "./types";
 
 
 /** Values held for the inputs of one block, keyed by `action_id`. */
@@ -138,10 +139,10 @@ export function BlockList({ blocks, values, setValue, disabled, onFire }: { bloc
   );
 }
 
-/** A stable React key for a block. `form` carries a required `block_id`; `actions` may.
- * Prefixed so a block_id can never collide with a bare index from a sibling. */
+/** A stable React key for a block. `form` carries a required `block_id`; `actions` and
+ * `table` may. Prefixed so a block_id can never collide with a bare index from a sibling. */
 function blockKey(block: AdminBlock, i: number): string {
-  const id = block.type === "form" ? block.block_id : block.type === "actions" ? block.block_id : undefined;
+  const id = block.type === "form" || block.type === "actions" || block.type === "table" ? block.block_id : undefined;
   return id ? `id:${id}` : `${block.type}:${i}`;
 }
 
@@ -188,7 +189,10 @@ function BlockView({ block, values, setValue, disabled, onFire }: { block: Admin
         </div>
       );
     case "table":
-      return <TableBlock block={block} />;
+      // The only interactive-capable block that used NOT to get the value bag. A row could
+      // show that a venue is hidden and could not offer the switch, so a list of 800 rows
+      // had to be written as 800 `actions` blocks — a table with the table taken out.
+      return <TableBlock block={block} values={values} setValue={setValue} disabled={disabled} onFire={onFire} />;
     case "image":
       return (
         <figure className="m-0">
@@ -222,7 +226,7 @@ function BlockView({ block, values, setValue, disabled, onFire }: { block: Admin
   }
 }
 
-function TableBlock({ block }: { block: Extract<AdminBlock, { type: "table" }> }) {
+function TableBlock({ block, values, setValue, disabled, onFire }: { block: Extract<AdminBlock, { type: "table" }>; disabled: boolean; onFire: (f: Fired) => void } & ValueBag) {
   if (block.rows.length === 0) return <p className="text-sm text-fg-subtle">{block.empty ?? "Nothing here."}</p>;
   return (
     // Wide tables scroll INSIDE their own container; the page must not scroll sideways.
@@ -239,7 +243,9 @@ function TableBlock({ block }: { block: Extract<AdminBlock, { type: "table" }> }
           {block.rows.map((row, i) => (
             <tr key={i}>
               {block.columns.map((c) => (
-                <td key={c.key} className="border-b border-border px-3 py-2 text-fg">{cell(row[c.key])}</td>
+                <td key={c.key} className="border-b border-border px-3 py-2 text-fg">
+                  <CellView value={row[c.key]} blockId={block.block_id} values={values} setValue={setValue} disabled={disabled} onFire={onFire} />
+                </td>
               ))}
             </tr>
           ))}
@@ -249,9 +255,31 @@ function TableBlock({ block }: { block: Extract<AdminBlock, { type: "table" }> }
   );
 }
 
-function cell(v: string | number | boolean | null | undefined): string {
+/** One cell: a value to read, or a control to act with.
+ *
+ * A cell's element is the SAME `ElementView` an `actions` block renders, on the same page
+ * value bag and the same `onFire` — a row's button is not a special kind of button, it is a
+ * button that happens to sit in a row. What identifies the row is the button's `value`,
+ * which is the idiom that already existed ("one `action_id` can serve a row"); an input in a
+ * cell has to carry a per-row `action_id` instead, since the bag is keyed by it, and the
+ * server refuses a response where two of them collide. */
+function CellView({ value, blockId, values, setValue, disabled, onFire }: { value: AdminCell | undefined; blockId?: string; disabled: boolean; onFire: (f: Fired) => void } & ValueBag) {
+  if (isElementCell(value)) return <ElementView el={value} blockId={blockId} compact values={values} setValue={setValue} disabled={disabled} onFire={onFire} />;
+  return <>{cell(value)}</>;
+}
+
+/** A cell is a value or an element, told apart by shape — the same discrimination the server
+ * enforces on the way out, so nothing else can be an object by the time it gets here. */
+function isElementCell(v: AdminCell | undefined): v is AdminElement {
+  return v !== null && typeof v === "object" && (ADMIN_ELEMENT_TYPES as readonly string[]).includes(v.type);
+}
+
+function cell(v: AdminCell | undefined): string {
   if (v === null || v === undefined) return "";
   if (typeof v === "boolean") return v ? "yes" : "no";
+  // An object that is not an element cannot reach a browser through a checked response; if
+  // one does, it is named rather than stringified into `[object Object]`.
+  if (typeof v === "object") return `[unsupported cell: ${String(v.type)}]`;
   return String(v);
 }
 
@@ -260,26 +288,44 @@ function ActionsBlock({ block, values, setValue, disabled, onFire }: { block: Ex
   // `onFire` attaches the whole bag, so a filter in this block reaches a button in another.
   return (
     <div className="flex flex-wrap items-end gap-3">
-      {block.elements.map((el, i) =>
-        el.type === "button" ? (
-          <Button
-            key={i}
-            variant={el.style === "primary" ? "primary" : el.style === "danger" ? "ghost" : "secondary"}
-            className={el.style === "danger" ? "text-danger" : undefined}
-            isDisabled={disabled}
-            onPress={() => {
-              if (el.confirm && !confirm(el.confirm)) return;
-              onFire({ type: "block_action", action_id: el.action_id, block_id: block.block_id, value: el.value ?? null });
-            }}
-          >
-            {el.label}
-          </Button>
-        ) : (
-          <InputView key={el.action_id} input={el} value={values[el.action_id]} onChange={(v) => setValue(el.action_id, v)} disabled={disabled} />
-        ),
-      )}
+      {block.elements.map((el, i) => (
+        <ElementView key={el.type === "button" ? `b:${i}` : `i:${el.action_id}`} el={el} blockId={block.block_id} values={values} setValue={setValue} disabled={disabled} onFire={onFire} />
+      ))}
     </div>
   );
+}
+
+/**
+ * One element — a button that fires, or an input bound to the page's value bag.
+ *
+ * Shared by `actions` and by a table cell so that the two cannot drift: a row's control has
+ * to reach the handler with exactly what a toolbar control reaches it with, or "the button
+ * in the row" becomes a second, weaker kind of button.
+ *
+ * `compact` is a rendering decision, not vocabulary: a control inside a data row is not a
+ * toolbar call-to-action, and 800 pill buttons at CTA size make a table unreadable. The
+ * server says what the control IS; the host decides how big it draws.
+ */
+function ElementView({ el, blockId, compact, values, setValue, disabled, onFire }: { el: AdminElement; blockId?: string; compact?: boolean; disabled: boolean; onFire: (f: Fired) => void } & ValueBag) {
+  if (el.type === "button") {
+    return (
+      <Button
+        size={compact ? "sm" : undefined}
+        variant={el.style === "primary" ? "primary" : el.style === "danger" ? "ghost" : "secondary"}
+        className={el.style === "danger" ? "text-danger" : undefined}
+        isDisabled={disabled}
+        onPress={() => {
+          if (el.confirm && !confirm(el.confirm)) return;
+          // `value` is what identifies the ROW: one `action_id` serves every row of a table,
+          // and the value says which one it was.
+          onFire({ type: "block_action", action_id: el.action_id, block_id: blockId, value: el.value ?? null });
+        }}
+      >
+        {el.label}
+      </Button>
+    );
+  }
+  return <InputView input={el} value={values[el.action_id]} onChange={(v) => setValue(el.action_id, v)} disabled={disabled} />;
 }
 
 function FormBlock({ block, values, setValue, disabled, onFire }: { block: Extract<AdminBlock, { type: "form" }>; disabled: boolean; onFire: (f: Fired) => void } & ValueBag) {
@@ -313,20 +359,27 @@ function FormBlock({ block, values, setValue, disabled, onFire }: { block: Extra
 
 const isInput = (el: AdminElement): el is AdminInput => el.type !== "button";
 
-/** Every input on a page, in declaration order, including those nested in `columns` and
- * `accordion`. The page seeds its whole value bag from this on every response. */
+/** Every input on a page, in declaration order, including those in table cells and those
+ * nested in `columns` and `accordion`. The page seeds its whole value bag from this on every
+ * response — an input the walk misses renders empty however good its `initial_value` was,
+ * and then submits that emptiness. */
 function collectInputs(blocks: readonly AdminBlock[], out: AdminInput[] = []): AdminInput[] {
   for (const b of blocks) {
     if (b.type === "form") out.push(...b.fields);
     else if (b.type === "actions") out.push(...b.elements.filter(isInput));
+    // Only cells a COLUMN names, because only those are rendered — the same set the server
+    // checks for colliding `action_id`s, so the two halves agree on what is on the page.
+    else if (b.type === "table") for (const row of b.rows) for (const c of b.columns) { const v = row[c.key]; if (isElementCell(v) && isInput(v)) out.push(v); }
     else if (b.type === "columns") for (const col of b.columns) collectInputs(col, out);
     else if (b.type === "accordion") collectInputs(b.blocks, out);
   }
   return out;
 }
 
-/** The page's value bag as a fresh response describes it. */
-function seedValues(blocks: readonly AdminBlock[]): BlockValues {
+/** The page's value bag as a fresh response describes it. Exported for the test that holds
+ * the seeding contract: it is a pure function of one response, and a table cell's input is
+ * only reachable through it. */
+export function seedValues(blocks: readonly AdminBlock[]): BlockValues {
   return initialValues(collectInputs(blocks));
 }
 
@@ -353,11 +406,31 @@ function InputView({ input, value, onChange, disabled }: { input: AdminInput; va
     </span>
   ) : null;
 
+  /**
+   * The server's verdict on THIS field, under the field it is about.
+   *
+   * The page-level `toast` was the only failure surface there was, and it is the wrong one
+   * for "25:00 is not a time" or "the end is before the start": it names no field, it is
+   * gone in three seconds, and it floats at the top of a form whose sixth input is the
+   * problem. It cannot be worked around from the page either — `form` renders a flat list of
+   * inputs, so a page cannot interleave a `context` block to put the message where it
+   * belongs.
+   *
+   * It is drawn from the response, not from state: the whole page re-renders on every
+   * interaction, so the error is exactly as old as the values beside it and there is nothing
+   * to invalidate. `role="alert"` because it appears in answer to something the user just
+   * did, so a screen reader has to be told without being asked.
+   */
+  const error = input.error ? (
+    <span role="alert" className="text-caption text-danger">{input.error}</span>
+  ) : null;
+
   if (input.type === "toggle") {
     return (
       <label className="flex items-center gap-2">
-        <input type="checkbox" checked={value === true} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
+        <input type="checkbox" checked={value === true} disabled={disabled} aria-invalid={input.error ? true : undefined} onChange={(e) => onChange(e.target.checked)} />
         <span className="text-sm text-fg">{input.label ?? input.action_id}</span>
+        {error}
       </label>
     );
   }
@@ -366,7 +439,7 @@ function InputView({ input, value, onChange, disabled }: { input: AdminInput; va
     <label className="flex min-w-[180px] flex-col gap-1.5">
       {label}
       {input.type === "select" ? (
-        <select className={CONTROL} value={typeof value === "string" ? value : ""} disabled={disabled} aria-label={input.label ?? input.action_id} onChange={(e) => onChange(e.target.value)}>
+        <select className={CONTROL} value={typeof value === "string" ? value : ""} disabled={disabled} aria-invalid={input.error ? true : undefined} aria-label={input.label ?? input.action_id} onChange={(e) => onChange(e.target.value)}>
           <option value="">—</option>
           {input.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
@@ -378,6 +451,7 @@ function InputView({ input, value, onChange, disabled }: { input: AdminInput; va
           max={input.max}
           placeholder={input.placeholder}
           disabled={disabled}
+          aria-invalid={input.error ? true : undefined}
           aria-label={input.label ?? input.action_id}
           value={typeof value === "number" ? String(value) : ""}
           onChange={(e) => onChange(e.target.value === "" ? null : Number(e.target.value))}
@@ -387,6 +461,7 @@ function InputView({ input, value, onChange, disabled }: { input: AdminInput; va
           className={`${CONTROL} h-auto min-h-24 py-2.5`}
           placeholder={input.placeholder}
           disabled={disabled}
+          aria-invalid={input.error ? true : undefined}
           aria-label={input.label ?? input.action_id}
           value={typeof value === "string" ? value : ""}
           onChange={(e) => onChange(e.target.value)}
@@ -400,11 +475,13 @@ function InputView({ input, value, onChange, disabled }: { input: AdminInput; va
           autoComplete={input.type === "secret_input" ? "new-password" : undefined}
           placeholder={input.placeholder}
           disabled={disabled}
+          aria-invalid={input.error ? true : undefined}
           aria-label={input.label ?? input.action_id}
           value={typeof value === "string" ? value : ""}
           onChange={(e) => onChange(e.target.value)}
         />
       )}
+      {error}
     </label>
   );
 }

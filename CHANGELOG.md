@@ -16,6 +16,40 @@ there are no backward-compatibility guarantees yet.
 
 ### Added
 
+- **Block Kit: a table row can act, and a field can be wrong (`@pramen/cms`, `@pramen/cms-editor`).**
+  Two gaps that between them decided whether a project screen could be an `adminPage` at all.
+
+  A **table cell may now hold an element** (`AdminCell = string | number | boolean | null |
+  AdminElement`), and `table` takes an optional `block_id`. `TableBlock` was the one
+  interactive-capable block the editor never handed the value bag or `onFire` to, so a list of
+  830 venues with a per-row control had to be written as 830 `actions` blocks — a table with the
+  table taken out of it. The element goes in the CELL rather than in a per-column declaration
+  because everything about a row's control is a fact of the row: the `value` is that row's id,
+  the label is "Hide" or "Show" depending on its state, and a row that must not be touched
+  carries no control. A cell renders its element through the same `ElementView` an `actions`
+  block uses, on the same page value bag, so a row's button reaches the handler with exactly
+  what a toolbar button reaches it with — the row is identified by the button's `value`, the
+  idiom that already existed. Values and elements are told apart by SHAPE (an element is an
+  object, a display value never is), and `normalizeAdminResponse` enforces it, so `rows: found`
+  is named at the boundary instead of rendering a column of `[object Object]`.
+
+  An **input** in a cell has no such carrier — the editor keys the page's whole value bag by
+  `action_id` — so a per-row input must mint a per-row id (`hours:<row id>`), and a response
+  where two inputs share one `action_id` is now REFUSED with a message that says so. That check
+  is page-wide (form, actions and cells share one bag), and it is new for existing pages too: an
+  `action_id` reused across two inputs was already one field wearing two hats, which only ever
+  showed up as a field that mysteriously carried someone else's value. Buttons are deliberately
+  not claimed — repeating one down a column is how a row column is written.
+
+  Every input also takes an optional **`error`**, drawn under that input (`role="alert"`, with
+  `aria-invalid` on the control). The page-level `toast` was the only failure surface there was,
+  and it is the wrong one for "25:00 is not a time": it names no field, it is gone in three
+  seconds while the bad value is still on screen, and `form` renders a flat list of inputs, so a
+  page could not even interleave a `context` block to put the message where it belongs. Errors
+  are part of the render, not client state — the whole page comes back on every interaction — and
+  they do not block submitting the fix. The generic "Fill in: …" hint for empty required fields
+  is unchanged; the two answer different questions.
+
 - **`app.migrations` — imperative, recorded data migrations (`@pramen/server`).** Schema
   reconciliation is a diff between two table SHAPES, so it can only ever enact structure: there
   was no way to express a TRANSFORMATION — split a column, backfill the nullable column

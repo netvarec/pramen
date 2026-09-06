@@ -19,6 +19,7 @@
 
 import { describe, expect, test } from "bun:test";
 import {
+  ADMIN_ELEMENT_TYPES,
   FIELD_TYPES,
   MAX_MENU_DEPTH,
   MEDIA_KINDS,
@@ -27,6 +28,7 @@ import {
   TAXONOMY_TARGETS,
 } from "../packages/cms/src/index";
 import {
+  ADMIN_ELEMENT_TYPES as EDITOR_ADMIN_ELEMENT_TYPES,
   MAX_MENU_DEPTH as EDITOR_MAX_MENU_DEPTH,
   MEDIA_KIND_LABELS,
   MEDIA_KINDS as EDITOR_MEDIA_KINDS,
@@ -51,6 +53,15 @@ describe("mirrors that must match exactly", () => {
     // The builder offers exactly what the runtime knows. A type it offered and the server
     // did not is a 400 on save; one the server knew and it did not is unauthorable.
     expect(EDITOR_FIELD_TYPES).toEqual(FIELD_TYPES);
+  });
+
+  test("ADMIN_ELEMENT_TYPES", () => {
+    // A Block Kit table cell is a display value OR an element, told apart by shape: the
+    // server refuses an object that is not one of these tags, and the editor decides from
+    // its own copy whether a cell draws as text or as a control. A tag the server lets
+    // through and the editor has not heard of is a live control rendered as
+    // `[unsupported cell: …]`; one the editor knows and the server does not is unauthorable.
+    expect([...EDITOR_ADMIN_ELEMENT_TYPES]).toEqual([...ADMIN_ELEMENT_TYPES]);
   });
 
   test("REDIRECT_STATUSES", () => {

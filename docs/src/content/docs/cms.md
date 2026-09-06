@@ -390,6 +390,33 @@ runs in the admin**. Blocks: `header`, `section`, `context`, `divider`, `fields`
 `stats`, `image`, `columns`, `accordion`, `empty`, `actions`, `form`. Inputs: `text_input`,
 `number_input`, `select`, `toggle`, `secret_input`.
 
+**A row can act.** A table cell holds either a value or an *element*, so the control lives
+where the thing it acts on is — no `actions` block per row:
+
+```ts
+{ type: "table", block_id: "venues", columns: [{ key: "name", label: "Name" }, { key: "act", label: "" }],
+  rows: venues.map((v) => ({
+    name: v.name,
+    act: { type: "button", action_id: "toggle", label: v.hidden ? "Show" : "Hide", value: v.id },
+  })) }
+```
+
+One `action_id` serves the whole column; the button's **`value` is what identifies the row**
+(`i.value` in `render`). An **input** in a cell has no such carrier — the editor keys the
+page's whole value bag by `action_id` — so a per-row input must mint a **per-row id**
+(``action_id: `hours:${v.id}` ``), and a response where two inputs share one is refused with a
+message saying so, rather than silently rendering one field 830 times.
+
+**A field can be wrong.** Every input takes an optional `error`, drawn under that input:
+
+```ts
+{ type: "text_input", action_id: "from", label: "From", initial_value: "25:00", error: "25:00 is not a time" }
+```
+
+Use it for anything the *field* got wrong ("the end is before the start"); `toast` stays the
+page-level message. Errors are part of the render, not client state — the whole page comes
+back on every interaction, so an error lasts exactly as long as the response carrying it.
+
 `render` is an ordinary handler body with the caller's own context, so `ctx.db` is scoped by
 the same policies as everywhere else — Block Kit removes the browser code, not the boundary.
 There is no ACL fragment to spread. `listAdminPages` is role-**filtered**, so a page you may

@@ -431,15 +431,19 @@ export interface WidgetArea {
 
 // --- Block Kit: custom admin pages (mirrors @pramen/cms `./blockkit`) ----------------
 
-/** An input a Block Kit form or actions row can carry. */
+/** An input a Block Kit form, actions row or table cell can carry.
+ *
+ * `error` is the per-FIELD failure, drawn under the input it belongs to. It is part of the
+ * render, not client state: the whole page comes back on every interaction, so an error
+ * lasts exactly as long as the response that carried it. */
 export type AdminInput =
-  | { type: "text_input"; action_id: string; label?: string; placeholder?: string; initial_value?: string; multiline?: boolean; required?: boolean }
-  | { type: "number_input"; action_id: string; label?: string; placeholder?: string; initial_value?: number; min?: number; max?: number; required?: boolean }
-  | { type: "select"; action_id: string; label?: string; options: { value: string; label: string }[]; initial_value?: string; required?: boolean }
-  | { type: "toggle"; action_id: string; label?: string; initial_value?: boolean }
+  | { type: "text_input"; action_id: string; label?: string; placeholder?: string; initial_value?: string; multiline?: boolean; required?: boolean; error?: string }
+  | { type: "number_input"; action_id: string; label?: string; placeholder?: string; initial_value?: number; min?: number; max?: number; required?: boolean; error?: string }
+  | { type: "select"; action_id: string; label?: string; options: { value: string; label: string }[]; initial_value?: string; required?: boolean; error?: string }
+  | { type: "toggle"; action_id: string; label?: string; initial_value?: boolean; error?: string }
   /** Write-only: deliberately has NO `initial_value`, so a stored secret is never echoed
    * back into the admin's DOM. */
-  | { type: "secret_input"; action_id: string; label?: string; placeholder?: string; required?: boolean };
+  | { type: "secret_input"; action_id: string; label?: string; placeholder?: string; required?: boolean; error?: string };
 
 export interface AdminButton {
   type: "button";
@@ -453,13 +457,24 @@ export interface AdminButton {
 
 export type AdminElement = AdminButton | AdminInput;
 
+/** Every `AdminElement` tag, as a runtime set — the editor needs it to decide whether a
+ * table cell draws as text or as a control. Mirrors `@pramen/cms`; the two are asserted
+ * equal in `test/cms-editor-mirrors.test.ts`, because a tag missing here renders a live
+ * control as `[object Object]`. */
+export const ADMIN_ELEMENT_TYPES = ["button", "text_input", "number_input", "select", "toggle", "secret_input"] as const;
+
+/** What one table cell holds: a value to READ, or an element to ACT with. Told apart by
+ * shape — a display value is a primitive, an element is an object. The server refuses any
+ * other object on the way out. */
+export type AdminCell = string | number | boolean | null | AdminElement;
+
 export type AdminBlock =
   | { type: "header"; text: string; level?: 1 | 2 | 3 }
   | { type: "section"; text: string }
   | { type: "divider" }
   | { type: "context"; text: string }
   | { type: "fields"; fields: { label: string; value: string }[] }
-  | { type: "table"; columns: { key: string; label: string }[]; rows: Record<string, string | number | boolean | null>[]; empty?: string }
+  | { type: "table"; block_id?: string; columns: { key: string; label: string }[]; rows: Record<string, AdminCell>[]; empty?: string }
   | { type: "stats"; stats: { label: string; value: string; hint?: string }[] }
   | { type: "actions"; block_id?: string; elements: AdminElement[] }
   | { type: "form"; block_id: string; fields: AdminInput[]; submit: { label: string; action_id: string } }

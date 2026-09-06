@@ -43,16 +43,23 @@ import { NAV_ORDER } from "./nav";
  * string through React, so there is no HTML path here to sanitize. */
 export type AdminText = string;
 
-/** An input a form (or an actions row) can carry. */
+/** An input a form, an actions row or a table cell can carry.
+ *
+ * `error` is the per-FIELD failure, rendered under the offending input. The page-level
+ * `toast` cannot do that job: it names no field, it is gone in three seconds while the bad
+ * value is still on screen, and a form with six inputs gives the reader no way to tell which
+ * one "25:00 is not a time" is about. It is a plain part of the render — the whole page
+ * comes back on every interaction, so an error lives exactly as long as the response that
+ * carried it, and there is nothing to clear. */
 export type AdminInput =
-  | { type: "text_input"; action_id: string; label?: AdminText; placeholder?: AdminText; initial_value?: string; multiline?: boolean; required?: boolean }
-  | { type: "number_input"; action_id: string; label?: AdminText; placeholder?: AdminText; initial_value?: number; min?: number; max?: number; required?: boolean }
-  | { type: "select"; action_id: string; label?: AdminText; options: { value: string; label: AdminText }[]; initial_value?: string; required?: boolean }
-  | { type: "toggle"; action_id: string; label?: AdminText; initial_value?: boolean }
+  | { type: "text_input"; action_id: string; label?: AdminText; placeholder?: AdminText; initial_value?: string; multiline?: boolean; required?: boolean; error?: AdminText }
+  | { type: "number_input"; action_id: string; label?: AdminText; placeholder?: AdminText; initial_value?: number; min?: number; max?: number; required?: boolean; error?: AdminText }
+  | { type: "select"; action_id: string; label?: AdminText; options: { value: string; label: AdminText }[]; initial_value?: string; required?: boolean; error?: AdminText }
+  | { type: "toggle"; action_id: string; label?: AdminText; initial_value?: boolean; error?: AdminText }
   /** Write-only: never echoed back to the browser once stored. The editor renders it as a
    * password field and sends it only on submit; a page that stores one must NOT put it back
    * in `initial_value` on the next render, which is why there is no such key here. */
-  | { type: "secret_input"; action_id: string; label?: AdminText; placeholder?: AdminText; required?: boolean };
+  | { type: "secret_input"; action_id: string; label?: AdminText; placeholder?: AdminText; required?: boolean; error?: AdminText };
 
 /** A button. `value` rides back on the interaction, so one `action_id` can serve a row. */
 export interface AdminButton {
@@ -68,6 +75,32 @@ export interface AdminButton {
 
 export type AdminElement = AdminButton | AdminInput;
 
+/** Every `AdminElement` tag, as a runtime set.
+ *
+ * Both halves need this at RUNTIME, which is why it is a value and not only a union: the
+ * server checks that an object sitting in a table cell really is an element, and the editor
+ * decides from the same set whether a cell draws as text or as a control. The editor keeps
+ * its own copy (it has no dependency on this package) and `test/cms-editor-mirrors.test.ts`
+ * fails if the two drift. */
+export const ADMIN_ELEMENT_TYPES = ["button", "text_input", "number_input", "select", "toggle", "secret_input"] as const;
+
+/** What one table cell holds: a value to READ, or an element to ACT with.
+ *
+ * The alternative shape was a per-COLUMN element declaration — `columns: [{ key, label,
+ * element }]` — and it is the wrong unit. Everything about a row's control is a fact of the
+ * ROW: the button's `value` is that row's id, its label is "Hide" or "Show" depending on
+ * that row's state, and a row that must not be touched carries no control at all. A column
+ * declaration would have to be a template with a substitution language, which is a second
+ * vocabulary to design and to escape. A cell already varies per row, so the element goes in
+ * the cell and the column keeps saying only where it lands. A cell is a value OR an element,
+ * never both; a column that wants both is two columns.
+ *
+ * The two are told apart by SHAPE: a display value is a primitive, an element is an object,
+ * and nothing else may be an object. `normalizeAdminResponse` enforces that, so a page that
+ * splats a whole row (`rows: found`) into the table is named at the boundary instead of
+ * rendering a column of `[object Object]` — or, worse, of half-elements. */
+export type AdminCell = AdminText | number | boolean | null | AdminElement;
+
 /** One block in a rendered admin page. */
 export type AdminBlock =
   | { type: "header"; text: AdminText; level?: 1 | 2 | 3 }
@@ -77,7 +110,9 @@ export type AdminBlock =
   | { type: "context"; text: AdminText }
   /** Label/value pairs, for a record's details. */
   | { type: "fields"; fields: { label: AdminText; value: AdminText }[] }
-  | { type: "table"; columns: { key: string; label: AdminText }[]; rows: Record<string, AdminText | number | boolean | null>[]; empty?: AdminText }
+  /** `block_id` rides back on an interaction a CELL fired, the same way an `actions` block's
+   * does — so a page with two tables can tell which one a shared `action_id` came from. */
+  | { type: "table"; block_id?: string; columns: { key: string; label: AdminText }[]; rows: Record<string, AdminCell>[]; empty?: AdminText }
   | { type: "stats"; stats: { label: AdminText; value: AdminText; hint?: AdminText }[] }
   | { type: "actions"; block_id?: string; elements: AdminElement[] }
   | { type: "form"; block_id: string; fields: AdminInput[]; submit: { label: AdminText; action_id: string } }
@@ -282,18 +317,25 @@ export function createAdminPageHandlers(pages: readonly AdminPageDef[], opts: Ad
  *   - `image.url` becomes an `<img src>`, so it goes through the same `isSafeHref`
  *     allow-list a rich-text link mark does.
  *   - nesting is capped, because rendering is recursive.
+ *   - a table cell that is an OBJECT is claiming to be an element, and is checked as one.
+ *   - every input's `action_id` is claimed once per page, because the editor keys the
+ *     page's whole value bag by it.
  *
  * A bad block throws rather than being dropped: this is the page author's own output, and a
  * block that silently vanishes is a bug that reads as "the data isn't there".
  */
 export function normalizeAdminResponse(res: AdminPageResponse): AdminPageResponse {
   if (!res || !Array.isArray(res.blocks)) throw new Error("pramen/cms: an admin page must return { blocks: [...] }");
-  const out: AdminPageResponse = { blocks: res.blocks.map((b) => normalizeAdminBlock(b, 0)) };
+  // One set for the WHOLE response, because the value bag it guards is per PAGE, not per
+  // block — an input in a form and an input in a table cell collide just as hard as two in
+  // one form.
+  const inputIds = new Set<string>();
+  const out: AdminPageResponse = { blocks: res.blocks.map((b) => normalizeAdminBlock(b, 0, inputIds)) };
   if (res.toast) out.toast = { text: String(res.toast.text), tone: res.toast.tone };
   return out;
 }
 
-function normalizeAdminBlock(block: AdminBlock, depth: number): AdminBlock {
+function normalizeAdminBlock(block: AdminBlock, depth: number, inputIds: Set<string>): AdminBlock {
   if (depth >= MAX_ADMIN_BLOCK_DEPTH) throw new Error(`pramen/cms: admin blocks nest deeper than ${MAX_ADMIN_BLOCK_DEPTH} levels`);
   switch (block.type) {
     case "image": {
@@ -302,15 +344,63 @@ function normalizeAdminBlock(block: AdminBlock, depth: number): AdminBlock {
       return { ...block, url };
     }
     case "columns":
-      return { ...block, columns: block.columns.map((col) => col.map((b) => normalizeAdminBlock(b, depth + 1))) };
+      return { ...block, columns: block.columns.map((col) => col.map((b) => normalizeAdminBlock(b, depth + 1, inputIds))) };
     case "accordion":
-      return { ...block, blocks: block.blocks.map((b) => normalizeAdminBlock(b, depth + 1)) };
+      return { ...block, blocks: block.blocks.map((b) => normalizeAdminBlock(b, depth + 1, inputIds)) };
     case "form":
       // `block_id` is how the editor keys a form's local values. Two forms sharing one would
       // share their state, so the second would submit the first one's inputs.
       if (!block.block_id) throw new Error("pramen/cms: a `form` block needs a block_id");
+      for (const f of block.fields) claimInputId(f, `form '${block.block_id}'`, inputIds);
       return block;
+    case "actions":
+      for (const el of block.elements) if (el.type !== "button") claimInputId(el, "an `actions` block", inputIds);
+      return block;
+    case "table": {
+      // Only the cells a COLUMN names are looked at, because only those are rendered. A key
+      // in `rows` with no column is data the table happens to carry along; checking it would
+      // reject rows a page is free to build wide and display narrow.
+      for (const [i, row] of block.rows.entries()) {
+        for (const c of block.columns) {
+          const cell = row[c.key];
+          if (!isElementCell(cell)) continue;
+          checkCellElement(cell, c.key, i);
+          if (cell.type !== "button") claimInputId(cell, `table column '${c.key}'`, inputIds);
+        }
+      }
+      return block;
+    }
     default:
       return block;
   }
+}
+
+/** An object in a cell is claiming to be an element — nothing else may be one. Narrowed to
+ * `AdminElement` here only so the check that follows can read its tag; whether it IS one is
+ * exactly what {@link checkCellElement} decides. */
+const isElementCell = (cell: AdminCell | undefined): cell is AdminElement => cell !== null && typeof cell === "object";
+
+function checkCellElement(cell: AdminElement, column: string, rowIndex: number): void {
+  const where = `table column '${column}', row ${rowIndex}`;
+  const kinds = ADMIN_ELEMENT_TYPES as readonly string[];
+  if (!kinds.includes(cell.type)) {
+    throw new Error(`pramen/cms: ${where} holds an object that is not an admin element (type ${JSON.stringify(cell.type)}). A cell is a value or one of ${kinds.join(", ")} — a whole row object put in a cell would render as [object Object]`);
+  }
+  if (!cell.action_id) throw new Error(`pramen/cms: the element in ${where} has no action_id — nothing would come back when it fires`);
+  if (cell.type === "button" && !cell.label) throw new Error(`pramen/cms: the button in ${where} has no label — it would draw as an empty control`);
+}
+
+/** Claim one input's `action_id` for the page.
+ *
+ * The editor holds ONE value bag for the whole page, keyed by `action_id`, because that is
+ * what makes a filter in one block reach a button in another. So two inputs sharing an id
+ * are one field wearing two hats, which is only ever a bug — and the way to write it by
+ * accident is to build a table and put the same input literal in every row. */
+function claimInputId(input: AdminInput, where: string, seen: Set<string>): void {
+  if (seen.has(input.action_id)) {
+    throw new Error(
+      `pramen/cms: action_id '${input.action_id}' is used by more than one input on this page (${where}) — the editor keys the page's value bag by action_id, so they would be ONE field: same value shown in every copy, and the last write wins on submit. A per-ROW input has to mint a per-row id (\`hours:\${row.id}\`); a per-row BUTTON does not, because its \`value\` rides back on the interaction instead`,
+    );
+  }
+  seen.add(input.action_id);
 }

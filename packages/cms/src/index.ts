@@ -1306,11 +1306,13 @@ export {
   createAdminPageHandlers,
   normalizeAdminResponse,
   validateAdminPages,
+  ADMIN_ELEMENT_TYPES,
   MAX_ADMIN_BLOCK_DEPTH,
 } from "./blockkit";
 export type {
   AdminBlock,
   AdminButton,
+  AdminCell,
   AdminElement,
   AdminInput,
   AdminInteractionType,
