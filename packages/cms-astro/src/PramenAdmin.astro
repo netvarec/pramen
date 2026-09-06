@@ -19,7 +19,15 @@
  */
 import editorSrc from "@pramen/cms-editor/editor.js?url";
 import editorCss from "@pramen/cms-editor/editor.css?url";
-import { adminBasePath, adminConfigScript, adminTitle } from "pramen:cms/admin";
+// The four shims a PANEL bundle's bare `react` / `react-dom` / JSX-runtime imports resolve
+// to. Assets like the editor's own, for the same reason and by the same mechanism — so the
+// site's bundler emits and fingerprints them and the import map below can name them.
+import panelReact from "@pramen/cms-editor/panel-react.js?url";
+import panelReactDom from "@pramen/cms-editor/panel-react-dom.js?url";
+import panelJsxRuntime from "@pramen/cms-editor/panel-jsx-runtime.js?url";
+import panelJsxDevRuntime from "@pramen/cms-editor/panel-jsx-dev-runtime.js?url";
+import { adminBasePath, adminConfigScript, adminHasPanels, adminTitle } from "pramen:cms/admin";
+import { adminImportMap } from "@pramen/cms-astro";
 
 // The editor is a client-side app against a live API — there is nothing to prerender, and
 // prerendering would bake one deployment's config into a static file.
@@ -42,6 +50,13 @@ Astro.response.headers.set("cache-control", "private, no-store");
         builds it, and it is the one that owns the brand rules. */}
     <title>{adminTitle}</title>
     <link rel="stylesheet" href={editorCss} />
+    {/* Ahead of every module script, because that is the only place an import map may go —
+        it cannot be added once module loading has begun, so this is the shell's job and not
+        the bundle's. Only when panels are configured: with none, nothing on this page
+        imports a bare specifier and there is no reason to rewrite what `react` means. */}
+    {adminHasPanels && (
+      <script type="importmap" is:inline set:html={adminImportMap({ react: panelReact, reactDom: panelReactDom, jsxRuntime: panelJsxRuntime, jsxDevRuntime: panelJsxDevRuntime })} />
+    )}
     <script is:inline set:html={adminConfigScript} />
   </head>
   <body>

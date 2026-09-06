@@ -60,6 +60,26 @@ export interface AdminRuntimeConfig {
   /** `order` places a link against `NAV_ORDER` (from @pramen/cms) instead of leaving it
    * after Settings — the documented example did not typecheck without it. */
   extraNav?: { label: string; href: string; target?: "_blank" | "_self"; order?: number }[];
+  /**
+   * Module URLs of this deployment's PANEL bundles — your own React screens, rendered
+   * inside the editor's chrome at `/apps/<slug>`.
+   *
+   * A panel is the escape hatch for the screen Block Kit (`adminPage()`) cannot describe:
+   * one that needs local interaction — a control that responds as you type, a row that
+   * expands, a dialog, a redirect. The entry itself is still declared server-side with
+   * `adminPanel()` in `app.ts`, which is what carries the label, the position and the role
+   * filter; this option only says where the browser half lives.
+   *
+   * Each entry is an ES module URL — an absolute path (`/admin/panels.js`, from `public/`),
+   * a path your build emitted, or an absolute http(s) URL. It is IMPORTED BY THE EDITOR, not
+   * loaded by a script tag: a panel bundle links against the editor's React (see the import
+   * map in `PramenAdmin.astro`), so it cannot be evaluated until the editor has published
+   * it. Anything that is not an http(s) URL is refused client-side and warned about.
+   *
+   * Build one with react, react-dom and the JSX runtimes marked EXTERNAL — see "Custom
+   * admin panels" in the CMS docs for the recipe and the `registerPanel` call.
+   */
+  panels?: string[];
   /** Where YOUR SITE renders a page preview — e.g. `"/preview"`.
    *
    * `signPagePreview` mints a token and a RELATIVE url that the CMS Worker itself redeems,
@@ -117,4 +137,44 @@ export function adminDocumentTitle(cfg: AdminRuntimeConfig): string {
 export function adminRuntimeConfig(admin: AdminOptions, backend: { url: string; tenant?: string }): AdminRuntimeConfig {
   const extra = admin === true ? {} : admin || {};
   return { ...extra, backend: { url: backend.url.replace(/\/+$/, ""), tenant: backend.tenant ?? "main" } };
+}
+
+/** Does this deployment declare any panel bundles?
+ *
+ * Gates the import map in the shell. The map is inert with no panels — nothing else on that
+ * page imports a bare specifier — but it is a document-wide rewrite of what `react` means,
+ * and a page that does not need one should not carry one. It also makes the feature legible
+ * in the served HTML: the map is there exactly when panels are.
+ */
+export function adminHasPanels(cfg: AdminRuntimeConfig): boolean {
+  return (cfg.panels?.length ?? 0) > 0;
+}
+
+/**
+ * The import map that lets a panel bundle's `import … from "react"` resolve to the React the
+ * editor already loaded.
+ *
+ * The alternative was to make each consumer alias those specifiers in their own bundler, and
+ * it is worse in the way that matters: a panel would then be React code that cannot be built
+ * like React code, and the port of an existing screen would start with a build-config
+ * archaeology session. With the map, a panel is ordinary source built with three externals.
+ *
+ * It has to be in the DOCUMENT, and ahead of every module script — an import map cannot be
+ * added by the editor at runtime once module loading has begun — which is why this is the
+ * shell's job and not the bundle's. The three shim modules it points at are generated at
+ * build time from the editor's own React namespaces, so the names they re-export cannot
+ * drift from the React that is actually loaded.
+ */
+export function adminImportMap(urls: { react: string; reactDom: string; jsxRuntime: string; jsxDevRuntime: string }): string {
+  return JSON.stringify({
+    imports: {
+      react: urls.react,
+      "react-dom": urls.reactDom,
+      "react/jsx-runtime": urls.jsxRuntime,
+      // The specifier an UNMINIFIED panel build emits. Mapped for the same reason the other
+      // three are: unmapped, it is the one bare import that still resolves — from the
+      // consumer's own node_modules, into a second React nobody asked for.
+      "react/jsx-dev-runtime": urls.jsxDevRuntime,
+    },
+  });
 }

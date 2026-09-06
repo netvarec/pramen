@@ -76,7 +76,7 @@ describe("who sees and who may open", () => {
 
   test("the listing never carries the role list or the render function", () => {
     const h = H(adminPage("finance", { label: "Finance", roles: ["admin"], render: () => ({ blocks: [] }) }));
-    expect(Object.keys(h.listAdminPages.run(ctxAs("admin"))[0]!).sort()).toEqual(["icon", "label", "navOrder", "slug"]);
+    expect(Object.keys(h.listAdminPages.run(ctxAs("admin"))[0]!).sort()).toEqual(["icon", "kind", "label", "navOrder", "slug"]);
   });
 
   test("an unknown slug and a forbidden one answer the same way", async () => {

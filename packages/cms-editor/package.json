@@ -13,7 +13,11 @@
   "type": "module",
   "exports": {
     "./editor.js": "./dist/editor.js",
-    "./editor.css": "./dist/editor.css"
+    "./editor.css": "./dist/editor.css",
+    "./panel-react.js": "./dist/panel-react.js",
+    "./panel-react-dom.js": "./dist/panel-react-dom.js",
+    "./panel-jsx-runtime.js": "./dist/panel-jsx-runtime.js",
+    "./panel-jsx-dev-runtime.js": "./dist/panel-jsx-dev-runtime.js"
   },
   "files": [
     "dist",

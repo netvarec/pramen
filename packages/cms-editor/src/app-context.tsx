@@ -29,6 +29,11 @@ declare global {
        * Rendered as plain external `<a>` links, positioned by `order` (see `NAV_ORDER`) and
        * defaulting to after the built-in tabs. */
       extraNav?: { label: string; href: string; target?: "_blank" | "_self"; order?: number }[];
+      /** Module URLs of this deployment's PANEL bundles — the project's own React screens,
+       * rendered inside the chrome at `/apps/:slug`. Imported by the editor at boot (see
+       * `main.tsx`), not by a script tag of the shell's, because the shared React they
+       * import has to be published first. */
+      panels?: string[];
       /** The wordmark in the topbar, on the Setup screen, and in the browser tab.
        *
        * This editor ships as a package an agency deploys FOR ITS CLIENT, so the default
@@ -98,9 +103,10 @@ interface AppContextValue {
   /** Collections registered on the server (from `listCollections`) — drives the nav + the
    * generic list/edit routes. Empty when the server registers none. */
   collections: CollectionMeta[];
-  /** Custom admin pages the CALLER may open (from `listAdminPages`) — Block Kit screens a
-   * project registered with `adminPage()`. They render inside the editor's own chrome, at a
-   * nav position they choose, which is the difference from an `extraNav` link.
+  /** Custom admin screens the CALLER may open (from `listAdminPages`) — Block Kit pages a
+   * project registered with `adminPage()`, and panels it registered with `adminPanel()`.
+   * They render inside the editor's own chrome, at a nav position they choose, which is the
+   * difference from an `extraNav` link.
    *
    * Filtered server-side by role, so there is no entry here the caller cannot open. An app
    * that registers none (or a server without the handler) leaves this empty; a failure is

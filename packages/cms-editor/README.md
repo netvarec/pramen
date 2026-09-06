@@ -79,7 +79,9 @@ on the host's own `/blog` rendering the editor's "Nothing lives here").
 
 **To write your own shell** (a Worker route, another framework), render: the stylesheet, a
 `<div id="app" data-base-path="…">`, an inline script setting `window.PRAMEN_CMS_EDITOR`,
-and `<script type="module" src="…editor.js">` — in that order. The dev preview in
+and `<script type="module" src="…editor.js">` — in that order. If the deployment has panels,
+add a `<script type="importmap">` ahead of every module script mapping `react`, `react-dom`,
+`react/jsx-runtime` and `react/jsx-dev-runtime` at `dist/panel-*.js`. The dev preview in
 `scripts/build.ts` is the smallest complete example.
 
 ## Configure it
@@ -93,8 +95,46 @@ admin: {
   // signInUrl: "/signin/",                          // ONLY once that page exists — see the warning
   // hidePages: true,                                // collections-only deployments
   // extraNav: [{ label: "Curation", href: "/curate", target: "_self" }],
+  // panels: ["/admin/curation.js"],                 // your own React screens — see below
 }
 ```
+
+## Panels — your own React screen inside the chrome
+
+A **panel** is a component you build and this editor renders, at `/apps/<slug>`, inside the
+same sidebar, header and theme as everything else. It is for the screen Block Kit
+(`adminPage()`) cannot describe — one that needs local interaction: a control that responds
+as you type, a row that expands, a dialog, a redirect.
+
+The entry is declared **server-side** with `adminPanel()` in `app.ts` (label, icon,
+`navOrder`, `roles`), so the nav position and the role filter are the same server facts they
+are for a Block Kit page — a panel you may not open is absent from the listing. This bundle
+supplies only the component:
+
+```tsx
+import { useState } from "react";
+
+function Curation({ api, basePath, theme, setError }) { /* ordinary React */ }
+
+globalThis.PRAMEN_CMS_EDITOR_RUNTIME.registerPanel({ slug: "curation", render: Curation });
+```
+
+Build it with **react, react-dom and both JSX runtimes external** — that is the whole
+contract:
+
+```
+bun build src/admin/curation.tsx --outfile public/admin/curation.js --minify --target=browser \
+  --external react --external react-dom --external react/jsx-runtime --external react/jsx-dev-runtime
+```
+
+The editor publishes its React on `globalThis.PRAMEN_CMS_EDITOR_RUNTIME` and the shell's
+import map points those specifiers at `dist/panel-*.js`, which read it back out. Two copies of
+React in one page share no hook dispatcher, so a bundled one throws on the panel's first hook.
+
+A panel is handed `api` (`call`/`resolve`, as the signed-in user), `basePath` (the mount
+prefix, so your links stay inside it), `theme`, and `setError` (the chrome's error banner) —
+and nothing else. The full guide, including how the URLs are declared, is in
+`docs/cms.md`.
 
 `extraNav` links open in a **new tab** by default, because the editor's catch-all route
 matches every same-origin path — a same-tab click would land on the editor's own 404 instead

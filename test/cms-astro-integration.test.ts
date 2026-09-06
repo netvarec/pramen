@@ -8,7 +8,8 @@
 // module emits — that is the contract a site consumes.
 
 import { describe, expect, test } from "bun:test";
-import { ADMIN_BASE, adminDocumentTitle, adminRuntimeConfig, serializeAdminConfig } from "../packages/cms-astro/src/admin";
+import { ADMIN_BASE, adminDocumentTitle, adminHasPanels, adminImportMap, adminRuntimeConfig, serializeAdminConfig } from "../packages/cms-astro/src/admin";
+import { PANEL_GLOBAL_SHIMS } from "../packages/cms-editor/src/panel-globals";
 import { pramenCms } from "../packages/cms-astro/src/integration";
 
 type VitePlugin = { name: string; enforce?: string; resolveId: (id: string) => string | null; load: (id: string) => string | null };
@@ -185,6 +186,10 @@ describe("pramenCms({ admin })", () => {
   test("the editor bundle is emitted as an asset, not walked as source", async () => {
     const { vite } = await setup({ backend: { url: "https://cms.example.workers.dev" }, admin: true });
     expect(vite.assetsInclude).toContain("**/@pramen/cms-editor/dist/editor.js");
+    // …and the panel shims with it. They read the editor's React off a global, so following
+    // their (nonexistent) imports would achieve nothing — and BUNDLING one would put the
+    // shim behind the very specifier it exists to resolve.
+    expect(vite.assetsInclude).toContain("**/@pramen/cms-editor/dist/panel-*.js");
   });
 
   test("the admin module's types are injected only when the route is", () => {
@@ -194,6 +199,48 @@ describe("pramenCms({ admin })", () => {
     expect(written["pramen-cms.d.ts"]).not.toContain("pramen:cms/admin");
     pramenCms({ backend: { url: "https://x.dev" }, admin: true }).hooks["astro:config:done"]!({ injectTypes } as never);
     expect(written["pramen-cms.d.ts"]).toContain('declare module "pramen:cms/admin"');
+  });
+});
+
+describe("panels — a project's own React screens inside the chrome", () => {
+  test("the declared bundle URLs ride along in the same inline config", async () => {
+    const { adminCode } = await setup({
+      backend: { url: "https://cms.example.workers.dev" },
+      admin: { panels: ["/admin/curation.js"] },
+    });
+    // The editor IMPORTS these; the shell does not script-tag them. A panel bundle links
+    // against the editor's React, so it cannot be evaluated until the editor has published
+    // it — which is a line of code in `main.tsx`, not an ordering of script tags.
+    expect(adminCode).toContain('\\"panels\\":[\\"/admin/curation.js\\"]');
+  });
+
+  test("the import map is emitted only when there are panels", async () => {
+    const without = await setup({ backend: { url: "https://x.dev" }, admin: true });
+    expect(without.adminCode).toContain("export const adminHasPanels = false;");
+    const with_ = await setup({ backend: { url: "https://x.dev" }, admin: { panels: ["/p.js"] } });
+    expect(with_.adminCode).toContain("export const adminHasPanels = true;");
+    // The gate itself, without the integration around it.
+    expect(adminHasPanels({ backend: { url: "", tenant: "main" } })).toBe(false);
+    expect(adminHasPanels({ backend: { url: "", tenant: "main" }, panels: [] })).toBe(false);
+    expect(adminHasPanels({ backend: { url: "", tenant: "main" }, panels: ["/p.js"] })).toBe(true);
+  });
+
+  test("the map covers EVERY specifier a panel build can emit", () => {
+    // The link between the shell and the shims, and the one place the two lists can drift.
+    // A specifier the shims resolve but the map omits is the failure this pins: it is the
+    // only bare import that still RESOLVES — from the consumer's own node_modules — so the
+    // panel silently ships a second React and its first hook throws.
+    const map = JSON.parse(adminImportMap({ react: "/r.js", reactDom: "/rd.js", jsxRuntime: "/j.js", jsxDevRuntime: "/jd.js" })) as { imports: Record<string, string> };
+    expect(Object.keys(map.imports).sort()).toEqual(PANEL_GLOBAL_SHIMS.map((s) => s.specifier).sort());
+    expect(map.imports["react"]).toBe("/r.js");
+    expect(map.imports["react/jsx-dev-runtime"]).toBe("/jd.js");
+  });
+
+  test("the admin module's types name the panel gate the shell reads", () => {
+    const written: Record<string, string> = {};
+    const injectTypes = ({ filename, content }: { filename: string; content: string }) => { written[filename] = content; };
+    pramenCms({ backend: { url: "https://x.dev" }, admin: true }).hooks["astro:config:done"]!({ injectTypes } as never);
+    expect(written["pramen-cms.d.ts"]).toContain("adminHasPanels");
   });
 });
 

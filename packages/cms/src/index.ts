@@ -1307,6 +1307,7 @@ export {
   normalizeAdminResponse,
   validateAdminPages,
   ADMIN_ELEMENT_TYPES,
+  ADMIN_PAGE_KINDS,
   MAX_ADMIN_BLOCK_DEPTH,
 } from "./blockkit";
 export type {
@@ -1319,10 +1320,17 @@ export type {
   AdminPageDef,
   AdminPageHandlerOpts,
   AdminPageInteraction,
+  AdminPageKind,
   AdminPageMeta,
   AdminPageResponse,
+  AdminScreenDef,
   AdminText,
 } from "./blockkit";
+
+/** Custom admin PANELS — a project's own React screen inside the editor's chrome, for the
+ * screens a server-driven vocabulary cannot carry. See `./panel`. */
+export { adminPanel, isAdminPanel } from "./panel";
+export type { AdminPanelDef } from "./panel";
 
 /**
  * Columns this package wrote in the pre-ISO space form that the SCHEMA cannot identify.

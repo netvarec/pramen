@@ -22,6 +22,7 @@ import {
   ADMIN_ELEMENT_TYPES,
   FIELD_TYPES,
   MAX_MENU_DEPTH,
+  ADMIN_PAGE_KINDS,
   MEDIA_KINDS,
   NAV_ORDER,
   REDIRECT_STATUSES,
@@ -29,6 +30,7 @@ import {
 } from "../packages/cms/src/index";
 import {
   ADMIN_ELEMENT_TYPES as EDITOR_ADMIN_ELEMENT_TYPES,
+  ADMIN_PAGE_KINDS as EDITOR_ADMIN_PAGE_KINDS,
   MAX_MENU_DEPTH as EDITOR_MAX_MENU_DEPTH,
   MEDIA_KIND_LABELS,
   MEDIA_KINDS as EDITOR_MEDIA_KINDS,
@@ -62,6 +64,16 @@ describe("mirrors that must match exactly", () => {
     // through and the editor has not heard of is a live control rendered as
     // `[unsupported cell: …]`; one the editor knows and the server does not is unauthorable.
     expect([...EDITOR_ADMIN_ELEMENT_TYPES]).toEqual([...ADMIN_ELEMENT_TYPES]);
+  });
+
+  test("ADMIN_PAGE_KINDS", () => {
+    // `listAdminPages` returns one list of two kinds; the editor switches on `kind` to
+    // decide whether to render Block Kit from the server's response or to look for a
+    // component its panel bundle registered. A kind the server sends and the editor has not
+    // heard of falls back to Block Kit — which then asks the server to render a screen that
+    // has no server render, so the reader gets an error instead of a blank page. That is the
+    // right degradation and still a drift worth failing on.
+    expect([...EDITOR_ADMIN_PAGE_KINDS]).toEqual([...ADMIN_PAGE_KINDS]);
   });
 
   test("REDIRECT_STATUSES", () => {

@@ -1,8 +1,10 @@
-// Build the CMS visual editor SPA into TWO self-contained assets:
+// Build the CMS visual editor SPA into self-contained assets:
 //
 //   dist/editor.js    the whole app (Bun bundles it; no chunks, no bare imports)
 //   dist/editor.css   the whole design system (Tailwind + podoba tokens + the web font,
 //                     inlined as a data: URI so the stylesheet references nothing else)
+//   dist/panel-*.js   three shims that hand a PANEL bundle the editor's own React — see
+//                     `panelGlobals()` below and `src/panel-runtime.ts`
 //
 // Deliberately NOT an index.html. The editor is served by a SHELL its host renders — an
 // injected Astro route in @pramen/cms-astro, the dev preview below — and the shell is what
@@ -17,6 +19,8 @@
 import { buzolaPlugin } from "@buzola/bun-plugin";
 import { rm, mkdir, writeFile, readFile } from "node:fs/promises";
 import { extname } from "node:path";
+import { exportableNames, panelShimSource, PANEL_GLOBAL_SHIMS } from "../src/panel-globals";
+import { PANEL_RUNTIME_GLOBAL } from "../src/panel-runtime";
 
 const root = new URL("..", import.meta.url).pathname;
 const dist = `${root}dist`;
@@ -58,8 +62,28 @@ async function styles(): Promise<void> {
   await writeFile(out, `${await Bun.file(out).text()}\n${await fontCss()}`);
 }
 
+// --- panel globals -----------------------------------------------------------------------
+//
+// Three tiny modules the shell's import map points `react`, `react-dom` and
+// `react/jsx-runtime` at, so a PANEL bundle (a project's own React screen, built separately
+// with those three marked external) links against the React the editor already loaded rather
+// than shipping a second copy. The generator lives in `src/panel-globals.ts` — typechecked,
+// and exercised end to end by `test/cms-editor-panel-globals.test.ts`; this only supplies the
+// namespaces to read the export lists off, which is the half that has to happen HERE, at the
+// moment the editor's own React is resolved.
+
+async function panelGlobals(): Promise<void> {
+  for (const shim of PANEL_GLOBAL_SHIMS) {
+    const names = exportableNames(await import(shim.specifier));
+    if (names.length === 0) throw new Error(`panel globals: ${shim.specifier} exported nothing to re-export`);
+    await writeFile(`${dist}/${shim.file}`, panelShimSource(shim, names, PANEL_RUNTIME_GLOBAL));
+  }
+  console.log(`built ${PANEL_GLOBAL_SHIMS.map((s) => `dist/${s.file}`).join(" + ")}`);
+}
+
 async function build(): Promise<void> {
   await styles();
+  await panelGlobals();
   const out = await Bun.build({
     entrypoints: [entry],
     outdir: dist,
@@ -86,11 +110,17 @@ await mkdir(dist, { recursive: true });
 await build();
 
 if (watch) {
-  // The preview's own shell — the same three things every shell owes the bundle: the
-  // stylesheet, the mount node carrying `data-base-path`, and the module script. Served at
-  // the origin root with an empty prefix, which is the standalone shape; the prefixed mount
-  // is what @pramen/cms-astro injects, and `test/cms-editor-mount.test.ts` exercises it
-  // against a real Router rather than leaving it to a dev server nobody runs under a prefix.
+  // The preview's own shell — the same four things every shell owes the bundle: the
+  // stylesheet, the import map that resolves a panel bundle's React against the editor's,
+  // the mount node carrying `data-base-path`, and the module script. Served at the origin
+  // root with an empty prefix, which is the standalone shape; the prefixed mount is what
+  // @pramen/cms-astro injects, and `test/cms-editor-mount.test.ts` exercises it against a
+  // real Router rather than leaving it to a dev server nobody runs under a prefix.
+  //
+  // The import map is here even though the preview declares no panels: it must precede every
+  // module script in the document, so it is not something a shell can add later when one
+  // appears, and a dev loop that points `window.PRAMEN_CMS_EDITOR.panels` at a local build
+  // should work without editing this file.
   const shell = `<!doctype html>
 <html lang="en">
   <head>
@@ -98,6 +128,9 @@ if (watch) {
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>pramen · cms editor</title>
     <link rel="stylesheet" href="/editor.css" />
+    <script type="importmap">
+      {"imports":{"react":"/panel-react.js","react-dom":"/panel-react-dom.js","react/jsx-runtime":"/panel-jsx-runtime.js","react/jsx-dev-runtime":"/panel-jsx-dev-runtime.js"}}
+    </script>
   </head>
   <body>
     <div id="app" data-base-path=""></div>

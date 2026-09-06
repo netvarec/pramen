@@ -1,14 +1,26 @@
-// A custom admin page (`/apps/:slug`) — Block Kit, rendered inside the editor's own chrome.
+// A project's own screen (`/apps/:slug`), rendered inside the editor's own chrome.
 //
 // Routed BY THE EDITOR, which is the point: an `extraNav` link has to open a new tab,
 // because `_404.tsx` registers the catch-all `/:__notFound+` and a same-tab click on an
-// unmounted editor lands on the in-app 404. A registered page has a real route, so it is
+// unmounted editor lands on the in-app 404. A registered screen has a real route, so it is
 // part of the admin rather than a link out of it.
+//
+// ONE route for two kinds. A Block Kit page (`adminPage()`) is described as JSON by the
+// server and rendered here; a panel (`adminPanel()`) is a React component the deployment's
+// own bundle registered. They share this route because they share everything a URL and a nav
+// entry are made of — the slug space, the role filter, the "Apps" band, the breadcrumb — and
+// differ only in where the rendering happens. Splitting them would have meant a second
+// route, a second nav band and a slug that could mean two things.
 
-import { createPage, useNavigate } from "@buzola/router";
+import { createPage, useNavigate, useRouter } from "@buzola/router";
+import { useMemo, useSyncExternalStore } from "react";
 import { useApp } from "../app-context";
 import { AdminPageView } from "../blockkit";
 import { Notice } from "../components";
+import { PanelBoundary } from "../panel-boundary";
+import { getPanel, panelsSettled, panelsVersion, subscribePanels, type PanelProps } from "../panels";
+import { useTheme } from "../theme";
+import { adminPageKind } from "../types";
 import { Button } from "@podoba/react";
 
 export default createPage()
@@ -29,8 +41,57 @@ export default createPage()
         </Notice>
       );
     }
+    if (adminPageKind(def) === "panel") return <PanelRoute slug={def.slug} />;
     // Keyed on the slug so switching between two pages REMOUNTS the view: buzola renders the
     // same component instance across a params-only change, and the blocks, the form values
     // and any toast all belong to one page.
     return <AdminPageView api={api} key={def.slug} slug={def.slug} label={def.label} onError={setError} />;
   });
+
+/**
+ * A panel: the component the deployment's own bundle registered for this slug.
+ *
+ * The registry is external state that changes without React knowing — bundles are imported
+ * from `main.tsx` and register whenever they land — so it is read through
+ * `useSyncExternalStore` rather than an effect. That is what makes a deep link to a panel
+ * work: the route can mount before the bundle has finished loading, and re-renders when it
+ * has, instead of deciding once and being wrong forever.
+ */
+function PanelRoute({ slug }: { slug: string }) {
+  const { api, setError } = useApp();
+  const theme = useTheme();
+  const basePath = useRouter().basePath;
+  const version = useSyncExternalStore(subscribePanels, panelsVersion, panelsVersion);
+  // `version` is the snapshot, not the value — a stable number is what a store hook needs,
+  // and the lookup is what the render actually wants. Depending on it is the point.
+  const panel = useMemo(() => getPanel(slug), [slug, version]);
+
+  if (!panel) {
+    // Two different situations, and the second is worth naming rather than spinning on
+    // forever: the server listed this panel (it is in `adminPages`, so the caller may open
+    // it), which means the bundle either has not landed yet or landed and never registered
+    // this slug. The second is a deployment mistake — a missing `panels` entry, a bundle
+    // built without the `registerPanel` call, a slug typo between `app.ts` and the bundle —
+    // and it is one nobody can diagnose from a spinner.
+    return (
+      <Notice>
+        {panelsSettled()
+          ? `No panel is registered for '${slug}'. Check that this deployment's panel bundle is listed in the admin's \`panels\` config and calls registerPanel({ slug: "${slug}", … }).`
+          : "Loading…"}
+      </Notice>
+    );
+  }
+
+  const props: PanelProps = { api, basePath, theme, setError };
+  // Keyed on the slug for the same reason a Block Kit page is: buzola keeps one component
+  // instance across a params-only change, and a panel's state belongs to its own screen.
+  //
+  // Wrapped, because this is someone else's component in our tree: React unmounts the whole
+  // root on an uncaught render error, so without the boundary one bad panel does not break a
+  // screen, it blanks the admin — no sidebar, and no way off the route that is failing.
+  return (
+    <PanelBoundary key={slug} slug={slug}>
+      <panel.render {...props} />
+    </PanelBoundary>
+  );
+}

@@ -25,7 +25,7 @@
 
 import type { AstroIntegration } from "astro";
 import { fileURLToPath } from "node:url";
-import { ADMIN_BASE, ADMIN_ROUTE, adminDocumentTitle, adminRuntimeConfig, serializeAdminConfig, type AdminOptions } from "./admin.js";
+import { ADMIN_BASE, ADMIN_ROUTE, adminDocumentTitle, adminHasPanels, adminRuntimeConfig, serializeAdminConfig, type AdminOptions } from "./admin.js";
 
 /** Where the CMS lives. A named descriptor rather than a bare `baseUrl` string, so a future
  * local/in-process backend can be added without changing the call shape. */
@@ -148,6 +148,7 @@ function adminModuleSource(admin: AdminOptions, backend: CmsBackend): string {
 export const adminBasePath = ${JSON.stringify(ADMIN_BASE)};
 export const adminConfigScript = ${JSON.stringify(serializeAdminConfig(cfg))};
 export const adminTitle = ${JSON.stringify(adminDocumentTitle(cfg))};
+export const adminHasPanels = ${JSON.stringify(adminHasPanels(cfg))};
 `;
 }
 
@@ -172,6 +173,8 @@ const ADMIN_TYPES = `declare module "pramen:cms/admin" {
   export const adminConfigScript: string;
   /** Pre-hydration fallback for the shell's <title>. */
   export const adminTitle: string;
+  /** Whether this deployment declares panel bundles — gates the shell's import map. */
+  export const adminHasPanels: boolean;
 }
 `;
 
@@ -218,7 +221,11 @@ export function pramenCms(opts: PramenCmsOptions): AstroIntegration {
             // it is emitted verbatim and referenced by url. `?url` alone asks for that, and
             // this says so for the file itself, since a `.js` extension is otherwise the one
             // thing a bundler assumes it should follow.
-            assetsInclude: ["**/@pramen/cms-editor/dist/editor.js"],
+            // …and the same for the three panel shims, which are likewise finished
+            // artifacts: they read the editor's React off a global, so following their
+            // (nonexistent) imports would achieve nothing and bundling them would put the
+            // shim behind the very specifier it exists to resolve.
+            assetsInclude: ["**/@pramen/cms-editor/dist/editor.js", "**/@pramen/cms-editor/dist/panel-*.js"],
             plugins: [
               {
                 name: "pramen:cms",

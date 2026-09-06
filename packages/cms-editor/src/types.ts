@@ -489,6 +489,15 @@ export interface AdminPageResponse {
   toast?: { text: string; tone?: "info" | "success" | "error" };
 }
 
+/** How a registered admin screen draws. Mirror of `ADMIN_PAGE_KINDS` in @pramen/cms.
+ *
+ * `"blocks"` is Block Kit — the server describes the page as JSON and the editor renders it.
+ * `"panel"` is a React component the deployment's own panel bundle registered under the
+ * same slug (see `panels.ts`); the server still owns the entry, so the role filter, the
+ * label, the icon and the position are the same server facts for both. */
+export const ADMIN_PAGE_KINDS = ["blocks", "panel"] as const;
+export type AdminPageKind = (typeof ADMIN_PAGE_KINDS)[number];
+
 /** A custom admin page, as the editor sees it (from `listAdminPages`) — never the render
  * function, and never the role list. A page the caller may not open is simply absent. */
 export interface AdminPageMeta {
@@ -496,6 +505,16 @@ export interface AdminPageMeta {
   label: string;
   icon?: string;
   navOrder?: number;
+  /** Absent ⇒ `"blocks"`, which is what every entry was before panels existed and what an
+   * older server still sends. Read through {@link adminPageKind} rather than directly, so
+   * the default lives in one place and an unrecognised kind from a NEWER server degrades to
+   * a Block Kit page (which renders a legible server error) instead of a blank screen. */
+  kind?: string;
+}
+
+/** The kind an entry actually is, defaulted and validated. */
+export function adminPageKind(meta: AdminPageMeta): AdminPageKind {
+  return (ADMIN_PAGE_KINDS as readonly string[]).includes(meta.kind ?? "") ? (meta.kind as AdminPageKind) : "blocks";
 }
 
 // --- media sorting and filtering -----------------------------------------------------------

@@ -425,6 +425,116 @@ not open is simply absent, and asking for it answers exactly as an unknown slug 
 The whole page comes back on every interaction; there is no patch protocol, because a server
 returning only what changed has to agree with the host about what is currently on screen.
 
+### Custom admin panels (your own React screen)
+
+Block Kit is a *server-driven* vocabulary, and the properties that make it safe are the same
+ones that cap it: the whole page comes back on every interaction, so an input cannot fire one,
+every control is disabled for the round trip (focus and caret with it), a table row cannot
+expand, and there is no link, no redirect, no dialog, no autofocus and no date input. For the
+screen that needs local interaction, `adminPanel()` gives you **a React component of your own,
+rendered inside the editor's chrome** — same sidebar, same header, same theme, a real route,
+a real nav entry.
+
+It is the *same registry* as `adminPage()`, so nothing about how a screen is placed or gated
+changes. Declare it in `app.ts`:
+
+```ts
+import { adminPanel, adminPage, createAdminPageHandlers, NAV_ORDER } from "@pramen/cms";
+
+const curation = adminPanel("curation", {
+  label: "Curation",
+  icon: "🎛",
+  navOrder: NAV_ORDER.media + 10,
+  roles: ["editor", "admin"],          // defaults to the deployment's editorRoles
+});
+
+handlers = { ...createAdminPageHandlers([desk, curation], { editorRoles }) };
+```
+
+There is no `render` here on purpose. **The server owns the entry, the bundle owns the
+component.** The label, the icon, the position and — above all — the role filter stay server
+facts, so `listAdminPages` filters a panel exactly as it filters a Block Kit page: a panel you
+may not open is simply absent, and there is no nav entry to click. If the bundle declared any
+of that, a bundle that failed to load would take the whole section with it.
+
+**Write the screen as ordinary React.** Nothing marks it as a panel except one call:
+
+```tsx
+// src/admin/curation.tsx
+import { useState } from "react";
+
+function Curation({ api, basePath, theme, setError }) {
+  const [q, setQ] = useState("");
+  // …an ordinary screen: local state, focus that survives typing, a dialog, a date input
+}
+
+globalThis.PRAMEN_CMS_EDITOR_RUNTIME.registerPanel({ slug: "curation", render: Curation });
+```
+
+A panel is handed four things, and only these:
+
+| | |
+| --- | --- |
+| `api` | `call(name, input?)` and `resolve(path)`, as the signed-in user. The narrow view — not the editor's whole `Api` class. |
+| `basePath` | The mount prefix (`/__admin`), so links you build stay inside it. |
+| `theme` | `"light"` / `"dark"`. Styling follows on its own (podoba tokens flip at the document root); this is for what CSS cannot decide — a chart palette, a canvas. |
+| `setError` | The chrome's one error banner. |
+
+The identity is deliberately *not* handed over. It is one `api.call("me")` away, and a panel
+that branches on the caller's roles to decide what to show is doing client-side
+authorization — the gate that counts is `roles` above, enforced before the entry is listed.
+
+**Build it with React external.** The panel renders into the editor's React tree, and two
+copies of React in one page share no hook dispatcher — the first `useState` would throw
+"invalid hook call". So the editor publishes its own React and the shell's import map points
+the bare specifiers at it; your build just has to not bundle them:
+
+```jsonc
+// package.json
+"scripts": {
+  "build:panels": "bun build src/admin/curation.tsx --outfile public/admin/curation.js --minify --target=browser --external react --external react-dom --external react/jsx-runtime --external react/jsx-dev-runtime"
+}
+```
+
+Any bundler will do — the whole contract is *those four specifiers stay external*. (Mark the
+dev JSX runtime too even if you only ship minified: unmapped, it is the one bare import that
+still resolves, straight into a second React.)
+
+Then point the admin at the built file:
+
+```js
+pramenCms({
+  backend: { url: "https://cms.example.workers.dev" },
+  admin: { panels: ["/admin/curation.js"] },
+})
+```
+
+An entry is an ES module URL — a path from `public/`, a fingerprinted path your build
+emitted, or an absolute http(s) URL. The **editor imports it**, rather than the shell adding a
+script tag, because the shared React has to be published before the bundle evaluates; the
+loads do not block the first paint, and a bundle that 404s costs its own panel and nothing
+else. Anything that is not an http(s) URL is refused with a console warning.
+
+A panel renders behind an **error boundary** — it is your component in the editor's tree, and
+React unmounts the whole root on an uncaught render error, so without one a bad panel would
+blank the admin rather than the screen. You get a message naming the panel and the failure, and
+the chrome stays navigable.
+
+Panels and pages share `/apps/:slug`, so a slug used twice is a **boot error** whichever kinds
+collide. A slug the server lists but no bundle registers renders a message saying exactly
+that, naming the slug — not a spinner.
+
+> **Which one?** Reach for `adminPage()` first: it is a list-and-form screen with no browser
+> code, no build step and no version skew. Reach for `adminPanel()` when the screen itself is
+> the interactive part.
+
+> **A panel is trusted code.** Block Kit's headline property is that *no project JavaScript
+> ever runs in the admin*; a panel gives that up on purpose. Its bundle runs in the editor's
+> own page with the editor's own session in scope — it can read the stored token, call
+> anything, and render anything. `roles` and the ACL still bound what the SERVER will do for
+> the caller, and `PanelApi` is a small surface to write against, but neither is a sandbox.
+> Ship a panel you wrote, from your own origin, and treat its bundle as part of the admin.
+
 ### An external data source
 
 The first thing to reach for is **not** a custom page. Mirror the source into a pramen entity
@@ -492,6 +602,7 @@ admin: {
   signInUrl: "/signin/",                        // must be a page that EXISTS (see below)
   hidePages: true,                              // collections-only deployments
   extraNav: [{ label: "Curation", href: "/curate", target: "_self" }],
+  panels: ["/admin/curation.js"],               // your own React screens — see "Custom admin panels"
 }
 ```
 

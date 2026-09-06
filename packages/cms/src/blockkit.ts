@@ -36,6 +36,7 @@ import { BadRequest, mutation, query } from "@pramen/server";
 import type { HandlerContext, JsonValue, SchemaDef } from "@pramen/server";
 import { isSafeHref, normalizeHref } from "./href";
 import { NAV_ORDER } from "./nav";
+import { isAdminPanel, type AdminPanelDef } from "./panel";
 
 // --- the block/element vocabulary ------------------------------------------------------
 
@@ -163,6 +164,10 @@ export const MAX_ADMIN_BLOCK_DEPTH = 4;
  * Without it `ctx.db.find({ from: "lectures", where: { title: { contains: q } } })` resolves
  * the table against the default `SchemaDef` and every column reads as a number. */
 export interface AdminPageDef<S extends SchemaDef = SchemaDef> {
+  /** Discriminates this from an `AdminPanelDef` in the registry the two share. Optional and
+   * defaulted, because a Block Kit page is what `adminPage()` has always produced and
+   * nothing should have to start saying so. */
+  readonly kind?: "blocks";
   /** URL + registry key: the page is served at `/apps/:slug` in the editor. */
   readonly slug: string;
   /** Nav label. */
@@ -200,20 +205,42 @@ export function adminPage<S extends SchemaDef = SchemaDef>(slug: string, opts: O
   return { ...opts, slug };
 }
 
-/** The client-facing view of a page — what the editor needs to put it in the nav. Never
- * the `render` function, and never the role list (which is a server fact; a page the caller
- * may not open is simply absent from the listing). */
+/** One entry in the custom-screens registry: a Block Kit page, or a panel the browser
+ * renders. They share a registry — and so a slug space, a route and a nav band — because
+ * from the editor's side they are the same thing (a project's own screen inside the chrome)
+ * differing only in where the rendering happens. Two registries would have made a slug
+ * collision between them a runtime surprise instead of a boot error. */
+export type AdminScreenDef<S extends SchemaDef = SchemaDef> = AdminPageDef<S> | AdminPanelDef;
+
+/** Every screen kind, as a runtime set. A value and not only a union because the editor
+ * keeps its own copy and `test/cms-editor-mirrors.test.ts` fails if the two drift — a kind
+ * the server sends and the editor has not heard of is a nav entry that renders nothing. */
+export const ADMIN_PAGE_KINDS = ["blocks", "panel"] as const;
+export type AdminPageKind = (typeof ADMIN_PAGE_KINDS)[number];
+
+/** The client-facing view of a registered screen — what the editor needs to put it in the
+ * nav and decide how to render it. Never the `render` function, and never the role list
+ * (which is a server fact; a screen the caller may not open is simply absent from the
+ * listing). */
 export interface AdminPageMeta {
   slug: string;
   label: string;
   icon?: string;
   navOrder: number;
+  /** `"blocks"` (Block Kit, rendered from this response) or `"panel"` (a component the
+   * deployment's panel bundle registered under this slug). */
+  kind: AdminPageKind;
 }
 
-/** Validate a registry at boot: slugs are unique and routable, and every page can be
+/** Validate a registry at boot: slugs are unique and routable, and every screen can be
  * addressed. Called by `createAdminPageHandlers`, so a mistake surfaces when the Worker
- * starts rather than as a 404 the first time someone opens the one page nobody exercised. */
-export function validateAdminPages(pages: readonly AdminPageDef[]): void {
+ * starts rather than as a 404 the first time someone opens the one page nobody exercised.
+ *
+ * Pages and panels are validated TOGETHER, against one `seen` set: they share `/apps/:slug`,
+ * so two entries with the same slug are a collision whatever their kinds — and the one that
+ * would win is decided by insertion order into a Map, which is not a thing to leave to
+ * chance. */
+export function validateAdminPages(pages: readonly AdminScreenDef[]): void {
   const seen = new Set<string>();
   for (const p of pages) {
     if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(p.slug) || p.slug.length > 80) {
@@ -222,7 +249,10 @@ export function validateAdminPages(pages: readonly AdminPageDef[]): void {
     if (seen.has(p.slug)) throw new Error(`pramen/cms: duplicate admin page slug '${p.slug}' — the slug is the registry's key`);
     seen.add(p.slug);
     if (p.label.trim() === "") throw new Error(`pramen/cms: admin page '${p.slug}' has an empty label — it would render an unnamed nav entry`);
-    if (typeof p.render !== "function") throw new Error(`pramen/cms: admin page '${p.slug}' has no render function`);
+    // A panel has no server render by definition, so the check is skipped for it rather
+    // than relaxed for everyone: "no render function" stays a boot error for a Block Kit
+    // page, which is the one it was written to catch.
+    if (!isAdminPanel(p) && typeof p.render !== "function") throw new Error(`pramen/cms: admin page '${p.slug}' has no render function`);
   }
 }
 
@@ -248,21 +278,25 @@ export interface AdminPageHandlerOpts {
  * There is no ACL fragment to spread: a page reads through `ctx.db` under whatever policies
  * the caller already has, so there is nothing here to grant.
  */
-export function createAdminPageHandlers(pages: readonly AdminPageDef[], opts: AdminPageHandlerOpts = {}) {
+export function createAdminPageHandlers(pages: readonly AdminScreenDef[], opts: AdminPageHandlerOpts = {}) {
   validateAdminPages(pages);
   const defaultRoles = opts.editorRoles ?? ["editor", "admin"];
   const bySlug = new Map(pages.map((p) => [p.slug, p]));
-  const rolesFor = (p: AdminPageDef): readonly string[] => p.roles ?? defaultRoles;
-  const mayOpen = (ctx: HandlerContext, p: AdminPageDef): boolean => held(ctx).some((r) => rolesFor(p).includes(r));
+  const rolesFor = (p: AdminScreenDef): readonly string[] => p.roles ?? defaultRoles;
+  const mayOpen = (ctx: HandlerContext, p: AdminScreenDef): boolean => held(ctx).some((r) => rolesFor(p).includes(r));
 
   return {
-    /** The pages THIS caller may open. Filtered rather than role-annotated: a nav entry
-     * that 403s when clicked is worse than one that is not there, and the role list is a
-     * server fact the browser has no use for. */
+    /** The screens THIS caller may open — Block Kit pages and panels alike. Filtered rather
+     * than role-annotated: a nav entry that 403s when clicked is worse than one that is not
+     * there, and the role list is a server fact the browser has no use for.
+     *
+     * A panel is filtered by exactly the same gate, which is the whole reason it is a
+     * registry entry rather than a client-side registration: the browser bundle decides
+     * only how the screen DRAWS, never whether this caller has one. */
     listAdminPages: query((ctx): AdminPageMeta[] =>
       pages
         .filter((p) => mayOpen(ctx, p))
-        .map((p) => ({ slug: p.slug, label: p.label, icon: p.icon, navOrder: p.navOrder ?? NAV_ORDER.adminPages })),
+        .map((p) => ({ slug: p.slug, label: p.label, icon: p.icon, navOrder: p.navOrder ?? NAV_ORDER.adminPages, kind: isAdminPanel(p) ? "panel" : "blocks" })),
     ),
 
     /**
@@ -281,6 +315,12 @@ export function createAdminPageHandlers(pages: readonly AdminPageDef[], opts: Ad
       if (!page) throw new BadRequest(`unknown admin page '${input.page}'`);
       // Before `render`, so a page's own code never runs for a caller who may not open it.
       if (!mayOpen(ctx, page)) throw new BadRequest(`unknown admin page '${input.page}'`);
+      // A panel renders in the BROWSER, so there is nothing here to interact with. Said
+      // plainly rather than folded into "unknown admin page": the caller may open this
+      // screen (it passed the gate above), so hiding its existence would only send whoever
+      // wired the call looking for a registration mistake that is not there. It is a client
+      // bug — the editor routes a panel to its component and never calls this.
+      if (isAdminPanel(page)) throw new BadRequest(`admin page '${input.page}' is a panel — it renders in the browser and has no server-side render`);
       const res = await page.render(ctx, input);
       return normalizeAdminResponse(res);
     }, {

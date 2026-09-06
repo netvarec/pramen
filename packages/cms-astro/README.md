@@ -108,6 +108,7 @@ pramenCms({
     signInUrl: "/signin/",                     // must be a page that EXISTS
     hidePages: true,                           // collections-only deployments
     extraNav: [{ label: "Curation", href: "/curate", target: "_self" }],
+    panels: ["/admin/curation.js"],            // YOUR React screens inside the chrome
     previewUrl: "/preview",                    // YOUR page that renders a draft
   },
 })
@@ -130,6 +131,21 @@ This is the same seam as `menuHref` and the sitemap's `pageUrl`: the CMS cannot 
 deployment routes, so the deployment says. Leave it unset and nothing changes — the link
 still points at the CMS's own endpoint. **Pages only**: a collection row has no canonical
 URL, so `signCollectionPreview` keeps returning the backend's JSON.
+
+### `panels` — your own React screens inside the chrome
+
+For the admin screen Block Kit (`adminPage()`) cannot describe — one that needs local
+interaction, a dialog, a redirect — declare an `adminPanel()` in `app.ts` and point this at
+the built bundle. The entry stays a server fact (label, position, `roles`, so the role filter
+is the same one Block Kit pages get); the bundle supplies only the component, through
+`globalThis.PRAMEN_CMS_EDITOR_RUNTIME.registerPanel({ slug, render })`.
+
+Build it with `react`, `react-dom`, `react/jsx-runtime` and `react/jsx-dev-runtime` marked
+**external**: the shell emits an import map that resolves them to the React the editor already
+loaded, because two copies in one page share no hook dispatcher. Each entry here is an ES
+module URL — a path from `public/`, one your build emitted, or an absolute http(s) URL — and
+the **editor imports it**, so it cannot evaluate before that React is published. The full
+guide is in `docs/cms.md`.
 
 `extraNav` links open in a **new tab** by default, because the editor's catch-all route
 matches every same-origin path — a same-tab click would land on the editor's own 404 instead

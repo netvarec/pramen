@@ -112,6 +112,22 @@ describe("what the nav shows at all", () => {
     expect(nav({ adminPages: [{ slug: "dispatch", label: "Dispatch", navOrder: NAV_ORDER.pages + 10 }] })).toEqual(["pages", "app:dispatch", "media", "settings"]);
   });
 
+  test("a PANEL is placed exactly like a Block Kit page — same list, same band, same key", () => {
+    // The two kinds differ only in where the rendering happens, so the nav must not be able
+    // to tell them apart: they arrive on one `listAdminPages`, keyed `app:<slug>`, and both
+    // are already role-filtered server-side. A separate entry shape here would have meant a
+    // second nav band and a second thing for a host to reason about when choosing a position.
+    expect(nav({ adminPages: [{ slug: "curation", label: "Curation", kind: "panel" }] })).toEqual(["pages", "media", "app:curation", "settings"]);
+    expect(
+      nav({
+        adminPages: [
+          { slug: "curation", label: "Curation", kind: "panel", navOrder: NAV_ORDER.pages + 10 },
+          { slug: "dispatch", label: "Dispatch", kind: "blocks" },
+        ],
+      }),
+    ).toEqual(["pages", "app:curation", "media", "app:dispatch", "settings"]);
+  });
+
   test("hiding the page builder hides Pages and Types with it", () => {
     const keys = nav({ hidePages: true, collections: [col("lectures")] });
     expect(keys).toEqual(["col:lectures", "media", "settings"]);

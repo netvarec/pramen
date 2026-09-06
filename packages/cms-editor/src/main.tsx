@@ -5,6 +5,9 @@ import { pageRegistry, routes } from "virtual:buzola/routes";
 import { AppProvider } from "./app-context";
 import { DOCUMENT_TITLE } from "./brand";
 import { isWithinBasePath, readBasePath, scopeToBasePath } from "./mount";
+import { publishPanelRuntime, type PanelRuntimeHost } from "./panel-runtime";
+import { loadPanelBundles, readPanelUrls, type PanelHost } from "./panels";
+import { initTheme } from "./theme";
 
 // Styling is podoba: the compiled Tailwind (podoba preset, with @podoba/tokens' variables
 // and the web font inlined) is a single stylesheet the SHELL links — see scripts/build.ts
@@ -18,6 +21,21 @@ import { isWithinBasePath, readBasePath, scopeToBasePath } from "./mount";
 // string this feature exists to hand over would put a foreign word in a rebranded client's
 // tab, and `suffix: null` ("just our name") could never drop it.
 document.title = DOCUMENT_TITLE;
+
+// Before the first paint, so an editor left in dark mode does not flash white on every load
+// — which is what an effect inside the root layout could never avoid.
+initTheme();
+
+// The shared React, published FIRST: a panel bundle's very first `import "react"` resolves
+// through the shell's import map to a shim that reads this back out, so the global has to
+// exist before any bundle is imported. See `panel-runtime.ts`.
+publishPanelRuntime(globalThis as PanelRuntimeHost);
+
+// …then the bundles themselves, NOT awaited. Every other fact the chrome is built from
+// arrives a round trip late too (`listAdminPages` is what puts a panel in the nav at all),
+// and awaiting a third-party fetch here would mean one hanging request is a blank admin.
+// A panel's route re-reads the registry as registrations land — see `panels.ts`.
+void loadPanelBundles(readPanelUrls(globalThis as PanelHost, typeof location === "undefined" ? "" : location.href));
 
 const el = document.getElementById("app");
 const basePath = readBasePath(el);

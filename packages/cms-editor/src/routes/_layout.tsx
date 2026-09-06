@@ -39,9 +39,9 @@ import { pagesHidden, splitsByType } from "../components";
 import { APP_BAR_H } from "../chrome";
 import { DarkThemeIcon, GroupFoldedIcon, GroupOpenIcon, LightThemeIcon, MenuToggleIcon, NAV_GLYPHS, RailToggleIcon, SettingsIcon, SignOutIcon } from "../icons";
 import { opensInSameTab } from "../mount";
+import { setTheme, useTheme } from "../theme";
 import { buildNav, NAV_SECTION_IDS, navSections, navSectionsAreLabelled, railIsNarrow, type ExtraNavLink, type NavIcon, type NavSectionId } from "../nav";
 
-const THEME_KEY = "pramen.cms.theme";
 /** Which nav groups this browser has folded away. Per-browser, like the theme — it is a
  * reading preference, not deployment configuration, and nothing server-side should carry it. */
 const COLLAPSED_KEY = "pramen.cms.nav.collapsed";
@@ -148,12 +148,10 @@ export default function RootLayout() {
   // otherwise be discarded with no prompt of any kind.
   const guarded = (go: () => void) => () => { if (confirmNavigation()) go(); };
 
-  // Dark mode: podoba tokens flip under `[data-theme="dark"]` — no `dark:` prefixes.
-  const [theme, setTheme] = useState(() => (typeof localStorage !== "undefined" ? localStorage.getItem(THEME_KEY) ?? "light" : "light"));
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme === "dark" ? "dark" : "light";
-    localStorage.setItem(THEME_KEY, theme);
-  }, [theme]);
+  // Dark mode. The choice lives in `theme.ts` rather than here: podoba's tokens flip under
+  // `[data-theme="dark"]` on the document root, `main.tsx` applies the stored one before the
+  // first paint, and a PANEL is handed the same value — three readers, so one store.
+  const theme = useTheme();
 
   // Below `md` the rail collapses to a disclosure under the brand row. A DISCLOSURE, not an
   // overlay drawer: an overlay owes the reader a focus trap, a restore and an Esc handler,

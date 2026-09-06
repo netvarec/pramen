@@ -16,6 +16,63 @@ there are no backward-compatibility guarantees yet.
 
 ### Added
 
+- **Custom admin PANELS — a project's own React screen inside the editor's chrome
+  (`@pramen/cms`, `@pramen/cms-editor`, `@pramen/cms-astro`).** Block Kit is a server-driven
+  vocabulary, and the properties that make it safe are the same ones that cap it: the whole page
+  comes back on every interaction, so an input cannot fire one, every control is disabled for the
+  round trip (focus and caret with it), a row cannot expand, and there is no link, no redirect,
+  no dialog, no autofocus and no date input. Those are not gaps to patch one element at a time.
+  The thing a project reaches for instead is what this replaces: a standalone React SPA served
+  next to the editor with the chrome rebuilt by hand — "it goes outside the application, it does
+  not even have the same layout".
+
+  `adminPanel(slug, { label, icon, navOrder, roles })` is the **same registry entry** as
+  `adminPage()` with the render moved to the browser. Same slug space, same `/apps/:slug` route,
+  same "Apps" nav band, same `listAdminPages` — which is the part that matters: **the server owns
+  the entry, the bundle owns only the component.** The role filter is therefore identical, so a
+  panel the caller may not open is absent from the listing exactly as a Block Kit page is; and a
+  bundle that fails to load renders a diagnostic naming the slug rather than making a nav section
+  quietly cease to exist. A slug used by both kinds is a boot error, because they share a route.
+
+  A panel is written as **ordinary React** — `import { useState } from "react"`, nothing in the
+  source marking it as a panel except one `registerPanel({ slug, render })` call — and built with
+  react, react-dom and both JSX runtimes marked **external**. The editor publishes its own React
+  on `globalThis.PRAMEN_CMS_EDITOR_RUNTIME` and the shell emits an import map pointing those four
+  specifiers at generated shim modules that read it back out, so a panel links against the React
+  already on the page. Two copies would share no hook dispatcher and the panel's first `useState`
+  would throw. The shims are GENERATED from the editor's own React namespaces at build time
+  (`dist/panel-react.js`, `panel-react-dom.js`, `panel-jsx-runtime.js`, `panel-jsx-dev-runtime.js`),
+  so their export lists cannot drift from the React actually loaded — a hand-written list is a
+  copy of React's export table whose first omission surfaces as a browser link error in someone
+  else's bundle. The dev JSX runtime is mapped deliberately: unmapped, it is the one bare import
+  that still RESOLVES, from the consumer's own `node_modules`, silently producing the second React
+  the whole mechanism exists to prevent.
+
+  A panel is handed four things and no more — `api` (a narrow `call`/`resolve` view of the
+  session, not the editor's whole `Api` class), `basePath` (so links stay inside the mount
+  prefix), `theme`, and `setError` (the chrome's one error banner). The identity is deliberately
+  absent: it is one `api.call("me")` away, and a panel branching on the caller's roles to decide
+  what to show is doing client-side authorization, where the gate that counts is `roles` on
+  `adminPanel()`.
+
+  Delivery is `admin: { panels: ["/admin/curation.js"] }` on `pramenCms()`. The **editor imports**
+  those URLs rather than the shell script-tagging them — a panel bundle cannot evaluate before the
+  shared React is published, and neither script order works: first is too early, second races the
+  first render. The loads do not block the first paint (the panel route re-reads the registry as
+  registrations land), a bundle that 404s costs its own panel and nothing else, and a URL that is
+  not http(s) is refused with a warning, because these strings are imported, which is to say
+  executed.
+
+  A panel renders behind an **error boundary**, because it is someone else's component in this
+  app's React tree and React unmounts the whole root on an uncaught render error — without one,
+  a bad panel does not break a screen, it blanks the admin: no sidebar, and no way off the route
+  that is failing. The fallback names the panel and the failure; the chrome survives.
+
+  **ACTION REQUIRED (none for existing deployments; one for anyone reading `listAdminPages`).**
+  `AdminPageMeta` now carries `kind: "blocks" | "panel"`. Every existing `adminPage()` reports
+  `"blocks"`, and the editor treats an absent or unrecognised kind as `"blocks"`, so an older
+  server and a newer editor keep working in both directions.
+
 - **Block Kit: a table row can act, and a field can be wrong (`@pramen/cms`, `@pramen/cms-editor`).**
   Two gaps that between them decided whether a project screen could be an `adminPage` at all.
 
