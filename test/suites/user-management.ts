@@ -71,6 +71,30 @@ export async function runUserManagement(base: string): Promise<void> {
   const newLogin = await call("login", { username: "um_alice", password: "brandnew123" });
   assert(newLogin.body.ok && typeof newLogin.body.result.token === "string", "um: the new password logs in");
 
+  // --- self-service: a passwordless account sets its FIRST password ---------
+  // Účet z pozvánky / magic linku má prázdný passwordHash. `changePassword` po něm dřív
+  // chtěl SOUČASNÉ heslo, takže si ho přihlášený uživatel nemohl nastavit vůbec — dostal
+  // „current password is incorrect" o hesle, které nikdy neexistovalo. Teď smí prázdnou
+  // přihrádku zaplnit sezení; obsazenou pořád jen ten, kdo staré heslo zná (výš).
+  const invited = await call("inviteUser", { email: "um_invited@example.com", roles: ["user"] }, admin);
+  assert(invited.body.ok, "um: admin invites a passwordless user");
+  // Heslo o platné délce, jen prostě žádné nemá: prázdný hash nesmí ověřit NIC (kdyby ho
+  // `verifyPassword` brala jako „schéma neznám, projdi“, byl by účet z pozvánky otevřený).
+  const noPasswordLogin = await call("login", { username: "um_invited@example.com", password: "anything123" });
+  assert(noPasswordLogin.status === 401, "um: an invited user cannot log in before setting a password");
+
+  const invitedToken = await token("um_invited@example.com", ["user"]);
+  const firstSet = await call("changePassword", { currentPassword: "", newPassword: "firstpassword" }, invitedToken);
+  assert(
+    firstSet.body.ok && firstSet.body.result?.firstPassword === true,
+    "um: an invited user sets a first password with an empty currentPassword",
+  );
+  const afterSet = await call("login", { username: "um_invited@example.com", password: "firstpassword" });
+  assert(afterSet.body.ok && Boolean(afterSet.body.result.token), "um: the newly set password logs in");
+  // …a od té chvíle je to obyčejný účet s heslem, tedy zase pod ochranou současného hesla.
+  const nowLocked = await call("changePassword", { currentPassword: "", newPassword: "secondpassword" }, invitedToken);
+  assert(nowLocked.status === 401, "um: once set, the password can no longer be replaced from the session alone");
+
   // --- admin: deactivate blocks login, reactivate restores it ---------------
   const deactivate = await call("setUserActive", { username: "um_bob", active: false }, admin);
   // bool columns read back as SQLite 0/1 (pramen stores booleans as INTEGER, no read-decode).

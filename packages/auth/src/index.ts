@@ -808,23 +808,56 @@ export function createUserHandlers(opts: { table?: string } = {}) {
       return { ...updated, emailVerified: null };
     }),
 
-    /** Self-service: change the caller's password. A credential op — it reads the
-     * caller's OWN hash (passwordHash is never ACL-readable) to verify the current
-     * password, then writes the new one. Self-scoped by the verified identity, so it
-     * never touches another row; passwordless (magic-link) users have no current
-     * password and are rejected. */
+    /** Self-service: set or change the caller's password. A credential op — it reads the
+     * caller's OWN hash (passwordHash is never ACL-readable) and writes the new one.
+     * Self-scoped by the verified identity, so it never touches another row.
+     *
+     * TWO cases, one rule: **an empty password slot may be filled by the session; a filled
+     * one may only be replaced by proving you know it.**
+     *
+     * - The account HAS a password → `currentPassword` must verify. Unchanged.
+     * - The account has NONE (every magic-link / invited user: `inviteUser` and
+     *   `loginWithMagicLink` both leave `passwordHash` empty) → `currentPassword` is
+     *   ignored and the new one is set. `firstPassword: true` says which happened.
+     *
+     * That second branch used to be a rejection, and it made "I signed in with a link and
+     * now I want a password" IMPOSSIBLE from an authenticated session: the account was
+     * asked for a credential it had never had, and told the one it invented was "incorrect".
+     * The only way through was the password-RESET email — a flow named for a problem the
+     * user does not have, on a page they have to be told about.
+     *
+     * The security question is whether a session alone should be able to mint a durable
+     * credential, and the answer here is yes, for this case only:
+     *
+     * - The session was itself minted by an emailed capability (the magic link), which is
+     *   the same proof a reset link carries. The reset link is only fresher.
+     * - The holder of that session already has everything the account can do, for the
+     *   session's whole life. A password is not new authority; it is authority that
+     *   outlives revocation — which is why the branch is narrow (empty slot only) and why
+     *   `refreshSession`'s denylist remains the remedy for a session known to be stolen.
+     * - Replacing an EXISTING password from a bare session stays impossible. That is the
+     *   property worth keeping, and it is untouched.
+     *
+     * A deployment that wants the stricter posture keeps `createPasswordReset` and does not
+     * surface this branch in its UI; the reset flow still works either way. */
     changePassword: mutation(async (ctx, input: { currentPassword: string; newPassword: string }) => {
       const userId = requireUserId(ctx);
       const current = typeof input?.currentPassword === "string" ? input.currentPassword : "";
       const next = typeof input?.newPassword === "string" ? input.newPassword : "";
       if (next.length < 8) throw new BadRequest("newPassword must be at least 8 characters");
       const rows = await ctx.db.exec(`SELECT passwordHash FROM ${table} WHERE username = ? LIMIT 1`, userId);
-      const stored = rows[0] ? String(rows[0].passwordHash ?? "") : "";
-      if (stored === "" || !(await verifyPassword(current, stored))) {
+      // No row at all: a token for an account that has since been deleted. Previously this
+      // fell into the same `stored === ""` branch as a passwordless user and was rejected as
+      // a wrong password — harmless then, but once an empty slot is fillable it would make
+      // the UPDATE a silent no-op that reports success.
+      if (rows.length === 0) throw new Unauthorized("authentication required");
+      const stored = String(rows[0].passwordHash ?? "");
+      const firstPassword = stored === "";
+      if (!firstPassword && !(await verifyPassword(current, stored))) {
         throw new Unauthorized("current password is incorrect");
       }
       await ctx.db.exec(`UPDATE ${table} SET passwordHash = ? WHERE username = ?`, await hashPassword(next), userId);
-      return { ok: true };
+      return { ok: true, firstPassword };
     }),
   };
 }

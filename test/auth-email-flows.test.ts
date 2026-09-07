@@ -15,15 +15,23 @@ import type { JsonValue } from "@pramen/server";
 import {
   authSchema,
   emailTokenSchema,
+  magicLinkSchema,
   authHandlers,
+  userHandlers,
   createPasswordReset,
   createEmailVerification,
+  createMagicLinkAuth,
   verifyPassword,
 } from "../packages/auth/src/index";
 
-const schema = defineSchema({ ...authSchema, ...emailTokenSchema });
+// `magicLinkSchema` je tu kvůli `inviteUser` (ten píše do `auth_magic_links`) — účet bez hesla
+// se jinak nedá založit tak, jak vzniká v provozu, a test na první heslo by stál na ručním
+// INSERTu, tedy na domněnce o tvaru řádku místo na tom, co ho doopravdy zakládá.
+const schema = defineSchema({ ...authSchema, ...emailTokenSchema, ...magicLinkSchema });
 const reset = createPasswordReset({ sendEmail: async () => {} });
 const verify = createEmailVerification({ sendEmail: async () => {} });
+// Jen kvůli `inviteUser` — účet bez hesla se jinak nedá založit tak, jak vzniká v provozu.
+const magic = createMagicLinkAuth({ sendEmail: async () => {} });
 const SECRET = "test-secret-at-least-16-chars";
 
 interface Enqueued {
@@ -210,5 +218,102 @@ describe("email verification", () => {
     await h.run(reset.handlers.requestPasswordReset, h.ctx(), { email: "ada@example.com" });
     const resetToken = h.enqueued[0].payload.token;
     await expect(h.run(verify.handlers.verifyEmail, h.ctx(), { token: resetToken })).rejects.toThrow(/invalid or expired/);
+  });
+});
+
+/*
+ * --- Nastavení PRVNÍHO hesla ---------------------------------------------------------------
+ *
+ * Účet z pozvánky nebo magic linku nemá heslo (`inviteUser` i `loginWithMagicLink` nechávají
+ * `passwordHash` prázdný). `changePassword` po něm dřív SOUČASNÉ heslo chtěl, takže si ho
+ * přihlášený uživatel nemohl nastavit vůbec — dostal „current password is incorrect" o hesle,
+ * které nikdy neexistovalo, a jedinou cestou byl reset e-mailem, tedy tok pojmenovaný podle
+ * problému, který nemá.
+ *
+ * Pravidlo je teď jedno: PRÁZDNOU přihrádku smí zaplnit sezení, OBSAZENOU jen ten, kdo dokáže,
+ * že staré heslo zná. Druhá půlka je ta, na které záleží, a je tady doložená vedle první —
+ * jinak by se z „umí to i bez hesla" snadno stalo „nechce heslo nikdy".
+ */
+describe("první heslo pro účet z magic linku", () => {
+  /** Účet bez hesla, přesně jak ho zakládá pozvánka. */
+  const invite = async (h: Awaited<ReturnType<typeof harness>>, email: string) => {
+    await h.run(magic.handlers.inviteUser, h.ctx({ userId: "admin", roles: ["admin"] }), { email });
+    h.enqueued.length = 0;
+    expect(String((await h.rawUser(email)).passwordHash)).toBe("");
+  };
+
+  test("prázdné „současné heslo“ nastaví první heslo a přihlášení pak projde", async () => {
+    const h = await harness();
+    await invite(h, "ada@example.com");
+
+    const res = (await h.run(userHandlers.changePassword, h.ctx({ userId: "ada@example.com" }), {
+      currentPassword: "",
+      newPassword: "correcthorse",
+    })) as { ok: boolean; firstPassword: boolean };
+    expect(res).toEqual({ ok: true, firstPassword: true });
+
+    // A opravdu se tím účet odemkl — `login` je jediný důkaz, který stojí za řeč.
+    const login = (await h.run(authHandlers.login, h.ctx(), { username: "ada@example.com", password: "correcthorse" })) as {
+      token: string;
+    };
+    expect(login.token).toBeString();
+  });
+
+  test("obsazenou přihrádku sezení samo nepřepíše", async () => {
+    // Tohle je ta vlastnost, kterou uvolnění NESMÍ vzít s sebou: kdo má jen ukradené sezení,
+    // nesmí z něj vyrobit trvalé heslo tam, kde už nějaké je.
+    const h = await harness();
+    await seedUser(h, "bob", "correcthorse");
+    const before = String((await h.rawUser("bob")).passwordHash);
+
+    await expect(
+      h.run(userHandlers.changePassword, h.ctx({ userId: "bob" }), { currentPassword: "", newPassword: "brandnewpass" }),
+    ).rejects.toThrow(/current password is incorrect/);
+    await expect(
+      h.run(userHandlers.changePassword, h.ctx({ userId: "bob" }), { currentPassword: "hadam", newPassword: "brandnewpass" }),
+    ).rejects.toThrow(/current password is incorrect/);
+    expect(String((await h.rawUser("bob")).passwordHash)).toBe(before);
+  });
+
+  test("běžná změna hesla se hlásí jako změna, ne jako nastavení", async () => {
+    // `firstPassword` řídí větu, kterou administrace ukáže. Kdyby lhala, uživatel s heslem se
+    // dozví „heslo nastaveno“ a bude si myslet, že to staré přestalo platit.
+    const h = await harness();
+    await seedUser(h, "cyd", "oldpassword");
+    const res = (await h.run(userHandlers.changePassword, h.ctx({ userId: "cyd" }), {
+      currentPassword: "oldpassword",
+      newPassword: "brandnewpass",
+    })) as { firstPassword: boolean };
+    expect(res.firstPassword).toBe(false);
+  });
+
+  test("token na smazaný účet nic nezaloží", async () => {
+    // Dřív spadl do téže větve jako uživatel bez hesla a odmítl se — neškodně. Jakmile se ale
+    // prázdná přihrádka smí zaplnit, byl by z toho UPDATE bez jediného řádku, který hlásí
+    // úspěch: administrace by řekla „heslo nastaveno“ a přihlásit by se nedalo nikdy.
+    const h = await harness();
+    await expect(
+      h.run(userHandlers.changePassword, h.ctx({ userId: "kdovi" }), { currentPassword: "", newPassword: "correcthorse" }),
+    ).rejects.toThrow(/authentication required/);
+    expect(await h.rawUser("kdovi")).toBeUndefined();
+  });
+
+  test("krátké heslo neprojde ani na účtu bez hesla", async () => {
+    // Uvolnění se týká SOUČASNÉHO hesla, ne požadavků na nové.
+    const h = await harness();
+    await invite(h, "dan@example.com");
+    await expect(
+      h.run(userHandlers.changePassword, h.ctx({ userId: "dan@example.com" }), { currentPassword: "", newPassword: "krátké" }),
+    ).rejects.toThrow(/at least 8 characters/);
+    expect(String((await h.rawUser("dan@example.com")).passwordHash)).toBe("");
+  });
+
+  test("bez přihlášení to nejde vůbec", async () => {
+    const h = await harness();
+    await invite(h, "eve@example.com");
+    await expect(
+      h.run(userHandlers.changePassword, h.ctx(), { currentPassword: "", newPassword: "correcthorse" }),
+    ).rejects.toThrow();
+    expect(String((await h.rawUser("eve@example.com")).passwordHash)).toBe("");
   });
 });

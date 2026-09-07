@@ -237,8 +237,19 @@ const acl = [
 
 - **Admin:** `listUsers`, `setUserRoles`, `setUserActive` (deactivate/reactivate),
   `deleteUser`. Reads are projected — `passwordHash` is never returned.
-- **Self:** `changeEmail` (unique, validated), `changePassword` (verifies the current
-  one).
+- **Self:** `changeEmail` (unique, validated), `changePassword`.
+
+`changePassword` follows one rule: **an empty password slot may be filled by the session, a
+filled one only by proving you know it.** An account created by `inviteUser` or a magic-link
+login has no `passwordHash`, so it passes an empty `currentPassword` and gets its FIRST
+password; the response says `firstPassword: true`. An account that already has one still has
+to send the current password, and a wrong or empty one is a 401 — so a stolen session can
+never *replace* a credential, only fill a slot that was empty anyway.
+
+Without that first branch, "I signed in with a link and now I want a password" had no answer
+at all: the account was asked for a credential it had never had, and told the one it invented
+was incorrect. The password-RESET flow was the only way through, which is a flow named for a
+problem the user does not have.
 
 Deactivating or deleting a user **revokes their outstanding tokens immediately** — the
 handlers write a KV denylist entry the Worker enforces. A `setUserRoles` change is

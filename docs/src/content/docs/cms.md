@@ -691,7 +691,9 @@ those handlers are wired into your app (`createUserHandlers`/`authPolicies` + `i
   `editor` role), edit roles inline (`setUserRoles`), activate/deactivate (`setUserActive`),
   and delete (`deleteUser`). You can't deactivate or delete your own account.
 - **Settings** — account self-service for any signed-in user: change your contact email
-  (`changeEmail`) or password (`changePassword`), plus an about card and sign-out.
+  (`changeEmail`) or password (`changePassword`), plus an about card and sign-out. Someone who
+  signed in with a magic link leaves "Current password" empty — they have none yet, and that
+  sets their first one.
 
 Both go through the same ACL-gated handlers, so a non-admin who forges the tab still hits a
 403 on the server.

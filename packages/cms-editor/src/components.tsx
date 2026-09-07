@@ -2342,9 +2342,28 @@ function MyAccountCard({ api, me, onError, onSignOut }: { api: Api; me: Me | nul
     catch (e) { onError(errMsg(e)); }
     finally { setBusy(false); }
   };
+  /**
+   * Sets a password as well as changes one.
+   *
+   * An account created by an invite or a magic link has NO password, so "Current password"
+   * is a field it can never fill — and the form used to hold the button disabled until
+   * something was typed into it, then report that whatever was typed was "incorrect".
+   * Setting a password after signing in with a link was, in other words, impossible from
+   * here; the only route was the password-RESET page, which is named for a problem the user
+   * does not have and which nothing in this screen mentioned.
+   *
+   * `changePassword` now fills an empty slot from the session and still requires the current
+   * password to REPLACE a real one (see its handler docs for why that line is drawn there),
+   * so the same form serves both — the field is simply left empty by whoever has nothing to
+   * put in it. The server says which case it was, so the confirmation can too.
+   */
   const savePassword = async () => {
     setBusy(true);
-    try { await api.call("changePassword", { currentPassword: pwCurrent, newPassword: pwNew }); setPwCurrent(""); setPwNew(""); flash("Password updated"); }
+    try {
+      const res = await api.call<{ firstPassword?: boolean }>("changePassword", { currentPassword: pwCurrent, newPassword: pwNew });
+      setPwCurrent(""); setPwNew("");
+      flash(res?.firstPassword ? "Password set — you can now sign in with it" : "Password updated");
+    }
     catch (e) { onError(errMsg(e)); }
     finally { setBusy(false); }
   };
@@ -2360,9 +2379,20 @@ function MyAccountCard({ api, me, onError, onSignOut }: { api: Api; me: Me | nul
       <div className="flex flex-col gap-4">
         <Input label="Change contact email" type="email" value={email} onChange={setEmail} placeholder="you@example.com" />
         <Button className="w-full" onPress={saveEmail} isDisabled={busy || !email}>Save email</Button>
-        <Input label="Current password" type="password" value={pwCurrent} onChange={setPwCurrent} autoComplete="current-password" />
+        <Input
+          label="Current password"
+          description="Leave this empty if you have only ever signed in with a link — then you have no password yet, and this sets your first one."
+          type="password"
+          value={pwCurrent}
+          onChange={setPwCurrent}
+          autoComplete="current-password"
+        />
         <Input label="New password (at least 8 characters)" type="password" value={pwNew} onChange={setPwNew} autoComplete="new-password" />
-        <Button className="w-full" onPress={savePassword} isDisabled={busy || pwNew.length < 8 || pwCurrent.length === 0}>Change password</Button>
+        {/* Enabled on the NEW password alone. Requiring the current one here is what made
+            the form unusable for the accounts that need it most; the server still requires
+            it wherever there is one to require. "Save" rather than "Change", because for
+            half the people reading this there is nothing yet to change. */}
+        <Button className="w-full" onPress={savePassword} isDisabled={busy || pwNew.length < 8}>Save password</Button>
         <Button variant="ghost" className="mt-2 w-full text-danger" onPress={onSignOut}>Sign out</Button>
       </div>
     </Card>
