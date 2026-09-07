@@ -8,7 +8,7 @@ import Highlight from "@tiptap/extension-highlight";
 import TaskItem from "@tiptap/extension-task-item";
 import TaskList from "@tiptap/extension-task-list";
 import StarterKit from "@tiptap/starter-kit";
-import { useCallback, useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type DragEvent, type ReactNode } from "react";
 import type { Api } from "./api";
 import { isRichTextDoc, richTextToPlainText } from "./rich-text";
 import type { FieldDefinition, FieldValue, FieldValues, Media, ReferenceOption, ReferenceResult, RichTextDoc } from "./types";
@@ -17,14 +17,46 @@ import type { FieldDefinition, FieldValue, FieldValues, Media, ReferenceOption, 
 // don't map cleanly onto a podoba primitive (number/date/select/file).
 export const CONTROL = "h-10 w-full rounded-lg border border-border bg-surface-card px-4 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus:border-brand-green";
 
-function FieldShell({ label, children }: { label: ReactNode; children: ReactNode }) {
+/**
+ * A field's help text — `FieldDefinition.description`, rendered under the control.
+ *
+ * Styled to match what podoba's `Input`/`Textarea` emit for their own `description` prop
+ * (`<Text slot="description">`), because those two render theirs and everything else renders
+ * this one: two helper texts on one form that don't look alike read as two different kinds
+ * of thing.
+ */
+function FieldHint({ id, children }: { id: string; children: ReactNode }) {
   return (
+    <p id={id} className="text-label text-fg-muted">
+      {children}
+    </p>
+  );
+}
+
+/**
+ * `description` is rendered OUTSIDE the `<label>`, deliberately.
+ *
+ * A `<label>` wrapping a control contributes ALL its text to that control's accessible name,
+ * so a hint nested inside would be read out as part of the field's name — "Adresa Použije se,
+ * jen když akce nemá přiřazená sportoviště" instead of "Adresa". The hint belongs in
+ * `aria-describedby`, which is a separate announcement the user can skip; hence the id, which
+ * the caller puts on the control itself.
+ */
+function FieldShell({ label, description, descriptionId, children }: { label: ReactNode; description?: string; descriptionId?: string; children: ReactNode }) {
+  const field = (
     <label className="flex w-full flex-col gap-2">
       {/* No label element at all when there is no label — an empty one still occupies a
           row and, with a required marker, showed a stray asterisk above the control. */}
       {label === undefined ? null : <span className="text-sm font-medium text-fg">{label}</span>}
       {children}
     </label>
+  );
+  if (!description || !descriptionId) return field;
+  return (
+    <div className="flex w-full flex-col gap-2">
+      {field}
+      <FieldHint id={descriptionId}>{description}</FieldHint>
+    </div>
   );
 }
 
@@ -183,6 +215,19 @@ function FieldInput({ def, value, onChange, api, hideLabelAs, siblings }: { def:
       {def.label ?? def.name} {def.required ? <span className="text-danger">*</span> : null}
     </>
   );
+  // A label names the field; a description says what it MEANS — which of two plausible
+  // readings is the right one, when it applies, what leaving it empty does. Without
+  // somewhere to put that, the only place it can live is a comment in the app's source,
+  // where the person filling the field in will never see it.
+  //
+  // Suppressed under `hideLabelAs` (a single-field repeater row) for the same reason the
+  // label is: the list already carries both, once, and repeating a sentence on every row
+  // buries the rows.
+  const hint = hideLabelAs !== undefined ? undefined : def.description?.trim() || undefined;
+  // Stable per field instance, so the control can point `aria-describedby` at the hint.
+  // `useId` is called unconditionally — it is a hook, and the switch below returns early.
+  const hintId = useId();
+  const describedBy = hint ? hintId : undefined;
   const asText = (v: FieldValue) => (typeof v === "string" ? v : v == null ? "" : JSON.stringify(v));
   switch (def.type) {
     case "text":
@@ -191,34 +236,36 @@ function FieldInput({ def, value, onChange, api, hideLabelAs, siblings }: { def:
       return hideLabelAs !== undefined ? (
         <input className={CONTROL} type="text" aria-label={hideLabelAs} placeholder={placeholder} value={(value as string) ?? ""} onChange={(e) => onChange(e.target.value)} />
       ) : (
-        <Input label={label} value={(value as string) ?? ""} onChange={onChange} placeholder={placeholder} />
+        // podoba's own `description` prop, not our `FieldHint`: `Input` is a React Aria
+        // `TextField`, which associates label, description and error with the control for us.
+        <Input label={label} description={hint} value={(value as string) ?? ""} onChange={onChange} placeholder={placeholder} />
       );
     }
     case "textarea":
       return hideLabelAs !== undefined ? (
         <textarea className={`${CONTROL} h-auto min-h-20 py-2.5`} aria-label={hideLabelAs} value={asText(value)} onChange={(e) => onChange(e.target.value)} />
       ) : (
-        <Textarea label={label} value={asText(value)} onChange={onChange} />
+        <Textarea label={label} description={hint} value={asText(value)} onChange={onChange} />
       );
     case "richtext":
       // A rich-text value is a document tree. A legacy HTML string still opens (it seeds
       // the editor as-is) and is upgraded to a doc by the first save.
       return (
-        <FieldShell label={label}>
+        <FieldShell label={label} description={hint} descriptionId={hintId}>
           <RichText value={value as RichTextDoc | string | null} onChange={onChange as (v: RichTextDoc) => void} />
         </FieldShell>
       );
     case "number":
       return (
-        <FieldShell label={label}>
-          <input className={CONTROL} type="number" aria-label={hideLabelAs} value={value == null ? "" : String(value)} onChange={(e) => onChange(e.target.value === "" ? null : Number(e.target.value))} />
+        <FieldShell label={label} description={hint} descriptionId={hintId}>
+          <input className={CONTROL} type="number" aria-label={hideLabelAs} aria-describedby={describedBy} value={value == null ? "" : String(value)} onChange={(e) => onChange(e.target.value === "" ? null : Number(e.target.value))} />
         </FieldShell>
       );
     case "date":
     case "datetime":
       return (
-        <FieldShell label={label}>
-          <input className={CONTROL} type={def.type === "date" ? "date" : "datetime-local"} aria-label={hideLabelAs} value={(value as string) ?? ""} onChange={(e) => onChange(e.target.value || null)} />
+        <FieldShell label={label} description={hint} descriptionId={hintId}>
+          <input className={CONTROL} type={def.type === "date" ? "date" : "datetime-local"} aria-label={hideLabelAs} aria-describedby={describedBy} value={(value as string) ?? ""} onChange={(e) => onChange(e.target.value || null)} />
         </FieldShell>
       );
     case "slug":
@@ -226,6 +273,8 @@ function FieldInput({ def, value, onChange, api, hideLabelAs, siblings }: { def:
         <SlugField
           def={def}
           label={label}
+          description={hint}
+          descriptionId={hintId}
           value={typeof value === "string" ? value : ""}
           source={typeof siblings?.[def.from ?? ""] === "string" ? (siblings[def.from ?? ""] as string) : ""}
           onChange={onChange as (v: string) => void}
@@ -239,24 +288,30 @@ function FieldInput({ def, value, onChange, api, hideLabelAs, siblings }: { def:
         <div className="flex w-full flex-col gap-2">
           <span className="text-sm font-medium text-fg">{label}</span>
           <PublishControl value={typeof value === "string" ? value : ""} onChange={onChange as (v: string | null) => void} />
+          {hint ? <FieldHint id={hintId}>{hint}</FieldHint> : null}
         </div>
       );
     case "boolean":
       return (
-        <label className="flex items-center gap-2">
-          <input type="checkbox" checked={Boolean(value)} onChange={(e) => onChange(e.target.checked)} />
-          <span className="text-sm text-fg">{def.label ?? def.name}</span>
-        </label>
+        <div className="flex w-full flex-col gap-1">
+          <label className="flex items-center gap-2">
+            <input type="checkbox" aria-describedby={describedBy} checked={Boolean(value)} onChange={(e) => onChange(e.target.checked)} />
+            <span className="text-sm text-fg">{def.label ?? def.name}</span>
+          </label>
+          {/* Outside the <label>, like everywhere else — inside, it would be read out as
+              part of the checkbox's name. */}
+          {hint ? <FieldHint id={hintId}>{hint}</FieldHint> : null}
+        </div>
       );
     case "select":
       return (
-        <FieldShell label={label}>
-          <SelectField def={def} value={value as string | null} onChange={onChange} api={api} ariaLabel={hideLabelAs} />
+        <FieldShell label={label} description={hint} descriptionId={hintId}>
+          <SelectField def={def} value={value as string | null} onChange={onChange} api={api} ariaLabel={hideLabelAs} describedBy={describedBy} />
         </FieldShell>
       );
     case "media":
       return (
-        <FieldShell label={label}>
+        <FieldShell label={label} description={hint} descriptionId={hintId}>
           <MediaField value={value as string | null} onChange={onChange} api={api} />
         </FieldShell>
       );
@@ -268,18 +323,19 @@ function FieldInput({ def, value, onChange, api, hideLabelAs, siblings }: { def:
         <div className="flex w-full flex-col gap-2">
           {label === undefined ? null : <span className="text-sm font-medium text-fg">{label}</span>}
           <ReferenceField def={def} value={value} onChange={onChange} api={api} ariaLabel={hideLabelAs} />
+          {hint ? <FieldHint id={hintId}>{hint}</FieldHint> : null}
         </div>
       );
     case "group":
       return (
-        <FieldShell label={label}>
+        <FieldShell label={label} description={hint} descriptionId={hintId}>
           <div className="rounded-lg border border-border bg-surface-muted p-3.5">
             <FieldForm schema={def.fields ?? []} value={(value as FieldValues) ?? {}} onChange={onChange as (v: FieldValues) => void} api={api} />
           </div>
         </FieldShell>
       );
     case "repeater":
-      return <Repeater def={def} value={(value as FieldValues[]) ?? []} onChange={onChange as (v: FieldValues[]) => void} api={api} label={label} />;
+      return <Repeater def={def} value={(value as FieldValues[]) ?? []} onChange={onChange as (v: FieldValues[]) => void} api={api} label={label} description={hint} descriptionId={hintId} />;
     default:
       return null;
   }
@@ -385,7 +441,7 @@ export function RichText({ value, onChange }: { value: RichTextDoc | string | nu
  * Reordering is drag-and-drop from the ⠿ handle, mirroring the block canvas. ↑/↓ stay,
  * because dragging is unavailable to keyboard users and awkward on touch.
  */
-function Repeater({ def, value, onChange, api, label }: { def: FieldDefinition; value: FieldValues[]; onChange: (v: FieldValues[]) => void; api: Api; label: ReactNode }) {
+function Repeater({ def, value, onChange, api, label, description, descriptionId }: { def: FieldDefinition; value: FieldValues[]; onChange: (v: FieldValues[]) => void; api: Api; label: ReactNode; description?: string; descriptionId?: string }) {
   const items = Array.isArray(value) ? value : [];
   const fields = def.fields ?? [];
   // One field, and not itself a tall control — the case where the card is pure overhead.
@@ -491,6 +547,9 @@ function Repeater({ def, value, onChange, api, label }: { def: FieldDefinition; 
   return (
     <div className="flex flex-col gap-2">
       <span className="text-sm font-medium text-fg">{label}</span>
+      {/* Above the rows, not under them: a repeater grows, and a note about what the list is
+          for is only useful before you start adding to it. */}
+      {description && descriptionId ? <FieldHint id={descriptionId}>{description}</FieldHint> : null}
 
       {items.length === 0 ? <span className="text-sm text-fg-muted">None yet.</span> : null}
 
@@ -579,7 +638,7 @@ function slugifyInput(input: string): string {
  * not silently change its URL and break every link to it; "Generate from …" is there for
  * when that IS what you want.
  */
-function SlugField({ def, label, value, source, onChange }: { def: FieldDefinition; label: ReactNode; value: string; source: string; onChange: (v: string) => void }) {
+function SlugField({ def, label, description, descriptionId, value, source, onChange }: { def: FieldDefinition; label: ReactNode; description?: string; descriptionId?: string; value: string; source: string; onChange: (v: string) => void }) {
   // What this control last wrote. While the field still holds it, the field is "untouched"
   // and free to follow; anything else means a human typed it.
   const derived = useRef<string | null>(null);
@@ -611,9 +670,10 @@ function SlugField({ def, label, value, source, onChange }: { def: FieldDefiniti
   const canGenerate = Boolean(suggestion) && suggestion !== value;
 
   return (
-    <FieldShell label={label}>
+    <FieldShell label={label} description={description} descriptionId={descriptionId}>
       <input
         className={CONTROL}
+        aria-describedby={description ? descriptionId : undefined}
         value={value}
         onChange={(e) => {
           touched.current = true; // typed by hand — stop following from here on
@@ -642,7 +702,7 @@ function SlugField({ def, label, value, source, onChange }: { def: FieldDefiniti
 // A `select` field. Static `options` render as-is; when `optionsFrom` is set, the options are
 // fetched once from that query handler (returns `{ value, label }[]`) — e.g. a live list of
 // campaigns — so the editor never has to hardcode or copy identifiers by hand.
-function SelectField({ def, value, onChange, api, ariaLabel }: { def: FieldDefinition; value: string | null; onChange: (v: FieldValue) => void; api: Api; ariaLabel?: string }) {
+function SelectField({ def, value, onChange, api, ariaLabel, describedBy }: { def: FieldDefinition; value: string | null; onChange: (v: FieldValue) => void; api: Api; ariaLabel?: string; describedBy?: string }) {
   const [dyn, setDyn] = useState<{ value: string; label: string }[] | null>(null);
   const from = def.optionsFrom;
   useEffect(() => {
@@ -657,7 +717,7 @@ function SelectField({ def, value, onChange, api, ariaLabel }: { def: FieldDefin
   const loading = Boolean(from) && dyn === null;
   const opts = from ? dyn ?? [] : (def.options ?? []).map((o) => ({ value: o, label: o }));
   return (
-    <select className={CONTROL} aria-label={ariaLabel} value={value ?? ""} onChange={(e) => onChange(e.target.value || null)}>
+    <select className={CONTROL} aria-label={ariaLabel} aria-describedby={describedBy} value={value ?? ""} onChange={(e) => onChange(e.target.value || null)}>
       <option value="">{loading ? "Načítám…" : "—"}</option>
       {opts.map((o) => (
         <option key={o.value} value={o.value}>{o.label}</option>

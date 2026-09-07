@@ -191,6 +191,19 @@ function FieldRow({ def, siblings, siblingFields, index, count, depth, onChange,
         {duplicate ? <p className="text-caption text-danger">Two fields here are called “{def.name}” — they would write the same key, and one could never be saved.</p> : null}
         {badName ? <p className="text-caption text-danger">A name must start with a letter or underscore and hold only letters, digits and underscores.</p> : null}
 
+        {/* Full width, and under the three-up row: this is the one input here that takes a
+            sentence rather than a word, and it is the only place a field's meaning can be
+            written down where the person filling it in will read it. */}
+        <label className="flex flex-col gap-1.5">
+          <span className="text-caption text-fg-subtle">Help text (optional)</span>
+          <input
+            className={CONTROL}
+            value={def.description ?? ""}
+            placeholder="What this field means, when it applies, what empty does"
+            onChange={(e) => patch({ description: e.target.value || undefined })}
+          />
+        </label>
+
         <label className="flex items-center gap-2">
           <input type="checkbox" checked={def.required === true} onChange={(e) => patch({ required: e.target.checked || undefined })} />
           <span className="text-sm text-fg">Required</span>

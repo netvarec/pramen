@@ -43,6 +43,50 @@ describe("field schemas", () => {
     expect(() => normalizeFieldSchema([{ name: "a", type: "wysiwyg" }])).toThrow(/not a field type/);
   });
 
+  /*
+   * Help text.
+   *
+   * `validateFieldSchema` rebuilds every entry from a whitelist, so a key it does not name
+   * is dropped in silence — which is what makes this worth its own test rather than trusting
+   * the type. An authored description would round-trip through `createContentType` and come
+   * back gone, and the only symptom would be a field in the editor with no explanation under
+   * it, indistinguishable from one where nobody wrote an explanation.
+   */
+  test("a description survives — it is the field's help text, not decoration", () => {
+    expect(normalizeFieldSchema([{ name: "address", type: "text", label: "Address", description: "Only used when no venue is attached." }]))
+      .toEqual([{ name: "address", type: "text", label: "Address", description: "Only used when no venue is attached." }]);
+  });
+
+  test("a blank description is dropped rather than stored as an empty string", () => {
+    // An empty string is falsy in the editor, so it renders nothing either way — but stored,
+    // it makes every diff of a content type noisy and every `toEqual` in a test lie.
+    expect(normalizeFieldSchema([{ name: "a", type: "text", description: "   " }])).toEqual([{ name: "a", type: "text" }]);
+    expect(normalizeFieldSchema([{ name: "a", type: "text", description: "" }])).toEqual([{ name: "a", type: "text" }]);
+  });
+
+  test("a description is trimmed, like a label", () => {
+    expect(normalizeFieldSchema([{ name: "a", type: "text", description: "  Say what empty does.  " }]))
+      .toEqual([{ name: "a", type: "text", description: "Say what empty does." }]);
+  });
+
+  test("a non-string description is ignored, not coerced", () => {
+    // `String(o.description)` would store "[object Object]" under a field nobody would think
+    // to look at, and it would render.
+    expect(normalizeFieldSchema([{ name: "a", type: "text", description: 42 }])).toEqual([{ name: "a", type: "text" }]);
+    expect(normalizeFieldSchema([{ name: "a", type: "text", description: { cs: "…" } }])).toEqual([{ name: "a", type: "text" }]);
+  });
+
+  test("a description rides along on every field type, not just text", () => {
+    // It is rendered by one shared path in the editor, so the schema must not be the thing
+    // that decides which types may carry one.
+    const schema = normalizeFieldSchema([
+      { name: "when", type: "date", description: "Empty means a one-day event." },
+      { name: "gallery", type: "repeater", description: "Shown under the text.", fields: [{ name: "img", type: "media" }] },
+    ]);
+    expect(schema[0]!.description).toBe("Empty means a one-day event.");
+    expect(schema[1]!.description).toBe("Shown under the text.");
+  });
+
   test("each field is REBUILT, so a stale key from another type cannot ride along", () => {
     // Switching a field from `select` to `text` and back must not resurrect the old options.
     expect(normalizeFieldSchema([{ name: "a", type: "text", options: ["x"], referenceFrom: "h", junk: 1 }])).toEqual([{ name: "a", type: "text" }]);

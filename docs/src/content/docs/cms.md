@@ -122,6 +122,28 @@ field, and a `slug`'s `from` must name a text field standing beside it. These ar
 rather than warnings because none of them fails visibly — an unknown field type renders
 nothing and `validateFields` skips it, so the field's content is quietly lost on every save.
 
+#### Help text on a field
+
+A field takes an optional `description` — one or two sentences rendered under the control and
+announced via `aria-describedby`:
+
+```ts
+{
+  name: "address",
+  label: "Adresa",
+  type: "text",
+  description: "Použije se, jen když akce nemá přiřazená žádná sportoviště.",
+}
+```
+
+Write one whenever the label leaves a real question open: which of two plausible readings is
+meant, when the field applies at all, what leaving it empty does. Those are exactly the notes
+that otherwise end up as a comment beside the `defineContentType` call — where the person
+filling the field in never sees them.
+
+It works on every field type and in the editor's own type builder ("Help text"), so a
+webmaster-authored type can carry one too.
+
 The whole area is gated on `listCmsCapabilities().canEdit`, i.e. the deployment's own
 `editorRoles`. A reviewer can read everything and author nothing.
 

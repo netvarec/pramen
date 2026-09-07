@@ -135,6 +135,20 @@ export interface FieldDefinition {
     | "reference"
     | "repeater"
     | "group";
+  /**
+   * Help text under the control — what the field MEANS, when it applies, what leaving it
+   * empty does. Optional, and worth writing exactly when the label alone leaves a real
+   * question open: an "Address" that is only used for an event with no venue attached, a
+   * "Time to" that applies to every day of a range rather than the last one.
+   *
+   * The alternative is a comment beside the field's declaration in the app's source, where
+   * the person filling the field in will never see it — which is where this kind of note
+   * had nowhere else to go before.
+   *
+   * One or two sentences. It is announced via `aria-describedby`, so a paragraph here is a
+   * paragraph a screen-reader user hears before every edit.
+   */
+  description?: string;
   required?: boolean;
   default?: unknown;
   /** repeater/group only — the nested fields. */
@@ -1569,6 +1583,10 @@ export function validateFieldSchema(raw: unknown, path = "fieldsSchema", depth =
     }
     const f: FieldDefinition = { name, type };
     if (typeof o.label === "string" && o.label.trim() !== "") f.label = o.label.trim();
+    // Same treatment as `label`, and it has to be HERE: this function rebuilds every entry
+    // from a whitelist, so a key it does not name is dropped without a word — an authored
+    // description would round-trip through `createContentType` and come back gone.
+    if (typeof o.description === "string" && o.description.trim() !== "") f.description = o.description.trim();
     if (o.required === true) f.required = true;
     if (o.default !== undefined) f.default = o.default;
 
