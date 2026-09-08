@@ -162,8 +162,49 @@ export type HandlerKind = "query" | "mutation";
  *   - `"authenticated"` — any non-anonymous caller (identity != null)
  *   - `string[]`        — the caller must hold one of these roles
  *   - `(identity) => boolean` — a custom predicate
- * Absent ⇒ open (the prior behavior; a `ctx.db` handler is still ACL-gated). */
+ * Absent ⇒ open (the prior behavior; a `ctx.db` handler is still ACL-gated).
+ *
+ * `callPrivileged` is NOT exempt: it sends an ordinary identity (`{ roles: ["admin"] }` by
+ * default, or whatever `roles` it is given) and `dispatch` runs this same check for it. So
+ * a SYSTEM-only handler is one gated on a role no issued token carries, which the privileged
+ * caller then presents — NOT `auth: []`, which is satisfied by nobody at all and is refused
+ * at boot by {@link validateHandlerAuth}. */
 export type HandlerAuth = "authenticated" | readonly string[] | ((identity: Identity | null) => boolean);
+
+/**
+ * Reject a handler whose `auth` no caller can ever satisfy — an EMPTY role list.
+ *
+ * `auth: []` reads as "system-only: unreachable over /rpc, but still reachable from inside
+ * the Worker", and it does not mean that. `callPrivileged` does not bypass the gate: it
+ * sends an ordinary identity (`{ roles: ["admin"] }` by default) and `dispatch` runs the
+ * same check for it as for anyone. `[]` is truthy, so the gate runs, and `[].some(...)` is
+ * false for every identity — so the handler is unreachable FULL STOP.
+ *
+ * That is a silent failure, which is why it is a boot error rather than a warning: nothing
+ * throws at declaration, the handler simply 403s forever, and the caller is usually a
+ * pre-auth route that swallows the status into a generic message. `@pramen/auth`'s OIDC
+ * sign-in shipped this way — every login failed at the user upsert with "Sign-in could not
+ * be completed", and the test asserting the handler's `auth` was `[]` passed the whole time.
+ *
+ * The fix is a role no issued token carries, presented by the privileged caller:
+ *
+ *   const SYSTEM_ROLE = "__my_system";
+ *   myHandler: mutation(fn, { auth: [SYSTEM_ROLE] })
+ *   ctx.callPrivileged({ name: "myHandler", roles: [SYSTEM_ROLE] })
+ */
+export function validateHandlerAuth(handlers: HandlerMap | undefined): void {
+  for (const [name, handler] of Object.entries(handlers ?? {})) {
+    if (Array.isArray(handler.auth) && handler.auth.length === 0) {
+      throw new Error(
+        `handler ${JSON.stringify(name)}: \`auth: []\` can be satisfied by no caller — not even ` +
+          `callPrivileged, which sends an ordinary identity through the same gate — so the handler is ` +
+          `unreachable. For a system-only handler, gate it on a role no issued token carries and have ` +
+          `the privileged caller present it: \`auth: ["__my_system"]\` + ` +
+          `\`callPrivileged({ name, roles: ["__my_system"] })\`. To leave a handler open, omit \`auth\`.`,
+      );
+    }
+  }
+}
 
 /** Evaluate a handler's `auth` requirement against the caller's identity. */
 export function authorizeHandler(auth: HandlerAuth, identity: Identity | null): boolean {

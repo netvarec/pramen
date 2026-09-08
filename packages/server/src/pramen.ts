@@ -16,7 +16,7 @@ import { makeWorker, type Env } from "./worker";
 import { pramenDO, type DoEnv } from "./durable-object";
 import { validateTriggerTasks, type SchemaDef } from "./sdk/schema";
 import { validateMigrations } from "./runtime/data-migrations";
-import type { AppTaskMap, HandlerMap, BootstrapFn, DataMigration } from "./sdk/handlers";
+import { validateHandlerAuth, type AppTaskMap, type HandlerMap, type BootstrapFn, type DataMigration } from "./sdk/handlers";
 import type { AppQueueMap, QueueBatch } from "./runtime/queue-consumer";
 import type { Role } from "./sdk/acl";
 import type { EnvBag } from "./sdk/handlers";
@@ -81,6 +81,7 @@ export function createPramen(app: PramenApp): {
 } {
   validateTriggerTasks(app.schema, Object.keys(app.tasks ?? {})); // fail fast on a typo'd trigger task
   validateMigrations(app.schema, app.migrations); // fail fast on a duplicate/empty id or an unknown partition
+  validateHandlerAuth(app.handlers); // fail fast on an `auth: []` handler, which is unreachable by anyone
   const worker = makeWorker(app);
   return { fetch: worker.fetch, scheduled: worker.scheduled, queue: worker.queue, PramenDO: pramenDO(app) };
 }

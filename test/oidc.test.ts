@@ -6,7 +6,8 @@
 // and the account-key rules — without a network or a real IdP.
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { createOidcAuth, oidcHandlers, OIDC_UPSERT_HANDLER } from "../packages/auth/src/oidc";
+import { createOidcAuth, oidcHandlers, OIDC_SYSTEM_ROLE, OIDC_UPSERT_HANDLER } from "../packages/auth/src/oidc";
+import { authorizeHandler, validateHandlerAuth, type HandlerAuth } from "../packages/server/src/sdk/handlers";
 
 const ISSUER = "https://idp.example.com";
 const CLIENT_ID = "pramen-app";
@@ -221,8 +222,62 @@ describe("createOidcAuth — the callback", () => {
 });
 
 describe("the privileged upsert handler", () => {
-  test("is unreachable over /rpc — no role satisfies it", () => {
-    expect((oidcHandlers[OIDC_UPSERT_HANDLER] as { auth?: string[] }).auth).toEqual([]);
+  // This test used to assert `auth` was `[]` — the declaration — and so it passed while every
+  // OIDC sign-in was failing. `callPrivileged` does NOT bypass the handler gate: it sends an
+  // ordinary identity through the same `dispatch` check as any other caller, and an empty
+  // allow-list is satisfied by nobody, the callback included. So the assertions here run the
+  // REAL gate (`authorizeHandler`) against the identities that actually reach it.
+  const authOf = (): HandlerAuth => (oidcHandlers[OIDC_UPSERT_HANDLER] as { auth: HandlerAuth }).auth;
+
+  test("the callback's own privileged identity satisfies it", () => {
+    expect(authorizeHandler(authOf(), { roles: [OIDC_SYSTEM_ROLE] })).toBe(true);
+  });
+
+  test("no ordinary caller does — an admin included", () => {
+    expect(authorizeHandler(authOf(), { roles: ["admin"] })).toBe(false);
+    expect(authorizeHandler(authOf(), { roles: ["user", "editor"] })).toBe(false);
+    expect(authorizeHandler(authOf(), null)).toBe(false);
+  });
+
+  // `["admin"]` would also have made the flow work, and is the wrong fix: this handler
+  // WRITES ROLES, so gating it on admin would let any admin grant themselves a role set
+  // over /rpc.
+  test("the gate is a dedicated system role, not `admin`", () => {
+    expect(authOf()).toEqual([OIDC_SYSTEM_ROLE]);
+  });
+
+  // The regression that would reintroduce the outage, caught at app construction rather
+  // than as a 403 at runtime.
+  test("`auth: []` is refused at boot, so this cannot silently come back", () => {
+    expect(() => validateHandlerAuth({ dead: { kind: "mutation", run: () => null, auth: [] } })).toThrow(/unreachable/);
+    expect(() => validateHandlerAuth(oidcHandlers)).not.toThrow();
+  });
+
+  // And the end of the chain: a sign-in through a `callPrivileged` that enforces the REAL
+  // gate instead of waving the call through. Every other callback test here stubs
+  // `callPrivileged` to succeed unconditionally, which is precisely how a handler nobody
+  // could reach went unnoticed — the stub was more permissive than dispatch.
+  test("a full callback completes when the upsert is gated exactly as dispatch gates it", async () => {
+    const h = harness(); active = h;
+    const seen: (string[] | undefined)[] = [];
+    // Unlike `upsert()`, this stub enforces the REAL gate. Every other callback test here
+    // waves the privileged call through, which is exactly how a handler that nobody could
+    // reach went unnoticed: the stub was more permissive than dispatch.
+    const gated = {
+      callPrivileged: async (o: { name: string; roles?: string[] }) => {
+        seen.push(o.roles);
+        const auth = (oidcHandlers[o.name] as { auth?: HandlerAuth }).auth;
+        if (auth && !authorizeHandler(auth, { roles: o.roles ?? ["admin"] })) {
+          return Response.json({ ok: false, error: "not authorized" }, { status: 403 });
+        }
+        return Response.json({ ok: true, result: { roles: ["user"], active: true } });
+      },
+    };
+
+    const { res } = await startThenCallback(h, { ctx: gated as never });
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toContain("#token=");
+    expect(seen).toEqual([[OIDC_SYSTEM_ROLE]]);
   });
 });
 

@@ -256,8 +256,15 @@ log) for independent single-writer serialization and storage.
   Accounts key on the VERIFIED email by default (links with magic-link/password rows); an
   unverified email is REFUSED, not silently keyed on `sub`. `accountKey: "sub"` namespaces by
   issuer instead. `active = false` still blocks login. The write goes through
-  `callPrivileged` → `__oidcUpsertUser`, which is `auth: []` so no role can reach it over
-  /rpc. The callback sets ONE cookie (`pramen_oidc`, HttpOnly/SameSite=Lax/callback-path,
+  `callPrivileged` → `__oidcUpsertUser`, gated on `OIDC_SYSTEM_ROLE` — a role no issued
+  token carries, presented by the callback. NOT `auth: []`, which this said until it was
+  found to be unreachable BY ANYONE: `callPrivileged` does not bypass the handler gate (it
+  sends an ordinary `{ roles: [...] }` identity through the same `dispatch` check), `[]` is
+  truthy so the gate runs, and `[].some(...)` is false for every caller — so every OIDC
+  sign-in 403'd at the upsert. `createPramen` now REFUSES an empty role list at boot
+  (`validateHandlerAuth`); a system-only handler names a private role and the privileged
+  caller passes `roles: [...]`. `auth: ["admin"]` is the wrong fix for a handler that writes
+  roles. The callback sets ONE cookie (`pramen_oidc`, HttpOnly/SameSite=Lax/callback-path,
   cleared on completion) binding `state` to the browser that started the login — without it
   an attacker's valid state+code fed to a victim's browser signs the victim in AS THE
   ATTACKER; sessions themselves stay bearer tokens. The error page escapes centrally and

@@ -33,7 +33,7 @@ export type {
 
 // --- app + handlers ---
 export { createApp } from "./sdk/app";
-export { query, mutation, authorizeHandler } from "./sdk/handlers";
+export { query, mutation, authorizeHandler, validateHandlerAuth } from "./sdk/handlers";
 export type { EnvBag, Handler, HandlerContext, HandlerKind, HandlerMap, HandlerOpts, HandlerAuth, Tasks, TaskHandler, AppTaskMap, BootstrapContext, BootstrapFn, MigrationContext, DataMigration } from "./sdk/handlers";
 
 // --- ACL ---
