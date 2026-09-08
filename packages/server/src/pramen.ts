@@ -81,7 +81,7 @@ export function createPramen(app: PramenApp): {
 } {
   validateTriggerTasks(app.schema, Object.keys(app.tasks ?? {})); // fail fast on a typo'd trigger task
   validateMigrations(app.schema, app.migrations); // fail fast on a duplicate/empty id or an unknown partition
-  validateHandlerAuth(app.handlers); // fail fast on an `auth: []` handler, which is unreachable by anyone
+  validateHandlerAuth(app.handlers); // warn (never throw) about an `auth: []` handler — see the note there
   const worker = makeWorker(app);
   return { fetch: worker.fetch, scheduled: worker.scheduled, queue: worker.queue, PramenDO: pramenDO(app) };
 }

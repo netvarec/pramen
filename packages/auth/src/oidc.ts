@@ -21,7 +21,7 @@
 // authoritative), else the roles stored on the user's row (pramen is authoritative — the
 // only workable answer for Google), else `defaultRoles` for a first login.
 
-import { JwksStrategy, Kv, mutation } from "@pramen/server";
+import { isSystemRole, JwksStrategy, Kv, mutation } from "@pramen/server";
 import type { EnvBag, HandlerContext, HandlerMap, JsonObject, Row } from "@pramen/server";
 import type { PublicRoute, RouteContext } from "@pramen/server/worker";
 // The package's OWN HS256 signer — `@pramen/server`'s `signToken` mints the opaque
@@ -318,7 +318,10 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
         username = `${doc.issuer}#${sub}`;
       }
 
-      const mapped = opts.mapRoles?.(claims);
+      // A SYSTEM role can never be held by a session (the verifier strips it), so an IdP
+      // group that happens to be named like one must not be stored as if it meant something.
+      // `mapRoles` hands the provider's claim straight through, so this is where it lands.
+      const mapped = opts.mapRoles?.(claims)?.filter((r) => !isSystemRole(r));
       const res = await ctx.callPrivileged({
         name: OIDC_UPSERT_HANDLER,
         input: { table, username, email: email || null, roles: mapped ? [...mapped] : null, defaultRoles: [...defaultRoles] },

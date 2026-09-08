@@ -93,7 +93,7 @@ export { signToken, verifyToken, isUsableSecret, resolveSecret, MIN_TOKEN_SECRET
 // Verify strategies live on the AUTHORING entry, not `/worker`: they carry no
 // `cloudflare:workers` import, and @pramen/auth's OIDC flow verifies a provider's RS256 ID
 // token with the same JWKS cache (and its key-rotation handling) the Worker uses.
-export { HmacStrategy, JwksStrategy, type VerifyStrategy, type VerifyOptions } from "./auth";
+export { HmacStrategy, JwksStrategy, isSystemRole, SYSTEM_ROLE_PREFIX, type VerifyStrategy, type VerifyOptions } from "./auth";
 export type { ExpiringToken } from "./runtime/token";
 export type { StorageAdapter, PutResult, GetResult } from "./runtime/storage";
 

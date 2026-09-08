@@ -8,6 +8,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createOidcAuth, oidcHandlers, OIDC_SYSTEM_ROLE, OIDC_UPSERT_HANDLER } from "../packages/auth/src/oidc";
 import { authorizeHandler, validateHandlerAuth, type HandlerAuth } from "../packages/server/src/sdk/handlers";
+import { isSystemRole } from "../packages/server/src/auth";
 
 const ISSUER = "https://idp.example.com";
 const CLIENT_ID = "pramen-app";
@@ -248,9 +249,23 @@ describe("the privileged upsert handler", () => {
 
   // The regression that would reintroduce the outage, caught at app construction rather
   // than as a 403 at runtime.
-  test("`auth: []` is refused at boot, so this cannot silently come back", () => {
-    expect(() => validateHandlerAuth({ dead: { kind: "mutation", run: () => null, auth: [] } })).toThrow(/unreachable/);
-    expect(() => validateHandlerAuth(oidcHandlers)).not.toThrow();
+  test("`auth: []` is reported at boot, so this cannot silently come back", () => {
+    expect(validateHandlerAuth({ dead: { kind: "mutation", run: () => null, auth: [] } })).toEqual(["dead"]);
+    expect(validateHandlerAuth(oidcHandlers)).toEqual([]);
+  });
+
+  // It reports rather than throws on purpose: `createPramen` runs at the Worker entry's
+  // module scope, so throwing would fail every request in the deployment — and an empty list
+  // is not always a mistake (`@pramen/cms` builds `auth` from a caller's `reviewerRoles`, so
+  // `reviewerRoles: []` produces one deliberately).
+  test("reporting it does not take the deployment down", () => {
+    expect(() => validateHandlerAuth({ dead: { kind: "mutation", run: () => null, auth: [] } })).not.toThrow();
+  });
+
+  // The gate is only as good as the claim that no issued token carries the role. The token
+  // verifier is what makes that true — see SYSTEM_ROLE_PREFIX.
+  test("a system role cannot arrive from outside, so the gate cannot be presented to", () => {
+    expect(isSystemRole(OIDC_SYSTEM_ROLE)).toBe(true);
   });
 
   // And the end of the chain: a sign-in through a `callPrivileged` that enforces the REAL

@@ -172,7 +172,7 @@ export type HandlerKind = "query" | "mutation";
 export type HandlerAuth = "authenticated" | readonly string[] | ((identity: Identity | null) => boolean);
 
 /**
- * Reject a handler whose `auth` no caller can ever satisfy — an EMPTY role list.
+ * Warn about a handler whose `auth` no caller can ever satisfy — an EMPTY role list.
  *
  * `auth: []` reads as "system-only: unreachable over /rpc, but still reachable from inside
  * the Worker", and it does not mean that. `callPrivileged` does not bypass the gate: it
@@ -180,30 +180,35 @@ export type HandlerAuth = "authenticated" | readonly string[] | ((identity: Iden
  * same check for it as for anyone. `[]` is truthy, so the gate runs, and `[].some(...)` is
  * false for every identity — so the handler is unreachable FULL STOP.
  *
- * That is a silent failure, which is why it is a boot error rather than a warning: nothing
- * throws at declaration, the handler simply 403s forever, and the caller is usually a
- * pre-auth route that swallows the status into a generic message. `@pramen/auth`'s OIDC
- * sign-in shipped this way — every login failed at the user upsert with "Sign-in could not
- * be completed", and the test asserting the handler's `auth` was `[]` passed the whole time.
+ * That is a silent failure worth surfacing: nothing throws at declaration, the handler simply
+ * 403s forever, and the caller is usually a pre-auth route that swallows the status into a
+ * generic message. `@pramen/auth`'s OIDC sign-in shipped this way — every login failed at the
+ * user upsert with "Sign-in could not be completed", and the test asserting the handler's
+ * `auth` was `[]` passed the whole time.
  *
- * The fix is a role no issued token carries, presented by the privileged caller:
- *
- *   const SYSTEM_ROLE = "__my_system";
- *   myHandler: mutation(fn, { auth: [SYSTEM_ROLE] })
- *   ctx.callPrivileged({ name: "myHandler", roles: [SYSTEM_ROLE] })
+ * A WARNING and not a throw, deliberately. `createPramen` runs at the Worker entry's module
+ * scope, so a throw here fails EVERY request — `/files/*`, `/media/*`, public routes, the
+ * whole site — not merely the handler that is misconfigured. And an empty list is not always
+ * a mistake: `@pramen/cms` builds `auth` from its caller's `editorRoles`/`reviewerRoles`, so
+ * an app that passes `reviewerRoles: []` to switch the review workflow off produces one on
+ * purpose. Taking a deployment down over that is out of all proportion to the defect.
  */
-export function validateHandlerAuth(handlers: HandlerMap | undefined): void {
+export function validateHandlerAuth(handlers: HandlerMap | undefined): string[] {
+  const dead: string[] = [];
   for (const [name, handler] of Object.entries(handlers ?? {})) {
-    if (Array.isArray(handler.auth) && handler.auth.length === 0) {
-      throw new Error(
-        `handler ${JSON.stringify(name)}: \`auth: []\` can be satisfied by no caller — not even ` +
-          `callPrivileged, which sends an ordinary identity through the same gate — so the handler is ` +
-          `unreachable. For a system-only handler, gate it on a role no issued token carries and have ` +
-          `the privileged caller present it: \`auth: ["__my_system"]\` + ` +
-          `\`callPrivileged({ name, roles: ["__my_system"] })\`. To leave a handler open, omit \`auth\`.`,
-      );
-    }
+    if (Array.isArray(handler.auth) && handler.auth.length === 0) dead.push(name);
   }
+  if (dead.length > 0) {
+    console.warn(
+      `pramen: handler(s) ${dead.join(", ")} declare \`auth: []\`, which no caller can satisfy — not even ` +
+        `callPrivileged, which sends an ordinary identity through the same gate. They will 403 for everyone. ` +
+        `If that is deliberate, say so with \`auth: () => false\`. For a SYSTEM-only handler, gate it on a ` +
+        `\`__\`-prefixed role (stripped from every verified token, so only the Worker can present it) and have ` +
+        `the privileged caller pass it: \`auth: ["__my_system"]\` + \`callPrivileged({ name, roles: ["__my_system"] })\`. ` +
+        `To leave a handler open, omit \`auth\`.`,
+    );
+  }
+  return dead;
 }
 
 /** Evaluate a handler's `auth` requirement against the caller's identity. */
