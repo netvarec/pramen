@@ -15,6 +15,11 @@ export const PUBLISH_PKGS = [
   "packages/react",
   "packages/auth",
   "packages/cms",
+  // After `cms`: `publish.ts` rewrites every `workspace:` range — peerDependencies and
+  // devDependencies included — to the sibling's version on disk, so a package must be
+  // published after anything it names. @pramen/analytics names `@pramen/cms` as an optional
+  // peer (the Block Kit dashboard) as well as `@pramen/server`.
+  "packages/analytics",
   "packages/cms-astro",
   "packages/cms-editor",
   "packages/admin",
