@@ -5,10 +5,19 @@ description: Cut and publish a pramen release — bump all @pramen/* packages in
 
 # Releasing pramen
 
-All eight `@pramen/*` packages publish to npm **in lockstep** (one shared version):
-`@pramen/client`, `@pramen/server`, `@pramen/react`, `@pramen/auth`, `@pramen/cms`,
-`@pramen/cms-astro`, `@pramen/cms-editor`, `@pramen/admin`. The list lives in
-`scripts/packages.ts` (`PUBLISH_PKGS`) — don't hardcode it here or anywhere else.
+Every `@pramen/*` package publishes to npm **in lockstep** (one shared version). The list
+lives in `scripts/packages.ts` (`PUBLISH_PKGS`) — read it, don't hardcode it here or
+anywhere else:
+
+```bash
+grep -A 20 'PUBLISH_PKGS = \[' scripts/packages.ts
+```
+
+(This file used to name the packages inline and said "all eight". The set grew to nine when
+`@pramen/analytics` landed and the list here silently went stale — including the
+verification loop in step 5, which then checked eight of nine and would have reported a
+partial publish as a complete one. That is the same drift `assertNoPackageDrift` exists to
+catch in code; this document is not exempt from its own rule.)
 
 Publishing is **CI-driven via a version tag**. You do not run `npm publish` by hand —
 pushing a `vX.Y.Z` tag triggers `.github/workflows/release.yml`, which typechecks,
@@ -81,10 +90,26 @@ It **refuses a dirty working tree** — the bump must be its own commit.
    On success, confirm **every** package is live at the new version — a partial publish
    leaves the registry out of lockstep, and checking just one hides it:
    ```bash
-   for p in client server react auth cms cms-astro cms-editor admin; do
-     printf "@pramen/%-12s %s\n" "$p" "$(npm view @pramen/$p version 2>/dev/null || echo '(not published)')"
-   done
+   bun -e 'import { PUBLISH_PKGS } from "./scripts/packages";
+   for (const dir of PUBLISH_PKGS) {
+     const { name } = await Bun.file(`${dir}/package.json`).json();
+     const r = await Bun.$`npm view ${name} version`.quiet().nothrow();
+     console.log(`${name.padEnd(22)} ${r.stdout.toString().trim() || "(not published)"}`);
+   }'
    ```
+   Driven off `PUBLISH_PKGS` so it cannot check a stale subset.
+
+   **A package reading one version behind is not necessarily a failed publish.**
+   `@pramen/cms-astro` in particular takes npm's ASYNC publish path — the log says
+   `npm notice Your package is being processed and may take a few minutes to become
+   available` and `+ @pramen/cms-astro@X`, and the registry 404s for up to a few minutes
+   after. Poll before concluding anything:
+   ```bash
+   curl -s -o /dev/null -w '%{http_code}\n' https://registry.npmjs.org/@pramen%2Fcms-astro/<X.Y.Z>
+   ```
+   Tell the two apart by the RUN LOG, never by the registry alone: a real gap shows an
+   `npm error` for that package, a lag shows `+ @pramen/<name>@<version>`. In 0.0.62 the
+   two looked identical from outside and only the log distinguished them.
 
 ## Notes & gotchas
 
@@ -102,17 +127,45 @@ It **refuses a dirty working tree** — the bump must be its own commit.
     a new package can't be silently left out of a release (which is exactly how
     `cms`/`cms-astro`/`cms-editor` got skipped once). A package opts out of publishing
     with `"private": true` in its `package.json`.
+  - **Put a brand-new package LAST in the list, not merely after its dependencies.**
+    Order exists so a package is published after anything it depends on, and
+    `publish.ts` resolves `workspace:` ranges from the versions ON DISK, so ordering
+    never affects correctness of the rewrite — only which packages a mid-run failure
+    blocks. A new package's npm-side credentials are the least proven thing in the set,
+    so anything ahead of the established packages converts its own failure into theirs.
+    `@pramen/analytics` was placed after `packages/cms` in 0.0.69 and took
+    `cms-astro`/`cms-editor`/`admin` down with it.
   - **Critical npm-side prerequisite (do this BEFORE the first release that includes
     the new package):** on npmjs.com, configure the package's **Trusted Publisher**
     (Settings → Trusted Publisher → GitHub Actions: repo `netvarec/pramen`, workflow
-    `release.yml`, no environment) — matching the existing packages. Without it, the
-    OIDC publish is rejected with **`E404` "could not be found or you do not have
-    permission"** (npm returns 404, not 403, for an unauthorized trusted-publish), and
-    the run dies at that package — the ones before it in dependency order still
-    publish, leaving the registry out of lockstep. For a brand-new scoped package the
-    name must also exist first (or have a *pending* trusted publisher configured); this
-    is a manual, owner-only step that cannot be done from CI. After fixing it, just
-    re-run the failed job (`gh run rerun <run-id> --failed`) — no new version needed.
+    `release.yml`, no environment) — matching the existing packages. **A trusted
+    publisher has a per-publisher PERMISSION as well as an identity:** `npm stage
+    publish` is always allowed, and direct `npm publish` is a separate opt-in checkbox
+    ("Choose whether this trusted publisher can also publish directly"). This pipeline
+    publishes directly, so that box must be ticked. npm's docs recommend stage-only as
+    the more secure default, so a publisher configured fresh today will NOT have it.
+    Read the failure carefully — the two are different faults:
+      - **`E403` "OIDC permission denied for this action"** — the publisher EXISTS and is
+        trusted; the *action* is not allowed. Tick "can also publish directly". Adding a
+        second trusted publisher will not help, and looking for a missing one wastes the
+        outage. (0.0.69 hit exactly this and was misdiagnosed as a missing publisher.)
+      - **`E404` "could not be found or you do not have permission"** — no publisher
+        matches (npm answers 404, not 403, for an unrecognized trusted-publish).
+    Either way the run dies at that package and the ones before it in dependency order
+    stay published, leaving the registry out of lockstep. For a brand-new scoped package
+    the name must also exist first, or have a *pending* trusted publisher configured —
+    which is the better route, since publishing once by hand to create the name produces
+    a version with no provenance that sits on the registry forever. This is manual and
+    owner-only; it cannot be done from CI. After fixing it, re-run the failed job
+    (`gh run rerun <run-id> --failed`) — `publish.ts` skips what is already live, so no
+    new version is needed.
+  - **Staged publishing exists and this pipeline does not use it.** `npm stage publish`
+    submits a version for a maintainer to approve with 2FA (`npm stage approve <id>`)
+    before it goes live. Adopting it is a workflow change, not a config tweak: it needs
+    **npm ≥ 11.15.0** (the workflow pins 11.5.1 on purpose — `npm@latest` once shipped
+    without bundled `sigstore` and broke the v0.0.15 publish) and **Node ≥ 22.14.0**, a
+    switch from `npm publish` in `scripts/publish.ts`, and a human approval step per
+    release. Don't improvise it mid-release.
 - **Manual trigger:** `release.yml` also has `workflow_dispatch` — re-run from the
   Actions tab (or `gh workflow run release.yml`) without a new tag, e.g. to retry a
   failed publish on the same version.
