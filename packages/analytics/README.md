@@ -99,6 +99,11 @@ than "unknown country".
    that is one in-process SQLite insert, which is genuinely fine at small scale.
 3. **`NoopSink`** — neither is available. Drops events and says so once.
 
+The privileged ingest handler is gated on `INGEST_ROLE` (`__analytics_ingest`). The `__`
+prefix is load-bearing, not decorative: `@pramen/server` strips such roles from every
+verified token, so the only way to present one is to be the Worker. `auth: []` does **not**
+express "system-only" — it is satisfied by nobody, `callPrivileged` included.
+
 A collector failure never propagates: `collectRoute` logs and answers `204`. `sendBeacon`
 discards the response anyway, and the same route shape is what the server-side hook will
 call — where a throw would take the *page* down.

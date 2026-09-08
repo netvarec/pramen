@@ -17,6 +17,8 @@ import {
 } from "../packages/analytics/src/events";
 import { daysInRange } from "../packages/analytics/src/queries";
 import { sessionId } from "../packages/analytics/src/collect";
+import { INGEST_ROLE } from "../packages/analytics/src/ingest";
+import { isSystemRole } from "../packages/server/src/auth";
 
 describe("normalizePath", () => {
   // A path is a GROUPING KEY. Every variant that is not folded here becomes its own row in
@@ -182,5 +184,15 @@ describe("day helpers", () => {
 
   test("it crosses a month and a leap day correctly", () => {
     expect(daysInRange("2028-02-28", "2028-03-01")).toEqual(["2028-02-28", "2028-02-29", "2028-03-01"]);
+  });
+});
+
+describe("the ingest gate", () => {
+  // The collector's role is only a gate because `toIdentity` strips `__`-prefixed roles from
+  // every verified token — otherwise an IdP group of the same name would satisfy it, and the
+  // handler behind it writes rows with the ACL bypassed. Pinned here so a future rename
+  // cannot quietly drop the prefix and take the guarantee with it.
+  test("INGEST_ROLE is a SYSTEM role, so no verified token can present it", () => {
+    expect(isSystemRole(INGEST_ROLE)).toBe(true);
   });
 });

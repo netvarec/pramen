@@ -112,10 +112,19 @@ export const INGEST_HANDLER = "__analyticsIngest";
  * and goes through the same check. A handler declared that way is unreachable full stop,
  * not merely unreachable from outside.
  *
- * So the gate names a role instead — one no token issued by `@pramen/auth` can carry,
- * because roles come from the user row and nothing writes this one. `auth: ["admin"]` would
- * also work and is worse: it would let any admin post fabricated traffic over /rpc, and the
- * collector does not need to be an admin to insert an event. */
+ * So the gate names a role instead — a SYSTEM role, `__`-prefixed. That prefix is not a
+ * naming convention: `toIdentity` STRIPS such a role from every verified token, so the only
+ * way to hold one is to be the Worker (see `SYSTEM_ROLE_PREFIX` in `@pramen/server`).
+ *
+ * The weaker version of this argument — "no token carries it because nothing writes it" —
+ * was wrong, and is worth recording because it is the tempting one: a JWT's `roles` claim is
+ * copied verbatim into the identity, and on the verify-only (BYO-IdP) path that claim is
+ * written entirely by an external IdP, so a directory group of the same name would have been
+ * enough. The invariant has to be enforced at verification; asserting it in a comment is not
+ * enforcement.
+ *
+ * `auth: ["admin"]` would also work and is worse: it would let any admin post fabricated
+ * traffic over /rpc, and the collector does not need to be an admin to insert an event. */
 export const INGEST_ROLE = "__analytics_ingest";
 
 export interface IngestInput {
