@@ -182,6 +182,10 @@ export class Api {
     this.call<Media[]>("listMedia", { limit: opts.limit ?? 50, offset: opts.offset ?? 0, sort: opts.sort, kind: opts.kind, q: opts.q, term: opts.term });
   getMedia = (id: string) => this.call<Media | null>("getMedia", { id });
   updateMedia = (id: string, alt: string | null) => this.call<Media>("updateMedia", { id, alt });
+  /** A signed, expiring url that DOWNLOADS the file under its original name (the server
+   * sets `Content-Disposition: attachment`). Relative, like every signed url pramen mints —
+   * `resolve()` it before use. */
+  signMediaDownload = (id: string) => this.call<{ url: string; expiresAt: number }>("signMediaDownload", { id });
   deleteMedia = (id: string) => this.call<{ ok: true }>("deleteMedia", { id });
   // Trash is not a UI nicety here: deleteMedia no longer removes the R2 object, so without
   // a reachable purge a file can be "deleted" in the library and still be served on the

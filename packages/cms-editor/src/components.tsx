@@ -1761,7 +1761,7 @@ function mediaCountLabel(count: number, hasMore: boolean, narrowed: boolean): st
 const ALL_TAGS = "__all";
 
 export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) => void }) {
-  const { cms: { mediaTerms, canEdit } } = useApp();
+  const { cms: { mediaTerms, mediaDownload, canEdit } } = useApp();
   const [media, setMedia] = useState<Media[]>([]);
   const [offset, setOffset] = useState(0);
   const [hasMore, setHasMore] = useState(false);
@@ -2012,6 +2012,7 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
             taxa={mediaTerms ? taxa : []}
             terms={terms}
             canEdit={canEdit}
+            canDownload={mediaDownload}
             onClose={() => setSelected(null)}
             onSaved={(m) => { setSelected(m); setMedia((prev) => prev.map((x) => (x.id === m.id ? m : x))); }}
             onDeleted={(id) => { setSelected(null); setMedia((prev) => prev.filter((x) => x.id !== id)); loadTrash(); }}
@@ -2027,7 +2028,7 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
   );
 }
 
-function MediaDetail({ api, media, taxa, terms, canEdit, onClose, onSaved, onDeleted, onTermsSaved, onError }: { api: Api; media: Media; taxa: Taxonomy[]; terms: Record<string, Term[]>; canEdit: boolean; onClose: () => void; onSaved: (m: Media) => void; onDeleted: (id: string) => void; onTermsSaved: () => void; onError: (s: string) => void }) {
+function MediaDetail({ api, media, taxa, terms, canEdit, canDownload, onClose, onSaved, onDeleted, onTermsSaved, onError }: { api: Api; media: Media; taxa: Taxonomy[]; terms: Record<string, Term[]>; canEdit: boolean; canDownload: boolean; onClose: () => void; onSaved: (m: Media) => void; onDeleted: (id: string) => void; onTermsSaved: () => void; onError: (s: string) => void }) {
   const [alt, setAlt] = useState(media.alt ?? "");
   const [busy, setBusy] = useState(false);
   useEffect(() => setAlt(media.alt ?? ""), [media]);
@@ -2043,6 +2044,47 @@ function MediaDetail({ api, media, taxa, terms, canEdit, onClose, onSaved, onDel
       setBusy(false);
     }
   };
+  /** Open the file at full size in a new tab.
+   *
+   * Worth having even though the image is already on screen: the inline render is capped at
+   * 340px, and a banner is wide and short — scaled to fit that box it is unreadable, which
+   * is the whole reason you would open the library to look at one. For a PDF or a video the
+   * panel shows only the file extension, so this is the ONLY way to see the thing at all.
+   *
+   * A plain `window.open` on a click: no url to mint, so there is nothing async to survive a
+   * popup blocker, and `opener` is severed rather than passing `noopener` as a feature
+   * string — that form returns null by spec, which is how the page-preview button was
+   * briefly broken. */
+  const preview = () => {
+    const tab = window.open(url, "_blank");
+    if (tab) tab.opener = null;
+  };
+
+  /** Download the file under the name it was uploaded with.
+   *
+   * `/media/<key>` serves inline and would save under the opaque storage key, so this mints
+   * the signed attachment url instead. Driven through a temporary anchor rather than
+   * `location.href`: the response is a download, so assigning location works only as long as
+   * the server really does send `Content-Disposition: attachment` — if it ever did not, the
+   * editor would navigate away from itself and lose whatever was on screen. */
+  const download = async () => {
+    setBusy(true);
+    try {
+      const signed = await api.signMediaDownload(media.id);
+      const a = document.createElement("a");
+      a.href = api.resolve(signed.url);
+      a.rel = "noreferrer";
+      a.download = media.file.filename ?? "";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } catch (e) {
+      onError(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const del = async () => {
     if (!confirm("Move this file to the trash? It disappears from the library, but a page published while it was in use keeps showing it — delete it permanently from the trash to remove the file itself.")) return;
     setBusy(true);
@@ -2081,6 +2123,8 @@ function MediaDetail({ api, media, taxa, terms, canEdit, onClose, onSaved, onDel
       {taxa.length > 0 ? <MediaTerms api={api} mediaId={media.id} taxa={taxa} terms={terms} canEdit={canEdit} onSaved={onTermsSaved} onError={onError} /> : null}
       <div className="mt-3.5 flex items-center gap-2">
         <Button onPress={save} isDisabled={busy || alt === (media.alt ?? "")}>Save</Button>
+        <Button variant="secondary" size="sm" onPress={preview}>Preview</Button>
+        {canDownload ? <Button variant="secondary" size="sm" onPress={download} isDisabled={busy}>Download</Button> : null}
         <Button variant="secondary" size="sm" onPress={() => navigator.clipboard?.writeText(url)}>Copy URL</Button>
         <span className="flex-1" />
         <Button variant="ghost" className="text-danger" onPress={del} isDisabled={busy}>Delete</Button>
