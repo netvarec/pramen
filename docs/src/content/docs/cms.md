@@ -67,6 +67,45 @@ work on either.
 media). Anonymous callers get the published snapshot; editors pass `preview: true` for the
 live draft.
 
+### Publishing refuses an incomplete page
+
+`required: true` on a page field is enforced at exactly one moment: publishing. Every draft
+write (`createPage`, `updatePage`, `addBlock`, `updateBlock`) passes `requireRequired: false`
+on purpose — a draft in progress is allowed to be incomplete, and a form you cannot save
+until every field is filled is a form you cannot leave. `publishPage`, `approve` and the
+scheduled `cms:publish` task all go through `doPublish`, which checks first and refuses with
+the missing fields named by their **labels**:
+
+```
+cannot publish: 'Začátek' is required and has no value
+```
+
+Worth knowing what this is guarding against, because it is not a validation nicety. A front
+end drops content it cannot place — an event with no date has nowhere to go on a calendar —
+so an incomplete page publishes, answers 200 at its own URL, and appears in no listing
+anywhere. Reachable, published, invisible, and nothing said to anyone.
+
+A page whose content type no longer exists is exempt: there is no schema to measure it
+against, and refusing would strand it.
+
+### Slugs your front end has already taken
+
+A headless CMS cannot see the routing table in front of it, so by default it will let an
+editor publish a page on a path the site never asks it about. The page reports `published`,
+its URL answers 200, and what it serves is the framework's own route — permanently, silently,
+and undiagnosably from inside the editor.
+
+Tell it which paths you serve yourself:
+
+```ts
+createCmsHandlers({ reservedSlugs: ["blog", "search", "about"] })
+```
+
+A page cannot then be created, renamed or translated onto one. Matching is case-insensitive
+and ignores locale prefixes — a route you serve is served in every locale. Nothing is
+inferred: the CMS has no way to enumerate your routes, and a list that is 90% right is worse
+than an empty one, because it refuses slugs that are free.
+
 ### Features
 
 - **Media** — `signMediaUpload` → PUT → `createMedia`; `"media"` block fields resolve to
@@ -235,6 +274,15 @@ published row goes live at once. There is no staged snapshot the way a page has 
 
 The site-level things every project used to rebuild by hand. All four are read by your
 layout, not by a page, and each gets its own editor section.
+
+**If your layout reads none of them, say so:** `createCmsHandlers({ siteFurniture: false })`
+clears the capability, which drops the whole Site nav section and the page editor's Terms
+tab. These four are the only part of the CMS whose output nothing in the CMS consumes — a
+menu matters because a layout asks for it, a redirect because the edge honours it — so a
+deployment that renders neither is offering four sections that write to a table nobody reads.
+No error, no clue, just work that quietly never happens; that is worse than the feature being
+absent. The handlers stay registered either way, so an app that grows a menu-rendering layout
+later flips one flag.
 
 | | Read with | Notes |
 |---|---|---|

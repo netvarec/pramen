@@ -2206,13 +2206,65 @@ async function resolveMediaId(db: CmsDb, id: unknown): Promise<ResolvedMedia | n
   };
 }
 
+/**
+ * Refuse to publish a page that is missing a field its own content type marks `required`.
+ *
+ * The message NAMES the fields, and uses their labels rather than their storage keys: the
+ * person reading it is looking at a form, and "startsAt" is not what the form calls it.
+ *
+ * A page whose content type has vanished is left alone rather than blocked — the type is
+ * gone, so there is no schema to be measured against, and refusing to publish would strand
+ * the page with no way to fix it.
+ */
+export async function assertPublishable(db: CmsDb, page: Record<string, unknown>): Promise<void> {
+  const ctRows = await db.find({ from: "cms_content_types", where: { id: page.typeId }, limit: 1 });
+  const schema = ctRows[0]?.fieldsSchema as FieldDefinition[] | undefined;
+  if (!Array.isArray(schema) || schema.length === 0) return;
+  const values = (page.fields ?? {}) as FieldValues;
+  const missing = schema
+    .filter((f) => f.required)
+    .filter((f) => {
+      const v = values[f.name];
+      return v === undefined || v === null || v === "";
+    })
+    .map((f) => f.label ?? f.name);
+  if (missing.length === 0) return;
+  throw new BadRequest(
+    missing.length === 1
+      ? `cannot publish: '${missing[0]}' is required and has no value`
+      : `cannot publish: these are required and have no value: ${missing.join(", ")}`,
+  );
+}
+
 /** Publish a page: assemble a snapshot, write a revision (recording the actor), and point
  * the page at it. Shared by publishPage, approve, and the scheduled cms:publish task.
  * `clearSchedule` (a MANUAL publish) also clears the pending auto-unpublish token so a
  * stale scheduled unpublish can't later archive the page behind the editor's back; the
- * SCHEDULED cms:publish task passes false so a publish+unpublish pair both still fire. */
+ * SCHEDULED cms:publish task passes false so a publish+unpublish pair both still fire.
+ *
+ * REQUIRED FIELDS ARE ENFORCED HERE, and only here.
+ *
+ * Every draft write — createPage, updatePage, addBlock, updateBlock — passes
+ * `requireRequired: false`, deliberately: a draft in progress is allowed to be incomplete,
+ * and a form that refuses to save until every field is filled is a form you cannot leave.
+ * `ValidateOpts` has said "required is only mandatory when publishing" since it was written.
+ * It simply was not true: publishing validated nothing at all, so `required: true` on a page
+ * field was decoration from end to end.
+ *
+ * What that cost, in the deployment that found it: an event content type whose `startsAt` is
+ * required, an editor who published one without a date, and a live page at its own URL that
+ * appeared in no listing anywhere — because the front end drops an event it cannot place on
+ * a calendar. Published, reachable, and invisible, with nothing said to anyone.
+ *
+ * So the gate belongs at the moment the content becomes public, which is this function: the
+ * one road every route to `published` goes down (manual, review-approved, and scheduled
+ * alike). A page that cannot satisfy its own schema does not go live.
+ *
+ * Type checks are not repeated here — the draft writes already ran them, and a stored value
+ * cannot have changed type without going through one of them. */
 async function doPublish(db: CmsDb, page: Record<string, unknown>, actor: string | null, note?: string, clearSchedule = false): Promise<Record<string, unknown> | undefined> {
   const now = nowStamp();
+  await assertPublishable(db, page);
   const snapshot = await assembleLive(db, { ...page, status: "published" });
   snapshot.page.status = "published";
   const rev = await db.insert("cms_page_revisions", { pageId: page.id, title: page.title, status: "published", snapshot, note: note ?? null, actor });
@@ -2807,6 +2859,41 @@ export interface CmsHandlerOpts {
    * is `/${slug}/`. Override it and `getMenu` follows — which is the point of storing a
    * REFERENCE rather than the href an editor typed: change the routing, not the menu. */
   menuHref?: (target: MenuHrefTarget) => string;
+  /**
+   * Top-level slugs this deployment's front end has already spoken for — its own routes.
+   *
+   * A headless CMS cannot see the routing table in front of it, so it will happily let an
+   * editor publish a page on a slug the site never asks it about. The page then reports
+   * `published`, its URL answers 200, and what it serves is somebody else's page: the
+   * framework route wins, permanently and silently. Diagnosing that from inside the editor
+   * is impossible, because from in there everything is correct.
+   *
+   * List the paths your app serves itself (`["about", "blog", "search"]`, no leading slash)
+   * and a page cannot be created, renamed or translated onto one. Comparison is
+   * case-insensitive; locale prefixes are not considered, because a reserved route is
+   * reserved in every locale a site serves it in.
+   *
+   * Deliberately NOT inferred from anything: the CMS has no way to enumerate a front end's
+   * routes, and a guess that is 90% right is worse than an empty list — it would refuse
+   * slugs that are perfectly free.
+   */
+  reservedSlugs?: readonly string[];
+  /**
+   * Whether this deployment's front end actually renders menus, taxonomy terms, widget
+   * areas and redirects. Default `true`.
+   *
+   * These four surfaces are the only part of the CMS whose output NOTHING in the CMS
+   * consumes — a menu means something because a layout asks for it, a redirect because the
+   * edge honours it. When the front end does neither, the editor is offering four sections
+   * that write to a table nobody reads: no error, no clue, just work that quietly never
+   * happens. That is worse than the feature being absent.
+   *
+   * `false` clears `siteFurniture` in `listCmsCapabilities`, which drops the Site nav
+   * section and the page editor's Terms tab. The handlers stay registered — turning them
+   * off is a UI statement about this deployment, not a change to the API surface — so an
+   * app that grows a menu-rendering layout later flips one flag.
+   */
+  siteFurniture?: boolean;
 }
 
 /** Build the CMS handler map. Spread into your app's handlers. Editor mutations are
@@ -2817,6 +2904,10 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
   const mediaMaxSize = opts.mediaMaxSize ?? 25_000_000;
   const locales = opts.locales && opts.locales.length > 0 ? [...opts.locales] : ["en"];
   const defaultLocale = locales[0]!;
+  // Lower-cased once: slugs are compared case-insensitively, and doing it per call would
+  // re-walk the list on every page write.
+  const reservedSlugs = new Set((opts.reservedSlugs ?? []).map((r) => r.trim().toLowerCase()).filter((r) => r !== ""));
+  const siteFurniture = opts.siteFurniture !== false;
   const reviewerRoles = opts.reviewerRoles ?? ["reviewer", "admin"];
   const reviewer = { auth: reviewerRoles };
   const previewTtl = opts.previewTtlSeconds ?? DEFAULT_PREVIEW_TTL_SECONDS;
@@ -2913,6 +3004,20 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
   // the editor lists ONE type per tab, and "already exists" naming only slug + locale leaves
   // them staring at a list that visibly contains no such row. Both messages name the owning
   // type, the way the trash variant already named the trash.
+  /** Refuse a slug the front end has already spoken for — see `reservedSlugs`.
+   *
+   * Separate from `assertSlugFree`, and called only where a slug is being CHOSEN (create,
+   * rename, translate). `restore` re-asserts a trashed page's own existing slug, and a page
+   * that predates the list must stay restorable: blocking it there would strand a row whose
+   * only route back is the very operation being refused. */
+  const assertSlugAllowed = (slug: string): void => {
+    if (reservedSlugs.size === 0) return;
+    if (!reservedSlugs.has(slug.trim().toLowerCase())) return;
+    throw new BadRequest(
+      `slug '${slug}' is a route this site serves itself — a page there would publish successfully and never be reachable`,
+    );
+  };
+
   const assertSlugFree = async (db: CmsDb, slug: string, locale: string, exceptId?: string): Promise<void> => {
     const rows = await db.exec(
       "SELECT id, deletedAt, typeId FROM cms_pages WHERE slug = ? AND locale = ? LIMIT 1",
@@ -4155,6 +4260,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       if (input.slug !== undefined || input.locale !== undefined) {
         const nextSlug = input.slug ?? String(page.slug);
         const nextLocale = input.locale ?? String(page.locale);
+        assertSlugAllowed(nextSlug);
         await assertSlugFree(db, nextSlug, nextLocale, String(page.id));
         if (input.slug !== undefined) patch.slug = input.slug;
         if (input.locale !== undefined) patch.locale = input.locale;
@@ -4191,6 +4297,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       validateFields(ct.fieldsSchema as FieldDefinition[] | undefined, input.fields ?? {}, "page.fields", { requireRequired: false });
       const cleanPageFields = normalizeFields(ct.fieldsSchema as FieldDefinition[] | undefined, input.fields ?? {}, rtSchema);
       const locale = input.locale ?? defaultLocale;
+      assertSlugAllowed(input.slug);
       await assertSlugFree(db, input.slug, locale);
 
       const page = await db.insert("cms_pages", {
@@ -4268,6 +4375,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
         );
       }
       const slug = input.slug ?? String(src.slug);
+      assertSlugAllowed(slug);
       await assertSlugFree(db, slug, input.locale);
       return db.insert("cms_pages", {
         typeId: src.typeId,
@@ -4328,7 +4436,11 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       // Same kind of declaration as `pagesByType`, for the same reason: an OLDER server has
       // no menu/redirect/taxonomy/widget handlers at all, and a nav section whose every
       // screen 404s is worse than one that is absent. Fails closed by being absent there.
-      siteFurniture: true as const,
+      // Declared by the deployment (`siteFurniture`), not by the fact that the handlers
+      // exist. They always exist — spreading `cmsHandlers` brings all of them — so "the
+      // server can do this" was never the question the editor needed answered. The question
+      // is whether the FRONT END renders any of it, and only the app knows that.
+      siteFurniture,
       // Whether `managedBy` means anything on this server. Declared for the same reason as
       // its neighbours: `@pramen/cms-editor` is a separate package with no dependency on
       // `@pramen/cms`, so a newer editor CAN run against an older server — where every row

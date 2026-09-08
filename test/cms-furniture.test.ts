@@ -562,3 +562,45 @@ describe("who may call what", () => {
     }
   });
 });
+
+/*
+ * --- Nasazení, jehož front-end tohle nekreslí ------------------------------------------
+ *
+ * Menu, štítek, widget area ani redirect nemá sám o sobě žádný účinek — účinek mu dává až
+ * to, že se na něj šablona zeptá a že ho edge respektuje. Tam, kde front-end nedělá ani
+ * jedno, nabízí administrace čtyři sekce, které píší do tabulky, kterou nikdo nečte: žádná
+ * chyba, žádná stopa, jen práce, která se tiše nestane. To je horší, než kdyby ta funkce
+ * nebyla.
+ *
+ * `siteFurniture` byla dřív v `listCmsCapabilities` natvrdo `true` — odpovídala na otázku
+ * „umí to server?", jenže tu se editor ptát nepotřebuje. Handlery tam jsou vždycky, protože
+ * se spreadují všechny naráz. Otázka je, jestli to kreslí FRONT-END, a to ví jenom aplikace.
+ */
+describe("siteFurniture deklaruje nasazení, ne knihovna", () => {
+  const caps = (opts?: Parameters<typeof createCmsHandlers>[0]) =>
+    (createCmsHandlers(opts).listCmsCapabilities as unknown as { run: (c: HandlerContext, i: Row) => Promise<Row> }).run(
+      {} as never,
+      {},
+    );
+
+  test("výchozí stav se nemění — kdo nic neřekl, dostane všechno jako dosud", async () => {
+    expect((await caps()).siteFurniture).toBe(true);
+    expect((await caps({})).siteFurniture).toBe(true);
+    expect((await caps({ siteFurniture: true })).siteFurniture).toBe(true);
+  });
+
+  test("`false` sekce schová", async () => {
+    expect((await caps({ siteFurniture: false })).siteFurniture).toBe(false);
+  });
+
+  test("handlery zůstávají registrované — je to výrok o UI, ne o API", async () => {
+    // Schovat sekci a odebrat handler jsou dvě různá rozhodnutí. Kdyby `false` handlery
+    // odpojilo, aplikace, která si menu čte vlastním kódem a jen ho needituje v administraci,
+    // by o tu možnost přišla — a odpojený handler by navíc rozbil deep link na 404 místo
+    // na vysvětlení, které editor na té routě umí ukázat.
+    const off = createCmsHandlers({ siteFurniture: false });
+    for (const name of ["listMenus", "getMenu", "listRedirects", "listTaxonomies", "listWidgetAreas"]) {
+      expect(off[name as keyof typeof off]).toBeDefined();
+    }
+  });
+});
