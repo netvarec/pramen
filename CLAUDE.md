@@ -252,12 +252,27 @@ log) for independent single-writer serialization and storage.
   role-in-token ACL working. The session lands in the redirect's URL FRAGMENT (never sent to
   a server). Roles: `mapRoles(claims)` when the IdP is authoritative (Entra `roles`,
   Auth0/Okta namespaced claim) — it overwrites stored roles on every login, removals
-  included — else the row's stored roles (Google Workspace ships none), else `defaultRoles`.
+  included, minus any `__`-prefixed system role (filtered out; see below) — else the row's
+  stored roles (Google Workspace ships none), else `defaultRoles`.
   Accounts key on the VERIFIED email by default (links with magic-link/password rows); an
   unverified email is REFUSED, not silently keyed on `sub`. `accountKey: "sub"` namespaces by
   issuer instead. `active = false` still blocks login. The write goes through
-  `callPrivileged` → `__oidcUpsertUser`, which is `auth: []` so no role can reach it over
-  /rpc. The callback sets ONE cookie (`pramen_oidc`, HttpOnly/SameSite=Lax/callback-path,
+  `callPrivileged` → `__oidcUpsertUser`, gated on `OIDC_SYSTEM_ROLE`. NOT `auth: []`, which
+  this said until it was found to be unreachable BY ANYONE: `callPrivileged` does not bypass
+  the handler gate (it sends an ordinary `{ roles: [...] }` identity through the same
+  `dispatch` check), `[]` is truthy so the gate runs, and `[].some(...)` is false for every
+  caller — so every OIDC sign-in 403'd at the upsert. `validateHandlerAuth` now WARNS at boot
+  about an empty list (never throws — `createPramen` runs at the Worker entry's module scope,
+  so a throw would fail every request in the deployment, and `@pramen/cms` builds `auth` from
+  a caller's `reviewerRoles`, so `reviewerRoles: []` produces one on purpose).
+  `auth: ["admin"]` is the wrong fix for a handler that writes roles.
+  **A `__`-prefixed role is a SYSTEM role**: `toIdentity` strips it from every verified token,
+  so it can only ever be presented by `callPrivileged` from inside the Worker — without that
+  the gate would be bypassable by anyone whose IdP has a group of that name (`mapRoles` passes
+  the provider's claim into the minted session, and on the verify-only path the `roles` claim
+  is the external IdP's entirely). `setUserRoles` refuses to grant one, and `mapRoles` output
+  is filtered, so the store never holds a role that silently does nothing. Use the prefix for
+  any future server-only handler. The callback sets ONE cookie (`pramen_oidc`, HttpOnly/SameSite=Lax/callback-path,
   cleared on completion) binding `state` to the browser that started the login — without it
   an attacker's valid state+code fed to a victim's browser signs the victim in AS THE
   ATTACKER; sessions themselves stay bearer tokens. The error page escapes centrally and

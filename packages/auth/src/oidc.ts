@@ -21,7 +21,7 @@
 // authoritative), else the roles stored on the user's row (pramen is authoritative — the
 // only workable answer for Google), else `defaultRoles` for a first login.
 
-import { JwksStrategy, Kv, mutation } from "@pramen/server";
+import { isSystemRole, JwksStrategy, Kv, mutation } from "@pramen/server";
 import type { EnvBag, HandlerContext, HandlerMap, JsonObject, Row } from "@pramen/server";
 import type { PublicRoute, RouteContext } from "@pramen/server/worker";
 // The package's OWN HS256 signer — `@pramen/server`'s `signToken` mints the opaque
@@ -318,10 +318,14 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
         username = `${doc.issuer}#${sub}`;
       }
 
-      const mapped = opts.mapRoles?.(claims);
+      // A SYSTEM role can never be held by a session (the verifier strips it), so an IdP
+      // group that happens to be named like one must not be stored as if it meant something.
+      // `mapRoles` hands the provider's claim straight through, so this is where it lands.
+      const mapped = opts.mapRoles?.(claims)?.filter((r) => !isSystemRole(r));
       const res = await ctx.callPrivileged({
         name: OIDC_UPSERT_HANDLER,
         input: { table, username, email: email || null, roles: mapped ? [...mapped] : null, defaultRoles: [...defaultRoles] },
+        roles: [OIDC_SYSTEM_ROLE],
       });
       const upserted = (await res.json().catch(() => ({}))) as { ok?: boolean; result?: { roles?: string[]; active?: boolean } };
       if (upserted.ok !== true || !upserted.result) return html(500, "Sign-in could not be completed.");
@@ -360,12 +364,22 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
  * exactly as the CMS's preview route does. */
 export const OIDC_UPSERT_HANDLER = "__oidcUpsertUser";
 
+/** The role the OIDC callback presents when it calls {@link OIDC_UPSERT_HANDLER}, and the
+ * only role that handler's `auth` accepts.
+ *
+ * It is deliberately not a role anything else grants: roles reach an identity either from a
+ * user row (`auth_users.roles`) or from an IdP claim mapping, and nothing writes this one.
+ * The Worker also overwrites or deletes the `x-pramen-identity` header on every proxied
+ * request (`worker.ts`), so a caller cannot supply it from outside either. */
+export const OIDC_SYSTEM_ROLE = "__oidc_system";
+
 /** Handlers for `createOidcAuth`'s routes. Spread into `app.handlers`:
  *
  *   handlers: { ...authHandlers, ...oidcHandlers }
  *
- * `__oidcUpsertUser` is SYSTEM-only: `callPrivileged` reaches it from inside the Worker, and
- * `auth: []` means no role satisfies it over `/rpc`, so it cannot be called from outside. */
+ * `__oidcUpsertUser` is SYSTEM-only: the callback reaches it through `callPrivileged`
+ * presenting {@link OIDC_SYSTEM_ROLE}, which no token issued to a user can carry — so it
+ * cannot be called over `/rpc` by anyone, admins included. */
 export const oidcHandlers: HandlerMap = {
   [OIDC_UPSERT_HANDLER]: mutation(
     async (ctx: HandlerContext, input: { table: string; username: string; email: string | null; roles: string[] | null; defaultRoles: string[] }) => {
@@ -400,9 +414,16 @@ export const oidcHandlers: HandlerMap = {
       }
       return { roles, active };
     },
-    // No role can satisfy an empty allow-list, so /rpc always 403s; callPrivileged runs as
-    // SYSTEM and bypasses it. The handler writes roles, so it must never be callable.
-    { auth: [] },
+    // Gated on a role NO issued token can carry, because `callPrivileged` does not bypass
+    // this check — it sends an ordinary identity (`{ roles: [...] }`) through the same
+    // `dispatch` gate as any other caller. An empty allow-list, which this used to be, is
+    // satisfied by nobody INCLUDING the callback, so every OIDC sign-in 403'd at the upsert
+    // and reported "Sign-in could not be completed." `createPramen` now rejects that
+    // spelling at boot rather than letting it fail silently at runtime.
+    //
+    // `["admin"]` would work — that is `callPrivileged`'s default identity — and is wrong:
+    // this handler WRITES ROLES, so any admin could hand themselves a role set over /rpc.
+    { auth: [OIDC_SYSTEM_ROLE] },
   ),
 };
 

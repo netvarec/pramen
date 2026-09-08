@@ -220,12 +220,39 @@ export class JwksStrategy implements VerifyStrategy {
   }
 }
 
+/** Roles with this prefix are SYSTEM roles: they may only ever be presented by
+ * `callPrivileged` from inside the Worker, and are stripped from every verified token.
+ *
+ * They exist because a handler sometimes has to be reachable by the server and by nobody
+ * else — `@pramen/auth`'s OIDC user upsert, `@pramen/analytics`'s event ingest. The obvious
+ * `auth: []` does not express that (it is satisfied by no one at all, `callPrivileged`
+ * included), so such a handler names a private role instead and the privileged caller
+ * presents it.
+ *
+ * That only holds if the role cannot arrive from OUTSIDE, and without this filter it could:
+ * `toIdentity` copies the `roles` claim verbatim, and on the verify-only (BYO-IdP) path that
+ * claim is written entirely by an external IdP — a directory group named `__oidc_system`
+ * would have been enough. The same reaches a pramen session through OIDC `mapRoles`, which
+ * passes the provider's claim straight into the minted token. Stripping at VERIFICATION is
+ * what makes the invariant true for every consumer at once, including future ones: after
+ * this, the only way to hold a system role is to be the Worker. */
+export const SYSTEM_ROLE_PREFIX = "__";
+
+/** Whether a role name is reserved for privileged, server-originated calls. */
+export function isSystemRole(role: string): boolean {
+  return role.startsWith(SYSTEM_ROLE_PREFIX);
+}
+
 function toIdentity(claims: JsonObject): Identity {
-  const roles = Array.isArray(claims.roles)
+  const claimed = Array.isArray(claims.roles)
     ? (claims.roles as string[])
     : typeof claims.role === "string"
       ? [claims.role]
       : [];
+  // Dropped silently rather than rejecting the token: a token carrying one is far more
+  // likely an IdP group that happens to collide than an attack, and failing the whole login
+  // would be a denial of service triggered by someone else's directory naming.
+  const roles = claimed.filter((r) => typeof r === "string" && !isSystemRole(r));
   const identity: Identity = { roles, userId: (claims.sub ?? claims.userId) as string | undefined };
   // Carry `exp` (a STANDARD claim, so the passthrough loop skips it) so a WebSocket can
   // re-check expiry per message — its identity is fixed at upgrade and never re-verified.

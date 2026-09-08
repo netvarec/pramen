@@ -16,7 +16,7 @@
 // magicLinkSchema too). It is transport-agnostic: you supply sendEmail; pramen owns
 // the token lifecycle. See createMagicLinkAuth below.
 
-import { Entity, mutation, query, defaultTo, unique, hidden, policy, allow, $identity, BadRequest, Unauthorized, denySession, allowSession } from "@pramen/server";
+import { Entity, mutation, query, defaultTo, unique, hidden, policy, allow, $identity, BadRequest, Unauthorized, denySession, allowSession, isSystemRole } from "@pramen/server";
 import type { AppTaskMap, CellValue, HandlerContext, HandlerMap, JsonObject, JsonValue, Policy, Row } from "@pramen/server";
 
 /** What an auth factory contributes to an app: RPC handlers plus the task handlers
@@ -752,6 +752,14 @@ export function createUserHandlers(opts: { table?: string } = {}) {
       if (typeof input?.username !== "string" || input.username.length === 0) throw new BadRequest("username is required");
       if (!Array.isArray(input.roles) || !input.roles.every((r) => typeof r === "string" && r.length > 0)) {
         throw new BadRequest("roles must be a non-empty string[]");
+      }
+      // A SYSTEM role (`__`-prefixed) is reserved for calls the Worker makes to itself — it
+      // gates handlers that write roles and bypass the row ACL. The token verifier already
+      // strips these, so granting one would do nothing; refusing is the honest answer rather
+      // than storing a role that silently never takes effect.
+      const reserved = input.roles.filter(isSystemRole);
+      if (reserved.length > 0) {
+        throw new BadRequest(`roles reserved for the server cannot be granted: ${reserved.join(", ")}`);
       }
       const updated = await usersDb(ctx).update(table, input.username, { roles: input.roles });
       if (!updated) throw new BadRequest("user not found"); // (or out of the caller's update scope)
