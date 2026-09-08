@@ -50,6 +50,20 @@ import {
   hashPassword,
 } from "@pramen/auth";
 // @pramen/cms — the block/page builder, wired as an ordinary app fragment.
+// @pramen/analytics — the traffic collector. `analyticsSchema` migrates alongside the
+// rest; the routes are PUBLIC (a visitor has no session), and the dashboard is a Block Kit
+// page in the editor's own chrome.
+import {
+  analyticsSchema,
+  analyticsPolicies,
+  analyticsDashboard,
+  createAnalyticsHandlers,
+  createAnalyticsQueues,
+  createAnalyticsSink,
+  collectRoute,
+  trackerRoute,
+  ANALYTICS_QUEUE,
+} from "@pramen/analytics";
 import { CMS_LEGACY_TIMESTAMP_COLUMNS, cmsSchema, cmsHandlers, cmsPolicies, cmsTasks, cmsRoutes, defineBlockType, defineContentType, cmsBootstrap, cmsMigrations, collection, createCollectionHandlers, createCollectionTasks, collectionPolicies, collectionPublicPolicies, adminPage, createAdminPageHandlers, NAV_ORDER } from "@pramen/cms";
 
 /** The columns `createNote` writes. `meta` is omitted (not null) when absent, so a
@@ -90,6 +104,8 @@ const schema = defineSchema({
   ...emailTokenSchema,
   // @pramen/cms's block/page-builder tables (cms_pages, cms_blocks, cms_block_types, …).
   ...cmsSchema,
+  // @pramen/analytics: the raw event log plus the two daily rollups it is folded into.
+  ...analyticsSchema,
   // A COLLECTION-backed entity: `lectures` is an ordinary pramen entity (real, queryable
   // columns), registered as a CMS collection below so it gets a generic list/edit UI in the
   // editor — the "edit arbitrary content, not just pages" escape hatch. No mandatory slug.
@@ -443,7 +459,10 @@ const handlers = {
   // @pramen/cms Block Kit: listAdminPages (role-filtered) + adminPageInteract. No ACL
   // fragment goes with it — a page reads through `ctx.db` under whatever policies the
   // caller already holds, so there is nothing here to grant.
-  ...createAdminPageHandlers([lectureDesk]),
+  ...createAdminPageHandlers([lectureDesk, analyticsDashboard()]),
+  // @pramen/analytics: the privileged ingest sink plus the role-gated metric reads. The
+  // dashboard above renders from the same queries these expose.
+  ...createAnalyticsHandlers(),
   // The PUBLIC read for the `lectures` collection. Deliberately un-gated (no `auth`), so
   // anonymous can call it — what limits the result is the ACL, not this query. Anonymous
   // holds only `collectionPublicPolicies`, which scopes `lectures` reads to
@@ -796,6 +815,9 @@ const acl = [
     policy("admin:signups:create", "signups", "create", allow()),
     policy("admin:events:read", "events", "read", allow()),
     policy("admin:events:create", "events", "create", allow()),
+    // @pramen/analytics: full CRUD, because `runAnalyticsRollup` / `pruneAnalytics` run
+    // with the CALLER's ctx (a task context would be system-scoped and need none of this).
+    ...analyticsPolicies().admin,
     // auditLog lives in the "audit" partition; ACL is partition-agnostic (policies
     // name entities). The audit DO loads this same ACL, so admin can write/read it.
     policy("admin:audit:read", "auditLog", "read", allow()),
@@ -837,7 +859,8 @@ const acl = [
   // can approve/reject/publish. Both need the same CMS data ACL (full CRUD on cms_ tables);
   // the workflow gate is the per-handler `auth` (submit → editor, approve/reject → reviewer).
   // Distinct policy-name prefixes so the grants don't collide with admin's.
-  role("editor", [...cmsPolicies({ prefix: "cms-ed" }).editor, ...collectionPolicies(collections, { prefix: "cms-ed" })]),
+  // The editor reads analytics but cannot roll up or prune — the dashboard is a read.
+  role("editor", [...cmsPolicies({ prefix: "cms-ed" }).editor, ...collectionPolicies(collections, { prefix: "cms-ed" }), ...analyticsPolicies({ prefix: "an-ed" }).viewer]),
   // A reviewer needs the COLLECTION grants too, not just the page ones: getCollectionPreview
   // is gated with viewerRoles (editor ∪ reviewer), so a reviewer-only identity passes the
   // handler gate and then hits the row ACL. Without this the direct RPC 404s — the preview
@@ -955,6 +978,21 @@ const routes = [
   },
   // @pramen/cms: public GET /sitemap.xml + /robots.txt (origin derived from the request).
   ...cmsRoutes(),
+  // @pramen/analytics: the beacon endpoint and the script it lives in. Both PUBLIC and
+  // pre-auth by necessity — a visitor has no session, and matching them here means they
+  // never reach the DO's auth path at all.
+  //
+  // `createAnalyticsSink` picks the transport: with the ANALYTICS queue bound it hands the
+  // batch off and returns; without one it writes in-request through `callPrivileged`. The
+  // example binds no analytics queue, so this exercises the direct path.
+  ...collectRoute({
+    // The tenant a visitor belongs to. A browser sends no `x-pramen-tenant`, so a real
+    // multi-tenant deployment maps the request's HOST to a tenant here; the header is
+    // honoured too so the e2e suite can address its own store.
+    sink: (request, env, ctx) =>
+      createAnalyticsSink(env, ctx, { tenant: request.headers.get("x-pramen-tenant") ?? "main" }),
+  }),
+  trackerRoute(),
 ];
 
 // Deferred side-effect handlers, drained from the outbox after a mutation enqueues.
@@ -995,6 +1033,10 @@ const queues = {
     const { id } = message.body as { id: string; tenant: string };
     await ctx.kv.put(`job:${id}`, `done:${id}`, { expirationTtl: 900 });
   },
+  // @pramen/analytics: drains a batch of events into the store. Declared even though this
+  // example binds no analytics queue — the handler is what a deployment ADDS the binding
+  // for, and `createPramen` would reject a queue message it had no route for.
+  ...createAnalyticsQueues({ queueName: ANALYTICS_QUEUE }),
 };
 
 // @pramen/cms code-defined types: declare block + content types in code and have every

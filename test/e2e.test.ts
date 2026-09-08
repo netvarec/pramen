@@ -7,6 +7,7 @@ import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { runAcl } from "./suites/acl";
 import { runCellAcl } from "./suites/cell-acl";
+import { runAnalytics } from "./suites/analytics";
 import { runCms } from "./suites/cms";
 import { runD1 } from "./suites/d1";
 import { runFiles } from "./suites/files";
@@ -113,4 +114,5 @@ describe("pramen e2e", () => {
   test("DO partitions (isolation + per-partition admin/reactivity)", () => runPartitions(BASE, WS), 30_000);
   test("data migrations (app.migrations run on boot + the ledger endpoint)", () => runMigrations(BASE), 30_000);
   test("@pramen/cms (block/page builder: regions, publish, content API)", () => runCms(BASE), 30_000);
+  test("@pramen/analytics (beacon, ingest, role gate, rollup, prune)", () => runAnalytics(BASE), 30_000);
 });

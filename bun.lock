@@ -9,6 +9,7 @@
         "@cloudflare/workers-types": "^4.20250101.0",
         "@oxlint/plugins": "1.79.0",
         "@pramen/admin": "workspace:*",
+        "@pramen/analytics": "workspace:*",
         "@pramen/auth": "workspace:*",
         "@pramen/client": "workspace:*",
         "@pramen/cms": "workspace:*",
@@ -43,7 +44,7 @@
     },
     "packages/admin": {
       "name": "@pramen/admin",
-      "version": "0.0.62",
+      "version": "0.0.68",
       "dependencies": {
         "@podoba/react": "^0.0.34",
         "@podoba/tailwind": "^0.0.34",
@@ -59,20 +60,37 @@
         "tailwindcss": "^4.0.0",
       },
     },
+    "packages/analytics": {
+      "name": "@pramen/analytics",
+      "version": "0.0.68",
+      "dependencies": {
+        "@pramen/server": "workspace:*",
+      },
+      "devDependencies": {
+        "@pramen/cms": "workspace:*",
+        "@types/node": "^22.0.0",
+      },
+      "peerDependencies": {
+        "@pramen/cms": "workspace:*",
+      },
+      "optionalPeers": [
+        "@pramen/cms",
+      ],
+    },
     "packages/auth": {
       "name": "@pramen/auth",
-      "version": "0.0.62",
+      "version": "0.0.68",
       "dependencies": {
         "@pramen/server": "workspace:*",
       },
     },
     "packages/client": {
       "name": "@pramen/client",
-      "version": "0.0.62",
+      "version": "0.0.68",
     },
     "packages/cms": {
       "name": "@pramen/cms",
-      "version": "0.0.62",
+      "version": "0.0.68",
       "bin": {
         "pramen-cms": "./dist/cli.js",
       },
@@ -91,7 +109,7 @@
     },
     "packages/cms-astro": {
       "name": "@pramen/cms-astro",
-      "version": "0.0.62",
+      "version": "0.0.68",
       "devDependencies": {
         "@pramen/cms-editor": "workspace:*",
       },
@@ -105,7 +123,7 @@
     },
     "packages/cms-editor": {
       "name": "@pramen/cms-editor",
-      "version": "0.0.62",
+      "version": "0.0.68",
       "dependencies": {
         "@buzola/router": "^0.0.12",
         "@phosphor-icons/react": "^2.1.10",
@@ -135,7 +153,7 @@
     },
     "packages/react": {
       "name": "@pramen/react",
-      "version": "0.0.62",
+      "version": "0.0.68",
       "dependencies": {
         "@pramen/client": "workspace:*",
       },
@@ -145,7 +163,7 @@
     },
     "packages/server": {
       "name": "@pramen/server",
-      "version": "0.0.62",
+      "version": "0.0.68",
       "bin": {
         "pramen": "./dist/cli.js",
       },
@@ -489,6 +507,8 @@
     "@poppinss/exception": ["@poppinss/exception@1.2.3", "", {}, "sha512-dCED+QRChTVatE9ibtoaxc+WkdzOSjYTKi/+uacHWIsfodVfpsueo3+DKpgU5Px8qXjgmXkSvhXvSCz3fnP9lw=="],
 
     "@pramen/admin": ["@pramen/admin@workspace:packages/admin"],
+
+    "@pramen/analytics": ["@pramen/analytics@workspace:packages/analytics"],
 
     "@pramen/auth": ["@pramen/auth@workspace:packages/auth"],
 
