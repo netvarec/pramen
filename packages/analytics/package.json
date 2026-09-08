@@ -1,6 +1,6 @@
 {
   "name": "@pramen/analytics",
-  "version": "0.0.68",
+  "version": "0.0.69",
   "description": "First-party traffic analytics for pramen — a server-side collector plus a small beacon, one event table, a daily rollup, and a Block Kit dashboard.",
   "license": "MIT",
   "repository": {
