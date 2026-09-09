@@ -2056,8 +2056,12 @@ function MediaDetail({ api, media, taxa, terms, canEdit, canDownload, onClose, o
    * string — that form returns null by spec, which is how the page-preview button was
    * briefly broken. */
   const preview = () => {
-    const tab = window.open(url, "_blank");
-    if (tab) tab.opener = null;
+    // `noopener` here, rather than severing `opener` after the fact: that feature string
+    // makes `window.open` return null by spec, which matters only when the handle is needed
+    // afterwards (the page-preview button navigates the tab it opened, and passing it there
+    // silently broke the whole flow). Nothing is done with this window, so the simplest form
+    // is also the correct one.
+    window.open(url, "_blank", "noopener");
   };
 
   /** Download the file under the name it was uploaded with.
@@ -2074,7 +2078,18 @@ function MediaDetail({ api, media, taxa, terms, canEdit, canDownload, onClose, o
       const a = document.createElement("a");
       a.href = api.resolve(signed.url);
       a.rel = "noreferrer";
-      a.download = media.file.filename ?? "";
+      // `target` is what actually guarantees the editor is never navigated away, and it is
+      // needed because the two softer guards BOTH fail on the same row. `file.filename` is
+      // optional — `createMedia` stores whatever ref it was given, and the media backfill
+      // writes `filename: null` for rows that had none — and with no filename
+      // `signDownload` omits `fn`, so `/files/download` sends no `content-disposition` at
+      // all. The `download` attribute would be the remaining guard, and it is ignored
+      // cross-origin per spec, which is exactly the standalone-editor topology `CORS_ORIGINS`
+      // exists for. Without this the click replaces the editor tab with the raw file.
+      a.target = "_blank";
+      // A fallback name, so a row with no filename saves as something openable rather than
+      // as `download` with no extension.
+      a.download = media.file.filename ?? fallbackFilename(media);
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -2466,6 +2481,23 @@ function ext(m: Media): string {
   const fromName = m.file.filename?.split(".").pop();
   return (fromName ?? fromType ?? "file").slice(0, 5).toUpperCase();
 }
+/** A save-as name for a row that has no `filename`.
+ *
+ * Not cosmetic: such rows exist (`createMedia` stores whatever ref it is handed, and the
+ * media backfill writes `filename: null` for the ones that had none), and without a name the
+ * browser saves the file as `download`, with no extension and nothing to identify it by. The
+ * media id keeps it traceable back to the library; the extension comes from the stored
+ * content type, which is the only thing left that says what the bytes are. */
+export function fallbackFilename(m: Media): string {
+  const sub = (m.file.contentType ?? "").split("/")[1]?.split("+")[0];
+  // Alphanumerics only. An extension needs nothing else, and the content type is
+  // caller-supplied — allowing `.` and `-` let `image/../../etc/passwd` through as the
+  // "extension" `..`, producing `m-1...`. Anything that is not a plain extension is dropped
+  // whole rather than sanitized halfway.
+  const safe = sub && /^[a-z0-9]{1,8}$/i.test(sub) ? `.${sub.toLowerCase()}` : "";
+  return `${m.id}${safe}`;
+}
+
 function fmtBytes(n?: number): string {
   if (!n || n <= 0) return "—";
   const u = ["B", "KB", "MB", "GB"];

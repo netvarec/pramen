@@ -430,6 +430,24 @@ export async function runCms(base: string): Promise<void> {
   assert(inline.headers.get("content-type") === "image/png", "cms: …with the stored content type");
   assert(inline.headers.get("content-disposition") === null, "cms: …and INLINE — no attachment disposition");
 
+  // An ACTIVE type (svg is an ordinary image an editor would upload) is sandboxed on the way
+  // out. `signMediaUpload` takes the content type from its caller, and in the embedded
+  // topology `/media` shares an origin with the editor's stored session token — so without
+  // this, previewing an editor-uploaded SVG runs its script next to that token.
+  const svgUp = await call("signMediaUpload", { contentType: "image/svg+xml", filename: "mark.svg" }, admin);
+  await fetch(`${base}${svgUp.body.result.url}`, {
+    method: "PUT",
+    headers: { "content-type": "image/svg+xml" },
+    body: '<svg xmlns="http://www.w3.org/2000/svg"><script>1</script></svg>',
+  });
+  const svgRes = await fetch(`${base}/media/${svgUp.body.result.ref.key}`);
+  const csp = svgRes.headers.get("content-security-policy") ?? "";
+  assert(csp.includes("sandbox"), `cms: an SVG is served sandboxed (got ${JSON.stringify(csp)})`);
+  assert(svgRes.headers.get("content-type") === "image/svg+xml", "cms: …and still with its real type, so it renders");
+  // Narrow on purpose: a blanket sandbox risks the browser's built-in PDF viewer, breaking a
+  // legitimate preview to defend against bytes that were never executable.
+  assert(inline.headers.get("content-security-policy") === null, "cms: …while an ordinary image is NOT sandboxed");
+
   const dl = await call("signMediaDownload", { id: mediaId }, admin);
   assert(dl.body.ok && typeof dl.body.result.url === "string", "cms: signMediaDownload mints a signed url");
   const dlRes = await fetch(`${base}${dl.body.result.url}`);

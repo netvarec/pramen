@@ -342,6 +342,39 @@ const MEDIA_KEY = /^[^/]+\/media\/[^/][^\0]*$/;
  * auth (published-site assets are public; the random tenant-scoped key is the capability).
  * Returns a Response for any `/media/*` path, or null if not a media request. Restricted
  * to `<tenant>/media/` keys so it can't serve arbitrary (e.g. signed-private) objects. */
+/** Content types the browser treats as an ACTIVE DOCUMENT — one that can run script when
+ * opened at the top level, rather than being rendered as inert media.
+ *
+ * `nosniff` stops a browser guessing its way INTO one of these; it does nothing when the
+ * type is declared outright. And it is declared by the uploader: `signMediaUpload` takes
+ * `contentType` from its input with no allow-list, so an editor can upload
+ * `image/svg+xml` — a perfectly ordinary thing to want, since SVG is a real image format —
+ * and that file, opened at `/media/<key>`, runs its own script on THIS origin.
+ *
+ * Which matters because of the embedded topology: `@pramen/cms-astro` mounts the editor on
+ * the same origin that serves `/media`, and the editor keeps its session token in
+ * `localStorage` there. So without this, "editor uploads an SVG, admin clicks Preview" is
+ * an editor-to-admin token theft — and `setUserRoles` is admin-gated precisely because those
+ * roles are not meant to be equivalent. */
+const ACTIVE_TYPES = new Set(["text/html", "application/xhtml+xml", "image/svg+xml", "text/xml", "application/xml"]);
+
+/** `sandbox` with no tokens is the maximally restrictive form: the response becomes an
+ * opaque-origin document with scripts disabled, so it can neither run code nor reach this
+ * origin's storage. `default-src 'none'` stops it fetching anything of its own.
+ *
+ * Applied ONLY to the active types, deliberately. Sandboxing everything would be simpler to
+ * describe and would risk the browser's built-in PDF viewer, which is a plugin-ish surface a
+ * blanket sandbox can disable — breaking a legitimate preview to defend against a type that
+ * was never executable. An SVG still RENDERS under this; only its script does not run. */
+const ACTIVE_TYPE_CSP = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
+
+/** Whether a stored content type needs the sandbox above. Parameters after `;` (a charset)
+ * are stripped — `text/html; charset=utf-8` is still html. */
+export function isActiveType(contentType: string | null | undefined): boolean {
+  const base = (contentType ?? "").split(";")[0]?.trim().toLowerCase() ?? "";
+  return ACTIVE_TYPES.has(base);
+}
+
 export async function handleMediaRequest(
   request: Request,
   opts: { adapter: StorageAdapter },
@@ -366,5 +399,6 @@ export async function handleMediaRequest(
   // Blobs are immutable (random keys), so cache hard; never sniff into an executable type.
   headers.set("cache-control", "public, max-age=31536000, immutable");
   headers.set("x-content-type-options", "nosniff");
+  if (isActiveType(obj.contentType)) headers.set("content-security-policy", ACTIVE_TYPE_CSP);
   return new Response(request.method === "HEAD" ? null : obj.body, { headers });
 }
