@@ -11,6 +11,19 @@
 @source "./**/*.{ts,tsx}";
 @source "../node_modules/@podoba/react/src/**/*.{ts,tsx}";
 
+/* The chrome's own metrics, as custom properties.
+ *
+ * Declared here as well as on the chrome's root element (see `chromeVars` in `chrome.ts`)
+ * because the sticky offsets that read them belong to SCREENS, and a screen can be rendered
+ * outside the chrome — a panel bundle mounting a component of its own, a test rendering one
+ * list. Without a default `top: var(--pramen-chrome-h)` computes to `top: auto` and a sticky
+ * header silently stops sticking. The values here are the sidebar's, which is the default
+ * layout; the chrome overrides both when a deployment asks for the topbar. */
+:root {
+  --pramen-chrome-h: 2.75rem;
+  --pramen-chrome-pad: 0px;
+}
+
 /* Buttons look clickable.
  *
  * podoba's `Button` sets no `cursor`, and a real `<button>` gets the default arrow from the

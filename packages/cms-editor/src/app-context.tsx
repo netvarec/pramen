@@ -25,6 +25,14 @@ declare global {
        * building. The tab is otherwise always shown and lands on an empty list, which
        * reads as "the CMS is broken" rather than "this site has no pages". */
       hidePages?: boolean;
+      /** Which chrome the nav wears — `"sidebar"` (the default rail) or `"topbar"` (the
+       * Graphic Standard bar: brand left, tabs right, avatar at the end).
+       *
+       * A deployment-level choice, not a reading preference like the theme or a folded nav
+       * group: it is the shape of the product this admin is part of, and it decides the
+       * chrome's height, which every sticky offset below it is measured against. See
+       * `ChromeLayout` in `chrome.ts`. */
+      layout?: "sidebar" | "topbar";
       /** Extra top-nav links to companion tools the host serves (e.g. a curation page).
        * Rendered as plain external `<a>` links, positioned by `order` (see `NAV_ORDER`) and
        * defaulting to after the built-in tabs. */

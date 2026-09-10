@@ -6,7 +6,7 @@ import { Button, Dialog, type DialogSize, DropdownMenu, DropdownMenuItem, Dropdo
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Api, ApiError } from "./api";
 import { CONTROL, FieldForm, formatWhen, fromLocalInput, slugify, toLocalInput } from "./fields";
-import { BELOW_APP_BAR, BELOW_PAGE_TOOLBAR, PAGE_TOOLBAR_H, ROW, WRAP } from "./chrome";
+import { BELOW_APP_BAR, BELOW_PAGE_TOOLBAR, INSPECTOR_MAX_H, PAGE_TOOLBAR_H, ROW, WRAP } from "./chrome";
 import { useCrumb } from "./breadcrumb";
 import { PageHeader } from "./page-header";
 import { pagePreviewHref, sitePreviewUrl } from "./preview";
@@ -1123,7 +1123,7 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, backLabe
           : null}
       </div>
 
-      <aside className={`sticky ${BELOW_PAGE_TOOLBAR} max-h-[calc(100vh-8rem)] overflow-auto rounded-panel border border-border bg-surface-card p-5`}>
+      <aside className={`sticky ${BELOW_PAGE_TOOLBAR} ${INSPECTOR_MAX_H} overflow-auto rounded-panel border border-border bg-surface-card p-5`}>
         {/* A real tab strip, not five ghost buttons that read as filter chips: the selected
             one is underlined and Capitalised, so which panel you are in is visible without
             comparing background tints. */}

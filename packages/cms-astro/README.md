@@ -107,6 +107,7 @@ pramenCms({
     brand: { name: "Acme", suffix: "cms" },   // the wordmark; `suffix: null` drops the second half
     signInUrl: "/signin/",                     // must be a page that EXISTS
     hidePages: true,                           // collections-only deployments
+    layout: "topbar",                          // horizontal nav (Graphic Standard bar); default "sidebar"
     extraNav: [{ label: "Curation", href: "/curate", target: "_self" }],
     panels: ["/admin/curation.js"],            // YOUR React screens inside the chrome
     previewUrl: "/preview",                    // YOUR page that renders a draft

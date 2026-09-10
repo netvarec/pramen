@@ -692,10 +692,37 @@ admin: {
   brand: { name: "Acme", suffix: "cms" },      // the wordmark — set it when you deploy for a client
   signInUrl: "/signin/",                        // must be a page that EXISTS (see below)
   hidePages: true,                              // collections-only deployments
+  layout: "topbar",                             // the horizontal bar instead of the sidebar — see below
   extraNav: [{ label: "Curation", href: "/curate", target: "_self" }],
   panels: ["/admin/curation.js"],               // your own React screens — see "Custom admin panels"
 }
 ```
+
+### `layout` — sidebar or topbar
+
+The editor ships **two chromes** for the same nav.
+
+`"sidebar"` (the default) is a left rail: an icon and a label per destination, grouped under
+collapsible headings, everything one click away. It is what a full admin needs — Pages or one
+entry per content type, N collections, Media, Menus, Taxonomies, Widgets, Redirects, your
+Apps, Types, Users, Settings and any host links is a dozen-plus destinations, which in a row
+is a dense unlabelled ribbon over a horizontal scroller.
+
+`"topbar"` is the horizontal bar the **Graphic Standard** apps wear (podoba's `Topbar`):
+brand on the left, tabs on the right, the account avatar at the end, a hairline under it.
+Choose it when the editor sits inside a product that already has that bar — a vertical rail
+under a horizontal one reads as two apps stacked — or when your nav genuinely fits a row.
+
+It stays usable past six destinations without reviving the scroller: the **first** nav group
+renders as flat tabs and each later group folds into a dropdown, so a full admin reads as
+`Pages · Articles · Lectures · Media · Site ⌄ · Apps ⌄ · System ⌄` plus the avatar. Below
+`md` the whole nav moves into a dialog behind a hamburger. Everything else is the same
+editor: the same screens, the same breadcrumb (the detail half, beside the wordmark — the lit
+tab already says which section you are in), the same theme and sign-out in the avatar menu.
+
+The choice is a **deployment** setting, not a per-reader preference like the theme or a
+folded nav group: it decides the chrome's height, which every sticky header in the editor is
+positioned against.
 
 `extraNav` links open in a **new tab** by default, because the editor's catch-all route
 matches every same-origin path — a same-tab click would land on the editor's own 404 instead

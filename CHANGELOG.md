@@ -16,6 +16,41 @@ there are no backward-compatibility guarantees yet.
 
 ### Added
 
+- **A SECOND editor chrome: the horizontal Graphic Standard bar (`@pramen/cms-editor`,
+  `@pramen/cms-astro`).** `admin: { layout: "topbar" }` swaps the sidebar rail for podoba's
+  `Topbar` used the way the Graphic Standard apps use it — brand left, tabs pushed right, the
+  account avatar as a bare circle at the end, a 77px bar with a hairline under it and gs's air
+  below that. Everything under the chrome is unchanged: the same screens, the same theme and
+  sign-out in the avatar menu, the same unsaved-changes guard on every way out. The default
+  stays `"sidebar"`, and an existing deployment renders identically (the DOM gains two
+  wrappers — one declaring the chrome's custom properties, one carrying a 0px gap — and every
+  measured offset is unchanged).
+
+  The bar does **not** revive the horizontal scroller the rail was built to replace. Twelve
+  destinations in a row at 1280px was a dense unlabelled ribbon over a scroller you had to
+  scroll to discover what was in it; here the **first** nav group renders as flat tabs and each
+  later group folds into a dropdown (`topbarNav`), so a full admin reads as
+  `Pages · Lectures · Media · Site ⌄ · Apps ⌄ · System ⌄` plus the avatar. A dropdown among the
+  tabs is the gs bar's own shape — its app switcher is one — so it stays one design rather than
+  a compromise bolted onto it. Below `md` the whole nav moves into a dialog behind a hamburger
+  (React Aria's, via podoba's `Dialog`, so the focus trap and Esc are the design system's).
+  The breadcrumb keeps only its **detail** half, beside the wordmark: the lit tab already names
+  the section, and a second row that appeared only on detail screens would change the chrome's
+  height. An `extraNav` link stays a real anchor with its `rel` and `target` wherever it lands.
+
+  What made this a seam rather than a fork: `routes/_layout.tsx` now **derives and does not
+  draw** — it builds the nav, works out what is lit, and hands `chrome-sidebar.tsx` or
+  `chrome-topbar.tsx` the same `ChromeProps`. The subtle half (the order rule, the
+  percent-decoding in `segmentAt`, the guard, the same-tab containment rules) has exactly one
+  implementation, and a third shape is markup. The chrome's HEIGHT is the one thing that
+  differs and that screens depend on — `page-header.tsx` and the page editor's toolbar and
+  inspector are all sticky beneath it — so it moved from two literal Tailwind classes to a CSS
+  custom property set once by the chrome and defaulted in `app.css` (a screen rendered outside
+  the chrome, in a panel or a test, still lays out). Those class strings name the property as
+  literal text on purpose: Tailwind v4 finds utilities by scanning source, so a built
+  `` `top-[var(${VAR})]` `` is a rule that is silently never generated and a sticky header that
+  silently stops sticking.
+
 - **Custom admin PANELS — a project's own React screen inside the editor's chrome
   (`@pramen/cms`, `@pramen/cms-editor`, `@pramen/cms-astro`).** Block Kit is a server-driven
   vocabulary, and the properties that make it safe are the same ones that cap it: the whole page

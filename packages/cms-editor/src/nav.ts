@@ -248,6 +248,40 @@ export function navSectionsAreLabelled(sections: NavSection[]): boolean {
   return sections.length > 1;
 }
 
+/** The nav, arranged for a HORIZONTAL bar. */
+export interface TopbarNav {
+  /** Rendered as flat tabs, left to right. */
+  tabs: NavEntry[];
+  /** Rendered as dropdown triggers after them, one per remaining section. */
+  menus: NavSection[];
+}
+
+/**
+ * Split the sections into the tabs a bar shows and the menus it folds the rest into.
+ *
+ * The FIRST section is flat and every later one is a dropdown. That is the whole rule, and
+ * it falls out of what the bands already mean: `navSections` orders them Content · Site ·
+ * Apps · System, so the flat half is the destinations an editor came here to write and the
+ * folded half is the furniture and the administration — the same reason the sidebar ships
+ * with Site and System foldable and Content not.
+ *
+ * It exists because a row is the one shape this nav does NOT fit: twelve destinations at
+ * 1280px is a dense unlabelled ribbon over a horizontal scroller, which is the nav the
+ * sidebar was built to replace. A dropdown costs a click on the way IN, which is exactly the
+ * cost the sidebar's collapsible groups were designed to avoid — but a row has no column to
+ * spend instead, so the choice is between paying it and hiding items behind a scroll nobody
+ * discovers. Three or four triggers beside the tabs is also the shape the Graphic Standard
+ * bar already has (its app switcher is a dropdown in the same nav), so it stays one design.
+ *
+ * A single section stays entirely flat: there is nothing to fold away from, and one lone
+ * dropdown labelled "Content" would hide the whole nav behind a click.
+ */
+export function topbarNav(sections: NavSection[]): TopbarNav {
+  // No special case for the single section: `slice(1)` of a one-element list is already the
+  // empty menu list, and of an empty one it is empty twice over.
+  return { tabs: sections[0]?.entries ?? [], menus: sections.slice(1) };
+}
+
 /**
  * Is the rail ACTUALLY narrowed?
  *

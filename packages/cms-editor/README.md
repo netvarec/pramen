@@ -94,10 +94,33 @@ admin: {
   brand: { name: "Acme", suffix: "cms" },            // the wordmark — see below
   // signInUrl: "/signin/",                          // ONLY once that page exists — see the warning
   // hidePages: true,                                // collections-only deployments
+  // layout: "topbar",                               // horizontal nav instead of the sidebar — see below
   // extraNav: [{ label: "Curation", href: "/curate", target: "_self" }],
   // panels: ["/admin/curation.js"],                 // your own React screens — see below
 }
 ```
+
+### `layout` — which chrome the nav wears
+
+Two shapes for the same nav, and the same screens under either.
+
+- **`"sidebar"`** (default) — a left rail: an icon and a label per row, collapsible group
+  headings, a toggle that narrows it to icons. What a dozen-plus destinations needs.
+- **`"topbar"`** — the **Graphic Standard** bar (podoba's `Topbar`): brand left, tabs right,
+  the account avatar at the end, a hairline under it. For an editor embedded in a product
+  that already wears that bar, or a nav that fits a row.
+
+The bar does not revive the horizontal scroller the rail replaced: the **first** nav group
+renders as flat tabs and each later group folds into a dropdown
+(`Pages · Lectures · Media · Site ⌄ · Apps ⌄ · System ⌄` + the avatar). Below `md` the whole
+nav moves into a dialog behind a hamburger. The breadcrumb keeps only its detail half, beside
+the wordmark — the lit tab already names the section.
+
+`chrome.ts` owns the choice (`CHROME_LAYOUT`) and the two numbers that follow from it — the
+chrome's height and the air under it — as CSS custom properties, because every sticky header
+in the editor (`page-header.tsx`, the page editor's toolbar and inspector) is positioned
+against them. `chrome-sidebar.tsx` and `chrome-topbar.tsx` are the two components;
+`routes/_layout.tsx` derives the nav and hands either one the same `ChromeProps`.
 
 ## Panels — your own React screen inside the chrome
 

@@ -50,6 +50,16 @@ export interface AdminRuntimeConfig {
   signInUrl?: string;
   /** Hide the Pages tab, for deployments that use collections only. */
   hidePages?: boolean;
+  /**
+   * Which chrome the editor wears. `"sidebar"` (the default) is the rail: a scannable
+   * column with icons and collapsible groups, which is what a dozen-plus destinations
+   * needs. `"topbar"` is the Graphic Standard bar — brand left, tabs right, avatar at the
+   * end — for a site whose own chrome is that bar, or whose nav fits a row.
+   *
+   * Past the first nav group the bar folds each later group into a dropdown rather than
+   * scrolling sideways, so a big admin stays usable in it; it is still the smaller shape.
+   */
+  layout?: "sidebar" | "topbar";
   /** Extra top-nav links to companion tools the host serves.
    *
    * `target` defaults to `"_blank"`, because a companion tool is normally a separate
