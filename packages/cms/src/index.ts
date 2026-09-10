@@ -1459,11 +1459,25 @@ export function validateFields(schema: FieldDefinition[] | undefined | null, val
       case "publish":
         if (typeof v !== "string" || !isDateTimeString(v)) throw new BadRequest(`field '${at}' must be a date-time (ISO 8601)`);
         break;
-      case "media":
+      case "media": {
         // Media ids are uuids (strings) — reject numbers so the value always resolves
         // (collectMediaIds/resolveMediaFields only handle string ids).
-        if (typeof v !== "string") throw new BadRequest(`field '${at}' must be a media id (string)`);
-        break;
+        if (typeof v === "string") break;
+        // Except where the bag carries stored data the caller never sent (see
+        // `legacyBaseline`). The editor autosaves the WHOLE fields bag, so a block whose
+        // media column already holds a non-id — a seeded page, an import, a value round-
+        // tripped out of the public read API — sends it back along with an edit to some
+        // other field. Rejecting it makes that block permanently UNSAVEABLE, and blames a
+        // field the editor never touched; the only way out is to notice that a media field
+        // showing a perfectly good url is the culprit and clear it.
+        // Tolerated ONLY when it is exactly what is stored, so a caller still cannot
+        // introduce a new non-id value. Not `===` as `richtext` does it: that value is a
+        // string, and this one is an object that has been through JSON on the way in, so
+        // reference equality would never hold and the carve-out would be dead code.
+        const stored = opts.legacyBaseline?.[def.name];
+        if (stored !== undefined && stored !== null && sameJson(stored, v)) break;
+        throw new BadRequest(`field '${at}' must be a media id (string)`);
+      }
       // An OPAQUE id: the record may live in another table, or in a system we do not own,
       // so there is nothing to check it against here beyond its shape. The picker's
       // `referenceFrom` handler is the authority on which ids exist, and it runs under the

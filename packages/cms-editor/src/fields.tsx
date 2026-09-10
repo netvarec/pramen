@@ -312,7 +312,9 @@ function FieldInput({ def, value, onChange, api, hideLabelAs, siblings }: { def:
     case "media":
       return (
         <FieldShell label={label} description={hint} descriptionId={hintId}>
-          <MediaField value={value as string | null} onChange={onChange} api={api} />
+          {/* No cast: what is in the column decides, not what the schema says should be —
+              see `mediaFieldValue`. */}
+          <MediaField value={value} onChange={onChange} api={api} />
         </FieldShell>
       );
     case "reference":
@@ -726,20 +728,71 @@ function SelectField({ def, value, onChange, api, ariaLabel, describedBy }: { de
   );
 }
 
-function MediaField({ value, onChange, api }: { value: string | null; onChange: (v: string | null) => void; api: Api }) {
+/** What a `media` field's stored value is, as the control has to treat it.
+ *
+ * A media field holds a media ID — but the column is free-form JSON and the editor is not
+ * the only writer. A page seeded by a script, an import, or a value round-tripped out of the
+ * PUBLIC read API (where `getPage` resolves the id into `{ url, alt, … }` for the site to
+ * render) all put something else in there. The component used to render that value straight
+ * into a `<span>` as the fallback for a missing filename, and React refuses an object as a
+ * child — so ONE such field took down the whole `/pages/:id` route, error boundary and all,
+ * with the page unopenable until someone edited the database.
+ *
+ * So the narrowing happens once, here, and the component only ever sees strings:
+ *
+ *   - `id` is what to look up and what to treat as "there is a media asset here". Only a
+ *     non-empty string qualifies; anything else is `null`. A RESOLVED value is the one
+ *     recoverable case: `getPage` builds it as `{ id, key, url, alt, … }`, so it still
+ *     carries the id it was resolved FROM. Reading that back means the field renders
+ *     normally — thumbnail and all — and the next save writes the bare id, so the round
+ *     trip repairs itself instead of costing the editor a clear and a manual re-pick.
+ *   - `label` is what to SHOW when there is no resolved asset to name. An unrecognised
+ *     object says what it points at (its `url`) rather than reading as an empty field —
+ *     the page it belongs to usually still renders that image on the site, and "empty" would
+ *     send an editor looking for a picture that is not missing.
+ *   - `hasValue` decides whether "clear" is offered, and it is deliberately NOT `id !== null`:
+ *     clearing is how an editor repairs one of these by hand, so it has to be reachable
+ *     exactly when the value is something the picker cannot represent. That includes a bare
+ *     `42` or `true` — the server's own `media` check names a number as the thing a bad
+ *     writer puts here, and such a value is otherwise indistinguishable from an empty field:
+ *     no label, no clear button, and a save that 400s until someone edits the database. */
+export function mediaFieldValue(value: unknown): { id: string | null; label: string; hasValue: boolean } {
+  if (typeof value === "string" && value !== "") return { id: value, label: value, hasValue: true };
+  if (value !== null && typeof value === "object") {
+    const { id, url } = value as { id?: unknown; url?: unknown };
+    if (typeof id === "string" && id !== "") return { id, label: id, hasValue: true };
+    return { id: null, label: typeof url === "string" ? url : "", hasValue: true };
+  }
+  if (value === null || value === undefined || value === "") return { id: null, label: "", hasValue: false };
+  return { id: null, label: String(value), hasValue: true };
+}
+
+function MediaField({ value, onChange, api }: { value: unknown; onChange: (v: string | null) => void; api: Api }) {
   const [open, setOpen] = useState(false);
   const [media, setMedia] = useState<Media | null>(null);
+  const { id, label, hasValue } = mediaFieldValue(value);
   useEffect(() => {
-    if (value) api.call<Media | null>("getMedia", { id: value }).then(setMedia).catch(() => setMedia(null));
-    else setMedia(null);
-  }, [value, api]);
+    if (!id) {
+      setMedia(null);
+      return;
+    }
+    // Pick A then quickly B and both lookups are in flight; if A lands last it would leave
+    // the thumbnail and filename naming A while the stored value is B, with nothing left to
+    // re-trigger the effect. Only the live one is allowed to write.
+    let alive = true;
+    api
+      .call<Media | null>("getMedia", { id })
+      .then((m) => { if (alive) setMedia(m); })
+      .catch(() => { if (alive) setMedia(null); });
+    return () => { alive = false; };
+  }, [id, api]);
   return (
     <div>
       <div className="flex items-center gap-3 rounded-[14px] border border-transparent bg-surface-card px-[18px] py-3.5">
         {media ? <img className="h-10 w-10 rounded object-cover" src={api.resolve(`/media/${media.file.key}`)} alt="" /> : <span className="text-fg-subtle">no media</span>}
-        <span className="flex-1 truncate text-fg-subtle">{media?.file.filename ?? value ?? ""}</span>
+        <span className="flex-1 truncate text-fg-subtle">{media?.file.filename ?? label}</span>
         <Button variant="secondary" size="sm" onPress={() => setOpen(true)}>pick</Button>
-        {value ? (
+        {hasValue ? (
           <Button variant="ghost" size="sm" className="text-danger" onPress={() => onChange(null)}>clear</Button>
         ) : null}
       </div>

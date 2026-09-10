@@ -532,6 +532,51 @@ there are no backward-compatibility guarantees yet.
 
 ### Fixed
 
+- **One `media` field holding something other than an id took down the whole page editor
+  (`@pramen/cms-editor`).** `MediaField` rendered the raw stored value as the fallback for a
+  missing filename. React refuses an object as a child, so a field holding
+  `{ url, alt }` — the shape `getPage` RESOLVES a media id into for the site to render, and
+  the shape a seeding script or an import naturally writes — threw straight through the
+  router's error boundary: `Route error: Objects are not valid as a React child`, no fields,
+  no blocks, no toolbar. The whole `/pages/:id` route, for every page holding one.
+
+  What made it hard to see is that the SITE was fine. It reads the resolved shape by design,
+  so the affected pages rendered their images perfectly to visitors while being unopenable to
+  the person who wanted to change them; the crash named neither the page nor the field, and
+  the only way back in was editing the database.
+
+  The value is now narrowed once, in `mediaFieldValue`, and the component only ever sees
+  strings: a non-empty string is an id to look up, anything else is not, and an unrecognised
+  object shows what it points at (its `url`) instead of reading as an empty field — the
+  image is usually still live on the site, and "empty" sends an editor looking for a picture
+  that is not missing. `clear` is offered whenever there is ANY value, not just a valid id:
+  the picker cannot represent one of these, so clearing it is how an editor repairs the field
+  from inside the editor rather than from the database — and that now includes a bare `42` or
+  `true`, which used to read as an empty field with no clear button, i.e. as nothing wrong at
+  all. The field's declared type is not taken as evidence about the column's contents
+  anywhere — the cast at the call site is gone too.
+
+  The RESOLVED shape is not merely tolerated but repaired: `getPage` builds it as
+  `{ id, key, url, alt, … }`, so it still carries the id it was resolved from. That id is read
+  back, the field resolves and renders normally — thumbnail, filename and all — and the next
+  save writes the bare id, so the round trip undoes itself instead of costing a clear and a
+  manual re-pick.
+
+  **Opening the page was only half of it (`@pramen/cms`).** The editor autosaves the WHOLE
+  fields bag, so a block holding one of these values sent it back on an edit to any other
+  field, and `validateFields` rejected it: `field 'image' must be a media id (string)`, naming
+  a field the editor never touched, on every save, forever. Editing the heading of an affected
+  block was impossible until someone guessed that a media field displaying a perfectly good
+  url was the culprit and cleared it. A stored non-id value is now tolerated when the incoming
+  value is exactly what is already in the row — the same `legacyBaseline` carve-out `richtext`
+  has, except by VALUE rather than by `===`, since this one is an object that has been through
+  JSON and reference equality could never hold. A caller still cannot introduce a new non-id
+  value, and with no baseline the strict check is unchanged.
+
+  Also fixed while here: the `getMedia` lookup had no stale-response guard, so picking one
+  asset and quickly picking another could leave the first one's thumbnail and filename on
+  screen against the second one's stored value, with nothing left to re-trigger the fetch.
+
 - **The D1 store's Worker boot could wedge an isolate for its lifetime (`@pramen/server`,
   #51).** After some deploys a share of fetch invocations hung at 0–1 ms CPU until the caller
   gave up, before reaching any handler, while crons on the same Worker stayed healthy and a
