@@ -532,6 +532,29 @@ there are no backward-compatibility guarantees yet.
 
 ### Fixed
 
+- **One `media` field holding something other than an id took down the whole page editor
+  (`@pramen/cms-editor`).** `MediaField` rendered the raw stored value as the fallback for a
+  missing filename. React refuses an object as a child, so a field holding
+  `{ url, alt }` — the shape `getPage` RESOLVES a media id into for the site to render, and
+  the shape a seeding script or an import naturally writes — threw straight through the
+  router's error boundary: `Route error: Objects are not valid as a React child`, no fields,
+  no blocks, no toolbar. The whole `/pages/:id` route, for every page holding one.
+
+  What made it hard to see is that the SITE was fine. It reads the resolved shape by design,
+  so the affected pages rendered their images perfectly to visitors while being unopenable to
+  the person who wanted to change them; the crash named neither the page nor the field, and
+  the only way back in was editing the database.
+
+  The value is now narrowed once, in `mediaFieldValue`, and the component only ever sees
+  strings: a non-empty string is an id to look up, anything else is not, and an unrecognised
+  object shows what it points at (its `url`) instead of reading as an empty field — the
+  image is usually still live on the site, and "empty" sends an editor looking for a picture
+  that is not missing. `clear` is offered whenever there is ANY value, not just a valid id:
+  the picker cannot represent one of these, so clearing it is how an editor repairs the field
+  from inside the editor rather than from the database. The field's declared type is not
+  taken as evidence about the column's contents anywhere — the cast at the call site is gone
+  too.
+
 - **The D1 store's Worker boot could wedge an isolate for its lifetime (`@pramen/server`,
   #51).** After some deploys a share of fetch invocations hung at 0–1 ms CPU until the caller
   gave up, before reaching any handler, while crons on the same Worker stayed healthy and a
