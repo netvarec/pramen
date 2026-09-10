@@ -551,9 +551,31 @@ there are no backward-compatibility guarantees yet.
   image is usually still live on the site, and "empty" sends an editor looking for a picture
   that is not missing. `clear` is offered whenever there is ANY value, not just a valid id:
   the picker cannot represent one of these, so clearing it is how an editor repairs the field
-  from inside the editor rather than from the database. The field's declared type is not
-  taken as evidence about the column's contents anywhere — the cast at the call site is gone
-  too.
+  from inside the editor rather than from the database — and that now includes a bare `42` or
+  `true`, which used to read as an empty field with no clear button, i.e. as nothing wrong at
+  all. The field's declared type is not taken as evidence about the column's contents
+  anywhere — the cast at the call site is gone too.
+
+  The RESOLVED shape is not merely tolerated but repaired: `getPage` builds it as
+  `{ id, key, url, alt, … }`, so it still carries the id it was resolved from. That id is read
+  back, the field resolves and renders normally — thumbnail, filename and all — and the next
+  save writes the bare id, so the round trip undoes itself instead of costing a clear and a
+  manual re-pick.
+
+  **Opening the page was only half of it (`@pramen/cms`).** The editor autosaves the WHOLE
+  fields bag, so a block holding one of these values sent it back on an edit to any other
+  field, and `validateFields` rejected it: `field 'image' must be a media id (string)`, naming
+  a field the editor never touched, on every save, forever. Editing the heading of an affected
+  block was impossible until someone guessed that a media field displaying a perfectly good
+  url was the culprit and cleared it. A stored non-id value is now tolerated when the incoming
+  value is exactly what is already in the row — the same `legacyBaseline` carve-out `richtext`
+  has, except by VALUE rather than by `===`, since this one is an object that has been through
+  JSON and reference equality could never hold. A caller still cannot introduce a new non-id
+  value, and with no baseline the strict check is unchanged.
+
+  Also fixed while here: the `getMedia` lookup had no stale-response guard, so picking one
+  asset and quickly picking another could leave the first one's thumbnail and filename on
+  screen against the second one's stored value, with nothing left to re-trigger the fetch.
 
 - **The D1 store's Worker boot could wedge an isolate for its lifetime (`@pramen/server`,
   #51).** After some deploys a share of fetch invocations hung at 0–1 ms CPU until the caller

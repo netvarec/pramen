@@ -741,21 +741,30 @@ function SelectField({ def, value, onChange, api, ariaLabel, describedBy }: { de
  * So the narrowing happens once, here, and the component only ever sees strings:
  *
  *   - `id` is what to look up and what to treat as "there is a media asset here". Only a
- *     non-empty string qualifies; anything else is `null`.
+ *     non-empty string qualifies; anything else is `null`. A RESOLVED value is the one
+ *     recoverable case: `getPage` builds it as `{ id, key, url, alt, … }`, so it still
+ *     carries the id it was resolved FROM. Reading that back means the field renders
+ *     normally — thumbnail and all — and the next save writes the bare id, so the round
+ *     trip repairs itself instead of costing the editor a clear and a manual re-pick.
  *   - `label` is what to SHOW when there is no resolved asset to name. An unrecognised
  *     object says what it points at (its `url`) rather than reading as an empty field —
  *     the page it belongs to usually still renders that image on the site, and "empty" would
  *     send an editor looking for a picture that is not missing.
  *   - `hasValue` decides whether "clear" is offered, and it is deliberately NOT `id !== null`:
  *     clearing is how an editor repairs one of these by hand, so it has to be reachable
- *     exactly when the value is something the picker cannot represent. */
+ *     exactly when the value is something the picker cannot represent. That includes a bare
+ *     `42` or `true` — the server's own `media` check names a number as the thing a bad
+ *     writer puts here, and such a value is otherwise indistinguishable from an empty field:
+ *     no label, no clear button, and a save that 400s until someone edits the database. */
 export function mediaFieldValue(value: unknown): { id: string | null; label: string; hasValue: boolean } {
   if (typeof value === "string" && value !== "") return { id: value, label: value, hasValue: true };
   if (value !== null && typeof value === "object") {
-    const url = (value as { url?: unknown }).url;
+    const { id, url } = value as { id?: unknown; url?: unknown };
+    if (typeof id === "string" && id !== "") return { id, label: id, hasValue: true };
     return { id: null, label: typeof url === "string" ? url : "", hasValue: true };
   }
-  return { id: null, label: "", hasValue: false };
+  if (value === null || value === undefined || value === "") return { id: null, label: "", hasValue: false };
+  return { id: null, label: String(value), hasValue: true };
 }
 
 function MediaField({ value, onChange, api }: { value: unknown; onChange: (v: string | null) => void; api: Api }) {
@@ -763,8 +772,19 @@ function MediaField({ value, onChange, api }: { value: unknown; onChange: (v: st
   const [media, setMedia] = useState<Media | null>(null);
   const { id, label, hasValue } = mediaFieldValue(value);
   useEffect(() => {
-    if (id) api.call<Media | null>("getMedia", { id }).then(setMedia).catch(() => setMedia(null));
-    else setMedia(null);
+    if (!id) {
+      setMedia(null);
+      return;
+    }
+    // Pick A then quickly B and both lookups are in flight; if A lands last it would leave
+    // the thumbnail and filename naming A while the stored value is B, with nothing left to
+    // re-trigger the effect. Only the live one is allowed to write.
+    let alive = true;
+    api
+      .call<Media | null>("getMedia", { id })
+      .then((m) => { if (alive) setMedia(m); })
+      .catch(() => { if (alive) setMedia(null); });
+    return () => { alive = false; };
   }, [id, api]);
   return (
     <div>
