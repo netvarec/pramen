@@ -27,6 +27,11 @@ const dist = `${root}dist`;
 const entry = `${root}src/main.tsx`;
 const watch = process.argv.includes("--watch");
 
+/** Which chrome the PREVIEW shell asks for — `--layout=topbar` to see the Graphic Standard
+ * bar instead of the default sidebar. A dev-loop flag, not a build input: it only reaches
+ * the preview's inline config below, which is the same global a real shell writes. */
+const previewLayout = process.argv.find((a) => a.startsWith("--layout="))?.slice("--layout=".length) ?? "";
+
 /** The web font, as CSS with the binary inlined.
  *
  * @podoba/tokens ships `fonts.css` next to `./fonts/*.woff2` and relies on the consumer's
@@ -134,6 +139,7 @@ if (watch) {
   </head>
   <body>
     <div id="app" data-base-path=""></div>
+    <script>window.PRAMEN_CMS_EDITOR=${JSON.stringify(previewLayout ? { layout: previewLayout } : {})};</script>
     <script type="module" src="/editor.js"></script>
   </body>
 </html>
