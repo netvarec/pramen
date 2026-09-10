@@ -228,6 +228,11 @@ export interface CmsCapabilities {
    * 404 the moment a file is opened, and the library's tag filter would send an argument
    * that is silently ignored — a control that visibly does nothing. */
   mediaTerms: boolean;
+  /** The server has `signMediaDownload`. Declared, not assumed: `/media/<key>` serves the
+   * bytes on every version (so Preview always works), but getting the file back under its
+   * ORIGINAL FILENAME needs the signed attachment url, and a Download button on a server
+   * without it is a button that always errors. Absent ⇒ Preview only. */
+  mediaDownload: boolean;
 }
 
 /**
@@ -264,6 +269,7 @@ export const DEFAULT_CAPABILITIES: CmsCapabilities = {
   siteFurniture: false,
   codeDefinedTypes: false,
   mediaTerms: false,
+  mediaDownload: false,
   // Fails OPEN, unlike its neighbours. An older server sends no `canEdit`, and hiding
   // every authoring control from a real editor is unrecoverable from inside the editor;
   // showing one that 403s is a legible error with a way forward. The server is the

@@ -3969,6 +3969,38 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       },
     }),
 
+    /** Mint a signed, short-lived url that DOWNLOADS a media file rather than displaying
+     * it — `Content-Disposition: attachment`, with the original filename restored.
+     *
+     * `/media/<key>` already serves the bytes, and it serves them INLINE: a browser shows a
+     * PDF, plays a video, renders an image, and saves the file under its opaque storage key
+     * if you right-click it. So this is not a second way to reach the same bytes; it is the
+     * only way to get the file back out under the name it was uploaded with.
+     *
+     * The row is read through `ctx.db` FIRST, and the url is minted from what that read
+     * returns — never from a key the caller supplied. Knowing a key is not authorization,
+     * and the read is what applies the public scope (a trashed file is `deletedAt`-filtered
+     * out, so this 404s for it exactly as `getMedia` does).
+     *
+     * `viewer`, not `editor`: the bytes are already public at `/media/<key>`, so gating the
+     * FILENAME behind an editor session would protect nothing while breaking the download
+     * button for a reviewer. */
+    signMediaDownload: query(async (ctx, input: { id: string }) => {
+      const rows = await cdb(ctx).find({ from: "cms_media", where: { id: input.id }, limit: 1 });
+      const row = rows[0];
+      if (!row) throw notFound("media");
+      const file = row.file as FileRef | null;
+      if (!file?.key) throw notFound("media");
+      return ctx.files.signDownload(file, { download: true });
+    }, {
+      ...viewer,
+      input: (raw): { id: string } => {
+        const o = asObj(raw);
+        if (typeof o.id !== "string" || o.id === "") throw new BadRequest("id is required");
+        return { id: o.id };
+      },
+    }),
+
     /** Edit a media asset's metadata (currently just `alt` text). Editor-gated. */
     updateMedia: mutation(async (ctx, input: { id: string; alt: string | null }) => {
       const updated = await cdb(ctx).update("cms_media", input.id, { alt: input.alt ?? null });
@@ -4453,6 +4485,12 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       // section would 404 on open and the library's tag filter would send an argument that
       // is ignored — a filter that visibly does nothing. Absent ⇒ neither is drawn.
       mediaTerms: true as const,
+      // `signMediaDownload` exists. Same reason again: an older server has no such handler,
+      // so a Download button would be one that always errors — and unlike a filter that
+      // quietly does nothing, this one is pressed deliberately, with an expectation.
+      // Absent ⇒ the detail panel offers Preview (a plain link to /media/<key>, which every
+      // version has) and no Download.
+      mediaDownload: true as const,
       // PER-CALLER, unlike everything else here. `viewer` is `editorRoles ∪ reviewerRoles`,
       // so a reviewer-only session reaches this handler and every read handler — but every
       // WRITE is `editorRoles`. Without this the editor renders the authoring surfaces

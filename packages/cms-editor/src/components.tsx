@@ -1761,7 +1761,7 @@ function mediaCountLabel(count: number, hasMore: boolean, narrowed: boolean): st
 const ALL_TAGS = "__all";
 
 export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) => void }) {
-  const { cms: { mediaTerms, canEdit } } = useApp();
+  const { cms: { mediaTerms, mediaDownload, canEdit } } = useApp();
   const [media, setMedia] = useState<Media[]>([]);
   const [offset, setOffset] = useState(0);
   const [hasMore, setHasMore] = useState(false);
@@ -2012,6 +2012,7 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
             taxa={mediaTerms ? taxa : []}
             terms={terms}
             canEdit={canEdit}
+            canDownload={mediaDownload}
             onClose={() => setSelected(null)}
             onSaved={(m) => { setSelected(m); setMedia((prev) => prev.map((x) => (x.id === m.id ? m : x))); }}
             onDeleted={(id) => { setSelected(null); setMedia((prev) => prev.filter((x) => x.id !== id)); loadTrash(); }}
@@ -2027,7 +2028,7 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
   );
 }
 
-function MediaDetail({ api, media, taxa, terms, canEdit, onClose, onSaved, onDeleted, onTermsSaved, onError }: { api: Api; media: Media; taxa: Taxonomy[]; terms: Record<string, Term[]>; canEdit: boolean; onClose: () => void; onSaved: (m: Media) => void; onDeleted: (id: string) => void; onTermsSaved: () => void; onError: (s: string) => void }) {
+function MediaDetail({ api, media, taxa, terms, canEdit, canDownload, onClose, onSaved, onDeleted, onTermsSaved, onError }: { api: Api; media: Media; taxa: Taxonomy[]; terms: Record<string, Term[]>; canEdit: boolean; canDownload: boolean; onClose: () => void; onSaved: (m: Media) => void; onDeleted: (id: string) => void; onTermsSaved: () => void; onError: (s: string) => void }) {
   const [alt, setAlt] = useState(media.alt ?? "");
   const [busy, setBusy] = useState(false);
   useEffect(() => setAlt(media.alt ?? ""), [media]);
@@ -2043,6 +2044,62 @@ function MediaDetail({ api, media, taxa, terms, canEdit, onClose, onSaved, onDel
       setBusy(false);
     }
   };
+  /** Open the file at full size in a new tab.
+   *
+   * Worth having even though the image is already on screen: the inline render is capped at
+   * 340px, and a banner is wide and short — scaled to fit that box it is unreadable, which
+   * is the whole reason you would open the library to look at one. For a PDF or a video the
+   * panel shows only the file extension, so this is the ONLY way to see the thing at all.
+   *
+   * A plain `window.open` on a click: no url to mint, so there is nothing async to survive a
+   * popup blocker, and `opener` is severed rather than passing `noopener` as a feature
+   * string — that form returns null by spec, which is how the page-preview button was
+   * briefly broken. */
+  const preview = () => {
+    // `noopener` here, rather than severing `opener` after the fact: that feature string
+    // makes `window.open` return null by spec, which matters only when the handle is needed
+    // afterwards (the page-preview button navigates the tab it opened, and passing it there
+    // silently broke the whole flow). Nothing is done with this window, so the simplest form
+    // is also the correct one.
+    window.open(url, "_blank", "noopener");
+  };
+
+  /** Download the file under the name it was uploaded with.
+   *
+   * `/media/<key>` serves inline and would save under the opaque storage key, so this mints
+   * the signed attachment url instead. Driven through a temporary anchor rather than
+   * `location.href`: the response is a download, so assigning location works only as long as
+   * the server really does send `Content-Disposition: attachment` — if it ever did not, the
+   * editor would navigate away from itself and lose whatever was on screen. */
+  const download = async () => {
+    setBusy(true);
+    try {
+      const signed = await api.signMediaDownload(media.id);
+      const a = document.createElement("a");
+      a.href = api.resolve(signed.url);
+      a.rel = "noreferrer";
+      // `target` is what actually guarantees the editor is never navigated away, and it is
+      // needed because the two softer guards BOTH fail on the same row. `file.filename` is
+      // optional — `createMedia` stores whatever ref it was given, and the media backfill
+      // writes `filename: null` for rows that had none — and with no filename
+      // `signDownload` omits `fn`, so `/files/download` sends no `content-disposition` at
+      // all. The `download` attribute would be the remaining guard, and it is ignored
+      // cross-origin per spec, which is exactly the standalone-editor topology `CORS_ORIGINS`
+      // exists for. Without this the click replaces the editor tab with the raw file.
+      a.target = "_blank";
+      // A fallback name, so a row with no filename saves as something openable rather than
+      // as `download` with no extension.
+      a.download = media.file.filename ?? fallbackFilename(media);
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } catch (e) {
+      onError(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const del = async () => {
     if (!confirm("Move this file to the trash? It disappears from the library, but a page published while it was in use keeps showing it — delete it permanently from the trash to remove the file itself.")) return;
     setBusy(true);
@@ -2081,6 +2138,8 @@ function MediaDetail({ api, media, taxa, terms, canEdit, onClose, onSaved, onDel
       {taxa.length > 0 ? <MediaTerms api={api} mediaId={media.id} taxa={taxa} terms={terms} canEdit={canEdit} onSaved={onTermsSaved} onError={onError} /> : null}
       <div className="mt-3.5 flex items-center gap-2">
         <Button onPress={save} isDisabled={busy || alt === (media.alt ?? "")}>Save</Button>
+        <Button variant="secondary" size="sm" onPress={preview}>Preview</Button>
+        {canDownload ? <Button variant="secondary" size="sm" onPress={download} isDisabled={busy}>Download</Button> : null}
         <Button variant="secondary" size="sm" onPress={() => navigator.clipboard?.writeText(url)}>Copy URL</Button>
         <span className="flex-1" />
         <Button variant="ghost" className="text-danger" onPress={del} isDisabled={busy}>Delete</Button>
@@ -2422,6 +2481,23 @@ function ext(m: Media): string {
   const fromName = m.file.filename?.split(".").pop();
   return (fromName ?? fromType ?? "file").slice(0, 5).toUpperCase();
 }
+/** A save-as name for a row that has no `filename`.
+ *
+ * Not cosmetic: such rows exist (`createMedia` stores whatever ref it is handed, and the
+ * media backfill writes `filename: null` for the ones that had none), and without a name the
+ * browser saves the file as `download`, with no extension and nothing to identify it by. The
+ * media id keeps it traceable back to the library; the extension comes from the stored
+ * content type, which is the only thing left that says what the bytes are. */
+export function fallbackFilename(m: Media): string {
+  const sub = (m.file.contentType ?? "").split("/")[1]?.split("+")[0];
+  // Alphanumerics only. An extension needs nothing else, and the content type is
+  // caller-supplied — allowing `.` and `-` let `image/../../etc/passwd` through as the
+  // "extension" `..`, producing `m-1...`. Anything that is not a plain extension is dropped
+  // whole rather than sanitized halfway.
+  const safe = sub && /^[a-z0-9]{1,8}$/i.test(sub) ? `.${sub.toLowerCase()}` : "";
+  return `${m.id}${safe}`;
+}
+
 function fmtBytes(n?: number): string {
   if (!n || n <= 0) return "—";
   const u = ["B", "KB", "MB", "GB"];

@@ -126,6 +126,20 @@ entry, so doing it there made the returned array stop matching the `as const` li
   the tenant's `media/` prefix); the client PUTs the bytes, then `createMedia({ ref, alt? })`
   confirms the blob is in R2 and persists a `cms_media` row. `listMedia`/`getMedia`/`deleteMedia`
   (deleteMedia also removes the R2 blob) round it out. Editor-gated.
+- **Viewing vs downloading:** `/media/<key>` serves the bytes **inline** and unauthenticated —
+  that is the preview path, and it is what an `<img src>` points at. It is not a download:
+  saving from it writes the file under its opaque storage key. `signMediaDownload({ id })`
+  mints a short-lived signed url that answers `Content-Disposition: attachment` with the
+  ORIGINAL filename. It reads the row through `ctx.db` first and mints from what that read
+  returns — never from a caller-supplied key — so a trashed file 404s. `viewer`-gated, not
+  editor: the bytes are already public, so gating the filename would protect nothing.
+  Declared as `listCmsCapabilities().mediaDownload`, so an editor running against an older
+  server offers Preview only rather than a button that always errors.
+
+  A file whose stored content type is an ACTIVE one (`text/html`, `image/svg+xml`, …) is
+  served with `Content-Security-Policy: … sandbox`, because `signMediaUpload` takes the
+  content type from its caller and the embedded topology puts `/media` on the same origin as
+  the editor's session token. The file still renders; its script does not run.
 - **Browsing:** `listMedia({ limit, offset, q?, sort?, kind?, term? })`. `q` matches the filename **or**
   the alt text (case-insensitive; a `%` or `_` in the needle is a literal), `sort` is one of
   `newest`/`oldest`/`name`/`name_desc`/`largest`/`smallest`, and `kind` narrows to

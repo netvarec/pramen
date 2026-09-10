@@ -421,6 +421,49 @@ export async function runCms(base: string): Promise<void> {
   assert(row?.contentType === "image/png", "cms: …and contentType");
   assert(row?.size === bytes.length, "cms: …and size, from the STORED blob rather than the client's claim");
 
+  // --- Preview vs Download -------------------------------------------------------------
+  // `/media/<key>` is the preview path: public, inline, on every server version. Assert it
+  // serves INLINE, because that is exactly what makes a download button necessary — saving
+  // from here would write the file under its opaque storage key.
+  const inline = await fetch(`${base}/media/${mediaKey}`);
+  assert(inline.status === 200, "cms: /media/<key> serves the bytes for preview");
+  assert(inline.headers.get("content-type") === "image/png", "cms: …with the stored content type");
+  assert(inline.headers.get("content-disposition") === null, "cms: …and INLINE — no attachment disposition");
+
+  // An ACTIVE type (svg is an ordinary image an editor would upload) is sandboxed on the way
+  // out. `signMediaUpload` takes the content type from its caller, and in the embedded
+  // topology `/media` shares an origin with the editor's stored session token — so without
+  // this, previewing an editor-uploaded SVG runs its script next to that token.
+  const svgUp = await call("signMediaUpload", { contentType: "image/svg+xml", filename: "mark.svg" }, admin);
+  await fetch(`${base}${svgUp.body.result.url}`, {
+    method: "PUT",
+    headers: { "content-type": "image/svg+xml" },
+    body: '<svg xmlns="http://www.w3.org/2000/svg"><script>1</script></svg>',
+  });
+  const svgRes = await fetch(`${base}/media/${svgUp.body.result.ref.key}`);
+  const csp = svgRes.headers.get("content-security-policy") ?? "";
+  assert(csp.includes("sandbox"), `cms: an SVG is served sandboxed (got ${JSON.stringify(csp)})`);
+  assert(svgRes.headers.get("content-type") === "image/svg+xml", "cms: …and still with its real type, so it renders");
+  // Narrow on purpose: a blanket sandbox risks the browser's built-in PDF viewer, breaking a
+  // legitimate preview to defend against bytes that were never executable.
+  assert(inline.headers.get("content-security-policy") === null, "cms: …while an ordinary image is NOT sandboxed");
+
+  const dl = await call("signMediaDownload", { id: mediaId }, admin);
+  assert(dl.body.ok && typeof dl.body.result.url === "string", "cms: signMediaDownload mints a signed url");
+  const dlRes = await fetch(`${base}${dl.body.result.url}`);
+  assert(dlRes.status === 200, "cms: the signed download url serves the bytes");
+  const disp = dlRes.headers.get("content-disposition") ?? "";
+  // The point of the whole feature: the file comes back under the name it was uploaded
+  // with, not the storage key.
+  assert(disp.startsWith("attachment"), `cms: …as an attachment (got ${JSON.stringify(disp)})`);
+  assert(disp.includes("logo.png"), "cms: …under the ORIGINAL filename, not the storage key");
+  assert(new Uint8Array(await dlRes.arrayBuffer()).length === bytes.length, "cms: …and the bytes are the stored ones");
+
+  // The url is minted from the row the ACL'd read returned, never from a caller-supplied
+  // key — so an unknown id is a 404, not a signed url for something that does not exist.
+  assert((await call("signMediaDownload", { id: "00000000-0000-4000-8000-000000000000" }, admin)).status === 404,
+    "cms: signMediaDownload 404s on an unknown id rather than signing it");
+
   const images = await call("listMedia", { limit: 50, kind: "image" }, admin);
   assert(
     (images.body.result as Array<{ id: string }>).some((m) => m.id === mediaId),
