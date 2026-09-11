@@ -108,12 +108,40 @@ pramenCms({
     signInUrl: "/signin/",                     // must be a page that EXISTS
     hidePages: true,                           // collections-only deployments
     layout: "topbar",                          // horizontal nav (Graphic Standard bar); default "sidebar"
+    pageHeader: { variant: "flat", accent: "#73e2b2" },  // dress the screen header — see below
     extraNav: [{ label: "Curation", href: "/curate", target: "_self" }],
     panels: ["/admin/curation.js"],            // YOUR React screens inside the chrome
     previewUrl: "/preview",                    // YOUR page that renders a draft
   },
 })
 ```
+
+### `pageHeader` — dressing the screen header
+
+The sticky panel carrying the `<h1>` and the primary action, on the editor's own screens.
+Three tokens — the host supplies presentation, the editor keeps owning the text, the action
+and the contrast:
+
+```ts
+pageHeader: {
+  variant: "flat",        // "cover" (default, the seeded artwork) | "flat" (panel, no art) | "bare" (no panel)
+  accent: "#73e2b2",      // the primary action's colour — an OPAQUE hex or rgb() literal
+  titleFont: "Inter, system-ui, sans-serif",
+}
+```
+
+`accent` is parsed rather than passed through, which is the point: the editor derives the
+label colour on it (whichever of podoba's ink and paper wins on WCAG contrast) and the hover
+shade, so those cannot be got wrong from out here. `var()`, `oklch()` and any colour with
+alpha are refused with a console warning, because neither can be measured. `titleFont`
+applies to the `<h1>` and nothing else, and only declares the family — your site is what
+loads it.
+
+It exists so that matching the editor's headers to your product does not mean a stylesheet
+selecting on its internal DOM — a hook that pins itself to markup a release can change, and
+that cannot tell one screen from another or a container from the control inside it. See
+[`@pramen/cms-editor`](https://www.npmjs.com/package/@pramen/cms-editor)'s README for the
+full note.
 
 ### `previewUrl` — where a preview link opens
 

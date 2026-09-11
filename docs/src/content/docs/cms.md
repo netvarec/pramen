@@ -693,6 +693,7 @@ admin: {
   signInUrl: "/signin/",                        // must be a page that EXISTS (see below)
   hidePages: true,                              // collections-only deployments
   layout: "topbar",                             // the horizontal bar instead of the sidebar — see below
+  pageHeader: { variant: "flat", accent: "#73e2b2" },  // dress the screen header — see below
   extraNav: [{ label: "Curation", href: "/curate", target: "_self" }],
   panels: ["/admin/curation.js"],               // your own React screens — see "Custom admin panels"
 }
@@ -723,6 +724,53 @@ tab already says which section you are in), the same theme and sign-out in the a
 The choice is a **deployment** setting, not a per-reader preference like the theme or a
 folded nav group: it decides the chrome's height, which every sticky header in the editor is
 positioned against.
+
+### `pageHeader` — dressing the screen header
+
+`brand` and `layout` dress the **chrome**, and `panels`/`adminPage()` add whole screens of
+your own. `pageHeader` is the third surface: the sticky panel carrying the `<h1>` and the
+primary action, on the editor's **own** screens.
+
+```js
+pageHeader: {
+  variant: "flat",                              // "cover" (default) | "flat" | "bare"
+  accent: "#73e2b2",                            // the colour the primary action wears
+  titleFont: "Inter, system-ui, sans-serif",    // the <h1>, and only the <h1>
+}
+```
+
+`variant` decides how much panel there is. `"cover"` is what every screen gets by default — a
+card with the seeded Truchet artwork that makes a dozen interchangeable list screens
+recognisable before the type is. `"flat"` keeps the card and drops the art. `"bare"` drops the
+card too, so the title and the action sit on the page the way a Graphic Standard section
+header does. All three still stick and still condense on scroll.
+
+`accent` re-points `--color-brand-primary` **inside the header only**, so the primary action
+wears your colour and nothing else in the app moves. It must be an **opaque hex or `rgb()`
+literal** — `var(--your-token)`, `oklch()` and anything with alpha are refused with a console
+warning. That restriction is the feature: the editor parses the colour to derive the label
+colour on it (the better of podoba's ink and paper by WCAG contrast) and the hover shade (a
+dark accent lightens, a light one darkens), so a host cannot ship an illegible button through
+this API. An accent that no label reads on is still applied, with a warning naming the ratio.
+
+`titleFont` sets the `<h1>`'s family. The counts, labels and controls around it are the
+editor's chrome and stay in the design system's type. It is a declaration, not a loader: the
+family has to be one the browser already has, which means your shell (or your site's own
+stylesheet, on a co-hosted editor) is what fetches it.
+
+Everything unusable warns and falls back to the shipped default. Nothing here throws: the
+config is resolved at module load in the entry bundle's import graph, where a throw is a blank
+page rather than a header that looks wrong.
+
+> **Use this instead of a stylesheet that selects on the editor's DOM.** A panel bundle can
+> load CSS, and a selector like
+> `div.sticky[class*="max-w-[1200px]"] > div.relative.isolate… > div.relative.grid > :not(h1)`
+> does work — until the next release, which can void it with no error anywhere. It is also
+> blind in two ways that cost real bugs: it cannot tell one screen from another, so a label
+> injected for "the header's action" turned Media's `+ Upload` into "New + Upload"; and it
+> cannot tell the container from the control, so one rule landed on both and put white text on
+> a mint fill at 1.58:1. If these three tokens do not cover your case,
+> [open an issue](https://github.com/netvarec/pramen/issues) rather than a selector.
 
 `extraNav` links open in a **new tab** by default, because the editor's catch-all route
 matches every same-origin path — a same-tab click would land on the editor's own 404 instead

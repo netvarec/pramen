@@ -16,6 +16,40 @@ there are no backward-compatibility guarantees yet.
 
 ### Added
 
+- **`admin: { pageHeader }` — a deployment dresses the screen header without touching the DOM
+  (`@pramen/cms-editor`, `@pramen/cms-astro`).** The sticky panel carrying the `<h1>` and the
+  primary action was the one surface a host could not influence: `brand` and `layout` dress the
+  chrome and `panels`/`adminPage()` add whole screens, but the editor's OWN screens were closed.
+  So a project reached for the only hook left — a stylesheet selecting on the header's internal
+  DOM (`div.sticky[class*="max-w-[1200px]"] > div.relative.isolate… > div.relative.grid >
+  :not(h1)`), which encodes the gutter, the panel's radius, the grid and the fact that the cover
+  art is a direct-child `<svg>`. The release that reworked the header would have voided it with
+  no error anywhere.
+
+  Three tokens replace it: `variant` (`"cover"`, the seeded artwork every screen has today |
+  `"flat"`, the panel without it | `"bare"`, no panel at all), `accent`, and `titleFont` for the
+  `<h1>`. Unconfigured renders identically — same panel, same art, same classes.
+
+  **`accent` is PARSED, not passed through**, and that is the substance rather than a
+  restriction. A structural hook cannot tell one screen from another or a container from the
+  control inside it, and both cost a real bug in the version that shipped: a label injected for
+  "the header's action" read `New + Upload` on Media, and a rule meant for the panel landed on
+  the button too — white on mint, 1.58:1. Here the host names ONE colour and the editor derives
+  what the host got wrong: the label colour on it (whichever of podoba's ink and paper wins on
+  WCAG contrast) and the hover shade (a dark accent lightens, a light one darkens — a fixed
+  direction takes a mint button somewhere invisible). Which is why `var(--your-token)`, `oklch()`
+  and any colour with alpha are refused with a warning rather than honoured: a value whose
+  contrast cannot be computed is one where the derivation silently stops happening, and that is
+  the 1.58:1 back. An accent no label reads on is still applied, with the ratio named.
+
+  The accent lands as podoba's own custom properties (`--color-brand-primary`,
+  `--color-fg-inverted`, `--color-neutral-600`) **scoped to the header element**, so it reaches
+  whatever control the slot holds — today a `Button`, tomorrow a second one beside it — without
+  every future control remembering a prop, and nothing outside the header moves. Resolution
+  lives in the leaf `page-header-style.ts` beside `brand.ts` and `chrome.ts`, with their rule:
+  read at module load, every malformed value warned about and fallen back rather than thrown on,
+  because a throw there is a blank page. Closes #60.
+
 - **A SECOND editor chrome: the horizontal Graphic Standard bar (`@pramen/cms-editor`,
   `@pramen/cms-astro`).** `admin: { layout: "topbar" }` swaps the sidebar rail for podoba's
   `Topbar` used the way the Graphic Standard apps use it — brand left, tabs pushed right, the
