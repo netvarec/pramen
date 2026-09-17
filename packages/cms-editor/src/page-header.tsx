@@ -14,6 +14,11 @@
 // rank, and "Navigation" at 40px beside "Media" at 56px is a question a reader has to stop and
 // ask.
 //
+// DRESSABLE, within limits. A deployment may set `pageHeader` in the shell config to drop the
+// artwork, drop the panel, recolour the primary action or set the title's face — see
+// `page-header-style.ts`, which exists because the alternative a project reached for was a
+// stylesheet selecting on the markup below.
+//
 // STICKY, and condensing. The header is the only thing on screen that says which of a dozen
 // interchangeable list screens you are on, and scrolling a media library past the first row
 // used to take it away — leaving a wall of thumbnails with no title and no primary action.
@@ -21,9 +26,10 @@
 // viewport on every scroll. So it condenses — same panel, same artwork, same button, a third
 // of the height — which is the only version of "keep it" that a long list can afford.
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { BELOW_APP_BAR } from "./chrome";
 import { CoverArt } from "./cover";
+import { pageHeaderStyle } from "./page-header-style";
 
 /** TWO thresholds, not one — this is hysteresis, and without it the header flickers.
  *
@@ -80,6 +86,14 @@ function useCondensed(): boolean {
  */
 export function PageHeader({ lead, em, children }: { lead: string; em: string; children?: ReactNode }) {
   const condensed = useCondensed();
+  // A deployment's own dressing (`pageHeader` in the shell config — see `page-header-style.ts`).
+  // Read from module state rather than taken as a prop: it is one deployment-wide setting, and
+  // every one of the nine call sites would otherwise have to pass a value none of them decide.
+  const { variant, vars, titleFont } = pageHeaderStyle();
+  const panel =
+    variant === "bare"
+      ? "relative isolate" // no card, no rule — the title sits on the page, gs-style
+      : "relative isolate overflow-hidden rounded-panel border border-border bg-surface-card";
   return (
     // The GUTTER is what sticks, not the panel: pinning the panel alone would let rows scroll
     // through the 28px of page margin either side of it and out the rounded corners. `bg-surface`
@@ -93,14 +107,26 @@ export function PageHeader({ lead, em, children }: { lead: string; em: string; c
     //
     // `z-20` sits above the list and below the rail's mobile disclosure (which is in flow above
     // it) and every modal overlay (z-50).
-    <div className={`sticky ${BELOW_APP_BAR} z-20 mx-auto max-w-[1200px] bg-surface px-7 pb-4`}>
-      <div className="relative isolate overflow-hidden rounded-panel border border-border bg-surface-card">
-        <CoverArt seed={lead} />
-        <div className="absolute inset-0 bg-gradient-to-r from-surface-card via-surface-card/70 to-transparent" />
+    //
+    // `vars` is empty unless the deployment named an accent; when it did, it re-points the
+    // podoba tokens the primary action reads — SCOPED here, so nothing else in the app moves.
+    <div className={`sticky ${BELOW_APP_BAR} z-20 mx-auto max-w-[1200px] bg-surface px-7 pb-4`} style={vars as CSSProperties}>
+      <div className={panel}>
+        {/* The artwork and the mask that keeps type off it are one thing: `flat` and `bare`
+            drop both, and a mask over a panel with nothing under it is a gradient for its own
+            sake. */}
+        {variant === "cover" ? (
+          <>
+            <CoverArt seed={lead} />
+            <div className="absolute inset-0 bg-gradient-to-r from-surface-card via-surface-card/70 to-transparent" />
+          </>
+        ) : null}
         <div
-          className={`relative grid grid-cols-[1fr_auto] items-center gap-6 px-8 transition-[padding] duration-150 ease-out max-[820px]:grid-cols-1 ${
-            condensed ? "py-3.5" : "py-9"
-          }`}
+          className={`relative grid grid-cols-[1fr_auto] items-center gap-6 transition-[padding] duration-150 ease-out max-[820px]:grid-cols-1 ${
+            // Bare has no panel edge to sit inside, so the title lines up with the content
+            // column itself — the gutter is already on the wrapper above.
+            variant === "bare" ? "px-0" : "px-8"
+          } ${condensed ? "py-3.5" : "py-9"}`}
         >
           {/* Condensed, the two halves run on ONE line. Stacked they would keep the full
               header's height and defeat the point; and the title has to stay a single `<h1>`
@@ -116,6 +142,10 @@ export function PageHeader({ lead, em, children }: { lead: string; em: string; c
             className={`m-0 font-normal tracking-[-0.01em] ${
               condensed ? "flex items-baseline gap-2 text-[22px] leading-tight" : "text-[56px] leading-[1.05] max-[820px]:text-[40px]"
             }`}
+            // The one place a host's own face is applied, and only here: the screen's name is
+            // what a product wants in its own type; the counts, labels and controls around it
+            // are the editor's chrome and stay in the design system's.
+            style={titleFont ? { fontFamily: titleFont } : undefined}
           >
             <span className={condensed ? "text-fg-subtle" : "block text-fg-subtle"}>{lead}</span>
             <span className={condensed ? "text-fg" : "block text-fg"}>{em}</span>

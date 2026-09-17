@@ -61,6 +61,28 @@ export interface AdminRuntimeConfig {
    */
   layout?: "sidebar" | "topbar";
   /**
+   * How the SCREEN header is dressed — the sticky panel with the title and the primary
+   * action, on the editor's own screens.
+   *
+   * The declarative alternative to a stylesheet that selects on the editor's internal DOM.
+   * That was the only hook a deployment had, and it cannot tell one screen from another or a
+   * container from a control: a rule written for "the header's action" injected a label that
+   * read "New + Upload" on Media, and landed on both the panel and the button at once (white
+   * on mint, 1.58:1). Here the host names the presentation and the editor keeps owning the
+   * text, the action and the contrast.
+   *
+   * - `variant` — `"cover"` (default) is the seeded artwork; `"flat"` keeps the panel without
+   *   it; `"bare"` drops the panel too, leaving the title and action on the page.
+   * - `accent` — the colour the primary action wears. An OPAQUE hex or `rgb()` literal, not
+   *   `var()` or `oklch()`: the editor parses it to derive the label colour on it and the
+   *   hover shade, which is what makes the contrast bug above unreachable through this API.
+   * - `titleFont` — a `font-family` list for the `<h1>`, and only the `<h1>`. A declaration,
+   *   not a loader: your site is what fetches the face.
+   *
+   * Anything unusable is warned about in the console and falls back; it never throws.
+   */
+  pageHeader?: { variant?: "cover" | "flat" | "bare"; accent?: string; titleFont?: string };
+  /**
    * Serve an editor YOU built instead of the one this package ships.
    *
    * A directory URL — `"/admin"` for a `buildEditor({ outdir: "public/admin" })`, or an
