@@ -14,5 +14,8 @@
     "verbatimModuleSyntax": true,
     "noEmit": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  // The build-time half of `src/` — Bun and node APIs, not browser code — is typechecked by
+  // `tsconfig.build.json` instead, so this config's `types` stay the browser's.
+  "exclude": ["src/build-editor.ts"]
 }

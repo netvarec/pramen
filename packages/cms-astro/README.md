@@ -205,6 +205,36 @@ route, wired in one `pramenCms()` call. It doubles as this package's end-to-end 
 > clearing the stored session, so a path that lands back inside the editor is a loop with
 > nothing to recover from. `?setup=1` always forces the built-in screen.
 
+### `editorAssets` — serve an editor you built yourself
+
+The packaged editor is one self-contained bundle with podoba compiled into it at the version
+`@pramen/cms-editor` pins. That is what makes the mount work with no build config, and it is
+also why a site whose own design system is podoba would run two generations of it at once.
+
+`buildEditor` (see that package's README) rebuilds the editor against **your** podoba, your
+Tailwind entry and, if you need it, your own screen header. Point the mount at the result:
+
+```js
+pramenCms({
+  backend,
+  admin: { editorAssets: "/admin" },  // where your build's output is served from
+})
+```
+
+One directory, not six URLs: `editor.js`, `editor.css` and the four `panel-*.js` shims all
+come from it. They have to agree, because a shim re-exports the export names of the React that
+*its* bundle linked — a packaged shim left beside a host-built editor is a link error inside
+somebody's panel, and nothing about the config line says so.
+
+Two consequences worth knowing before you set it:
+
+- **Cache-busting is yours.** The packaged assets are imported with `?url`, so the site's own
+  bundler fingerprints them. A path this build never sees cannot be hashed, so emit under a
+  content-hashed directory or serve with a short max-age.
+- **A relative base is refused.** `"admin"` would resolve against whatever admin route the
+  editor was deep-linked to, so it would work at `/__admin` and 404 at `/__admin/pages/42`.
+  Root-relative (`"/admin"`) or absolute (`"https://…"`) only.
+
 ## The kit of parts
 
 - **`createCmsClient({ baseUrl })`** — `getPage(slug, locale?)`, `listPublishedPages()`, and

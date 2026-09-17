@@ -270,6 +270,71 @@ Routes are file-based: `src/routes/*` is scanned by the Bun plugin at build time
 (re)generates the checked-in `src/buzola.gen.ts`. After adding or renaming a route, run
 `bun run codegen` (the build does it automatically) so tsc sees the new route.
 
+## Build it against your own design system
+
+The published `dist/editor.js` and `dist/editor.css` are self-contained: podoba's components
+are compiled into the bundle and its tokens and web font into the stylesheet, at the versions
+this package pins. That is what makes the drop-in mount work with no build config — and it
+means a site whose own design system is podoba gets **our** generation of it, not its own.
+No runtime option reaches inside a compiled bundle to change that.
+
+So the same build is also an API:
+
+```ts
+// build-admin.ts — run with bun
+import { buildEditor } from "@pramen/cms-editor/build";
+
+await buildEditor({
+  outdir: "public/admin",
+  // Link podoba and React out of THIS project, so the editor moves when your design system does.
+  designSystem: import.meta.dir,
+  // The other half: CSS is compiled, not linked, so your tokens can only arrive through a
+  // stylesheet in your own tree. Tailwind resolves a bare `@import` from the file that wrote
+  // it, which is why compiling ours from here would still pick up our podoba.
+  styles: "src/admin/editor.css",
+  // And, if you need your design system's own header component rather than a recolour of ours:
+  slots: { pageHeader: "src/admin/page-header.tsx" },
+});
+```
+
+```css
+/* src/admin/editor.css */
+@import "@pramen/cms-editor/app.css";  /* the editor's base rules */
+@import "./tokens.css";                /* yours, after ours, so yours win */
+```
+
+Then point the mount at what you built, with the directory those six files are served from:
+
+```js
+// astro.config.mjs
+pramenCms({ admin: { editorAssets: "/admin" } })
+```
+
+All six move together — `editor.js`, `editor.css` and the four `panel-*.js` shims — because a
+shim re-exports the names of the React *that* bundle linked. Since this build never sees those
+paths it cannot fingerprint them either, so cache-busting is yours: emit under a content-hashed
+directory, or serve them with a short max-age.
+
+**`designSystem` and `styles` are one decision, not two.** Setting only the first links your
+podoba into the bundle while the stylesheet stays compiled against ours — the editor comes up
+and the colours are subtly not yours. The build warns when it sees that combination.
+
+**Slots are deliberately few.** Today there is one, `pageHeader`, because a slot is a standing
+promise that a component's props are stable and only a narrow, already-documented contract can
+carry that. Before reaching for one, check whether something cheaper already does the job:
+
+| You want | Use |
+|---|---|
+| the header recoloured, unpanelled, or in your own face | `admin: { pageHeader }` — runtime config, no build |
+| the wordmark, the tab title, the nav shape | `admin: { brand }`, `admin: { layout }` |
+| a whole screen of your own | `adminPage()` or `adminPanel()` — no build either |
+| your design system's own header **component** | `slots: { pageHeader }` |
+
+A slot that stops resolving is a **build error**, not a silent fallback: if a release moves the
+module a slot names, `buildEditor` throws rather than quietly handing you ours back. That is the
+difference between this and the alternative it replaces — a stylesheet or a bundler alias
+written against our internals, which the next release voids with no error anywhere.
+
 ## Status
 
 Verified end-to-end against a live example server (connect → create/open a page → add blocks

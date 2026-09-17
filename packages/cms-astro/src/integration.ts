@@ -149,6 +149,7 @@ export const adminBasePath = ${JSON.stringify(ADMIN_BASE)};
 export const adminConfigScript = ${JSON.stringify(serializeAdminConfig(cfg))};
 export const adminTitle = ${JSON.stringify(adminDocumentTitle(cfg))};
 export const adminHasPanels = ${JSON.stringify(adminHasPanels(cfg))};
+export const adminEditorAssets = ${JSON.stringify(cfg.editorAssets ?? null)};
 `;
 }
 
@@ -175,6 +176,8 @@ const ADMIN_TYPES = `declare module "pramen:cms/admin" {
   export const adminTitle: string;
   /** Whether this deployment declares panel bundles — gates the shell's import map. */
   export const adminHasPanels: boolean;
+  /** Base URL of a host-built editor's assets, or null for the packaged ones. */
+  export const adminEditorAssets: string | null;
 }
 `;
 

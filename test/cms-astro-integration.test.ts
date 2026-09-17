@@ -8,7 +8,7 @@
 // module emits — that is the contract a site consumes.
 
 import { describe, expect, test } from "bun:test";
-import { ADMIN_BASE, adminDocumentTitle, adminHasPanels, adminImportMap, adminRuntimeConfig, serializeAdminConfig } from "../packages/cms-astro/src/admin";
+import { ADMIN_BASE, adminAssetUrls, adminDocumentTitle, adminHasPanels, adminImportMap, adminRuntimeConfig, serializeAdminConfig } from "../packages/cms-astro/src/admin";
 import { PANEL_GLOBAL_SHIMS } from "../packages/cms-editor/src/panel-globals";
 import { pramenCms } from "../packages/cms-astro/src/integration";
 
@@ -268,5 +268,65 @@ describe("the editor's runtime config in an inline <script>", () => {
     expect(adminDocumentTitle({ backend, brand: { name: "Acme", suffix: null } })).toBe("Acme");
     // A brand that yields no usable name keeps the default; the bundle warns about it.
     expect(adminDocumentTitle({ backend, brand: { name: "   " } })).toBe("pramen · cms editor");
+  });
+});
+
+describe("admin.editorAssets — serving an editor the host built", () => {
+  /** What the shell imports with `?url` when the packaged editor is used. */
+  const packaged = {
+    editor: "/_astro/editor.abc.js",
+    css: "/_astro/editor.abc.css",
+    react: "/_astro/panel-react.abc.js",
+    reactDom: "/_astro/panel-react-dom.abc.js",
+    jsxRuntime: "/_astro/panel-jsx-runtime.abc.js",
+    jsxDevRuntime: "/_astro/panel-jsx-dev-runtime.abc.js",
+  };
+
+  test("unset, the packaged assets are used untouched", () => {
+    expect(adminAssetUrls(undefined, packaged)).toEqual(packaged);
+  });
+
+  test("set, ALL SIX come from that directory", () => {
+    // All six or none. A deployment that built its own editor built its own shims too, and
+    // they re-export the names of the React that bundle linked — one packaged shim left
+    // behind beside a host-built editor is a link error inside someone's panel, which is the
+    // hardest kind of break to trace back to a config line.
+    const urls = adminAssetUrls("/admin", packaged);
+    expect(urls).toEqual({
+      editor: "/admin/editor.js",
+      css: "/admin/editor.css",
+      react: "/admin/panel-react.js",
+      reactDom: "/admin/panel-react-dom.js",
+      jsxRuntime: "/admin/panel-jsx-runtime.js",
+      jsxDevRuntime: "/admin/panel-jsx-dev-runtime.js",
+    });
+    // And the import map names the host's shims, not ours — the map is the whole mechanism,
+    // so a base that reached the assets but not the map would be silently half-applied.
+    expect(adminImportMap(urls)).not.toContain("_astro");
+  });
+
+  test("every shim the editor generates has a URL here", () => {
+    // The mirror: `PANEL_GLOBAL_SHIMS` is what the build writes, and this is what the shell
+    // serves. A fifth shim added there must appear here, or a host build would serve five
+    // files and the map would name four.
+    const urls = adminAssetUrls("/admin", packaged);
+    for (const shim of PANEL_GLOBAL_SHIMS) {
+      expect(Object.values(urls)).toContain(`/admin/${shim.file}`);
+    }
+  });
+
+  test("a trailing slash does not double up", () => {
+    expect(adminAssetUrls("/admin/", packaged).editor).toBe("/admin/editor.js");
+  });
+
+  test("an absolute origin is kept", () => {
+    expect(adminAssetUrls("https://cdn.example.com/a", packaged).editor).toBe("https://cdn.example.com/a/editor.js");
+  });
+
+  test("a relative base is refused, with the shape it needs", () => {
+    // `"admin"` resolves against the CURRENT admin route, so it would 404 on
+    // /__admin/pages/42 and work at /__admin — a bug that reproduces on some routes only.
+    expect(() => adminAssetUrls("admin", packaged)).toThrow(/root-relative/);
+    expect(() => adminAssetUrls("./admin", packaged)).toThrow(/root-relative/);
   });
 });

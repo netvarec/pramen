@@ -7,7 +7,10 @@
  *
  *  - The two assets are imported with `?url`, so the SITE's bundler emits, fingerprints and
  *    serves them. There is no root-absolute path to break under a prefix and nothing for a
- *    host to copy into the right directory.
+ *    host to copy into the right directory. A deployment that built its own editor
+ *    (`admin: { editorAssets }`) points at that directory instead, and owns its cache-busting;
+ *    the imports below stay regardless, because a conditional `?url` import is not something
+ *    Vite can resolve statically — and all six URLs move together either way.
  *  - The mount node carries the prefix this route was injected at. Same constant, so the
  *    router can never be mounted somewhere the server does not serve.
  *  - The runtime config is an inline script written from typed integration options, ahead
@@ -26,8 +29,19 @@ import panelReact from "@pramen/cms-editor/panel-react.js?url";
 import panelReactDom from "@pramen/cms-editor/panel-react-dom.js?url";
 import panelJsxRuntime from "@pramen/cms-editor/panel-jsx-runtime.js?url";
 import panelJsxDevRuntime from "@pramen/cms-editor/panel-jsx-dev-runtime.js?url";
-import { adminBasePath, adminConfigScript, adminHasPanels, adminTitle } from "pramen:cms/admin";
-import { adminImportMap } from "@pramen/cms-astro";
+import { adminBasePath, adminConfigScript, adminEditorAssets, adminHasPanels, adminTitle } from "pramen:cms/admin";
+import { adminAssetUrls, adminImportMap } from "@pramen/cms-astro";
+
+// The packaged assets, or the host's own build. Resolved once, so the stylesheet, the module
+// script and the import map cannot end up naming different builds.
+const assets = adminAssetUrls(adminEditorAssets ?? undefined, {
+  editor: editorSrc,
+  css: editorCss,
+  react: panelReact,
+  reactDom: panelReactDom,
+  jsxRuntime: panelJsxRuntime,
+  jsxDevRuntime: panelJsxDevRuntime,
+});
 
 // The editor is a client-side app against a live API — there is nothing to prerender, and
 // prerendering would bake one deployment's config into a static file.
@@ -49,18 +63,18 @@ Astro.response.headers.set("cache-control", "private, no-store");
         boot, so this deliberately does not try to reproduce that string here — one place
         builds it, and it is the one that owns the brand rules. */}
     <title>{adminTitle}</title>
-    <link rel="stylesheet" href={editorCss} />
+    <link rel="stylesheet" href={assets.css} />
     {/* Ahead of every module script, because that is the only place an import map may go —
         it cannot be added once module loading has begun, so this is the shell's job and not
         the bundle's. Only when panels are configured: with none, nothing on this page
         imports a bare specifier and there is no reason to rewrite what `react` means. */}
     {adminHasPanels && (
-      <script type="importmap" is:inline set:html={adminImportMap({ react: panelReact, reactDom: panelReactDom, jsxRuntime: panelJsxRuntime, jsxDevRuntime: panelJsxDevRuntime })} />
+      <script type="importmap" is:inline set:html={adminImportMap(assets)} />
     )}
     <script is:inline set:html={adminConfigScript} />
   </head>
   <body>
     <div id="app" data-base-path={adminBasePath}></div>
-    <script is:inline type="module" src={editorSrc}></script>
+    <script is:inline type="module" src={assets.editor}></script>
   </body>
 </html>
