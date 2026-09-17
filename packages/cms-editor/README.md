@@ -95,6 +95,7 @@ admin: {
   // signInUrl: "/signin/",                          // ONLY once that page exists — see the warning
   // hidePages: true,                                // collections-only deployments
   // layout: "topbar",                               // horizontal nav instead of the sidebar — see below
+  // pageHeader: { variant: "flat", accent: "#73e2b2" },  // dress the screen header — see below
   // extraNav: [{ label: "Curation", href: "/curate", target: "_self" }],
   // panels: ["/admin/curation.js"],                 // your own React screens — see below
 }
@@ -121,6 +122,46 @@ chrome's height and the air under it — as CSS custom properties, because every
 in the editor (`page-header.tsx`, the page editor's toolbar and inspector) is positioned
 against them. `chrome-sidebar.tsx` and `chrome-topbar.tsx` are the two components;
 `routes/_layout.tsx` derives the nav and hands either one the same `ChromeProps`.
+
+### `pageHeader` — dressing the screen header
+
+The sticky panel with the `<h1>` and the primary action, on the editor's own screens. Three
+tokens, no DOM:
+
+```js
+pageHeader: {
+  variant: "flat",          // "cover" (default) | "flat" | "bare"
+  accent: "#73e2b2",        // the colour the primary action wears
+  titleFont: "Inter, system-ui, sans-serif",   // the <h1>, and only the <h1>
+}
+```
+
+- **`variant`** — `"cover"` is the seeded Truchet artwork every screen gets by default;
+  `"flat"` keeps the panel and drops the art; `"bare"` drops the panel too, so the title and
+  action sit on the page the way a Graphic Standard section header does. The header still
+  sticks and still condenses on scroll in all three.
+- **`accent`** — re-points `--color-brand-primary` **inside the header only**, so the primary
+  action wears it and nothing else in the app moves. It must be an **opaque hex or `rgb()`
+  literal** — not `var()`, `oklch()` or a colour with alpha — because the editor parses it to
+  derive two things the host therefore cannot get wrong: the label colour on it (the better of
+  podoba's ink and paper by WCAG contrast) and the hover shade (a dark accent lightens, a
+  light one darkens). An accent no label reads on is still applied, with a console warning
+  naming the ratio.
+- **`titleFont`** — a `font-family` list for the `<h1>`. The counts, labels and controls around
+  it are the editor's chrome and stay in the design system's type. The editor loads no fonts of
+  its own beyond podoba's, so the family has to be one the browser already has — your shell
+  loads it.
+
+Anything unusable is warned about and falls back to the shipped default; nothing here throws.
+`page-header-style.ts` owns the resolution and the colour maths, `page-header.tsx` renders it.
+
+**This replaces reaching into the editor's DOM from a stylesheet.** A selector like
+`div.sticky[class*="max-w-[1200px]"] > div.relative.isolate … > div.relative.grid > :not(h1)`
+pins itself to private structure that a release can change with no error anywhere — and it
+cannot tell Media from a content type, or the panel from the button inside it, which is how a
+rule meant for "the header's action" turns `+ Upload` into "New + Upload" and puts white text
+on a mint fill at 1.58:1. If these tokens do not cover your case, open an issue rather than a
+selector.
 
 ## Panels — your own React screen inside the chrome
 
