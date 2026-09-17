@@ -3,8 +3,13 @@
 //   dist/editor.js    the whole app (Bun bundles it; no chunks, no bare imports)
 //   dist/editor.css   the whole design system (Tailwind + podoba tokens + the web font,
 //                     inlined as a data: URI so the stylesheet references nothing else)
-//   dist/panel-*.js   three shims that hand a PANEL bundle the editor's own React — see
-//                     `panelGlobals()` below and `src/panel-runtime.ts`
+//   dist/panel-*.js   four shims that hand a PANEL bundle the editor's own React — see
+//                     `src/panel-globals.ts` and `src/panel-runtime.ts`
+//
+// The build itself is `buildEditor` in `src/build-editor.ts`; this script is the in-repo caller
+// that produces the published `dist/`. It lives there rather than here because a HOST needs to
+// run the same build against its own podoba and its own stylesheet — a sealed bundle is what
+// drove one deployment to rebuild us out of `src/` with 70 string replacements.
 //
 // Deliberately NOT an index.html. The editor is served by a SHELL its host renders — an
 // injected Astro route in @pramen/cms-astro, the dev preview below — and the shell is what
@@ -17,14 +22,12 @@
 // --watch rebuilds on change and serves a preview shell on http://localhost:5175.
 
 import { buzolaPlugin } from "@buzola/bun-plugin";
-import { rm, mkdir, writeFile, readFile } from "node:fs/promises";
+import { rm } from "node:fs/promises";
 import { extname } from "node:path";
-import { exportableNames, panelShimSource, PANEL_GLOBAL_SHIMS } from "../src/panel-globals";
-import { PANEL_RUNTIME_GLOBAL } from "../src/panel-runtime";
+import { buildEditor } from "../src/build-editor";
 
 const root = new URL("..", import.meta.url).pathname;
 const dist = `${root}dist`;
-const entry = `${root}src/main.tsx`;
 const watch = process.argv.includes("--watch");
 
 /** Which chrome the PREVIEW shell asks for — `--layout=topbar` to see the Graphic Standard
@@ -32,86 +35,29 @@ const watch = process.argv.includes("--watch");
  * the preview's inline config below, which is the same global a real shell writes. */
 const previewLayout = process.argv.find((a) => a.startsWith("--layout="))?.slice("--layout=".length) ?? "";
 
-/** The web font, as CSS with the binary inlined.
+/** Build the published `dist/`.
  *
- * @podoba/tokens ships `fonts.css` next to `./fonts/*.woff2` and relies on the consumer's
- * bundler resolving that relative url. We have no consumer bundler here — `editor.css` is
- * emitted as an opaque asset and re-hosted (fingerprinted, moved into `_astro/`) by whoever
- * serves it, which would break any relative reference. Inlining costs ~68KB of base64 and
- * makes the stylesheet a single file that works wherever it lands. */
-async function fontCss(): Promise<string> {
-  const dir = `${root}node_modules/@podoba/tokens/src`;
-  const css = await readFile(`${dir}/fonts.css`, "utf8");
-  const refs = [...css.matchAll(/url\(['"]?\.\/(fonts\/[^'")]+)['"]?\)/g)];
-  let out = css;
-  for (const [match, rel] of refs) {
-    const bytes = await readFile(`${dir}/${rel}`);
-    out = out.replace(match, `url('data:font/woff2;base64,${bytes.toString("base64")}')`);
-  }
-  return out;
-}
-
-// Design system = podoba (Tailwind v4). app.css @imports tailwindcss + the podoba token
-// vars + @theme, so the compiled output is self-contained.
-//
-// The font block goes AFTER it, not before. Both files declare `--font-sans` on `:root`, so
-// the later one wins — and fonts.css's whole job is to point that token at the real
-// typeface. The old index.html linked them the other way round, which meant the bundled
-// NC Fontina was loaded and then never used.
-async function styles(): Promise<void> {
-  const out = `${dist}/editor.css`;
-  const args = ["@tailwindcss/cli", "-i", `${root}src/app.css`, "-o", out];
-  if (!watch) args.push("--minify");
-  const proc = Bun.spawn(["bunx", ...args], { cwd: root, stdout: "inherit", stderr: "inherit" });
-  if ((await proc.exited) !== 0) throw new Error("tailwind build failed");
-  await writeFile(out, `${await Bun.file(out).text()}\n${await fontCss()}`);
-}
-
-// --- panel globals -----------------------------------------------------------------------
-//
-// Three tiny modules the shell's import map points `react`, `react-dom` and
-// `react/jsx-runtime` at, so a PANEL bundle (a project's own React screen, built separately
-// with those three marked external) links against the React the editor already loaded rather
-// than shipping a second copy. The generator lives in `src/panel-globals.ts` — typechecked,
-// and exercised end to end by `test/cms-editor-panel-globals.test.ts`; this only supplies the
-// namespaces to read the export lists off, which is the half that has to happen HERE, at the
-// moment the editor's own React is resolved.
-
-async function panelGlobals(): Promise<void> {
-  for (const shim of PANEL_GLOBAL_SHIMS) {
-    const names = exportableNames(await import(shim.specifier));
-    if (names.length === 0) throw new Error(`panel globals: ${shim.specifier} exported nothing to re-export`);
-    await writeFile(`${dist}/${shim.file}`, panelShimSource(shim, names, PANEL_RUNTIME_GLOBAL));
-  }
-  console.log(`built ${PANEL_GLOBAL_SHIMS.map((s) => `dist/${s.file}`).join(" + ")}`);
-}
-
+ * The work itself lives in `src/build-editor.ts`, which is the same build exposed as an API so
+ * a HOST can run it against its own podoba, its own Tailwind entry and its own screen header
+ * (see `buildEditor`). Called with no options beyond the output directory, it is this: the
+ * self-contained bundle, its stylesheet with podoba's font inlined, and the four panel shims.
+ *
+ * `buzolaPlugin` is handed over rather than assumed, because it is the one part a host cannot
+ * run: it regenerates `src/buzola.gen.ts` by scanning `src/routes`, and it is a devDependency.
+ * For anyone building from the published package the generated table is already correct and
+ * `buildEditor` resolves the virtual module to it.
+ */
 async function build(): Promise<void> {
-  await styles();
-  await panelGlobals();
-  const out = await Bun.build({
-    entrypoints: [entry],
+  await buildEditor({
     outdir: dist,
-    target: "browser",
     minify: !watch,
-    sourcemap: watch ? "linked" : "none",
-    // A STABLE name, not a content hash. The host's bundler emits this file as an asset and
-    // fingerprints it there; hashing here as well would mean the filename changed on every
-    // build and no import specifier could name it.
-    naming: { entry: "editor.[ext]" },
-    // Scans src/routes, (re)generates src/buzola.gen.ts, and resolves the
-    // `virtual:buzola/routes` import in main.tsx.
+    sourcemap: watch,
     plugins: [buzolaPlugin({ root })],
   });
-  if (!out.success) {
-    for (const log of out.logs) console.error(log);
-    throw new Error("build failed");
-  }
-  console.log("built dist/editor.js + dist/editor.css");
+  console.log("built dist/editor.js + dist/editor.css + the panel shims");
 }
 
 await rm(dist, { recursive: true, force: true });
-await mkdir(dist, { recursive: true });
 await build();
 
 if (watch) {

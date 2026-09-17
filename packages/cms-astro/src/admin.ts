@@ -60,6 +60,27 @@ export interface AdminRuntimeConfig {
    * scrolling sideways, so a big admin stays usable in it; it is still the smaller shape.
    */
   layout?: "sidebar" | "topbar";
+  /**
+   * Serve an editor YOU built instead of the one this package ships.
+   *
+   * A directory URL — `"/admin"` for a `buildEditor({ outdir: "public/admin" })`, or an
+   * absolute `https://…` — under which all six of its outputs are served: `editor.js`,
+   * `editor.css` and the four `panel-*.js` shims. ONE option rather than six URLs because
+   * `buildEditor` writes them to one directory and they have to agree: a shim re-exports the
+   * names of the React that *that* bundle linked, so a shim from one build sitting beside an
+   * editor from another is a browser link error in somebody else's panel.
+   *
+   * Unset, the packaged assets are used, imported with `?url` so the SITE's bundler emits and
+   * fingerprints them. Set, they are referenced exactly as given — a path this build never
+   * sees is a path it cannot hash, so **cache-busting becomes yours**: emit under a
+   * content-hashed directory, or serve them with a short max-age.
+   *
+   * The reason to set it is a design system. The packaged bundle has podoba compiled in at the
+   * version @pramen/cms-editor pins, so a site whose own design system is podoba would
+   * otherwise run two generations of it — `buildEditor({ designSystem })` links yours instead.
+   * See "Build it against your own design system" in that package's README.
+   */
+  editorAssets?: string;
   /** Extra top-nav links to companion tools the host serves.
    *
    * `target` defaults to `"_blank"`, because a companion tool is normally a separate
@@ -158,6 +179,45 @@ export function adminRuntimeConfig(admin: AdminOptions, backend: { url: string; 
  */
 export function adminHasPanels(cfg: AdminRuntimeConfig): boolean {
   return (cfg.panels?.length ?? 0) > 0;
+}
+
+/** The six files the shell references: the bundle, its stylesheet, and the four panel shims. */
+export interface AdminAssetUrls {
+  editor: string;
+  css: string;
+  react: string;
+  reactDom: string;
+  jsxRuntime: string;
+  jsxDevRuntime: string;
+}
+
+/**
+ * Which editor the shell points at: the packaged one, or the host's own build.
+ *
+ * All six move together or none do — see `editorAssets`. Taking them as a set rather than
+ * letting a deployment override one is what makes "the shims match the bundle that generated
+ * them" a property of the type instead of a sentence in a doc comment.
+ *
+ * Validated here rather than at the call site because the failure is remote from the cause: a
+ * base like `"admin"` yields `admin/editor.js`, which resolves against whatever path the
+ * editor was deep-linked to (`/__admin/pages/42/admin/editor.js`) and 404s on some routes and
+ * not others. Anything that is not root-relative or absolute is refused with the shape it
+ * needs, at build time.
+ */
+export function adminAssetUrls(base: string | undefined, packaged: AdminAssetUrls): AdminAssetUrls {
+  if (base === undefined) return packaged;
+  if (!/^(?:\/|https?:\/\/)/.test(base)) {
+    throw new Error(`@pramen/cms-astro: admin.editorAssets must be root-relative ("/admin") or absolute ("https://…") — got ${JSON.stringify(base)}, which the browser would resolve against the current admin route.`);
+  }
+  const at = base.replace(/\/+$/, "");
+  return {
+    editor: `${at}/editor.js`,
+    css: `${at}/editor.css`,
+    react: `${at}/panel-react.js`,
+    reactDom: `${at}/panel-react-dom.js`,
+    jsxRuntime: `${at}/panel-jsx-runtime.js`,
+    jsxDevRuntime: `${at}/panel-jsx-dev-runtime.js`,
+  };
 }
 
 /**

@@ -16,6 +16,44 @@ there are no backward-compatibility guarantees yet.
 
 ### Added
 
+- **The editor's build, as an API (`@pramen/cms-editor`, `@pramen/cms-astro`).**
+  `buildEditor()` from `@pramen/cms-editor/build` is the same build that produces the published
+  `dist/`, parameterized — `designSystem` links podoba and React out of your project instead of
+  ours, `styles` compiles the stylesheet from your own Tailwind entry, and `slots` puts your
+  component in place of one of ours (today: `pageHeader`). `admin: { editorAssets: "/admin" }`
+  then points the mount at what you built. Called with only `outdir` it reproduces the published
+  bundle byte for byte, and `scripts/build.ts` is now a caller of it.
+
+  This exists because the published bundle is **sealed**: `editor.css` is Tailwind already
+  compiled against the podoba tokens this package pins, with the web font inlined as a data:
+  URI, and `editor.js` has podoba's components compiled in. Self-contained is what makes the
+  drop-in mount work with no build config — and it means a site whose own design system is
+  podoba gets our generation of it, with no configuration that can reach inside a compiled
+  bundle to change it. A deployment hit exactly that and rebuilt the editor out of the `src/`
+  we ship, getting the rest of the way with ~70 string replacements against our source
+  (several by `indexOf` + `slice`), every one of them a silent break waiting for the next
+  release.
+
+  Three things are deliberately *not* here. **CSS is a separate option** rather than falling
+  out of `designSystem`, because Tailwind resolves a bare `@import` from the directory of the
+  file that wrote it: our `app.css` resolves podoba out of our `node_modules` wherever it is
+  compiled from, so a host's tokens can only arrive through a stylesheet in the host's own
+  tree. Setting one without the other links your podoba against our compiled tokens — it comes
+  up, the colours are subtly not yours — so the build **warns**. **Slots are few**: one, because
+  a slot is a standing promise that a component's props are stable, and `pageHeader` takes the
+  same `{ lead, em, children }` it has taken since it was one component. The landing route was
+  tried and rejected — `routes/home.tsx` is a buzola `createPage()` carrying the redirect rules
+  for collections-only and split-by-type deployments, so slotting it would put `@buzola/router`
+  in every host's build and hand over redirects the one deployment that tried simply dropped,
+  leaving `/` landing nowhere on a collections-only site. **A slot that stops resolving is a
+  build error**, not a silent fallback to ours.
+
+  `admin.editorAssets` takes one directory rather than six URLs because the four `panel-*.js`
+  shims re-export the export names of the React *their* bundle linked: a packaged shim beside a
+  host-built editor is a browser link error in someone else's panel. A relative base is refused
+  outright — `"admin"` resolves against the current admin route, so it would work at `/__admin`
+  and 404 at `/__admin/pages/42`.
+
 - **A SECOND editor chrome: the horizontal Graphic Standard bar (`@pramen/cms-editor`,
   `@pramen/cms-astro`).** `admin: { layout: "topbar" }` swaps the sidebar rail for podoba's
   `Topbar` used the way the Graphic Standard apps use it — brand left, tabs pushed right, the

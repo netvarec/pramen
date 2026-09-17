@@ -14,6 +14,8 @@
   "exports": {
     "./editor.js": "./dist/editor.js",
     "./editor.css": "./dist/editor.css",
+    "./app.css": "./src/app.css",
+    "./build": "./src/build-editor.ts",
     "./panel-react.js": "./dist/panel-react.js",
     "./panel-react-dom.js": "./dist/panel-react-dom.js",
     "./panel-jsx-runtime.js": "./dist/panel-jsx-runtime.js",
