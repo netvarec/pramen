@@ -313,6 +313,13 @@ export async function buildEditor(opts: BuildEditorOptions): Promise<void> {
     // fingerprints it there; hashing here as well would mean the filename changed on every
     // build and no import specifier could name it.
     naming: { entry: "editor.[ext]" },
+    // React reads `process.env.NODE_ENV` to decide which of its two builds it is. Unset, the
+    // bundler leaves the expression in, nothing is eliminated, and the DEVELOPMENT build ships:
+    // ~268KB (19%) of extra bytes, the dev-only warning machinery, and the slower paths it
+    // exists to make debuggable. Tied to `minify`, because that is already the flag that means
+    // "this is the build someone will be served" — the watch loop wants the dev build and its
+    // warnings, and gets them.
+    define: { "process.env.NODE_ENV": JSON.stringify(opts.minify === false ? "development" : "production") },
     plugins: [
       ...(opts.plugins ?? []),
       ...(Object.keys(slots).length > 0 ? [slotsPlugin(slots, matched)] : []),
