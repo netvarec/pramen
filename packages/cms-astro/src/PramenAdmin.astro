@@ -20,28 +20,52 @@
  * a refresh is served like any other page, with no SPA-fallback rewrite for the host to
  * configure (and to get wrong for its own 404s).
  */
-import editorSrc from "@pramen/cms-editor/editor.js?url";
-import editorCss from "@pramen/cms-editor/editor.css?url";
-// The four shims a PANEL bundle's bare `react` / `react-dom` / JSX-runtime imports resolve
-// to. Assets like the editor's own, for the same reason and by the same mechanism — so the
-// site's bundler emits and fingerprints them and the import map below can name them.
-import panelReact from "@pramen/cms-editor/panel-react.js?url";
-import panelReactDom from "@pramen/cms-editor/panel-react-dom.js?url";
-import panelJsxRuntime from "@pramen/cms-editor/panel-jsx-runtime.js?url";
-import panelJsxDevRuntime from "@pramen/cms-editor/panel-jsx-dev-runtime.js?url";
 import { adminBasePath, adminConfigScript, adminEditorAssets, adminHasPanels, adminTitle } from "pramen:cms/admin";
-import { adminAssetUrls, adminImportMap } from "@pramen/cms-astro";
+import { adminAssetUrls, adminImportMap, type AdminAssetUrls } from "@pramen/cms-astro";
 
 // The packaged assets, or the host's own build. Resolved once, so the stylesheet, the module
 // script and the import map cannot end up naming different builds.
-const assets = adminAssetUrls(adminEditorAssets ?? undefined, {
-  editor: editorSrc,
-  css: editorCss,
-  react: panelReact,
-  reactDom: panelReactDom,
-  jsxRuntime: panelJsxRuntime,
-  jsxDevRuntime: panelJsxDevRuntime,
-});
+//
+// The six `?url` imports are DYNAMIC and behind the condition, which is not a style choice.
+// As static imports they ran for every deployment, including one that had set `editorAssets`
+// and therefore names none of them — and an unused `?url` import of a CSS file is not free:
+//
+//  - in dev, Vite treats it as a CSS module and INJECTS it as a `<style>` tag, so the admin
+//    loaded the packaged stylesheet on top of the host's. For a host that built the editor
+//    against its own design system that is precisely the two-generations-of-podoba problem
+//    `editorAssets` exists to end, reappearing through an import nothing references;
+//  - in a build, both assets are still emitted into the client bundle (~1.3MB) as orphans
+//    nothing ever loads.
+//
+// `await import()` in Astro frontmatter runs on the server at render time, so the packaged
+// URLs are resolved only when they are the ones being served. `Promise.all` because the
+// six resolve independently and the page cannot render until all of them are in.
+const packaged: AdminAssetUrls | undefined = adminEditorAssets
+  ? undefined
+  : await (async () => {
+      const [editor, css, react, reactDom, jsxRuntime, jsxDevRuntime] = await Promise.all([
+        import("@pramen/cms-editor/editor.js?url"),
+        import("@pramen/cms-editor/editor.css?url"),
+        // The four shims a PANEL bundle's bare `react` / `react-dom` / JSX-runtime imports
+        // resolve to. Assets like the editor's own, for the same reason and by the same
+        // mechanism — so the site's bundler emits and fingerprints them and the import map
+        // below can name them.
+        import("@pramen/cms-editor/panel-react.js?url"),
+        import("@pramen/cms-editor/panel-react-dom.js?url"),
+        import("@pramen/cms-editor/panel-jsx-runtime.js?url"),
+        import("@pramen/cms-editor/panel-jsx-dev-runtime.js?url"),
+      ]);
+      return {
+        editor: editor.default,
+        css: css.default,
+        react: react.default,
+        reactDom: reactDom.default,
+        jsxRuntime: jsxRuntime.default,
+        jsxDevRuntime: jsxDevRuntime.default,
+      };
+    })();
+
+const assets = adminAssetUrls(adminEditorAssets ?? undefined, packaged);
 
 // The editor is a client-side app against a live API — there is nothing to prerender, and
 // prerendering would bake one deployment's config into a static file.
