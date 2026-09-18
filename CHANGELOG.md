@@ -28,8 +28,25 @@ there are no backward-compatibility guarantees yet.
   (~1.3MB) as orphans nothing loads.
 
   The six imports are now dynamic and behind the condition, so the packaged URLs are resolved
-  only when they are the ones being served. Found by converting a real site to
-  `buildEditor()`; the shell's import shape is now pinned by a test.
+  only when they are the ones being served, and `adminAssetUrls` throws on "neither" rather
+  than returning six empty strings. Found by converting a real site to `buildEditor()`; the
+  shell's import shape is pinned by a test.
+
+  **This does NOT stop the dev-mode injection, and the entry above overstated it.** Measured
+  after the fact on 0.0.74: a dynamic `import()` with a literal specifier is still an edge in
+  Vite's module graph, so Astro's dev pipeline still collects the stylesheet and injects it.
+  What the change buys is that the packaged URLs are no longer *resolved* for a host that
+  names none of them, plus the throw.
+
+  The injected sheet turns out to be inert rather than harmful, which is why this is not
+  urgent: a host's tokens are declared in a plain `:root`, while the packaged stylesheet's
+  come through `@theme` into `@layer theme`, and unlayered declarations beat layered ones in
+  the cascade whatever the source order. Verified by comparing all 128 of one host's tokens
+  against their computed values in the browser — every one of them wins. The remaining cost
+  is weight: a wasted stylesheet download in dev and ~1.3MB of orphan assets in the build.
+
+  The real fix is for the integration to inject a DIFFERENT shell entrypoint when
+  `editorAssets` is set, so the packaged assets never enter the graph at all. Not done here.
 
 - **`admin: { pageHeader }` — a deployment dresses the screen header without touching the DOM
   (`@pramen/cms-editor`, `@pramen/cms-astro`).** The sticky panel carrying the `<h1>` and the
