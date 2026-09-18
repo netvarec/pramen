@@ -226,8 +226,15 @@ export interface AdminAssetUrls {
  * not others. Anything that is not root-relative or absolute is refused with the shape it
  * needs, at build time.
  */
-export function adminAssetUrls(base: string | undefined, packaged: AdminAssetUrls): AdminAssetUrls {
-  if (base === undefined) return packaged;
+export function adminAssetUrls(base: string | undefined, packaged?: AdminAssetUrls): AdminAssetUrls {
+  if (base === undefined) {
+    // The shell resolves the packaged URLs only when they are the ones being served (see
+    // `PramenAdmin.astro`), so "neither" is not a deployment state — it is this function
+    // being called wrong, and silently returning six empty strings would ship a shell whose
+    // module script has no src.
+    if (!packaged) throw new Error("@pramen/cms-astro: adminAssetUrls needs either an editorAssets base or the packaged URLs");
+    return packaged;
+  }
   if (!/^(?:\/|https?:\/\/)/.test(base)) {
     throw new Error(`@pramen/cms-astro: admin.editorAssets must be root-relative ("/admin") or absolute ("https://…") — got ${JSON.stringify(base)}, which the browser would resolve against the current admin route.`);
   }

@@ -8,6 +8,7 @@
 // module emits — that is the contract a site consumes.
 
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { ADMIN_BASE, adminAssetUrls, adminDocumentTitle, adminHasPanels, adminImportMap, adminRuntimeConfig, serializeAdminConfig } from "../packages/cms-astro/src/admin";
 import { PANEL_GLOBAL_SHIMS } from "../packages/cms-editor/src/panel-globals";
 import { pramenCms } from "../packages/cms-astro/src/integration";
@@ -328,5 +329,35 @@ describe("admin.editorAssets — serving an editor the host built", () => {
     // /__admin/pages/42 and work at /__admin — a bug that reproduces on some routes only.
     expect(() => adminAssetUrls("admin", packaged)).toThrow(/root-relative/);
     expect(() => adminAssetUrls("./admin", packaged)).toThrow(/root-relative/);
+  });
+});
+
+describe("the shell does not resolve assets it will not serve", () => {
+  /** The shell's frontmatter, read as text — the contract here is about IMPORT SHAPE. */
+  const shell = readFileSync(new URL("../packages/cms-astro/src/PramenAdmin.astro", import.meta.url), "utf8");
+
+  test("the packaged `?url` imports are behind the condition, not static", () => {
+    // Static, they ran for every deployment — including one that set `editorAssets` and
+    // names none of them. An unused `?url` import of a CSS file is not free: in dev Vite
+    // treats it as a CSS module and injects it as a `<style>`, so a host that built the
+    // editor against its own design system got the packaged stylesheet on top of its own,
+    // which is the two-generations-of-podoba problem `editorAssets` exists to end. In a
+    // build both assets are emitted as orphans (~1.3MB) nothing loads.
+    for (const asset of ["editor.js", "editor.css", ...PANEL_GLOBAL_SHIMS.map((s) => s.file)]) {
+      const spec = `@pramen/cms-editor/${asset}?url`;
+      expect(shell, `${asset} must be imported dynamically`).not.toContain(`from "${spec}"`);
+      expect(shell, `${asset} must still be reachable when the packaged editor is served`).toContain(`import("${spec}")`);
+    }
+  });
+
+  test("every packaged asset the shell resolves is one adminAssetUrls names", () => {
+    // The mirror: six URLs go in, six come out. A seventh asset added to the shell without
+    // a slot in `AdminAssetUrls` would be resolved and then silently dropped.
+    const imported = [...shell.matchAll(/import\("@pramen\/cms-editor\/([^"?]+)\?url"\)/g)].map((m) => m[1]);
+    expect(new Set(imported).size).toBe(Object.keys(adminAssetUrls("/admin", undefined as never)).length);
+  });
+
+  test("called with neither a base nor the packaged URLs, it throws rather than emit empty src", () => {
+    expect(() => adminAssetUrls(undefined, undefined)).toThrow(/editorAssets base or the packaged URLs/);
   });
 });

@@ -16,6 +16,21 @@ there are no backward-compatibility guarantees yet.
 
 ### Added
 
+- **Fixed: `editorAssets` no longer leaves the packaged assets loaded anyway
+  (`@pramen/cms-astro`).** The shell imported `editor.js`, `editor.css` and the four
+  `panel-*.js` with static `?url` imports, which ran for every deployment — including one
+  that had set `editorAssets` and therefore names none of them. An unused `?url` import of a
+  CSS file is not free: in dev Vite treats it as a CSS module and **injects it as a `<style>`
+  tag**, so a host that built the editor against its own design system got the packaged
+  stylesheet, with the podoba generation this package pins, on top of its own. That is
+  exactly the two-generations problem `editorAssets` exists to end, reappearing through an
+  import nothing references. In a build both assets were still emitted into the client bundle
+  (~1.3MB) as orphans nothing loads.
+
+  The six imports are now dynamic and behind the condition, so the packaged URLs are resolved
+  only when they are the ones being served. Found by converting a real site to
+  `buildEditor()`; the shell's import shape is now pinned by a test.
+
 - **`admin: { pageHeader }` — a deployment dresses the screen header without touching the DOM
   (`@pramen/cms-editor`, `@pramen/cms-astro`).** The sticky panel carrying the `<h1>` and the
   primary action was the one surface a host could not influence: `brand` and `layout` dress the
