@@ -25,6 +25,9 @@
 
 import type { AstroIntegration } from "astro";
 import { fileURLToPath } from "node:url";
+import { createReadStream } from "node:fs";
+import { createRequire } from "node:module";
+import { adminAssetUrls } from "./admin.js";
 import { ADMIN_BASE, ADMIN_ROUTE, adminDocumentTitle, adminHasPanels, adminRuntimeConfig, serializeAdminConfig, type AdminOptions } from "./admin.js";
 
 /** Where the CMS lives. A named descriptor rather than a bare `baseUrl` string, so a future
@@ -87,6 +90,24 @@ const RESOLVED_ID = "\0pramen:cms";
  * not drag `astro:content` and the generated collections into a runtime page. */
 const ADMIN_VIRTUAL_ID = "pramen:cms/admin";
 const ADMIN_RESOLVED_ID = "\0pramen:cms/admin";
+const ASSETS_ID = "pramen:cms/admin-assets";
+const ASSETS_RESOLVED_ID = "\0pramen:cms/admin-assets";
+const DEV_ASSET_BASE = `${ADMIN_BASE}/_assets`;
+const ASSET_FILES = {
+  editor: "editor.js",
+  css: "editor.css",
+  react: "panel-react.js",
+  reactDom: "panel-react-dom.js",
+  jsxRuntime: "panel-jsx-runtime.js",
+  jsxDevRuntime: "panel-jsx-dev-runtime.js",
+};
+
+function assetModuleSource(base: string | undefined): string {
+  if (base) return `export const assets = ${JSON.stringify(adminAssetUrls(base))};`;
+  return Object.entries(ASSET_FILES)
+    .map(([key, file]) => `import ${key} from "@pramen/cms-editor/${file}?url";`)
+    .join("\n") + `\nexport const assets = { ${Object.keys(ASSET_FILES).join(", ")} };`;
+}
 
 /** Ask the CMS which content types exist. Public and un-gated (`listPublicContentTypes`),
  * because this runs at BUILD time where there is no editor session — and a content type's
@@ -179,6 +200,9 @@ const ADMIN_TYPES = `declare module "pramen:cms/admin" {
   /** Base URL of a host-built editor's assets, or null for the packaged ones. */
   export const adminEditorAssets: string | null;
 }
+declare module "pramen:cms/admin-assets" {
+  export const assets: import("@pramen/cms-astro").AdminAssetUrls;
+}
 `;
 
 /**
@@ -202,7 +226,7 @@ export function pramenCms(opts: PramenCmsOptions): AstroIntegration {
   return {
     name: "@pramen/cms-astro",
     hooks: {
-      "astro:config:setup": async ({ updateConfig, injectRoute, logger }) => {
+      "astro:config:setup": async ({ updateConfig, injectRoute, logger, command }) => {
         const wanted = opts.collections ?? "auto";
         const map: CollectionMap = wanted === "auto" ? Object.fromEntries((await discoverTypes(opts.backend)).map((s) => [collectionKey(s), s])) : wanted;
         const names = Object.keys(map);
@@ -218,17 +242,15 @@ export function pramenCms(opts: PramenCmsOptions): AstroIntegration {
         // Only when asked. A site that just reads content never installs @pramen/cms-editor,
         // and an injected route would be a build error rather than an unused page.
         const adminCode = opts.admin ? adminModuleSource(opts.admin, opts.backend) : undefined;
+        const customAssets = opts.admin && opts.admin !== true ? opts.admin.editorAssets : undefined;
+        const servePackaged = !!opts.admin && !customAssets && command === "dev";
+        const assetCode = adminCode ? assetModuleSource(customAssets ?? (servePackaged ? DEV_ASSET_BASE : undefined)) : undefined;
         updateConfig({
           vite: {
-            // The editor's bundle is a finished artifact, not source for this build to walk:
-            // it is emitted verbatim and referenced by url. `?url` alone asks for that, and
-            // this says so for the file itself, since a `.js` extension is otherwise the one
-            // thing a bundler assumes it should follow.
-            // …and the same for the three panel shims, which are likewise finished
-            // artifacts: they read the editor's React off a global, so following their
-            // (nonexistent) imports would achieve nothing and bundling them would put the
-            // shim behind the very specifier it exists to resolve.
-            assetsInclude: ["**/@pramen/cms-editor/dist/editor.js", "**/@pramen/cms-editor/dist/panel-*.js"],
+            // Production emits these finished bundles verbatim. Dev serves them before
+            // Vite transforms run; custom editors have no packaged asset imports at all.
+            assetsInclude: adminCode && !customAssets && !servePackaged
+              ? ["**/@pramen/cms-editor/dist/editor.js", "**/@pramen/cms-editor/dist/panel-*.js"] : [],
             plugins: [
               {
                 name: "pramen:cms",
@@ -238,12 +260,35 @@ export function pramenCms(opts: PramenCmsOptions): AstroIntegration {
                 resolveId(id: string) {
                   if (id === VIRTUAL_ID) return RESOLVED_ID;
                   if (id === ADMIN_VIRTUAL_ID && adminCode) return ADMIN_RESOLVED_ID;
+                  if (id === ASSETS_ID && assetCode) return ASSETS_RESOLVED_ID;
                   return null;
                 },
                 load(id: string) {
                   if (id === RESOLVED_ID) return code;
                   if (id === ADMIN_RESOLVED_ID) return adminCode;
+                  if (id === ASSETS_RESOLVED_ID) return assetCode;
                   return null;
+                },
+                configureServer(server) {
+                  if (!servePackaged) return;
+                  // Finished bundles must bypass Vite's asset transforms in dev (#65).
+                  // An exact allowlist also keeps this from becoming a filesystem server.
+                  const require = createRequire(import.meta.url);
+                  const files = new Map(Object.values(ASSET_FILES).map((file) => [
+                    `${DEV_ASSET_BASE}/${file}`,
+                    require.resolve(`@pramen/cms-editor/${file}`),
+                  ]));
+                  server.middlewares.use((req, res, next) => {
+                    const pathname = req.url?.split("?")[0] ?? "";
+                    const file = files.get(pathname);
+                    if (!file || (req.method !== "GET" && req.method !== "HEAD")) return next();
+                    res.setHeader("Content-Type", file.endsWith(".css") ? "text/css" : "text/javascript");
+                    res.setHeader("Cache-Control", "no-cache");
+                    const stream = createReadStream(file);
+                    stream.on("error", next);
+                    if (req.method === "HEAD") { stream.destroy(); res.end(); }
+                    else stream.pipe(res);
+                  });
                 },
               },
             ],

@@ -11,7 +11,7 @@
 // uses @astrojs/cloudflare, and nothing asserted below is adapter-specific.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, rmSync, readFileSync, mkdirSync, mkdtempSync, writeFileSync, readdirSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { ADMIN_BASE } from "../packages/cms-astro/src/admin";
 
@@ -122,6 +122,7 @@ async function waitForReady(url: string, timeoutMs: number): Promise<void> {
 
 let cms: ReturnType<typeof stubCms> | undefined;
 let site: ReturnType<typeof Bun.spawn> | undefined;
+let dev: ReturnType<typeof Bun.spawn> | undefined;
 /** The shell, fetched once — every assertion below reads the same response. */
 let shell = "";
 let shellHeaders: Headers | undefined;
@@ -152,7 +153,70 @@ beforeAll(async () => {
 
 afterAll(() => {
   site?.kill();
+  dev?.kill();
   cms?.stop(true);
+});
+
+describe("admin asset delivery", () => {
+  test("astro dev serves actual packaged bytes for all six assets", async () => {
+    dev = Bun.spawn(["bun", "./node_modules/.bin/astro", "dev", "--port", "8792"], {
+      cwd: SITE,
+      env: { ...process.env, PRAMEN_CMS_URL: CMS_URL },
+      stdout: "ignore", stderr: "inherit",
+    });
+    const base = "http://localhost:8792";
+    await waitForReady(`${base}${ADMIN}`, 30_000);
+    const html = await (await fetch(`${base}${ADMIN}/pages/deep-link`)).text();
+    expect(html).toContain(`src="${ADMIN}/_assets/editor.js"`);
+    for (const file of ["editor.js", "editor.css", "panel-react.js", "panel-react-dom.js", "panel-jsx-runtime.js", "panel-jsx-dev-runtime.js"]) {
+      const res = await fetch(`${base}${ADMIN}/_assets/${file}?v=test`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toContain(file.endsWith(".css") ? "text/css" : "text/javascript");
+      expect(await res.text()).toBe(readFileSync(join(ROOT, "packages/cms-editor/dist", file), "utf8"));
+    }
+    dev.kill();
+    await dev.exited;
+    dev = undefined;
+  }, 60_000);
+
+  test("host-built editor excludes packaged assets from dev and production", async () => {
+    const scratch = join(ROOT, ".mine");
+    mkdirSync(scratch, { recursive: true });
+    const fixture = mkdtempSync(join(scratch, "astro-custom-editor-"));
+    symlinkSync(join(SITE, "node_modules"), join(fixture, "node_modules"), "dir");
+    // Keep the fixture isolated from the example site's generated types and dist.
+    writeFileSync(join(fixture, "astro.config.mjs"), `
+      import { defineConfig } from ${JSON.stringify(join(SITE, "node_modules/astro/dist/config/index.js"))};
+      import node from ${JSON.stringify(join(SITE, "node_modules/@astrojs/node/dist/index.js"))};
+      import pramenCms from ${JSON.stringify(join(ROOT, "packages/cms-astro/src/integration.ts"))};
+      export default defineConfig({
+        output: "server", adapter: node({ mode: "standalone" }),
+        integrations: [pramenCms({ backend: { url: ${JSON.stringify(CMS_URL)} }, collections: {}, admin: { editorAssets: "/custom", panels: ["/panel.js"] } })],
+      });
+    `);
+    const astro = join(SITE, "node_modules/.bin/astro");
+    let proc: ReturnType<typeof Bun.spawn> | undefined;
+    try {
+      proc = Bun.spawn(["bun", astro, "dev", "--port", "8793"], { cwd: fixture, stdout: "ignore", stderr: "inherit" });
+      await waitForReady("http://localhost:8793/__admin", 30_000);
+      const html = await (await fetch("http://localhost:8793/__admin")).text();
+      expect(html).toContain('src="/custom/editor.js"');
+      expect(html).toContain('href="/custom/editor.css"');
+      expect(html).not.toContain("cms-editor/dist");
+      expect(html).not.toContain("data-vite-dev-id");
+      expect(html).toContain("/custom/panel-react.js");
+      proc.kill();
+      await proc.exited;
+      proc = undefined;
+      await run(["bun", astro, "build"], fixture, {}, "custom editor build");
+      const output = readdirSync(join(fixture, "dist"), { recursive: true }).map(String);
+      expect(output.filter((path) => /(?:editor|panel-react|panel-jsx).*\.(?:js|css)$/.test(path))).toEqual([]);
+    } finally {
+      proc?.kill();
+      if (proc) await proc.exited;
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  }, 120_000);
 });
 
 // `bun run typecheck` at the repo root cannot cover this site: `astro check` runs the

@@ -226,6 +226,11 @@ come from it. They have to agree, because a shim re-exports the export names of 
 *its* bundle linked — a packaged shim left beside a host-built editor is a link error inside
 somebody's panel, and nothing about the config line says so.
 
+When `editorAssets` is set, packaged editor files do not enter the site's module graph:
+they are neither injected during development nor emitted as unused production assets.
+Without it, `astro dev` serves the six packaged files directly at `/__admin/_assets/`;
+production builds emit and fingerprint them through Vite.
+
 Two consequences worth knowing before you set it:
 
 - **Cache-busting is yours.** The packaged assets are imported with `?url`, so the site's own
