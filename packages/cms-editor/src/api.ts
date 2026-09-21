@@ -205,6 +205,8 @@ export class Api {
   updateBlockType = (id: string, input: Partial<BlockTypeInput>) => this.call<BlockType>("updateBlockType", { id, ...input } as unknown as RpcInput);
   createContentType = (input: ContentTypeInput) => this.call<ContentType>("createContentType", input as unknown as RpcInput);
   updateContentType = (id: string, input: Partial<ContentTypeInput>) => this.call<ContentType>("updateContentType", { id, ...input } as unknown as RpcInput);
+  deleteBlockType = (id: string) => this.call<{ ok: true }>("deleteBlockType", { id });
+  deleteContentType = (id: string) => this.call<{ ok: true }>("deleteContentType", { id });
 
   // --- site furniture ---
   listMenus = () => this.call<Menu[]>("listMenus");

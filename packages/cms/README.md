@@ -85,6 +85,21 @@ entry, so doing it there made the returned array stop matching the `as const` li
 `BlockFieldsOf<typeof def>` is inferred from — a cast a component would follow into
 `fields["  title  "] === undefined` with tsc insisting it was fine.
 
+### Deleting unused types
+
+`deleteContentType({ id })` and `deleteBlockType({ id })` permanently delete an unused,
+editor-authored type. Both require an editor role and enforce the caller's delete ACL.
+The type builder exposes **Delete type** when `listCmsCapabilities().typeDeletion` is true.
+
+- Code-managed types return **409**. Remove the declaration and let bootstrap release
+  ownership before deleting the row.
+- Content types with pages return **409**, including pages in trash. Purge those pages first.
+- Block types with blocks (including reusable blocks), default-block references, or region
+  allow-list references return **409**. Remove those uses first.
+- Page and block type relations use `ON DELETE RESTRICT`, so concurrent writes cannot leave
+  content pointing at a deleted type. Upgrading adds these constraints through the normal
+  schema migration. Deleting a type never cascades into its content.
+
 ## SEO & sitemap
 
 - Per-page SEO on `cms_pages`: `metaTitle`, `metaDescription`, `canonicalUrl`, `robots`,

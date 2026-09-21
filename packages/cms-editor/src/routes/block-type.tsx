@@ -16,6 +16,8 @@ export default createPage()
       <BlockTypeEditor
         api={api}
         codeDefinedTypes={cms.codeDefinedTypes}
+        typeDeletion={cms.typeDeletion}
+        onDeleted={() => navigate("schema")}
         // Keyed on the slug so switching between two types REMOUNTS the form: buzola renders
         // the same component instance across a params-only change, and the draft state
         // belongs to one type.

@@ -814,7 +814,7 @@ export const cmsSchema = {
   cms_blocks: Entity(
     (t) => ({
       id: primaryKey(generated(t.uuid())),
-      typeId: notNull(t.uuid()),
+      typeId: indexed(notNull(t.uuid())),
       title: t.text(),
       fields: t.json(), // content matching the block type's fieldsSchema
       isReusable: defaultTo(t.bool(), false),
@@ -824,7 +824,7 @@ export const cmsSchema = {
       createdAt: defaultTo(t.text(), expr.now()),
       updatedAt: defaultTo(t.text(), expr.now()),
     }),
-    (r) => ({ type: r.belongsTo("cms_block_types", "typeId") }),
+    (r) => ({ type: r.belongsTo("cms_block_types", "typeId", { onDelete: "restrict" }) }),
   ),
 
   cms_pages: Entity(
@@ -877,7 +877,7 @@ export const cmsSchema = {
       updatedAt: defaultTo(t.text(), expr.now()),
     }),
     (r) => ({
-      type: r.belongsTo("cms_content_types", "typeId"),
+      type: r.belongsTo("cms_content_types", "typeId", { onDelete: "restrict" }),
       placements: r.hasMany("cms_page_blocks", "pageId"),
       // Taxonomy terms, through the explicit junction. `where: { terms: { slug: "news" } }`
       // compiles to a nested subquery, so "pages in this category" is an ordinary query and
@@ -2440,6 +2440,38 @@ function assertHandlerName(v: unknown, what: string): string {
   return str;
 }
 
+async function deleteCmsType(db: CmsDb, kind: "content" | "block", id: string): Promise<{ ok: true }> {
+  const table = kind === "content" ? "cms_content_types" : "cms_block_types";
+  const dependent = kind === "content" ? "cms_pages" : "cms_blocks";
+  const rows = await db.find({ from: table, where: { id }, select: ["id", "slug", "managedBy"], limit: 1 });
+  if (!rows[0]) throw notFound(`${kind} type`);
+  assertNotManaged(rows[0], `${kind} type`, kind === "content" ? "defineContentType" : "defineBlockType");
+  const inUse = kind === "content"
+    ? "content type is in use. Permanently delete its pages (including trash) first."
+    : "block type is in use. Delete its blocks first, including reusable blocks.";
+  // Integrity checks must see even rows outside the caller's read scope, especially trash.
+  // Only existence crosses this boundary; the actual deletion remains ACL-checked.
+  if ((await db.exec(`SELECT 1 FROM ${dependent} WHERE typeId = ? LIMIT 1`, id)).length) throw new Conflict(inUse);
+  if (kind === "block") {
+    const references = await db.exec(
+      `SELECT 1 FROM cms_content_types AS ct WHERE
+        EXISTS (SELECT 1 FROM json_each(ct.defaultBlocks) AS b WHERE json_extract(b.value, '$.blockTypeSlug') = ?)
+        OR EXISTS (SELECT 1 FROM json_each(ct.regions) AS r, json_each(r.value, '$.allowedTypes') AS a WHERE a.value = ?)
+        LIMIT 1`,
+      String(rows[0].slug), String(rows[0].slug),
+    );
+    if (references.length) throw new Conflict("block type is used by a content type. Remove it from default blocks and region allow-lists first.");
+  }
+  try {
+    if (!await db.delete(table, id)) throw notFound(`${kind} type`);
+  } catch (e) {
+    // A concurrent D1 insert can land after the pre-check. The FK is the final guard.
+    if (/FOREIGN KEY constraint failed/i.test(String(e))) throw new Conflict(inUse);
+    throw e;
+  }
+  return { ok: true };
+}
+
 /**
  * A menu item's `ref` for a non-`custom` kind.
  *
@@ -2669,7 +2701,7 @@ function redirectPatch(raw: unknown, requireEnds: boolean): RedirectPatch {
 /** A required row id from client input. */
 function requireId(raw: unknown, what = "id"): string {
   const v = (asObj(raw) as Record<string, unknown>)[what];
-  if (typeof v !== "string" || v === "") throw new BadRequest(`${what} is required`);
+  if (typeof v !== "string" || v.trim() === "") throw new BadRequest(`${what} is required`);
   return v;
 }
 
@@ -3275,6 +3307,15 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
         return out as never;
       },
     }),
+
+    /** Only unused, editor-authored types can be removed. Trash still owns its type. */
+    deleteContentType: mutation(async (ctx, input: { id: string }) => {
+      return deleteCmsType(cdb(ctx), "content", input.id);
+    }, { ...editor, input: (raw) => ({ id: requireId(raw) }) }),
+
+    deleteBlockType: mutation(async (ctx, input: { id: string }) => {
+      return deleteCmsType(cdb(ctx), "block", input.id);
+    }, { ...editor, input: (raw) => ({ id: requireId(raw) }) }),
 
     // ---- site furniture: menus ----------------------------------------------
     //
@@ -4494,6 +4535,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       // the next cold start. That is GitHub #48 in the deployment that upgraded the editor to
       // fix it. Absent ⇒ the editor treats no type as code-defined, which is correct there.
       codeDefinedTypes: true as const,
+      typeDeletion: true as const,
       // Media carries taxonomy terms, and `listMedia` understands `term`. Declared for the
       // usual reason: an older server has neither handler, so the detail panel's Tags
       // section would 404 on open and the library's tag filter would send an argument that
