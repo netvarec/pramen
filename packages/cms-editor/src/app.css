@@ -30,24 +30,25 @@
  * sticking. And a host's override has to land on the same element as ours to compete with it
  * at all: a value declared on a nearer ancestor is simply what gets inherited.
  *
- * The topbar's 77px is the Graphic Standard bar's own height (`Topbar` defaults to 56px; gs
- * sets `h-[77px]`), and the 24px under it stands in for the gap gs leaves between its bar and
- * the first section. pramen's screen header is a sticky panel rather than gs's static one, so
- * the full 48px would be that much dead space pinned to the top all the way down a list. The
+ * The defaults are the Graphic Standard AppShell's, the product the topbar chrome was lifted
+ * from: content runs the full width (a list of 300 rows gains nothing from a 1200px cap on a
+ * wide screen), 24px gutters, 24px below the page, and 48px between the topbar (77px, gs's
+ * own override of `Topbar`'s 56px) and the first panel. That 48px is padding on the column,
+ * so it scrolls away; the sticky header pins at the bar's edge, not below the gap. The
  * sidebar keeps 0: its bar carries no rule, and the header meeting it directly is what makes
  * the two read as one block of chrome. `data-pramen-chrome` is written by `main.tsx`. */
 @layer base {
   :root {
-    --pramen-content-max: 1200px;
-    --pramen-gutter: 1.75rem;
-    --pramen-page-pt: 0.5rem;
-    --pramen-page-pb: 2rem;
+    --pramen-content-max: none;
+    --pramen-gutter: 1.5rem;
+    --pramen-page-pt: 0px;
+    --pramen-page-pb: 1.5rem;
     --pramen-chrome-h: 2.75rem;
     --pramen-chrome-pad: 0px;
   }
   :root[data-pramen-chrome="topbar"] {
     --pramen-chrome-h: 77px;
-    --pramen-chrome-pad: 1.5rem;
+    --pramen-chrome-pad: 3rem;
   }
 }
 

@@ -32,8 +32,14 @@ there are no backward-compatibility guarantees yet.
   layered, so it wins without matching our selector. The screen header, the page editor's
   toolbar and both bars read the same gutter, so their contents stay aligned with the page
   below; both bars take their height from `--pramen-chrome-h`, so the bar and every sticky
-  offset under it move together. Defaults equal the old literals, so an unconfigured
-  deployment renders as before. `chromeVars` and `CHROME_METRICS` are gone; a test now fails
+  offset under it move together.
+
+  **The defaults change** to the Graphic Standard AppShell's proportions: full-width content
+  (was capped at 1200px), 24px gutters (was 28px), no padding above a page and 24px below it
+  (was 8px and 32px), and 48px between the topbar and the first panel (was 24px; it scrolls
+  away, so it is not pinned space). The sidebar keeps no gap under its bar. A deployment that
+  wants the old look sets `:root { --pramen-content-max: 1200px; --pramen-gutter: 1.75rem;
+  --pramen-page-pt: 0.5rem; --pramen-page-pb: 2rem; }`. `chromeVars` and `CHROME_METRICS` are gone; a test now fails
   if a screen hardcodes the width or gutter again (it found the sidebar's error banner, still
   on `mx-7`).
 

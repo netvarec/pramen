@@ -60,22 +60,22 @@ describe("cms-editor chrome layout", () => {
     }
   });
 
-  // The defaults a host overrides. The sidebar's numbers are the ones that were hardcoded
-  // before the variables existed (`top-11`, no gap, `max-w-[1200px] px-7 pb-8 pt-2`), so an
-  // unconfigured deployment renders exactly as before.
+  // The defaults a host overrides: the Graphic Standard AppShell's proportions (full width,
+  // 24px gutters, 48px under the topbar). The sidebar keeps its bar height and no gap, so the
+  // screen header still meets that bar directly.
   test("app.css defaults every layout length, in a layer a host's :root beats", async () => {
     const css = await Bun.file(new URL("../packages/cms-editor/src/app.css", import.meta.url)).text();
     const layered = css.slice(css.indexOf("@layer base {\n  :root {"));
     const root = layered.slice(0, layered.indexOf("}"));
-    expect(root).toContain("--pramen-content-max: 1200px;");
-    expect(root).toContain("--pramen-gutter: 1.75rem;");
-    expect(root).toContain("--pramen-page-pt: 0.5rem;");
-    expect(root).toContain("--pramen-page-pb: 2rem;");
+    expect(root).toContain("--pramen-content-max: none;");
+    expect(root).toContain("--pramen-gutter: 1.5rem;");
+    expect(root).toContain("--pramen-page-pt: 0px;");
+    expect(root).toContain("--pramen-page-pb: 1.5rem;");
     expect(root).toContain("--pramen-chrome-h: 2.75rem;");
     expect(root).toContain("--pramen-chrome-pad: 0px;");
     const topbar = layered.slice(layered.indexOf(':root[data-pramen-chrome="topbar"]'));
     expect(topbar.slice(0, topbar.indexOf("}"))).toContain("--pramen-chrome-h: 77px;");
-    expect(topbar.slice(0, topbar.indexOf("}"))).toContain("--pramen-chrome-pad: 1.5rem;");
+    expect(topbar.slice(0, topbar.indexOf("}"))).toContain("--pramen-chrome-pad: 3rem;");
   });
 
   // The regression this seam exists for: a literal width or gutter left in one screen is a
