@@ -16,7 +16,9 @@ import { useEffect, useRef, useState } from "react";
 import { useUnsavedGuard } from "./app-context";
 import type { Api, BlockTypeInput, ContentTypeInput } from "./api";
 import { CONTROL, slugify } from "./fields";
-import { WRAP } from "./chrome";
+import { ROW, ROW_BUTTON, WRAP } from "./chrome";
+import { COMMON_COPY } from "./copy";
+import { LoadFailed } from "./list-state";
 import type { BlockType, ContentType, DefaultBlockDefinition, FieldDefinition, FieldType, RegionDefinition } from "./types";
 
 /** Every field type the CMS knows — the editor's mirror of `FIELD_TYPES` in @pramen/cms.
@@ -423,13 +425,25 @@ export function TypesOverview({ api, codeDefinedTypes, onOpenBlockType, onOpenCo
 }) {
   const [blockTypes, setBlockTypes] = useState<BlockType[] | null>(null);
   const [contentTypes, setContentTypes] = useState<ContentType[] | null>(null);
+  // Which of the two fetches failed. Without it a failure left its section on "Loading…"
+  // for good, since `null` was the only state a section could be in before its answer.
+  const [failed, setFailed] = useState({ block: false, content: false });
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     let live = true;
-    api.listBlockTypes().then((r) => live && setBlockTypes(r)).catch((e: Error) => onError(String(e.message ?? e)));
-    api.listContentTypes().then((r) => live && setContentTypes(r)).catch((e: Error) => onError(String(e.message ?? e)));
+    setFailed({ block: false, content: false });
+    api.listBlockTypes().then((r) => live && setBlockTypes(r)).catch((e: Error) => {
+      if (live) setFailed((f) => ({ ...f, block: true }));
+      onError(String(e.message ?? e));
+    });
+    api.listContentTypes().then((r) => live && setContentTypes(r)).catch((e: Error) => {
+      if (live) setFailed((f) => ({ ...f, content: true }));
+      onError(String(e.message ?? e));
+    });
     return () => { live = false; };
-  }, [api, onError]);
+  }, [api, onError, attempt]);
+  const retry = () => setAttempt((n) => n + 1);
 
   return (
     <div className={WRAP}>
@@ -449,16 +463,18 @@ export function TypesOverview({ api, codeDefinedTypes, onOpenBlockType, onOpenCo
         title="Block types"
         empty="No block types yet. A page is built from these, so start here."
         rows={blockTypes}
+        failed={failed.block}
+        onRetry={retry}
         newLabel="+ New block type"
         onNew={() => onOpenBlockType("new")}
         render={(bt) => (
-          <div className={"flex cursor-pointer items-center gap-3 rounded-[14px] border border-transparent bg-surface-card px-[18px] py-3.5 hover:bg-surface-muted"} key={bt.id} onClick={() => onOpenBlockType(bt.slug)}>
+          <button type="button" className={`${ROW} ${ROW_BUTTON}`} key={bt.id} onClick={() => onOpenBlockType(bt.slug)}>
             <span className="w-6 shrink-0 text-center">{bt.icon ?? ""}</span>
             <span className="min-w-0 flex-1 truncate font-medium">{bt.name}</span>
             {codeDefinedTypes && bt.managedBy ? <CodeBadge /> : null}
             <span className="shrink-0 truncate text-fg-subtle">{bt.slug}</span>
             <span className="shrink-0 text-caption text-fg-subtle">{(bt.fieldsSchema ?? []).length} field(s)</span>
-          </div>
+          </button>
         )}
       />
 
@@ -466,25 +482,29 @@ export function TypesOverview({ api, codeDefinedTypes, onOpenBlockType, onOpenCo
         title="Content types"
         empty="No content types yet. A page needs one — it is what declares the regions blocks go into."
         rows={contentTypes}
+        failed={failed.content}
+        onRetry={retry}
         newLabel="+ New content type"
         onNew={() => onOpenContentType("new")}
         render={(ct) => (
-          <div className={"flex cursor-pointer items-center gap-3 rounded-[14px] border border-transparent bg-surface-card px-[18px] py-3.5 hover:bg-surface-muted"} key={ct.id} onClick={() => onOpenContentType(ct.slug)}>
+          <button type="button" className={`${ROW} ${ROW_BUTTON}`} key={ct.id} onClick={() => onOpenContentType(ct.slug)}>
             <span className="min-w-0 flex-1 truncate font-medium">{ct.name}</span>
             {codeDefinedTypes && ct.managedBy ? <CodeBadge /> : null}
             <span className="shrink-0 truncate text-fg-subtle">{ct.slug}</span>
             <span className="shrink-0 text-caption text-fg-subtle">{(ct.regions ?? []).length} region(s)</span>
-          </div>
+          </button>
         )}
       />
     </div>
   );
 }
 
-function TypeSection<T>({ title, empty, rows, newLabel, onNew, render }: {
+function TypeSection<T>({ title, empty, rows, failed, onRetry, newLabel, onNew, render }: {
   title: string;
   empty: string;
   rows: T[] | null;
+  failed: boolean;
+  onRetry: () => void;
   newLabel: string;
   onNew: () => void;
   render: (row: T) => React.ReactNode;
@@ -495,8 +515,10 @@ function TypeSection<T>({ title, empty, rows, newLabel, onNew, render }: {
         <Heading level="2" className="font-normal">{title}</Heading>
         <Button variant="secondary" size="sm" onPress={onNew}>{newLabel}</Button>
       </div>
-      {rows === null ? (
-        <p className="text-fg-subtle">Loading…</p>
+      {rows === null && failed ? (
+        <LoadFailed onRetry={onRetry} />
+      ) : rows === null ? (
+        <p className="text-fg-subtle">{COMMON_COPY.loading}</p>
       ) : rows.length === 0 ? (
         <p className="text-fg-subtle">{empty}</p>
       ) : (

@@ -6,7 +6,9 @@ import { Button, Dialog, type DialogSize, DropdownMenu, DropdownMenuItem, Dropdo
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Api, ApiError } from "./api";
 import { CONTROL, FieldForm, formatWhen, fromLocalInput, slugify, toLocalInput } from "./fields";
-import { BELOW_APP_BAR, BELOW_PAGE_TOOLBAR, CONTENT, INSPECTOR_MAX_H, PAGE_TOOLBAR_H, ROW, WRAP } from "./chrome";
+import { BELOW_APP_BAR, BELOW_PAGE_TOOLBAR, CONTENT, INSPECTOR_MAX_H, PAGE_TOOLBAR_H, ROW, ROW_BUTTON, TILE_BUTTON, WRAP } from "./chrome";
+import { COMMON_COPY } from "./copy";
+import { listSummary, LoadFailed, usePagedList, type ListPhase } from "./list-state";
 import { useCrumb } from "./breadcrumb";
 import { PageHeader } from "./page-header";
 import { pagePreviewHref, sitePreviewUrl } from "./preview";
@@ -250,40 +252,20 @@ const PAGE_LIST_SIZE = 50;
 export function PageList({ api, type, onOpen, onError }: { api: Api; type?: ContentType; onOpen: (p: Page) => void; onError: (s: string) => void }) {
   // From the SERVER (listCmsCapabilities), not a local flag — see `CmsCapabilities`.
   const { cms: { multilingual } } = useApp();
-  const [pages, setPages] = useState<Page[]>([]);
-  const [offset, setOffset] = useState(0);
-  const [hasMore, setHasMore] = useState(false);
-  const [loading, setLoading] = useState(true);
   const [blockTypes, setBlockTypes] = useState<BlockType[]>([]);
   const [creating, setCreating] = useState(false);
   const contentType = type?.slug;
 
-  const load = useCallback(
-    (off: number) => {
-      setLoading(true);
-      return api
-        .listPages({ contentType, limit: PAGE_LIST_SIZE, offset: off })
-        .then((r) => {
-          setPages((prev) => (off === 0 ? r : [...prev, ...r]));
-          // A full page means there is probably more; a short one is definitely the end.
-          setHasMore(r.length === PAGE_LIST_SIZE);
-          setOffset(off + r.length);
-        })
-        .catch((e) => onError(errMsg(e)))
-        .finally(() => setLoading(false));
-    },
-    [api, contentType, onError],
+  // A new `contentType` is a new query, so the list resets (rows cleared, not kept): buzola
+  // renders the same component instance across a params-only change (`/types/a` →
+  // `/types/b`), and keeping the rows would leave the previous type's pages under the new
+  // type's heading until the fetch lands, and permanently if it fails.
+  const fetchPage = useCallback(
+    (offset: number, limit: number) => api.listPages({ contentType, limit, offset }),
+    [api, contentType],
   );
-
-  // Clearing first is the point: buzola renders the same component instance across a
-  // params-only change (`/types/a` → `/types/b`), so without this the previous type's rows
-  // sit under the new type's heading until the fetch lands — and permanently if it fails.
-  useEffect(() => {
-    setPages([]);
-    setOffset(0);
-    setHasMore(false);
-    void load(0);
-  }, [load]);
+  const list = usePagedList(fetchPage, PAGE_LIST_SIZE, onError);
+  const pages = list.rows;
 
   // Only for the empty state's hint, and it is a GLOBAL list — keyed on `api` alone so
   // switching type tabs doesn't refetch it.
@@ -295,31 +277,32 @@ export function PageList({ api, type, onOpen, onError }: { api: Api; type?: Cont
   // must read exactly as it did before types had tabs. `type.name` is a label a host writes
   // (often plural, it labels the tab), so it heads the screen and is never bent into a noun
   // phrase — "+ New Articles" is what guessing at grammar produces.
-  const count = pages.length === 0 ? "None yet" : pages.length === 1 ? "1 page total" : `${pages.length}${hasMore ? "+" : ""} pages total`;
+  const count = listSummary(list.phase, pages.length, { empty: "None yet", one: "1 page total", many: (n) => `${n} pages total` }, list.hasMore);
   return (
     <>
-      <Hero lead={type?.name ?? "Pages"} em={loading && pages.length === 0 ? "Loading…" : count}>
+      <Hero lead={type?.name ?? "Pages"} em={count}>
         <Button className="shrink-0" onPress={() => setCreating(true)}>+ New page</Button>
       </Hero>
       <div className={WRAP}>
         <div className="flex flex-col gap-2">
           {pages.map((p) => (
-            <div className={`${ROW} cursor-pointer hover:bg-surface-muted`} key={p.id} onClick={() => onOpen(p)}>
+            <button type="button" className={`${ROW} ${ROW_BUTTON}`} key={p.id} onClick={() => onOpen(p)}>
               <span className="flex-1 truncate font-medium">{p.title}</span>
               <span className="text-fg-subtle">/{p.slug}</span>
               {multilingual ? <span className="text-fg-subtle">{p.locale}</span> : null}
               <Pill status={p.status}>{p.status}</Pill>
-            </div>
+            </button>
           ))}
-          {!loading && pages.length === 0 ? <p className="text-fg-subtle">No pages yet. {blockTypes.length === 0 ? "Define block types + a content type first (via the API/admin)." : "Create one."}</p> : null}
+          {list.phase === "ready" && pages.length === 0 ? <p className="text-fg-subtle">No pages yet. {blockTypes.length === 0 ? "Define block types + a content type first (via the API/admin)." : "Create one."}</p> : null}
+          {list.phase === "failed" ? <LoadFailed onRetry={list.reload} /> : null}
         </div>
-        {hasMore ? (
+        {list.hasMore ? (
           <div className="mt-4 flex justify-center">
-            <Button variant="ghost" onPress={() => void load(offset)} isDisabled={loading}>{loading ? "Loading…" : "Load more"}</Button>
+            <Button variant="ghost" onPress={list.loadMore} isDisabled={list.loading}>{list.loading ? COMMON_COPY.loading : COMMON_COPY.loadMore}</Button>
           </div>
         ) : null}
       </div>
-      {creating ? <CreatePage api={api} type={type} onClose={() => setCreating(false)} onCreated={() => { setCreating(false); void load(0); }} onError={onError} /> : null}
+      {creating ? <CreatePage api={api} type={type} onClose={() => setCreating(false)} onCreated={() => { setCreating(false); list.reload(); }} onError={onError} /> : null}
     </>
   );
 }
@@ -431,39 +414,22 @@ function cellText(v: unknown): string {
 const COLLECTION_PAGE_SIZE = 50;
 
 export function CollectionList({ api, def, onOpen, onNew, onError }: { api: Api; def: CollectionMeta; onOpen: (id: string) => void; onNew: () => void; onError: (s: string) => void }) {
-  const [rows, setRows] = useState<FieldValues[]>([]);
-  const [offset, setOffset] = useState(0);
-  const [hasMore, setHasMore] = useState(false);
-  const [loading, setLoading] = useState(true);
-
-  const load = useCallback(
-    (off: number) => {
-      setLoading(true);
-      return api
-        .call<FieldValues[]>("collectionList", { collection: def.slug, limit: COLLECTION_PAGE_SIZE, offset: off })
-        .then((r) => {
-          setRows((prev) => (off === 0 ? r : [...prev, ...r]));
-          // A full page means there is probably more; a short one is definitely the end.
-          setHasMore(r.length === COLLECTION_PAGE_SIZE);
-          setOffset(off + r.length);
-        })
-        .catch((e) => onError(errMsg(e)))
-        .finally(() => setLoading(false));
-    },
-    [api, def.slug, onError],
+  const fetchPage = useCallback(
+    (offset: number, limit: number) => api.call<FieldValues[]>("collectionList", { collection: def.slug, limit, offset }),
+    [api, def.slug],
   );
-
-  useEffect(() => {
-    setRows([]);
-    setOffset(0);
-    setHasMore(false);
-    void load(0);
-  }, [load]);
+  const list = usePagedList(fetchPage, COLLECTION_PAGE_SIZE, onError);
+  const rows = list.rows;
 
   const labelOf = (col: string) => def.fields.find((f) => f.name === col)?.label ?? col;
+  const count = listSummary(list.phase, rows.length, {
+    empty: "None yet",
+    one: `1 ${def.label.toLowerCase()}`,
+    many: (n) => `${n} ${def.pluralLabel.toLowerCase()}`,
+  }, list.hasMore);
   return (
     <>
-      <Hero lead={def.pluralLabel} em={rows.length === 0 ? "None yet" : rows.length === 1 ? `1 ${def.label.toLowerCase()}` : `${rows.length}${hasMore ? "+" : ""} ${def.pluralLabel.toLowerCase()}`}>
+      <Hero lead={def.pluralLabel} em={count}>
         <Button className="shrink-0" onPress={onNew}>+ New {def.label.toLowerCase()}</Button>
       </Hero>
       <div className={WRAP}>
@@ -472,20 +438,21 @@ export function CollectionList({ api, def, onOpen, onNew, onError }: { api: Api;
             const id = String(row[def.idField] ?? "");
             const [first, ...rest] = def.list;
             return (
-              <div className={`${ROW} cursor-pointer hover:bg-surface-muted`} key={id} onClick={() => onOpen(id)}>
+              <button type="button" className={`${ROW} ${ROW_BUTTON}`} key={id} onClick={() => onOpen(id)}>
                 <span className="flex-1 truncate font-medium">{cellText(row[first ?? def.titleField]) || <Dim>untitled</Dim>}</span>
                 {rest.map((col) => (
                   <span className="truncate text-fg-subtle" key={col} title={labelOf(col)}>{cellText(row[col])}</span>
                 ))}
-              </div>
+              </button>
             );
           })}
-          {!loading && rows.length === 0 ? <p className="text-fg-subtle">No {def.pluralLabel.toLowerCase()} yet. Create one.</p> : null}
-          {loading ? <p className="text-fg-subtle">Loading…</p> : null}
+          {list.phase === "ready" && rows.length === 0 ? <p className="text-fg-subtle">No {def.pluralLabel.toLowerCase()} yet. Create one.</p> : null}
+          {list.phase === "failed" ? <LoadFailed onRetry={list.reload} /> : null}
+          {list.loading ? <p className="text-fg-subtle">{COMMON_COPY.loading}</p> : null}
         </div>
-        {hasMore && !loading ? (
+        {list.hasMore && !list.loading ? (
           <div className="mt-3.5 text-center">
-            <Button variant="secondary" size="sm" onPress={() => void load(offset)}>Load more</Button>
+            <Button variant="secondary" size="sm" onPress={list.loadMore}>{COMMON_COPY.loadMore}</Button>
           </div>
         ) : null}
       </div>
@@ -1702,22 +1669,33 @@ function PageTerms({ api, pageId, canEdit, onError }: { api: Api; pageId: string
 }
 
 function AuditLog({ api, pageId, onError }: { api: Api; pageId: string; onError: (s: string) => void }) {
-  const [rows, setRows] = useState<AuditEntry[]>([]);
+  // `null` until answered: "No history yet." is a claim about the page, and it used to be
+  // what the tab said while the fetch was still in flight (and after it failed).
+  const [rows, setRows] = useState<AuditEntry[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
-    api.listPageAudit(pageId).then(setRows).catch((e) => onError(errMsg(e)));
-  }, [api, pageId, onError]);
+    let live = true;
+    setFailed(false);
+    api.listPageAudit(pageId)
+      .then((r) => { if (live) setRows(r); })
+      .catch((e) => { if (live) setFailed(true); onError(errMsg(e)); });
+    return () => { live = false; };
+  }, [api, pageId, onError, attempt]);
   return (
     <div>
       <Section>Audit trail</Section>
       <div className="flex flex-col gap-2">
-        {rows.map((a) => (
+        {(rows ?? []).map((a) => (
           <div className={`${ROW} text-xs`} key={a.id}>
             <span className="rounded-full bg-surface-muted px-2 py-0.5 font-mono text-xs text-fg-muted">{a.action}</span>
             <span className="flex-1 truncate text-fg-subtle">{a.fromStatus} → {a.toStatus}</span>
             <span className="text-fg-subtle">{a.actor ?? "system"}</span>
           </div>
         ))}
-        {rows.length === 0 ? <p className="text-fg-subtle">No history yet.</p> : null}
+        {rows?.length === 0 ? <p className="text-fg-subtle">No history yet.</p> : null}
+        {rows === null && !failed ? <p className="text-fg-subtle">{COMMON_COPY.loading}</p> : null}
+        {rows === null && failed ? <LoadFailed onRetry={() => setAttempt((n) => n + 1)} /> : null}
       </div>
     </div>
   );
@@ -1750,10 +1728,8 @@ const SEARCH_DEBOUNCE_MS = 250;
  * Split out because the zero case is two different sentences: an empty LIBRARY, and a filter
  * that matched nothing. The header used to say "None yet" for both, which reads as "this CMS
  * has no media" while sixty files sit one cleared chip away. */
-function mediaCountLabel(count: number, hasMore: boolean, narrowed: boolean): string {
-  if (count === 0) return narrowed ? "No matches" : "None yet";
-  const suffix = hasMore ? "+" : "";
-  return count === 1 && !hasMore ? "1 file" : `${count}${suffix} files`;
+export function mediaCountLabel(phase: ListPhase, count: number, hasMore: boolean, narrowed: boolean): string {
+  return listSummary(phase, count, { empty: narrowed ? "No matches" : "None yet", one: "1 file", many: (n) => `${n} files` }, hasMore);
 }
 
 /** The tag menu's "no filter" row. A menu item needs an id and `null` is not one, so the
@@ -1762,9 +1738,6 @@ const ALL_TAGS = "__all";
 
 export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) => void }) {
   const { cms: { mediaTerms, mediaDownload, canEdit } } = useApp();
-  const [media, setMedia] = useState<Media[]>([]);
-  const [offset, setOffset] = useState(0);
-  const [hasMore, setHasMore] = useState(false);
   const [selected, setSelected] = useState<Media | null>(null);
   const [busy, setBusy] = useState(false);
   // The file input the header's Upload button drives. It stays in the DOM (hidden) rather
@@ -1820,33 +1793,29 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
   /** Whether what is on screen is a NARROWING of the library rather than the library. */
   const narrowed = kind !== null || term !== null || search !== "";
 
-  const load = useCallback(
-    (off: number) => {
-      api
-        .listMedia({ limit: PAGE_SIZE, offset: off, sort, kind: kind ?? undefined, q: search || undefined, term: term ?? undefined })
-        .then((rows) => {
-          setMedia((prev) => (off === 0 ? rows : [...prev, ...rows]));
-          setHasMore(rows.length === PAGE_SIZE);
-          setOffset(off + rows.length);
-        })
-        .catch((e) => onError(errMsg(e)));
-    },
-    // Changing any of them resets to page 0 through the effect below — appending a
-    // differently ordered or narrowed page onto the one already on screen would interleave
-    // two orderings, or show files the current filter excludes.
-    [api, onError, sort, kind, search, term],
+  const fetchPage = useCallback(
+    (offset: number, limit: number) =>
+      api.listMedia({ limit, offset, sort, kind: kind ?? undefined, q: search || undefined, term: term ?? undefined }),
+    // Changing any of them is a new query, and resets to page 0: appending a differently
+    // ordered or narrowed page onto the one already on screen would interleave two
+    // orderings, or show files the current filter excludes. The grid is KEPT while the new
+    // page is in flight (a filter bar that blanks on every keystroke-pause is worse than one
+    // that swaps), and a late answer to the previous filter is dropped rather than landing
+    // over the current one, which the debounced search box made easy to hit.
+    [api, sort, kind, search, term],
   );
+  const list = usePagedList(fetchPage, PAGE_SIZE, onError, { keepRowsOnReset: true });
+  const media = list.rows;
   const loadTrash = useCallback(() => {
     api.listTrash().then((r) => setTrash(r.media ?? [])).catch((e) => onError(errMsg(e)));
   }, [api, onError]);
-  useEffect(() => { load(0); }, [load]);
   useEffect(() => { loadTrash(); }, [loadTrash]);
 
   const restore = async (id: string) => {
     try {
       await api.restoreMedia(id);
       loadTrash();
-      load(0);
+      list.reload();
     } catch (e) {
       onError(errMsg(e));
     }
@@ -1867,7 +1836,7 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
     onError("");
     try {
       for (const f of Array.from(files)) await api.uploadMedia(f);
-      load(0); // refresh from the top
+      list.reload(); // refresh from the top
     } catch (e) {
       onError(errMsg(e));
     } finally {
@@ -1877,7 +1846,7 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
 
   return (
     <>
-      <Hero lead="Media" em={mediaCountLabel(media.length, hasMore, narrowed)}>
+      <Hero lead="Media" em={mediaCountLabel(list.phase, media.length, list.hasMore, narrowed)}>
         {/* A real `Button` driving a hidden input, not a `<label>` painted to look like one.
             The lookalike had to restate podoba's primary fill by hand, and once the mint
             wrapper was gone the two "primary" actions in this app were visibly different
@@ -1952,7 +1921,11 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
             ))}
           </div>
         </div>
-        {media.length === 0 ? (
+        {list.phase === "failed" ? (
+          <LoadFailed onRetry={list.reload} />
+        ) : list.phase === "loading" && media.length === 0 ? (
+          <p className="text-fg-subtle">{COMMON_COPY.loading}</p>
+        ) : media.length === 0 ? (
           // "No media yet" is a claim about the LIBRARY, and this list is a narrowing of it.
           // Search, type and tag are all new, so this is a state the screen could not reach
           // before: typing "logo" or picking Documents on an image-only library told you the
@@ -1969,16 +1942,20 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
         ) : (
           <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-2.5">
             {media.map((m) => (
-              <div key={m.id} className={`cursor-pointer overflow-hidden rounded-lg border bg-surface-card ${selected?.id === m.id ? "border-fg" : "border-border"}`} onClick={() => setSelected(m)}>
-                {isImage(m) ? <img className="block h-[130px] w-full object-cover" src={api.resolve(`/media/${m.file.key}`)} alt={m.alt ?? ""} /> : <div className="flex h-[130px] items-center justify-center bg-surface-muted font-mono text-xs text-fg-subtle">{ext(m)}</div>}
+              // A button, not a `<div onClick>`: the grid is the only way into a file's detail
+              // (alt text, tags, delete), and a div left all of that out of reach of the keyboard.
+              // The thumbnail is the ORIGINAL file, so it loads lazily: a page of sixty was
+              // sixty full-size downloads up front, most of them below the fold.
+              <button type="button" key={m.id} className={`${TILE_BUTTON} overflow-hidden rounded-lg border bg-surface-card ${selected?.id === m.id ? "border-fg" : "border-border"}`} onClick={() => setSelected(m)}>
+                {isImage(m) ? <img loading="lazy" decoding="async" className="block h-[130px] w-full object-cover" src={api.resolve(`/media/${m.file.key}`)} alt={m.alt ?? ""} /> : <div className="flex h-[130px] items-center justify-center bg-surface-muted font-mono text-xs text-fg-subtle">{ext(m)}</div>}
                 <div className="truncate px-2 py-1.5 text-[11px] text-fg-muted">{m.file.filename ?? m.id}</div>
-              </div>
+              </button>
             ))}
           </div>
         )}
-        {hasMore ? (
+        {list.hasMore ? (
           <div className="mt-3.5 text-center">
-            <Button variant="secondary" size="sm" onPress={() => load(offset)}>Load more</Button>
+            <Button variant="secondary" size="sm" isDisabled={list.loading} onPress={list.loadMore}>{COMMON_COPY.loadMore}</Button>
           </div>
         ) : null}
         {trash.length > 0 ? (
@@ -2014,12 +1991,12 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
             canEdit={canEdit}
             canDownload={mediaDownload}
             onClose={() => setSelected(null)}
-            onSaved={(m) => { setSelected(m); setMedia((prev) => prev.map((x) => (x.id === m.id ? m : x))); }}
-            onDeleted={(id) => { setSelected(null); setMedia((prev) => prev.filter((x) => x.id !== id)); loadTrash(); }}
+            onSaved={(m) => { setSelected(m); list.patch((prev) => prev.map((x) => (x.id === m.id ? m : x))); }}
+            onDeleted={(id) => { setSelected(null); list.patch((prev) => prev.filter((x) => x.id !== id)); loadTrash(); }}
             // Only while a tag filter is on, and only then: retagging the open file can move
             // it out of (or into) the current narrowing, so leaving the grid alone would show
             // a file the filter excludes. Unfiltered, nothing on screen changed.
-            onTermsSaved={() => { if (term) load(0); }}
+            onTermsSaved={() => { if (term) list.reload(); }}
             onError={onError}
           />
         ) : null}
@@ -2245,15 +2222,22 @@ function rolesOf(u: UserRow): string[] {
   return [];
 }
 
+/** Page size for the users list. It used to be one call with `limit: 200` and no way past
+ * it, so the 201st account was unreachable from the editor and the header said "200
+ * accounts" as though that were all of them. */
+const USERS_PAGE_SIZE = 200;
+
 export function UsersView({ api, me, onError }: { api: Api; me: Me | null; onError: (s: string) => void }) {
-  const [users, setUsers] = useState<UserRow[]>([]);
   const [inviting, setInviting] = useState(false);
   const [busy, setBusy] = useState<string>("");
 
-  const refresh = useCallback(() => {
-    api.call<UserRow[]>("listUsers", { limit: 200 }).then(setUsers).catch((e) => onError(errMsg(e)));
-  }, [api, onError]);
-  useEffect(() => { refresh(); }, [refresh]);
+  const fetchPage = useCallback(
+    (offset: number, limit: number) => api.call<UserRow[]>("listUsers", { limit, offset }),
+    [api],
+  );
+  const list = usePagedList(fetchPage, USERS_PAGE_SIZE, onError);
+  const users = list.rows;
+  const refresh = list.reload;
 
   const setRoles = async (u: UserRow, roles: string[]) => {
     setBusy(u.username);
@@ -2277,7 +2261,7 @@ export function UsersView({ api, me, onError }: { api: Api; me: Me | null; onErr
 
   return (
     <>
-      <Hero lead="Users" em={users.length === 0 ? "None yet" : users.length === 1 ? "1 account" : `${users.length} accounts`}>
+      <Hero lead="Users" em={listSummary(list.phase, users.length, { empty: "None yet", one: "1 account", many: (n) => `${n} accounts` }, list.hasMore)}>
         <Button className="shrink-0" onPress={() => setInviting(true)}>+ Invite</Button>
       </Hero>
       <div className={WRAP}>
@@ -2300,8 +2284,15 @@ export function UsersView({ api, me, onError }: { api: Api; me: Me | null; onErr
               </div>
             );
           })}
-          {users.length === 0 ? <p className="text-fg-subtle">No users yet. Invite someone to get started.</p> : null}
+          {list.phase === "ready" && users.length === 0 ? <p className="text-fg-subtle">No users yet. Invite someone to get started.</p> : null}
+          {list.phase === "loading" ? <p className="text-fg-subtle">{COMMON_COPY.loading}</p> : null}
+          {list.phase === "failed" ? <LoadFailed onRetry={list.reload} /> : null}
         </div>
+        {list.hasMore ? (
+          <div className="mt-3.5 text-center">
+            <Button variant="secondary" size="sm" isDisabled={list.loading} onPress={list.loadMore}>{COMMON_COPY.loadMore}</Button>
+          </div>
+        ) : null}
       </div>
       {inviting ? <InviteUser api={api} onClose={() => setInviting(false)} onInvited={() => { setInviting(false); refresh(); }} onError={onError} /> : null}
     </>
@@ -2333,9 +2324,11 @@ function RolesInput({ value, disabled, onSave }: { value: string[]; disabled: bo
     );
   }
   return (
-    <span className="flex cursor-pointer flex-wrap gap-1" onClick={() => setEditing(true)} title="Click to edit">
+    // A button, so the roles can be edited from the keyboard: this was a `<span onClick>`, and
+    // the only way to change someone's roles was to click on the pills.
+    <button type="button" className="flex cursor-pointer flex-wrap gap-1 rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring" disabled={disabled} onClick={() => setEditing(true)} title="Click to edit">
       {value.length === 0 ? <Pill>no roles</Pill> : value.map((r) => <Pill key={r} status={r === "admin" ? "published" : undefined}>{r}</Pill>)}
-    </span>
+    </button>
   );
 }
 

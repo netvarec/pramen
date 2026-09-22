@@ -11,15 +11,15 @@ export default createPage()
   .params({ slug: "string", id: "string" })
   .route("/collections/:slug/:id")
   .render(function CollectionItemRoute({ params }) {
-    const { api, collections, setError } = useApp();
+    const { api, collections, collectionsReady, setError } = useApp();
     const navigate = useNavigate();
     const def = collections.find((c) => c.slug === params.slug);
     const backToList = () => navigate("collection", { params: { slug: params.slug } });
 
     if (!def) {
       return (
-        <Notice action={collections.length > 0 ? <Button variant="ghost" size="sm" onPress={() => navigate("home")}>← Pages</Button> : undefined}>
-          {collections.length === 0 ? "Loading…" : `Unknown collection: ${params.slug}`}
+        <Notice action={collectionsReady ? <Button variant="ghost" size="sm" onPress={() => navigate("home")}>← Pages</Button> : undefined}>
+          {!collectionsReady ? "Loading…" : `Unknown collection: ${params.slug}`}
         </Notice>
       );
     }

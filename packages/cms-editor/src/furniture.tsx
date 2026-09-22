@@ -14,7 +14,9 @@ import { useCallback, useEffect, useState } from "react";
 import { useApp, useUnsavedGuard } from "./app-context";
 import type { Api } from "./api";
 import { CONTROL, RichText, slugify } from "./fields";
-import { ROW, WRAP } from "./chrome";
+import { ROW, ROW_BUTTON, WRAP } from "./chrome";
+import { COMMON_COPY } from "./copy";
+import { LoadFailed, nullableSummary } from "./list-state";
 import { useCrumb } from "./breadcrumb";
 import { PageHeader } from "./page-header";
 import type { CollectionMeta, Menu, MenuItem, MenuItemKind, Page, Redirect, RichTextDoc, Taxonomy, Term, Widget, WidgetArea } from "./types";
@@ -24,6 +26,36 @@ import type { TaxonomyTarget } from "./types";
 
 export function errText(e: unknown): string {
   return String((e as Error)?.message ?? e);
+}
+
+/** Fetch a furniture list into `T[] | null` state, where `null` is "not answered yet".
+ *
+ * These four screens already told loading apart from empty that way, and then threw it away
+ * on the error path: a failed fetch set `[]`, so a 500 read as "0 menus" and "No menus yet"
+ * under the error banner, the same as a fresh deployment. Now a failure leaves the rows as
+ * they were (null on first load, the last good list on a refresh) and raises `failed`, which
+ * the header and the body turn into "Not loaded" and a retry. */
+function useFurnitureList<T>(fetch: () => Promise<T[]>, onError: (s: string) => void) {
+  const [rows, setRows] = useState<T[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  const refresh = useCallback(() => {
+    fetch()
+      .then((r) => { setRows(r); setFailed(false); })
+      .catch((e) => { setFailed(true); onError(errText(e)); });
+  }, [fetch, onError]);
+  useEffect(refresh, [refresh]);
+  return { rows, failed: failed && rows === null, refresh };
+}
+
+/** A detail editor before its document is on screen: loading, or (if the fetch failed) a
+ * retry. The three editors below used to show "Loading…" in both cases, so a failed fetch was
+ * a spinner that never ended, with the actual error only in the banner above it. */
+function DetailPending({ failed, onRetry }: { failed: boolean; onRetry: () => void }) {
+  return (
+    <div className={WRAP}>
+      <div className="pt-8">{failed ? <LoadFailed onRetry={onRetry} /> : <p className="text-fg-subtle">{COMMON_COPY.loading}</p>}</div>
+    </div>
+  );
 }
 
 /** The site-furniture screens' header. `Head` stays as the local name the four call sites
@@ -59,16 +91,11 @@ function KeyFields({ label, keyValue, onLabel, onKey, keyHint }: {
 // --- menus ----------------------------------------------------------------------------
 
 export function MenusView({ api, onOpen, onError, canEdit }: { api: Api; onOpen: (name: string) => void; onError: (s: string) => void; canEdit: boolean }) {
-  const [menus, setMenus] = useState<Menu[] | null>(null);
+  const { rows: menus, failed, refresh } = useFurnitureList(useCallback(() => api.listMenus(), [api]), onError);
   const [label, setLabel] = useState("");
   const [name, setName] = useState("");
   const [nameTouched, setNameTouched] = useState(false);
   const [busy, setBusy] = useState(false);
-
-  const refresh = useCallback(() => {
-    api.listMenus().then(setMenus).catch((e) => { setMenus([]); onError(errText(e)); });
-  }, [api, onError]);
-  useEffect(refresh, [refresh]);
 
   const create = async () => {
     setBusy(true);
@@ -81,17 +108,18 @@ export function MenusView({ api, onOpen, onError, canEdit }: { api: Api; onOpen:
 
   return (
     <>
-      <Head lead="Navigation" em={menus === null ? "Menus" : menus.length === 1 ? "1 menu" : `${menus.length} menus`} />
+      <Head lead="Navigation" em={nullableSummary(menus, failed, { empty: "0 menus", one: "1 menu", many: (n) => `${n} menus` })} />
       <div className={WRAP}>
         <div className="flex flex-col gap-2">
-        {menus === null ? <p className="text-fg-subtle">Loading…</p> : null}
+        {menus === null && !failed ? <p className="text-fg-subtle">{COMMON_COPY.loading}</p> : null}
+        {failed ? <LoadFailed onRetry={refresh} /> : null}
         {menus?.length === 0 ? <p className="text-fg-subtle">No menus yet. A menu is read by name — <code>getMenu(&quot;primary&quot;)</code> — from your layout.</p> : null}
         {(menus ?? []).map((m) => (
-          <div key={m.id} className={`${ROW} cursor-pointer hover:bg-surface-muted`} onClick={() => onOpen(m.name)}>
+          <button type="button" key={m.id} className={`${ROW} ${ROW_BUTTON}`} onClick={() => onOpen(m.name)}>
             <span className="min-w-0 flex-1 truncate font-medium">{m.label}</span>
             <span className="shrink-0 truncate text-fg-subtle">{m.name}</span>
             <span className="shrink-0 text-caption text-fg-subtle">{countItems(m.items ?? [])} item(s)</span>
-          </div>
+          </button>
         ))}
       </div>
       {canEdit ? (
@@ -177,6 +205,9 @@ export function MenuEditor({ api, name, collections, onBack, onDeleted, onError,
   // overwrite is a 409 the person can act on rather than a silent replacement.
   const [version, setVersion] = useState<number | undefined>(undefined);
   const [missing, setMissing] = useState(false);
+  // See `DetailPending`: a failed load is not "still loading", and says so with a retry.
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   const [busy, setBusy] = useState(false);
   const [ok, setOk] = useState(false);
   // Reference targets, fetched once: a menu item points at a page or a term by id, and a
@@ -198,7 +229,7 @@ export function MenuEditor({ api, name, collections, onBack, onDeleted, onError,
         setVersion(m.version);
         setBaseline(JSON.stringify({ label: m.label, items: m.items ?? [] }));
       })
-      .catch((e) => onError(errText(e)));
+      .catch((e) => { if (live) setLoadFailed(true); onError(errText(e)); });
     api.listPages({ limit: 200 }).then((r) => live && setPages(r)).catch(() => setPages([]));
     api.listTaxonomies()
       .then(async (taxa) => {
@@ -219,7 +250,7 @@ export function MenuEditor({ api, name, collections, onBack, onDeleted, onError,
       })
       .catch(() => setTerms([]));
     return () => { live = false; };
-  }, [api, name, onError]);
+  }, [api, name, onError, attempt]);
 
   const save = async () => {
     if (!menu) return;
@@ -280,7 +311,7 @@ export function MenuEditor({ api, name, collections, onBack, onDeleted, onError,
   const add = () => setItems([...items, { id: crypto.randomUUID(), label: "New item", kind: "custom", url: "/" }]);
 
   if (missing) return <div className={WRAP}><p className="pt-8 text-fg-subtle">Unknown menu: {name}</p></div>;
-  if (!menu) return <div className={WRAP}><p className="pt-8 text-fg-subtle">Loading…</p></div>;
+  if (!menu) return <DetailPending failed={loadFailed} onRetry={() => { setLoadFailed(false); setAttempt((n) => n + 1); }} />;
 
   return (
     <div className={WRAP}>
@@ -413,16 +444,11 @@ function MenuItemRow({ item, depth, pages, terms, collections, onPatch, onMove, 
 // --- redirects ------------------------------------------------------------------------
 
 export function RedirectsView({ api, onError, canEdit }: { api: Api; onError: (s: string) => void; canEdit: boolean }) {
-  const [rows, setRows] = useState<Redirect[] | null>(null);
+  const { rows, failed, refresh } = useFurnitureList<Redirect>(useCallback(() => api.listRedirects(), [api]), onError);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [status, setStatus] = useState(301);
   const [busy, setBusy] = useState(false);
-
-  const refresh = useCallback(() => {
-    api.listRedirects().then(setRows).catch((e) => { setRows([]); onError(errText(e)); });
-  }, [api, onError]);
-  useEffect(refresh, [refresh]);
 
   const create = async () => {
     setBusy(true);
@@ -442,14 +468,15 @@ export function RedirectsView({ api, onError, canEdit }: { api: Api; onError: (s
 
   return (
     <>
-      <Head lead="Old URLs, kept alive" em={rows === null ? "Redirects" : rows.length === 1 ? "1 redirect" : `${rows.length} redirects`} />
+      <Head lead="Old URLs, kept alive" em={nullableSummary(rows, failed, { empty: "0 redirects", one: "1 redirect", many: (n) => `${n} redirects` })} />
       <div className={WRAP}>
         <p className="mb-4 max-w-[62ch] text-sm text-fg-muted">
         Changing a page&apos;s slug changes a live URL and breaks every link to it. A redirect is how the old one keeps working.
         Disabling one keeps the record of what the old URL was, which deleting it does not.
       </p>
       <div className="flex flex-col gap-2">
-        {rows === null ? <p className="text-fg-subtle">Loading…</p> : null}
+        {rows === null && !failed ? <p className="text-fg-subtle">{COMMON_COPY.loading}</p> : null}
+        {failed ? <LoadFailed onRetry={refresh} /> : null}
         {rows?.length === 0 ? <p className="text-fg-subtle">No redirects yet.</p> : null}
         {(rows ?? []).map((r) => (
           <div key={r.id} className={`${ROW} ${r.enabled ? "" : "opacity-60"}`}>
@@ -539,7 +566,10 @@ function appliesToText(t: Taxonomy): string {
 
 
 export function TaxonomiesView({ api, onOpen, onError, canEdit }: { api: Api; onOpen: (slug: string) => void; onError: (s: string) => void; canEdit: boolean }) {
-  const [taxa, setTaxa] = useState<Taxonomy[] | null>(null);
+  // No target: this is the screen that EDITS the scope, so it has to show a vocabulary it
+  // has narrowed away. Otherwise narrowing one to Media would remove it from the only
+  // place that could widen it again.
+  const { rows: taxa, failed, refresh } = useFurnitureList(useCallback(() => api.listTaxonomies(), [api]), onError);
   const [label, setLabel] = useState("");
   const [slug, setSlug] = useState("");
   const [slugTouched, setSlugTouched] = useState(false);
@@ -554,13 +584,6 @@ export function TaxonomiesView({ api, onOpen, onError, canEdit }: { api: Api; on
   // hidden rather than offered and silently dropped.
   const { cms: { mediaTerms: scopable } } = useApp();
 
-  const refresh = useCallback(() => {
-    // No target: this is the screen that EDITS the scope, so it has to show a vocabulary it
-    // has narrowed away — otherwise narrowing one to Media would remove it from the only
-    // place that could widen it again.
-    api.listTaxonomies().then(setTaxa).catch((e) => { setTaxa([]); onError(errText(e)); });
-  }, [api, onError]);
-  useEffect(refresh, [refresh]);
 
   const create = async () => {
     setBusy(true);
@@ -582,15 +605,16 @@ export function TaxonomiesView({ api, onOpen, onError, canEdit }: { api: Api; on
         a deployment declares what it sorts by, the same way it declares its content types.
       </p>
       <div className="flex flex-col gap-2">
-        {taxa === null ? <p className="text-fg-subtle">Loading…</p> : null}
+        {taxa === null && !failed ? <p className="text-fg-subtle">{COMMON_COPY.loading}</p> : null}
+        {failed ? <LoadFailed onRetry={refresh} /> : null}
         {taxa?.length === 0 ? <p className="text-fg-subtle">No vocabularies yet.</p> : null}
         {(taxa ?? []).map((t) => (
-          <div key={t.id} className={`${ROW} cursor-pointer hover:bg-surface-muted`} onClick={() => onOpen(t.slug)}>
+          <button type="button" key={t.id} className={`${ROW} ${ROW_BUTTON}`} onClick={() => onOpen(t.slug)}>
             <span className="min-w-0 flex-1 truncate font-medium">{t.label}</span>
             <span className="shrink-0 truncate text-fg-subtle">{t.slug}</span>
             <span className="shrink-0 text-caption text-fg-subtle">{t.hierarchical ? "nested" : "flat"}</span>
             {scopable ? <span className="shrink-0 text-caption text-fg-subtle">{appliesToText(t)}</span> : null}
-          </div>
+          </button>
         ))}
       </div>
       {canEdit ? (
@@ -626,7 +650,10 @@ export function TaxonomyEditor({ api, slug, onBack, onDeleted, onError, canEdit 
 }) {
   const [tax, setTax] = useState<Taxonomy | null>(null);
   const [tree, setTree] = useState<Term[] | null>(null);
+  const [treeFailed, setTreeFailed] = useState(false);
   const [missing, setMissing] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   const [termLabel, setTermLabel] = useState("");
   const [termSlug, setTermSlug] = useState("");
   const [termSlugTouched, setTermSlugTouched] = useState(false);
@@ -635,7 +662,7 @@ export function TaxonomyEditor({ api, slug, onBack, onDeleted, onError, canEdit 
   const { cms: { mediaTerms: scopable } } = useApp();
 
   const refreshTerms = useCallback(() => {
-    api.getTermTree(slug).then(setTree).catch((e) => { setTree([]); onError(errText(e)); });
+    api.getTermTree(slug).then((t) => { setTree(t); setTreeFailed(false); }).catch((e) => { setTreeFailed(true); onError(errText(e)); });
   }, [api, slug, onError]);
 
   useEffect(() => {
@@ -647,9 +674,9 @@ export function TaxonomyEditor({ api, slug, onBack, onDeleted, onError, canEdit 
         if (!t) { setMissing(true); return; }
         setTax(t);
       })
-      .catch((e) => onError(errText(e)));
+      .catch((e) => { if (live) setLoadFailed(true); onError(errText(e)); });
     return () => { live = false; };
-  }, [api, slug, onError]);
+  }, [api, slug, onError, attempt]);
   useEffect(refreshTerms, [refreshTerms]);
 
   const flat = tree ? flattenTerms(tree) : [];
@@ -693,7 +720,7 @@ export function TaxonomyEditor({ api, slug, onBack, onDeleted, onError, canEdit 
   };
 
   if (missing) return <div className={WRAP}><p className="pt-8 text-fg-subtle">Unknown vocabulary: {slug}</p></div>;
-  if (!tax) return <div className={WRAP}><p className="pt-8 text-fg-subtle">Loading…</p></div>;
+  if (!tax) return <DetailPending failed={loadFailed} onRetry={() => { setLoadFailed(false); setAttempt((n) => n + 1); }} />;
 
   return (
     <div className={WRAP}>
@@ -704,7 +731,8 @@ export function TaxonomyEditor({ api, slug, onBack, onDeleted, onError, canEdit 
       </div>
       <div className="flex max-w-[860px] flex-col gap-4">
         <div className="flex flex-col gap-2">
-          {tree === null ? <p className="text-fg-subtle">Loading…</p> : null}
+          {tree === null && !treeFailed ? <p className="text-fg-subtle">{COMMON_COPY.loading}</p> : null}
+          {tree === null && treeFailed ? <LoadFailed onRetry={refreshTerms} /> : null}
           {tree?.length === 0 ? <p className="text-fg-subtle">No terms yet.</p> : null}
           {flat.map(({ term, depth }) => (
             <div key={term.id} className={ROW} style={{ marginLeft: depth * 24 }}>
@@ -777,16 +805,11 @@ export function flattenTerms(tree: readonly Term[], depth = 0): FlatTerm[] {
 // --- widget areas ---------------------------------------------------------------------
 
 export function WidgetAreasView({ api, onOpen, onError, canEdit }: { api: Api; onOpen: (name: string) => void; onError: (s: string) => void; canEdit: boolean }) {
-  const [areas, setAreas] = useState<WidgetArea[] | null>(null);
+  const { rows: areas, failed, refresh } = useFurnitureList(useCallback(() => api.listWidgetAreas(), [api]), onError);
   const [label, setLabel] = useState("");
   const [name, setName] = useState("");
   const [nameTouched, setNameTouched] = useState(false);
   const [busy, setBusy] = useState(false);
-
-  const refresh = useCallback(() => {
-    api.listWidgetAreas().then(setAreas).catch((e) => { setAreas([]); onError(errText(e)); });
-  }, [api, onError]);
-  useEffect(refresh, [refresh]);
 
   const create = async () => {
     setBusy(true);
@@ -806,14 +829,15 @@ export function WidgetAreasView({ api, onOpen, onError, canEdit }: { api: Api; o
         Your layout reads one by name: <code>getWidgetArea(&quot;sidebar&quot;)</code>.
       </p>
       <div className="flex flex-col gap-2">
-        {areas === null ? <p className="text-fg-subtle">Loading…</p> : null}
+        {areas === null && !failed ? <p className="text-fg-subtle">{COMMON_COPY.loading}</p> : null}
+        {failed ? <LoadFailed onRetry={refresh} /> : null}
         {areas?.length === 0 ? <p className="text-fg-subtle">No widget areas yet.</p> : null}
         {(areas ?? []).map((a) => (
-          <div key={a.id} className={`${ROW} cursor-pointer hover:bg-surface-muted`} onClick={() => onOpen(a.name)}>
+          <button type="button" key={a.id} className={`${ROW} ${ROW_BUTTON}`} onClick={() => onOpen(a.name)}>
             <span className="min-w-0 flex-1 truncate font-medium">{a.label}</span>
             <span className="shrink-0 truncate text-fg-subtle">{a.name}</span>
             <span className="shrink-0 text-caption text-fg-subtle">{(a.widgets ?? []).length} widget(s)</span>
-          </div>
+          </button>
         ))}
       </div>
       {canEdit ? (
@@ -850,6 +874,9 @@ export function WidgetAreaEditor({ api, name, onBack, onDeleted, onError, canEdi
   useUnsavedGuard(area !== null && JSON.stringify({ label, widgets }) !== baseline);
   const [version, setVersion] = useState<number | undefined>(undefined);
   const [missing, setMissing] = useState(false);
+  // See `DetailPending`: a failed load is not "still loading", and says so with a retry.
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   const [busy, setBusy] = useState(false);
   const [ok, setOk] = useState(false);
 
@@ -864,10 +891,10 @@ export function WidgetAreaEditor({ api, name, onBack, onDeleted, onError, canEdi
         setVersion(a.version);
         setBaseline(JSON.stringify({ label: a.label, widgets: a.widgets ?? [] }));
       })
-      .catch((e) => onError(errText(e)));
+      .catch((e) => { if (live) setLoadFailed(true); onError(errText(e)); });
     api.listMenus().then((r) => live && setMenus(r)).catch(() => setMenus([]));
     return () => { live = false; };
-  }, [api, name, onError]);
+  }, [api, name, onError, attempt]);
 
   const save = async () => {
     if (!area) return;
@@ -895,7 +922,7 @@ export function WidgetAreaEditor({ api, name, onBack, onDeleted, onError, canEdi
   };
 
   if (missing) return <div className={WRAP}><p className="pt-8 text-fg-subtle">Unknown widget area: {name}</p></div>;
-  if (!area) return <div className={WRAP}><p className="pt-8 text-fg-subtle">Loading…</p></div>;
+  if (!area) return <DetailPending failed={loadFailed} onRetry={() => { setLoadFailed(false); setAttempt((n) => n + 1); }} />;
 
   return (
     <div className={WRAP}>

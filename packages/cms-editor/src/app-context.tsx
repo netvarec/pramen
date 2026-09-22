@@ -120,6 +120,15 @@ interface AppContextValue {
    * that registers none (or a server without the handler) leaves this empty; a failure is
    * non-fatal, exactly as with collections. */
   adminPages: AdminPageMeta[];
+  /** `listCollections` / `listAdminPages` have ANSWERED (or failed, which both treat as "none").
+   *
+   * The two lists stay plain arrays, since every nav builder and the host dashboards read them
+   * as such, but an empty array alone cannot say whether it is the answer. The routes for
+   * `/collections/:slug` and `/apps/:slug` used `length === 0` to mean "still loading", so on
+   * a deployment that registers no collections (or a session that may open no admin page) a
+   * stale link showed "Loading…" forever instead of saying the slug is unknown. */
+  collectionsReady: boolean;
+  adminPagesReady: boolean;
   /** Content types registered on the server (from `listContentTypes`). More than one ⇒ each
    * gets its own nav tab and its own list route, instead of one pooled "Pages" list where a
    * page and an article sit in the same column with nothing to tell them apart.
@@ -193,6 +202,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [me, setMe] = useState<Me | null>(null);
   const [collections, setCollections] = useState<CollectionMeta[]>([]);
   const [adminPages, setAdminPages] = useState<AdminPageMeta[]>([]);
+  const [collectionsReady, setCollectionsReady] = useState(false);
+  const [adminPagesReady, setAdminPagesReady] = useState(false);
   const [contentTypes, setContentTypes] = useState<ContentType[] | null>(null);
   const [contentTypesFailed, setContentTypesFailed] = useState(false);
   const [contentTypesNonce, setContentTypesNonce] = useState(0);
@@ -253,10 +264,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       .catch(() => setMe({}));
     // Collections drive the nav + list/edit routes. An app that registers none (or an older
     // server without the handler) just leaves the nav as-is — a failure is non-fatal.
-    api.call<CollectionMeta[]>("listCollections").then(setCollections).catch(() => setCollections([]));
+    api.call<CollectionMeta[]>("listCollections")
+      .then(setCollections)
+      .catch(() => setCollections([]))
+      .finally(() => setCollectionsReady(true));
     // Same shape, same tolerance: an app that registers no Block Kit pages, or a server
     // without the handler, just leaves the nav as it was.
-    api.listAdminPages().then(setAdminPages).catch(() => setAdminPages([]));
+    api.listAdminPages()
+      .then(setAdminPages)
+      .catch(() => setAdminPages([]))
+      .finally(() => setAdminPagesReady(true));
     // A server older than this handler leaves the monolingual default, which is the safe
     // way round: the i18n surface stays hidden rather than half-rendered. Merged OVER the
     // defaults, not substituted for them, so a capability the server does not know about
@@ -295,6 +312,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     isAdmin: (me?.roles ?? []).includes("admin"),
     collections,
     adminPages,
+    collectionsReady,
+    adminPagesReady,
     contentTypes,
     contentTypesFailed,
     refreshContentTypes,

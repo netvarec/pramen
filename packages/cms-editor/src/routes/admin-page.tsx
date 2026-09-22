@@ -27,7 +27,7 @@ export default createPage()
   .params({ slug: "string" })
   .route("/apps/:slug")
   .render(function AdminPageRoute({ params }) {
-    const { api, adminPages, setError } = useApp();
+    const { api, adminPages, adminPagesReady, setError } = useApp();
     const navigate = useNavigate();
     const def = adminPages.find((p) => p.slug === params.slug);
 
@@ -36,8 +36,8 @@ export default createPage()
     // list has arrived at all, exactly as the collection route does it.
     if (!def) {
       return (
-        <Notice action={adminPages.length > 0 ? <Button variant="ghost" size="sm" onPress={() => navigate("home")}>← Pages</Button> : undefined}>
-          {adminPages.length === 0 ? "Loading…" : `Unknown page: ${params.slug}`}
+        <Notice action={adminPagesReady ? <Button variant="ghost" size="sm" onPress={() => navigate("home")}>← Pages</Button> : undefined}>
+          {!adminPagesReady ? "Loading…" : `Unknown page: ${params.slug}`}
         </Notice>
       );
     }
