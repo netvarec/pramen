@@ -16,6 +16,86 @@ there are no backward-compatibility guarantees yet.
 
 ### Added
 
+- **Override slots and nav hooks: a theme replaces the editor's pieces without touching its
+  source (`@pramen/cms-editor`, `@pramen/cms-astro`).** `buildEditor({ slots })` had one slot,
+  `pageHeader`. The one deployment that rebuilds the editor for its design system got the rest
+  of the way with string replacements against our source: `routes/home.tsx` swapped for a
+  dashboard by `onLoad`, a detail header spliced into `schema-builder.tsx` and the page editor
+  (with the toolbar's own back button and title cut out), the media grid and its detail dialog
+  sliced out by `indexOf`, a nav function injected into `chrome-topbar.tsx` beside an inline
+  remap of the lit key (so the sidebar had none of it), and an account-menu row threaded as an
+  `onStructure`/`showStructure` pair through `_layout.tsx`, `chrome-shared.tsx` and both
+  chromes. Every one of those is now a named seam:
+
+  | Slot | Replaces | Your module exports |
+  |---|---|---|
+  | `home` | the SCREEN at `/` (the route stays ours) | `HomeScreen` |
+  | `detailHeader` | the way back and the title on every detail screen | `DetailHeader` |
+  | `mediaDetail` | the dialog frame around one media file | `MediaDetailFrame` |
+  | `mediaGrid` | the media library's grid and its empty state | `MediaGrid`, `MediaLibraryEmpty` |
+  | `nav` | hooks over the nav and the account menu | `navHooks` |
+
+  **Every contract is a type**, published as `@pramen/cms-editor/slots` (`HomeScreenProps`,
+  `DetailHeaderProps`, `MediaDetailFrameProps`, `MediaGridProps`, `NavHooks`, ... and
+  `PageHeaderProps` for the existing slot), and each default is declared against the same type.
+  The module is a leaf that imports only types from other leaves, so a theme typechecks against
+  it with no route table, no app context and no relative path into `src/`; everything a slot
+  needs from the running editor arrives as props. A test builds the editor with every slot
+  filled by fixture modules that use only those public imports, checks each one landed and each
+  default is gone, and typechecks the fixtures under a stricter config than ours.
+
+  **`home` slots the screen, not the route**, which is what answers the reasons the landing
+  route was turned down as a slot last time (it would have put `@buzola/router` in every host's
+  build, and handed each host the collections-only and split-by-type redirects to
+  reimplement, which the one host that tried simply dropped). The route computes the decision
+  (`homeLanding`) and hands it down as `landing`, with `goToLanding()` and, when the pooled page
+  list is itself the home screen, `pageList`. The default follows it exactly as before.
+
+  **One detail header, everywhere.** The "← Types / title" row was written out seven times
+  (collection item, block type, content type, menu, vocabulary, widget area, and inside the page
+  editor's toolbar); it is one `DetailHeader` now. The page editor uses it too: its toolbar
+  keeps the status pill, the save state and the actions, and the way back and the title moved
+  into the header above it, where a theme's header replaces them instead of sitting beside a
+  second copy. Because the header scrolls away, the page editor now publishes the page's title
+  as the chrome's breadcrumb (it deliberately did not while the sticky toolbar carried it).
+
+  **`mediaGrid` stays a slot rather than adopting podoba's `AssetMasonryGrid` /
+  `AssetLibraryPreview` / `AssetSelectionEmpty` by default.** They need podoba 0.0.35 (we pin
+  0.0.34, and the eight releases since restyle many other components), a masonry layout needs
+  per-file dimensions the stored media do not carry, and their look is the Graphic Standard's.
+  A theme built with `designSystem` links its own podoba and can use them through the slot today.
+
+  **The nav hooks run upstream of both chromes**: `transformNav({ sections, active, isAdmin,
+  me })` returns the sections to render and the key to light, and the sidebar, the topbar, the
+  breadcrumb and the account menu all read that one answer. A transform that throws or returns
+  junk is logged and the untransformed nav is rendered, since a throw there would otherwise be a
+  blank admin. `accountMenu` adds rows (`{ label, page, params?, icon?, requiresNav?, visible? }`)
+  between the theme toggle and Settings, each a guarded in-app navigation; the chromes render
+  them from one `accountItems` prop and know nothing about any particular row. `requiresNav` is
+  checked against the nav as BUILT, so a theme that hides Types and offers "Content structure"
+  in the account menu instead does not hide the row along with the entry.
+
+  **`buildEditor` checks slots by name before building**: an unknown slot and a path that does
+  not exist both fail up front, naming the slot. A relative slot path now resolves from the
+  working directory, which the README's own example already assumed.
+
+- **`admin: { hideControls, accountMenu }`: search, filters and account-menu rows as deployment
+  options (`@pramen/cms-editor`, `@pramen/cms-astro`).** Whether a CMS wants search and filters
+  is a product decision, and the deployment that decided against them made it by deleting the
+  controls from our source with regular expressions. `hideControls` takes `"mediaSearch"`,
+  `"mediaFilters"` (the sort menu, tag menu and type chips) and `"relationSearch"` (the picker's
+  search input). Default unchanged: everything visible. Hiding a control never narrows a list,
+  since its state stays at the default. `accountMenu` is the runtime-config form of the nav
+  hook's rows, for a deployment with no build: a page id is validated against the editor's
+  routes, `requiresNav` states the capability, and anything malformed is warned about and
+  dropped rather than thrown on, like `layout` and `brand`.
+
+- **Fixed: the standalone admin loaded NC Fontina and never used it (`@pramen/admin`).** Its
+  `index.html` linked podoba's `fonts.css` BEFORE the compiled `app.css`. Both declare
+  `--font-sans` on `:root`, so the later one wins, and `fonts.css` exists to point that token
+  at the face: linked first, the compiled tokens put the fallback stack back. Now linked after,
+  as `buildEditor` already appends it.
+
 - **The editor's layout is theme: width, gutter, page padding and chrome metrics are CSS
   variables (`@pramen/cms-editor`).** A host that built the editor against its own design
   system could recolour it but not re-proportion it: the 1200px column and the 28px gutter

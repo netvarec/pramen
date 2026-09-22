@@ -292,7 +292,8 @@ await buildEditor({
   // stylesheet in your own tree. Tailwind resolves a bare `@import` from the file that wrote
   // it, which is why compiling ours from here would still pick up our podoba.
   styles: "src/admin/editor.css",
-  // And, if you need your design system's own header component rather than a recolour of ours:
+  // And, if you need your design system's own components rather than a recolour of ours
+  // (see "Slots" below for the full list):
   slots: { pageHeader: "src/admin/page-header.tsx" },
 });
 ```
@@ -319,20 +320,111 @@ directory, or serve them with a short max-age.
 podoba into the bundle while the stylesheet stays compiled against ours — the editor comes up
 and the colours are subtly not yours. The build warns when it sees that combination.
 
-**Slots are deliberately few.** Today there is one, `pageHeader`, because a slot is a standing
-promise that a component's props are stable and only a narrow, already-documented contract can
-carry that. Before reaching for one, check whether something cheaper already does the job:
+### Slots: your components in place of ours
+
+A slot replaces one of the editor's own modules with one of yours, at build time. Each has a
+contract, published as a type from `@pramen/cms-editor/slots`, and the editor's own default is
+declared against the same type, so a contract that changes is a compile error on both sides.
+
+| Slot | What it is | Your module exports | Contract |
+|---|---|---|---|
+| `pageHeader` | the sticky header of a list screen | `PageHeader` | `PageHeaderProps` |
+| `home` | the screen at `/` | `HomeScreen` | `HomeScreenProps` |
+| `detailHeader` | the way back and the title on every detail screen (page editor, collection item, block and content type, menu, vocabulary, widget area) | `DetailHeader` | `DetailHeaderProps` |
+| `mediaDetail` | the dialog frame around one media file | `MediaDetailFrame` | `MediaDetailFrameProps` |
+| `mediaGrid` | the media library's grid and its empty state | `MediaGrid`, `MediaLibraryEmpty` | `MediaGridProps`, `MediaLibraryEmptyProps` |
+| `nav` | hooks over the nav and the account menu, for both chromes | `navHooks` | `NavHooks` |
+
+```ts
+await buildEditor({
+  outdir: "public/admin",
+  designSystem: import.meta.dir,
+  styles: "src/admin/editor.css",
+  slots: {
+    home: "src/admin/dashboard.tsx",
+    detailHeader: "src/admin/detail-header.tsx",
+    nav: "src/admin/nav.ts",
+  },
+});
+```
+
+```tsx
+// src/admin/detail-header.tsx
+import type { DetailHeaderProps } from "@pramen/cms-editor/slots";
+import { BrandPageHeader } from "@podoba/react";
+
+export function DetailHeader({ title, parent, href, onBack, children }: DetailHeaderProps) {
+  return (
+    <BrandPageHeader
+      greeting={title}
+      parentLink={<a href={href} onClick={(e) => { e.preventDefault(); onBack(); }}>{parent}</a>}
+      cta={children}
+    />
+  );
+}
+```
+
+```ts
+// src/admin/nav.ts
+import type { NavHooks } from "@pramen/cms-editor/slots";
+
+export const navHooks: NavHooks = {
+  // Rename, hide, reorder or regroup; move the highlight to match.
+  transformNav: ({ sections, active }) => ({
+    sections: sections.map((s) => ({ ...s, entries: s.entries.filter((e) => e.key !== "types") })),
+    active,
+  }),
+  // Offer the schema editor from the account menu instead, to the same people.
+  accountMenu: [{ label: "Content structure", page: "schema", icon: "types", requiresNav: "types" }],
+};
+```
+
+**Your modules import only public things**: `@pramen/cms-editor/slots` for the types,
+`@podoba/react` and React for the rest. Everything a slot needs from the running editor
+(the API client, the mount prefix, the session's content types, a way to navigate, an
+already-guarded way back) arrives as props. Do not import the editor's internals by relative
+path: a second copy of the app context is a second React context, which throws on first render.
+
+A few things the contracts decide for you, so a theme does not have to rediscover them:
+
+- **`home` gets the landing decision, not a blank slate.** The route stays ours and hands your
+  screen `landing` (where `/` would go: the first collection on a collections-only deployment,
+  the first content type when split by type, or the pooled page list) with `goToLanding()` to
+  act on it and `pageList` to render. On a deployment with one content type the nav's "Pages"
+  entry points at `/`, so a dashboard that drops `pageList` makes the page list unreachable.
+- **`detailHeader` owns the title everywhere, including the page editor.** The page editor's
+  toolbar keeps only the page's status, the save state and the actions; the way back and the
+  title are the detail header's. While the header is scrolled away, the chrome's breadcrumb
+  names the page.
+- **`mediaDetail` arranges, it does not implement.** It gets `preview`, `details` and `actions`
+  as three elements, so preview-beside-details is a layout, not a copy of the save and delete
+  logic.
+- **`mediaGrid` is handed tiles, not media rows.** Each has `src` only when it is an image,
+  a formatted `sizeLabel` and an `onOpen`. "No files match this filter" stays the editor's,
+  since clearing the filter is the way out of it. podoba's `AssetMasonryGrid`,
+  `AssetLibraryPreview` and `AssetSelectionEmpty` (podoba 0.0.35+) fit this slot; they are not
+  the default because the stored media carry no dimensions for a masonry layout to use and the
+  look is the Graphic Standard's rather than this editor's.
+- **`nav` runs upstream of both chromes.** The sidebar, the topbar, the breadcrumb and the
+  account menu all read the one transformed nav. `requiresNav` is checked against the nav as
+  BUILT, so hiding an entry does not hide the account-menu row that replaces it. A
+  `transformNav` that throws is logged and ignored rather than taking the admin down.
+
+**Before reaching for a slot, check whether something cheaper already does the job:**
 
 | You want | Use |
 |---|---|
-| the header recoloured, unpanelled, or in your own face | `admin: { pageHeader }` — runtime config, no build |
+| the header recoloured, unpanelled, or in your own face | `admin: { pageHeader }`, runtime config, no build |
 | the wordmark, the tab title, the nav shape | `admin: { brand }`, `admin: { layout }` |
-| a whole screen of your own | `adminPage()` or `adminPanel()` — no build either |
-| your design system's own header **component** | `slots: { pageHeader }` |
+| search or filters off | `admin: { hideControls }` |
+| an extra row in the account menu | `admin: { accountMenu }` |
+| a whole screen of your own | `adminPage()` or `adminPanel()`, no build either |
+| your design system's own **component** in one of the places above | `slots` |
 
 A slot that stops resolving is a **build error**, not a silent fallback: if a release moves the
-module a slot names, `buildEditor` throws rather than quietly handing you ours back. That is the
-difference between this and the alternative it replaces — a stylesheet or a bundler alias
+module a slot names, `buildEditor` throws rather than quietly handing you ours back. So does a
+slot name this release does not have, and a slot path that does not exist. That is the
+difference between this and the alternative it replaces: a stylesheet or a bundler alias
 written against our internals, which the next release voids with no error anywhere.
 
 ## Status

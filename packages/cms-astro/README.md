@@ -112,9 +112,29 @@ pramenCms({
     extraNav: [{ label: "Curation", href: "/curate", target: "_self" }],
     panels: ["/admin/curation.js"],            // YOUR React screens inside the chrome
     previewUrl: "/preview",                    // YOUR page that renders a draft
+    hideControls: ["mediaFilters"],            // turn off optional search/filter controls; see below
+    accountMenu: [{ label: "Content structure", page: "schema", icon: "types", requiresNav: "types" }],
   },
 })
 ```
+
+### `hideControls` and `accountMenu`
+
+Two product decisions a deployment takes without rebuilding the editor.
+
+`hideControls` turns off optional list controls: `"mediaSearch"` (the media library's search
+field), `"mediaFilters"` (its sort menu, tag menu and type chips) and `"relationSearch"` (the
+search input in a relation field's picker). All of them are on by default, and should usually
+stay on: the media library pages at sixty files. Hiding a control never narrows a list, since
+its state stays at the default. An unknown name is warned about in the console and ignored.
+
+`accountMenu` adds rows to the avatar's menu, each opening a screen of the editor by its route
+id (`"schema"`, `"users"`, `"collection"` with `params: { slug }`, ...). `requiresNav` shows a row
+only when the nav the editor built for this session has that entry, which is how a row states a
+capability: `"types"` exists only for someone who may author the schema, `"users"` only for an
+admin. A row naming a page that does not exist is dropped with a warning. For anything a JSON
+config cannot say (renaming or hiding nav entries, a visibility predicate), a theme built with
+`buildEditor()` has the `nav` slot; see that package's README.
 
 ### `pageHeader` — dressing the screen header
 
