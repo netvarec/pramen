@@ -6,7 +6,7 @@ import { Button, Dialog, type DialogSize, DropdownMenu, DropdownMenuItem, Dropdo
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Api, ApiError } from "./api";
 import { CONTROL, FieldForm, formatWhen, fromLocalInput, slugify, toLocalInput } from "./fields";
-import { BELOW_APP_BAR, BELOW_PAGE_TOOLBAR, INSPECTOR_MAX_H, PAGE_TOOLBAR_H, ROW, WRAP } from "./chrome";
+import { BELOW_APP_BAR, BELOW_PAGE_TOOLBAR, CONTENT, INSPECTOR_MAX_H, PAGE_TOOLBAR_H, ROW, WRAP } from "./chrome";
 import { useCrumb } from "./breadcrumb";
 import { PageHeader } from "./page-header";
 import { pagePreviewHref, sitePreviewUrl } from "./preview";
@@ -222,7 +222,7 @@ const Dim = ({ children }: { children: ReactNode }) => <span className="text-fg-
  * out verbatim; the copies had already drifted on which of them offered a way back. */
 export function Notice({ children, action }: { children: ReactNode; action?: ReactNode }) {
   return (
-    <div className="mx-auto flex max-w-[1200px] items-center gap-2 px-7 pt-8">
+    <div className={`${CONTENT} flex items-center gap-2 pt-8`}>
       <p className="text-fg-subtle">{children}</p>
       {action}
     </div>
@@ -844,7 +844,7 @@ function PageToolbar({ page, dirtyCount, onBack, backLabel, onAct, busy }: {
 
   return (
     <>
-    <div className={`sticky ${BELOW_APP_BAR} z-20 -mx-7 flex ${PAGE_TOOLBAR_H} items-center gap-3 border-b border-border bg-surface px-7`}>
+    <div className={`sticky ${BELOW_APP_BAR} z-20 -mx-[var(--pramen-gutter)] flex ${PAGE_TOOLBAR_H} items-center gap-3 border-b border-border bg-surface px-[var(--pramen-gutter)]`}>
       <Button variant="ghost" size="sm" className="shrink-0" onPress={onBack}>← {backLabel}</Button>
       <span className="min-w-0 truncate font-medium text-fg">{page.title}</span>
       {/* Beside the title, because it is a fact ABOUT the page — among the buttons it read as
@@ -1056,7 +1056,7 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, backLabe
 
 
   return (
-    <div className="px-7 pb-16">
+    <div className="px-[var(--pramen-gutter)] pb-16">
       <PageToolbar page={page} dirtyCount={dirtyCount} busy={acting} onAct={act} backLabel={backLabel} onBack={() => { if (confirmLeave()) onBack(); }} />
       {err ? <Banner>{err}</Banner> : null}
 

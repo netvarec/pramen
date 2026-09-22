@@ -5,6 +5,7 @@
 import { createPage, useNavigate } from "@buzola/router";
 import { Button } from "@podoba/react";
 import { useApp } from "../app-context";
+import { CONTENT } from "../chrome";
 import { UsersView } from "../components";
 
 export default createPage()
@@ -13,10 +14,10 @@ export default createPage()
     const { api, me, isAdmin, setError } = useApp();
     const navigate = useNavigate();
 
-    if (me === null) return <div className="mx-auto max-w-[1200px] px-7 pt-8"><p className="text-fg-subtle">Loading…</p></div>;
+    if (me === null) return <div className={`${CONTENT} pt-8`}><p className="text-fg-subtle">Loading…</p></div>;
     if (!isAdmin) {
       return (
-        <div className="mx-auto flex max-w-[1200px] items-center gap-2 px-7 pt-8">
+        <div className={`${CONTENT} flex items-center gap-2 pt-8`}>
           <p className="text-fg-subtle">Admins only.</p>
           <Button variant="ghost" size="sm" onPress={() => navigate("home")}>← back to pages</Button>
         </div>

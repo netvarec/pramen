@@ -10,10 +10,9 @@
 
 import { describe, expect, test } from "bun:test";
 import {
-  CHROME_METRICS,
   CHROME_LAYOUTS,
   DEFAULT_LAYOUT,
-  chromeVars,
+  chromeAttr,
   readLayoutConfig,
   resolveLayout,
   type LayoutHost,
@@ -49,14 +48,45 @@ describe("cms-editor chrome layout", () => {
     }
   });
 
-  // The sticky offsets in `page-header.tsx` and the page editor are measured against these
-  // two custom properties, so a chrome that reported the wrong height would leave a gap or
-  // an overlap on every screen. The sidebar's numbers are the ones that were hardcoded
-  // before the variables existed (`top-11` / no gap).
-  test("each chrome declares its own height and the air under it", () => {
-    expect(chromeVars("sidebar")).toEqual({ "--pramen-chrome-h": "2.75rem", "--pramen-chrome-pad": "0px" });
-    expect(chromeVars("topbar")).toEqual({ "--pramen-chrome-h": "77px", "--pramen-chrome-pad": "1.5rem" });
-    for (const layout of CHROME_LAYOUTS) expect(CHROME_METRICS[layout]).toBeDefined();
+  // The sticky offsets in `page-header.tsx` and the page editor are measured against the
+  // chrome's height, so a chrome that reported the wrong one would leave a gap or an overlap on
+  // every screen. The values are theme now (see `app.css`); what the code owns is naming the
+  // layout on the root, where the stylesheet keys them.
+  test("the layout is named on the document root", () => {
+    for (const layout of CHROME_LAYOUTS) {
+      const root = { dataset: {} as Record<string, string | undefined> };
+      chromeAttr(root, layout);
+      expect(root.dataset.pramenChrome).toBe(layout);
+    }
+  });
+
+  // The defaults a host overrides. The sidebar's numbers are the ones that were hardcoded
+  // before the variables existed (`top-11`, no gap, `max-w-[1200px] px-7 pb-8 pt-2`), so an
+  // unconfigured deployment renders exactly as before.
+  test("app.css defaults every layout length, in a layer a host's :root beats", async () => {
+    const css = await Bun.file(new URL("../packages/cms-editor/src/app.css", import.meta.url)).text();
+    const layered = css.slice(css.indexOf("@layer base {\n  :root {"));
+    const root = layered.slice(0, layered.indexOf("}"));
+    expect(root).toContain("--pramen-content-max: 1200px;");
+    expect(root).toContain("--pramen-gutter: 1.75rem;");
+    expect(root).toContain("--pramen-page-pt: 0.5rem;");
+    expect(root).toContain("--pramen-page-pb: 2rem;");
+    expect(root).toContain("--pramen-chrome-h: 2.75rem;");
+    expect(root).toContain("--pramen-chrome-pad: 0px;");
+    const topbar = layered.slice(layered.indexOf(':root[data-pramen-chrome="topbar"]'));
+    expect(topbar.slice(0, topbar.indexOf("}"))).toContain("--pramen-chrome-h: 77px;");
+    expect(topbar.slice(0, topbar.indexOf("}"))).toContain("--pramen-chrome-pad: 1.5rem;");
+  });
+
+  // The regression this seam exists for: a literal width or gutter left in one screen is a
+  // screen that ignores the host's theme, noticed only by someone comparing it to the others.
+  test("no screen hardcodes the content width or gutter", async () => {
+    const src = new URL("../packages/cms-editor/src/", import.meta.url).pathname;
+    for await (const file of new Bun.Glob("**/*.tsx").scan(src)) {
+      const text = await Bun.file(src + file).text();
+      expect({ file, width: /max-w-\[1200px\]/.test(text), gutter: /(?<![\w-])-?(?:px|mx)-7\b/.test(text) })
+        .toEqual({ file, width: false, gutter: false });
+    }
   });
 });
 

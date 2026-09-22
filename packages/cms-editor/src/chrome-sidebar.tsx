@@ -274,7 +274,7 @@ export function SidebarChrome({
             padding above it: the two read as one block of chrome rather than a bar with a
             panel parked beneath it. `bg-surface` is what keeps content from scrolling
             through — the border was never what did that. */}
-        <div className={`sticky top-0 z-30 flex ${APP_BAR_H} items-center gap-2 bg-surface px-7`}>
+        <div className={`sticky top-0 z-30 flex ${APP_BAR_H} items-center gap-2 bg-surface px-[var(--pramen-gutter)]`}>
           <Button
             variant="ghost"
             size="sm"
@@ -338,7 +338,7 @@ export function SidebarChrome({
  * topbar's. Its own inset either way. */
 export function ErrorBanner({ error }: { error: string }) {
   return (
-    <Card variant="outlined" padding="none" className="mx-7 mt-2 border-danger px-4 py-2.5">
+    <Card variant="outlined" padding="none" className="mx-[var(--pramen-gutter)] mt-2 border-danger px-4 py-2.5">
       <Text size="small" className="text-danger">
         {error}
       </Text>

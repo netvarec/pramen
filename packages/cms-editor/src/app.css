@@ -11,17 +11,44 @@
 @source "./**/*.{ts,tsx}";
 @source "../node_modules/@podoba/react/src/**/*.{ts,tsx}";
 
-/* The chrome's own metrics, as custom properties.
+/* The editor's layout, as theme.
  *
- * Declared here as well as on the chrome's root element (see `chromeVars` in `chrome.ts`)
- * because the sticky offsets that read them belong to SCREENS, and a screen can be rendered
- * outside the chrome — a panel bundle mounting a component of its own, a test rendering one
- * list. Without a default `top: var(--pramen-chrome-h)` computes to `top: auto` and a sticky
- * header silently stops sticking. The values here are the sidebar's, which is the default
- * layout; the chrome overrides both when a deployment asks for the topbar. */
-:root {
-  --pramen-chrome-h: 2.75rem;
-  --pramen-chrome-pad: 0px;
+ * Every length that places a screen: how wide the content column may grow, the gutter beside
+ * it (the bars use the same one, so their contents line up with the page below), the page's
+ * own padding above and below, and the chrome's height and the air it leaves under itself.
+ * A host re-proportions the editor by redeclaring any of these on `:root` in its own
+ * stylesheet; nothing in the source needs rewriting.
+ *
+ * In `@layer base` so that a host's plain, unlayered `:root` rule wins however the two
+ * stylesheets are ordered, and regardless of specificity, which is what lets it beat the
+ * per-layout rule below without copying its selector.
+ *
+ * On the root, not on the element that wraps the chrome, for two reasons. The sticky offsets
+ * that read them belong to SCREENS, and a screen can render outside the chrome (a panel
+ * bundle mounting a component of its own, a test rendering one list); without a value
+ * `top: var(--pramen-chrome-h)` computes to `top: auto` and a sticky header silently stops
+ * sticking. And a host's override has to land on the same element as ours to compete with it
+ * at all: a value declared on a nearer ancestor is simply what gets inherited.
+ *
+ * The topbar's 77px is the Graphic Standard bar's own height (`Topbar` defaults to 56px; gs
+ * sets `h-[77px]`), and the 24px under it stands in for the gap gs leaves between its bar and
+ * the first section. pramen's screen header is a sticky panel rather than gs's static one, so
+ * the full 48px would be that much dead space pinned to the top all the way down a list. The
+ * sidebar keeps 0: its bar carries no rule, and the header meeting it directly is what makes
+ * the two read as one block of chrome. `data-pramen-chrome` is written by `main.tsx`. */
+@layer base {
+  :root {
+    --pramen-content-max: 1200px;
+    --pramen-gutter: 1.75rem;
+    --pramen-page-pt: 0.5rem;
+    --pramen-page-pb: 2rem;
+    --pramen-chrome-h: 2.75rem;
+    --pramen-chrome-pad: 0px;
+  }
+  :root[data-pramen-chrome="topbar"] {
+    --pramen-chrome-h: 77px;
+    --pramen-chrome-pad: 1.5rem;
+  }
 }
 
 /* Buttons look clickable.

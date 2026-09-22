@@ -13,8 +13,19 @@
 // load, before any component renders, and the resolution is a pure function of config that a
 // test can exercise with a plain object.
 
-/** The page gutter every full-width screen uses. */
-export const WRAP = "mx-auto max-w-[1200px] px-7 pb-8 pt-2";
+// The page's width and gutters are THEME, not code: custom properties defaulted in `app.css`,
+// so a host re-proportions every screen from its own stylesheet (the `styles` entry of
+// `buildEditor()`) with one `:root` rule, instead of rewriting class strings in our source.
+// The names are written out literally for the reason given under the app bar below.
+
+/** The content column: capped width, centred, with the side gutter. For a screen that sets
+ * its own vertical rhythm (a notice, the users list). */
+export const CONTENT = "mx-auto max-w-[var(--pramen-content-max)] px-[var(--pramen-gutter)]";
+
+/** The page gutter every full-width screen uses: the content column plus the page's own
+ * padding above and below. */
+export const WRAP =
+  "mx-auto max-w-[var(--pramen-content-max)] px-[var(--pramen-gutter)] pb-[var(--pramen-page-pb)] pt-[var(--pramen-page-pt)]";
 
 /** One row in a list — a card-surfaced strip with the standard inset. */
 export const ROW = "flex items-center gap-3 rounded-[14px] border border-transparent bg-surface-card px-[18px] py-3.5";
@@ -91,39 +102,31 @@ export const CHROME_LAYOUT: ChromeLayout = resolveLayout(readLayoutConfig(global
 // height the Graphic Standard apps set it to). Tailwind needs literal class names, so a
 // per-layout class string would mean every sticky call site taking the layout as a prop and
 // picking between two — threading a value through `page-header.tsx` and three levels of the
-// page editor to express one length. The variable is declared once on the chrome's root
-// element (see `chromeVars`) and defaulted in `app.css`, so a screen rendered outside the
-// chrome (a test, a panel) still lays out.
+// page editor to express one length.
+//
+// The values live in `app.css`, keyed by `data-pramen-chrome` on the document root (see
+// `chromeAttr`), not in an inline style. That is what makes them theme: an inline style beats
+// every stylesheet, so a host that wanted a taller bar or more air under it had nothing to
+// override but our source. Declared on the ROOT, next to podoba's tokens, so a host's plain
+// `:root { --pramen-chrome-pad: 3rem }` lands on the same element and wins by being
+// unlayered (ours sit in `@layer base`). The bars size themselves off the same variable, so
+// the height and every offset measured against it cannot drift apart.
+//
+// The property NAMES are written out as literal text, here and in `app.css`, not
+// interpolated from a constant. Tailwind v4 finds utilities by scanning source files for
+// class names, so a built string like `` `top-[var(${CHROME_H_VAR})]` `` names a utility that
+// never gets generated: the app builds, the rule is simply absent, and every sticky header
+// silently stops sticking.
 
-/** How tall each chrome is, and how much air it leaves under itself.
- *
- * The topbar's 77px is the Graphic Standard bar's own height (`Topbar` defaults to 56px;
- * gs sets `h-[77px]`), and the 24px under it stands in for the gap gs leaves between its
- * bar and the first section — pramen's screen header is a sticky panel rather than gs's
- * static one, so the full 48px would be that much dead space pinned to the top all the way
- * down a list. The sidebar keeps 0: its bar carries no rule, and the header meeting it
- * directly is what makes the two read as one block of chrome. */
-export const CHROME_METRICS = {
-  sidebar: { height: "2.75rem", pad: "0px" },
-  topbar: { height: "77px", pad: "1.5rem" },
-} satisfies Record<ChromeLayout, { height: string; pad: string }>;
-
-/** The two custom properties to declare on the chrome's root element. */
-export function chromeVars(layout: ChromeLayout) {
-  const m = CHROME_METRICS[layout];
-  return { "--pramen-chrome-h": m.height, "--pramen-chrome-pad": m.pad };
+/** Put the layout where `app.css` keys the chrome metrics off it. Called once, from
+ * `main.tsx`, before the first render, for the same reason as `initTheme`. Takes the
+ * root structurally, so this module keeps needing no DOM lib. */
+export function chromeAttr(root: { dataset: Record<string, string | undefined> }, layout: ChromeLayout): void {
+  root.dataset.pramenChrome = layout;
 }
 
-// The property NAMES are written out as literal text here, in `chromeVars` above and in
-// `app.css` — not interpolated from a constant. Tailwind v4 finds utilities by scanning
-// source files for class names, so a built string like `` `top-[var(${CHROME_H_VAR})]` ``
-// names a utility that never gets generated: the app builds, the rule is simply absent, and
-// every sticky header silently stops sticking. Keep the three sites in step by hand; there
-// are two names and they are one screen apart.
-
-/** The sidebar app bar's height. Only the sidebar chrome renders it; the topbar sizes
- * itself (podoba's `Topbar` owns its height), which is why this is not `Record`-shaped. */
-export const APP_BAR_H = "h-11";
+/** The app bar's height, for whichever chrome is showing. */
+export const APP_BAR_H = "h-[var(--pramen-chrome-h)]";
 
 /** The sticky offset anything pinned beneath the chrome must use. */
 export const BELOW_APP_BAR = "top-[var(--pramen-chrome-h)]";

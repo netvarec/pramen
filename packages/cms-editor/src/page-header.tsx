@@ -27,7 +27,7 @@
 // of the height — which is the only version of "keep it" that a long list can afford.
 
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
-import { BELOW_APP_BAR } from "./chrome";
+import { BELOW_APP_BAR, CONTENT } from "./chrome";
 import { CoverArt } from "./cover";
 import { pageHeaderStyle } from "./page-header-style";
 
@@ -110,7 +110,7 @@ export function PageHeader({ lead, em, children }: { lead: string; em: string; c
     //
     // `vars` is empty unless the deployment named an accent; when it did, it re-points the
     // podoba tokens the primary action reads — SCOPED here, so nothing else in the app moves.
-    <div className={`sticky ${BELOW_APP_BAR} z-20 mx-auto max-w-[1200px] bg-surface px-7 pb-4`} style={vars as CSSProperties}>
+    <div className={`sticky ${BELOW_APP_BAR} z-20 ${CONTENT} bg-surface pb-4`} style={vars as CSSProperties}>
       <div className={panel}>
         {/* The artwork and the mask that keeps type off it are one thing: `flat` and `bare`
             drop both, and a mask over a panel with nothing under it is a gradient for its own

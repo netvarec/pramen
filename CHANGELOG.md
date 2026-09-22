@@ -16,6 +16,27 @@ there are no backward-compatibility guarantees yet.
 
 ### Added
 
+- **The editor's layout is theme: width, gutter, page padding and chrome metrics are CSS
+  variables (`@pramen/cms-editor`).** A host that built the editor against its own design
+  system could recolour it but not re-proportion it: the 1200px column and the 28px gutter
+  were literal classes in a dozen screens (only some of them through `WRAP`), and the chrome's
+  height and the air under it were an inline style, which no stylesheet can beat. The one
+  real consumer so far rewrote our source at build time (`replaceAll("max-w-[1200px]", ...)`
+  across ten files) and injected a class to add padding.
+
+  Now `app.css` defaults `--pramen-content-max`, `--pramen-gutter`, `--pramen-page-pt`,
+  `--pramen-page-pb`, `--pramen-chrome-h` and `--pramen-chrome-pad` on `:root`, inside
+  `@layer base`, with the topbar's two metrics under `:root[data-pramen-chrome="topbar"]`
+  (`main.tsx` writes the attribute before the first render). A host overrides any of them
+  with a plain `:root { ... }` in the stylesheet it passes as `styles`: unlayered beats
+  layered, so it wins without matching our selector. The screen header, the page editor's
+  toolbar and both bars read the same gutter, so their contents stay aligned with the page
+  below; both bars take their height from `--pramen-chrome-h`, so the bar and every sticky
+  offset under it move together. Defaults equal the old literals, so an unconfigured
+  deployment renders as before. `chromeVars` and `CHROME_METRICS` are gone; a test now fails
+  if a screen hardcodes the width or gutter again (it found the sidebar's error banner, still
+  on `mx-7`).
+
 - **Fixed: `editorAssets` no longer leaves the packaged assets loaded anyway
   (`@pramen/cms-astro`).** The shell imported `editor.js`, `editor.css` and the four
   `panel-*.js` with static `?url` imports, which ran for every deployment — including one

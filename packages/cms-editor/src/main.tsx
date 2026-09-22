@@ -7,6 +7,7 @@ import { DOCUMENT_TITLE } from "./brand";
 import { isWithinBasePath, readBasePath, scopeToBasePath } from "./mount";
 import { publishPanelRuntime, type PanelRuntimeHost } from "./panel-runtime";
 import { loadPanelBundles, readPanelUrls, type PanelHost } from "./panels";
+import { CHROME_LAYOUT, chromeAttr } from "./chrome";
 import { initTheme } from "./theme";
 
 // Styling is podoba: the compiled Tailwind (podoba preset, with @podoba/tokens' variables
@@ -25,6 +26,10 @@ document.title = DOCUMENT_TITLE;
 // Before the first paint, so an editor left in dark mode does not flash white on every load
 // — which is what an effect inside the root layout could never avoid.
 initTheme();
+
+// Same moment, for the chrome's metrics: `app.css` sizes the bar and every offset beneath it
+// off this attribute, so it has to be there before the first layout.
+chromeAttr(document.documentElement, CHROME_LAYOUT);
 
 // The shared React, published FIRST: a panel bundle's very first `import "react"` resolves
 // through the shell's import map to a shim that reads this back out, so the global has to

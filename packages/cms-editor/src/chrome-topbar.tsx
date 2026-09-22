@@ -5,7 +5,7 @@
 // its own `ml-auto`, `Topbar.NavLink` tabs inside it, a dropdown among them where a flat
 // list would not fit, and the account menu as a bare avatar circle at the right end. The
 // height (77px), the tab metrics, the hairline under the bar and the air below it are the gs
-// values, not new ones — see `CHROME_METRICS` in `chrome.ts`.
+// values, not new ones; the lengths are defaults in `app.css` a host can override.
 //
 // Opt in with `layout: "topbar"`. The SIDEBAR remains the default and remains the right
 // answer for a big admin; this is for the deployment that sits inside a product already
@@ -27,7 +27,7 @@
 
 import { Button, Dialog, DialogTrigger, Topbar, UserMenu, UserMenuItem } from "@podoba/react";
 import type { ReactNode } from "react";
-import { BELOW_CHROME_PAD } from "./chrome";
+import { APP_BAR_H, BELOW_CHROME_PAD } from "./chrome";
 import { AccountMenu, NavIconSlot, type ChromeProps, type NavRoute } from "./chrome-shared";
 import { BRAND } from "./brand";
 import { GroupFoldedIcon as CrumbSeparatorIcon, GroupOpenIcon, MenuToggleIcon } from "./icons";
@@ -59,11 +59,12 @@ export function TopbarChrome({
     // and every in-page anchor assumes it. A sticky bar over a document scroller is the same
     // bar to look at, and the one that does not silently break four screens.
     <div className="min-h-screen bg-surface text-fg">
-      {/* `h-[77px]` is gs's own override of podoba's 56px default. The bottom rule comes from
+      {/* The height is `--pramen-chrome-h` (77px by default, gs's own override of podoba's
+          56px), so the bar and everything pinned beneath it move together. The bottom rule comes from
           `Topbar` itself; unlike the sidebar's app bar this chrome HAS one, because there is
           no second ground (the rail's `surface-card`) doing the separating. `bg-surface`
           keeps content from scrolling through while pinned. */}
-      <Topbar className="sticky top-0 z-30 h-[77px] bg-surface px-7">
+      <Topbar className={`sticky top-0 z-30 ${APP_BAR_H} bg-surface px-[var(--pramen-gutter)]`}>
         {/* NOT `shrink-0`. podoba's base sets `min-w-0` on this slot precisely so it can give
             width back, and the crumb below is the reason: a long page title sized the brand
             block to max-content, `Topbar.Nav` was then the only sibling left to shrink, and

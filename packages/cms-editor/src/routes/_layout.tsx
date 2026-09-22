@@ -15,10 +15,10 @@
 // third shape means writing a component, not re-deriving state.
 
 import { Outlet, useNavigate, useRoute, useRouter } from "@buzola/router";
-import { useState, type CSSProperties } from "react";
+import { useState } from "react";
 import { useApp } from "../app-context";
 import { BreadcrumbProvider } from "../breadcrumb";
-import { CHROME_LAYOUT, chromeVars } from "../chrome";
+import { CHROME_LAYOUT } from "../chrome";
 import { ErrorBanner, SidebarChrome } from "../chrome-sidebar";
 import { TopbarChrome } from "../chrome-topbar";
 import type { ChromeProps, NavRoute } from "../chrome-shared";
@@ -157,13 +157,7 @@ export default function RootLayout() {
     ),
   };
 
-  // The custom properties every sticky offset below the chrome is measured against. Declared
-  // on the element that WRAPS the chrome rather than inside each one, because it is the same
-  // contract for both and a chrome that forgot to set them would break `page-header.tsx` and
-  // the page editor from a file that mentions neither.
-  return (
-    <div style={chromeVars(CHROME_LAYOUT) as CSSProperties}>
-      {CHROME_LAYOUT === "topbar" ? <TopbarChrome {...chrome} /> : <SidebarChrome {...chrome} />}
-    </div>
-  );
+  // The metrics every sticky offset below the chrome is measured against come from `app.css`,
+  // keyed off the root attribute `main.tsx` writes; see `chrome.ts`.
+  return CHROME_LAYOUT === "topbar" ? <TopbarChrome {...chrome} /> : <SidebarChrome {...chrome} />;
 }
