@@ -319,6 +319,9 @@ function CreatePage({ api, type, onClose, onCreated, onError }: { api: Api; type
   const [typeId, setTypeId] = useState(type?.id ?? "");
   const [title, setTitle] = useState("");
   const [slug, setSlug] = useState("");
+  // In flight. "Create" stayed pressable while `createPage` was running, so a double click
+  // (or an impatient second one on a slow network) filed the same page twice.
+  const [busy, setBusy] = useState(false);
   // Re-sync, not seed-once. On a type-scoped list the type is decided by the screen you are
   // on — and that screen can change UNDER an open modal: history navigation isn't blocked by
   // the overlay the way a topbar click is, and buzola keeps this component instance across
@@ -330,11 +333,14 @@ function CreatePage({ api, type, onClose, onCreated, onError }: { api: Api; type
     setTypeId((cur) => (cur && list.some((c) => c.id === cur) ? cur : list[0]?.id ?? ""));
   }, [type, contentTypes]);
   const create = async () => {
+    setBusy(true);
     try {
       await api.call("createPage", { typeId, title, slug: slug || slugify(title) });
       onCreated();
     } catch (e) {
       onError(errMsg(e));
+    } finally {
+      setBusy(false);
     }
   };
   return (
@@ -365,11 +371,15 @@ function CreatePage({ api, type, onClose, onCreated, onError }: { api: Api; type
               wrong one puts the entry under a different route. Cards make the selection deliberate. */}
           <div className="flex flex-wrap gap-2">
             {cts.map((c) => (
+              // `aria-pressed`: which card is chosen was said by its border colour alone, which
+              // a screen reader does not announce. The ring is for the keyboard, which could
+              // reach the cards but not see which one it was on.
               <button
                 key={c.id}
                 type="button"
+                aria-pressed={typeId === c.id}
                 onClick={() => setTypeId(c.id)}
-                className={`rounded-lg border px-4 py-2.5 text-sm font-medium transition-colors ${
+                className={`rounded-lg border px-4 py-2.5 text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring ${
                   typeId === c.id
                     ? "border-brand-green bg-surface-muted text-fg"
                     : "border-border bg-surface-card text-fg-muted hover:border-fg-subtle hover:text-fg"
@@ -384,7 +394,7 @@ function CreatePage({ api, type, onClose, onCreated, onError }: { api: Api; type
         <Input label="Slug" value={slug} onChange={setSlug} placeholder={slugify(title)} />
         <div className="mt-2 flex justify-end gap-2">
           <Button variant="ghost" onPress={onClose}>cancel</Button>
-          <Button onPress={create} isDisabled={!typeId || !title}>Create</Button>
+          <Button onPress={create} isDisabled={busy || !typeId || !title}>Create</Button>
         </div>
       </div>
     </Modal>
