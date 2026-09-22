@@ -16,8 +16,8 @@ const html = (jsName: string) => `<!doctype html>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>pramen · admin</title>
-    <link rel="stylesheet" href="./fonts.css" />
     <link rel="stylesheet" href="./app.css" />
+    <link rel="stylesheet" href="./fonts.css" />
   </head>
   <body>
     <div id="app"></div>
@@ -31,6 +31,12 @@ const html = (jsName: string) => `<!doctype html>
 // tokens.css). The NC Fontina web font ships as CSS + a woff2 in @podoba/tokens; we
 // copy both to dist/ and <link> fonts.css directly, so its `url('./fonts/…')` stays
 // relative to dist/ (no bundler asset-rebasing needed).
+//
+// fonts.css is linked AFTER app.css, and the order is the whole point of the file. Both
+// declare `--font-sans` on `:root`, so the later one wins; fonts.css exists to point that
+// token at NC Fontina. Linked first, the compiled tokens in app.css put the fallback stack
+// back, and the face was downloaded and never used. (`buildEditor` appends it after the
+// compiled CSS for the same reason; see `styles()` there.)
 async function styles(): Promise<void> {
   const args = ["@tailwindcss/cli", "-i", `${root}src/app.css`, "-o", `${dist}/app.css`];
   if (!watch) args.push("--minify");
