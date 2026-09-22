@@ -385,6 +385,11 @@ export const navHooks: NavHooks = {
 already-guarded way back) arrives as props. Do not import the editor's internals by relative
 path: a second copy of the app context is a second React context, which throws on first render.
 
+**A theme that uses podoba builds with `designSystem` set.** That option redirects every
+`@podoba/*` import in the bundle, the editor's and your slots' alike, to one copy. Without it
+the editor links the podoba this package pins and your slot modules link yours, and two copies
+of a React Aria based design system in one tree do not share their providers.
+
 A few things the contracts decide for you, so a theme does not have to rediscover them:
 
 - **`home` gets the landing decision, not a blank slate.** The route stays ours and hands your
