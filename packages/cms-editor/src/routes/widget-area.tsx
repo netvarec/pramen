@@ -1,6 +1,6 @@
 // One widget area's contents (`/widgets/:name`).
 
-import { createPage, useNavigate } from "@buzola/router";
+import { createPage, useNavigate, useRouter } from "@buzola/router";
 import { useApp } from "../app-context";
 import { Notice } from "../components";
 import { WidgetAreaEditor } from "../furniture";
@@ -11,6 +11,7 @@ export default createPage()
   .render(function WidgetAreaRoute({ params }) {
     const { api, cms, setError } = useApp();
     const navigate = useNavigate();
+    const router = useRouter();
     // The nav hides these on a server without the handlers, but a BOOKMARK does not —
     // without this the screen mounts fully interactive and every call 404s. The
     // `/schema` routes already gated on their own capability; these did not.
@@ -22,6 +23,7 @@ export default createPage()
         name={params.name}
         canEdit={cms.canEdit}
         onBack={() => navigate("widgets")}
+        backHref={router.buildPagePath("widgets")}
         onDeleted={() => navigate("widgets")}
         onError={setError}
       />

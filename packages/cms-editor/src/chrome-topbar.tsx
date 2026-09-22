@@ -45,6 +45,7 @@ export function TopbarChrome({
   onSettings,
   onSignOut,
   onHome,
+  accountItems,
   onGo,
   sameTab,
   confirmNavigation,
@@ -136,7 +137,7 @@ export function TopbarChrome({
             own nav. `ml-3` overrides the slot's `ml-auto`: two auto margins would SPLIT the
             free space and float the cluster away from the tabs it sits beside. */}
         <Topbar.Actions className="ml-3 hidden shrink-0 md:flex">
-          <AccountMenu me={me} theme={theme} compact onTheme={onTheme} onSettings={onSettings} onSignOut={onSignOut} />
+          <AccountMenu me={me} theme={theme} compact items={accountItems} onTheme={onTheme} onSettings={onSettings} onSignOut={onSignOut} />
         </Topbar.Actions>
 
         {/* The small-viewport nav. Everything at once in a dialog rather than the dropdowns
@@ -197,6 +198,9 @@ export function TopbarChrome({
                     <AccountMenu
                       me={me}
                       theme={theme}
+                      // Same "only if it went" rule as Settings: a row navigates, so it takes
+                      // the dialog with it.
+                      items={accountItems.map((item) => ({ ...item, onSelect: () => { const went = item.onSelect(); if (went) close(); return went; } }))}
                       onTheme={onTheme}
                       onSettings={() => { if (onSettings()) close(); }}
                       onSignOut={onSignOut}

@@ -83,6 +83,38 @@ export interface AdminRuntimeConfig {
    */
   pageHeader?: { variant?: "cover" | "flat" | "bare"; accent?: string; titleFont?: string };
   /**
+   * Turn off optional list controls. Search and filters stay on by default; whether a CMS
+   * needs them is a product decision for the deployment (a small curated library may be
+   * better without), so it is taken here rather than by rebuilding the editor.
+   *
+   * - `"mediaSearch"`: the media library's search field.
+   * - `"mediaFilters"`: the media library's sort menu, tag menu and type chips.
+   * - `"relationSearch"`: the search input in a relation field's picker.
+   *
+   * Hiding a control never narrows a list: its state stays at the default, so the list is the
+   * complete one. An unknown name is warned about in the console and ignored.
+   */
+  hideControls?: ("mediaSearch" | "mediaFilters" | "relationSearch")[];
+  /**
+   * Extra rows in the account menu (the avatar's menu), each opening a screen of the editor.
+   *
+   * For a destination that belongs with the session's own affordances rather than in the nav:
+   * the usual case is a deployment that hides the schema editor's nav entry from everyday
+   * editors and offers it here instead.
+   *
+   * - `page`: which screen, by its editor route id (`"schema"`, `"users"`, `"media"`, …), with
+   *   `params` for one that takes them (`{ page: "collection", params: { slug: "lectures" } }`).
+   * - `icon`: one of the nav's glyphs (`"types"`, `"settings"`, …), so the row lines up.
+   * - `requiresNav`: show the row only when the nav the editor built has an entry with this
+   *   key. The nav keys already encode capability (`"types"` exists only for someone who may
+   *   author the schema, `"users"` only for an admin), so this is how a row avoids offering a
+   *   screen the session would be refused.
+   *
+   * A row naming an unknown page is dropped with a console warning. A theme built with
+   * `buildEditor({ slots: { nav } })` can add rows too, with an arbitrary `visible` predicate.
+   */
+  accountMenu?: { label: string; page: string; params?: Record<string, string>; icon?: string; requiresNav?: string }[];
+  /**
    * Serve an editor YOU built instead of the one this package ships.
    *
    * A directory URL — `"/admin"` for a `buildEditor({ outdir: "public/admin" })`, or an

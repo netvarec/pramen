@@ -1,55 +1,50 @@
-// Home route (`/`): the page list. Opening a page navigates to /pages/:pageId.
+// Home route (`/`). Decides where the admin lands and hands that to the home SCREEN, which is a
+// slot (`slots.home`, see `home-screen.tsx`): by default it follows the decision (a redirect to
+// the first collection or content type) or shows the pooled page list, and a deployment's own
+// dashboard gets the same decision to follow or ignore.
 
-import { createPage, useNavigate } from "@buzola/router";
-import { useEffect } from "react";
+import { createPage, useNavigate, useRouter } from "@buzola/router";
 import { useApp } from "../app-context";
-import { PageList, pagesHidden, splitsByType } from "../components";
+import { homeLanding, PageList, pagesHidden } from "../components";
+import { HomeScreen } from "../home-screen";
+import type { EditorPage } from "../slots";
 
 export default createPage()
   .route("/")
   .render(function Home() {
-    const { api, setError, collections, contentTypes, cms } = useApp();
+    const { api, setError, collections, adminPages, contentTypes, cms, isAdmin } = useApp();
     const navigate = useNavigate();
+    const router = useRouter();
 
-    // Collections-only deployment: `/` is the Pages list, so land on the first
-    // collection instead. Without this, hiding the tab still leaves the landing page
-    // showing an empty page list — and still fetching pages, which errors outright on a
-    // deployment that never spread cmsSchema.
-    const hidePages = pagesHidden();
-    const firstCollection = collections[0]?.slug;
-    // With more than one content type each gets its own tab and its own list (`/types/:slug`),
-    // so the pooled list here has no tab of its own to be reached from and would just be a
-    // fourth way to see the same rows. Land on the first type instead. One type (or none, on a
-    // server too old to answer) keeps the pooled list — that IS the whole CMS there.
-    const splitByType = splitsByType(contentTypes, cms, hidePages);
-    // A content type must have a non-empty slug (the server refuses one), but this is data
-    // from a server this build does not control, and an empty slug builds `/types/` — a path
-    // the router drops the empty segment from, so it matches nothing. Skip such a type rather
-    // than redirect into a route that cannot match.
-    const firstType = (contentTypes ?? []).find((t) => t.slug !== "")?.slug;
-    // ONE condition for the redirect and for the bail below. Gated differently, a split
-    // deployment whose first type has no usable slug redirected nowhere and rendered nothing:
-    // a permanently blank `/`, which the wordmark leads straight back to.
-    const toType = splitByType && firstType !== undefined ? firstType : undefined;
+    const landing = homeLanding({ hidePages: pagesHidden(), collections, contentTypes, cms });
+    // buzola's `navigate` is typed off the generated page map, and `EditorPage` is the same set
+    // written out for the public contract (proved equal in `_layout.tsx`); the cast is the
+    // bridge between the two, in one place.
+    const go = (page: EditorPage, params?: Record<string, string>, replace = false): void =>
+      navigate(page as never, { ...(params ? { params } : {}), replace } as never);
 
-    useEffect(() => {
-      if (hidePages && firstCollection) navigate("collection", { params: { slug: firstCollection }, replace: true });
-      else if (toType !== undefined) navigate("type", { params: { slug: toType }, replace: true });
-    }, [hidePages, firstCollection, toType, navigate]);
-
-    // `hidePages` means this deployment has no block/page builder at all, so `/` never falls
-    // through to the page list here — fetching pages is exactly what the flag says not to do
-    // (on a deployment that never spread `cmsSchema` it errors outright). It hands off to the
-    // first collection, or says so when there is none to hand off to.
-    // (Nothing rendered when there is no collection either: `collections` is empty both while
-    // it loads and when a deployment registers none, so any message here would be wrong half
-    // the time. The layout's chrome is still on screen — the tabs are the way out.)
-    if (hidePages) return null;
-    if (toType !== undefined) return null;
-    // Not answered yet ≠ "this deployment has one type". Rendering the pooled list before
-    // `listContentTypes` lands paints — and fetches — the very screen the split exists to
-    // retire, then redirects away from it a round trip later.
-    if (contentTypes === null) return null;
-
-    return <PageList api={api} onOpen={(p) => navigate("page", { params: { pageId: p.id } })} onError={setError} />;
+    return (
+      <HomeScreen
+        api={api}
+        basePath={router.basePath}
+        contentTypes={contentTypes}
+        collections={collections}
+        adminPages={adminPages}
+        isAdmin={isAdmin}
+        cms={cms}
+        landing={landing}
+        goToLanding={() => {
+          // `replace`, so Back from the landing list does not return to a `/` that redirects
+          // straight back to it.
+          if (landing.kind === "collection") go("collection", { slug: landing.slug }, true);
+          else if (landing.kind === "type") go("type", { slug: landing.slug }, true);
+        }}
+        // Only when the pooled list IS home. Built here rather than by the screen because it is
+        // the editor's own component, wired to the editor's own routing; a theme only places it.
+        pageList={landing.kind === "pages" ? <PageList api={api} onOpen={(p) => navigate("page", { params: { pageId: p.id } })} onError={setError} /> : null}
+        href={(page, params) => router.buildPagePath(page, params)}
+        navigate={(page, params) => go(page, params)}
+        onError={setError}
+      />
+    );
   });

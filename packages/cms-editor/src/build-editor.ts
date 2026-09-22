@@ -38,35 +38,55 @@ const PKG = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 /**
  * The editor's own modules a host may replace, and the specifier each is reached by.
  *
- * ONE entry, and the bar for a second is high. A slot is a standing promise that a module's
- * props are stable across releases, so it is only honest for a component whose contract is
- * already narrow and already documented — the sticky screen header takes `{ lead, em,
- * children }` and has taken those three since it was one component.
+ * A slot is a standing promise that a module's props are stable across releases, so every one
+ * has its contract written down as a TYPE in `slots.ts` (published as
+ * `@pramen/cms-editor/slots`), and the default here is declared against that same type. A theme
+ * types its replacement with an import, not a copy, and a change to a contract is a compile
+ * error on both sides.
  *
- * What is deliberately NOT here, having been tried:
+ * Each slot replaced something a deployment was already doing by string replacement against
+ * our source, which is the bar for adding one: evidence that the seam is wanted, and a
+ * contract narrow enough to keep.
  *
- * - **The landing route.** `routes/home.tsx` is not a component; it is a buzola `createPage()`
- *   carrying the redirect rules for a collections-only deployment and for one split by content
- *   type. Slotting it would put `@buzola/router` in every host's build AND hand the host those
- *   redirects to reimplement, which no host has wanted: the deployment that tried it simply
- *   dropped them, so `/` stopped landing anywhere sensible on a collections-only site. A
- *   landing screen of your own is `adminPage()`/`adminPanel()` plus somewhere for `/` to point,
- *   which is shell config, not a build input.
+ * - `pageHeader`: the sticky header of a list screen (`PageHeaderProps`).
+ * - `home`: the SCREEN at `/` (`HomeScreenProps`). Not the route: the route stays ours and
+ *   hands the screen its landing decision, so a dashboard neither imports the router nor
+ *   re-derives the collections-only and split-by-type redirects. (Slotting the route itself
+ *   was tried and rejected for exactly those two reasons; see `home-screen.tsx`.)
+ * - `detailHeader`: the way back plus the title, on every detail screen (`DetailHeaderProps`).
+ * - `mediaDetail`: the dialog frame around one file (`MediaDetailFrameProps`).
+ * - `mediaGrid`: the library grid AND its empty state, one module exporting both
+ *   (`MediaGridProps`, `MediaLibraryEmptyProps`).
+ * - `nav`: not a component but an object of hooks over the nav (`NavHooks`): transform the
+ *   sections and the lit key, add account-menu rows. Applied upstream of both chromes.
+ *
+ * What is deliberately NOT here:
+ *
  * - **The chrome.** `brand` and `layout` already dress it from the shell config, at runtime,
- *   with no build at all.
- * - **Dressing the header rather than replacing it.** `pageHeader` in the shell config sets the
- *   variant, the accent and the title's face, and keeps the editor deriving label contrast from
- *   the accent you name. Reach for this slot only when you need your design system's own header
- *   COMPONENT, not a recolour of ours.
+ *   with no build at all, and `nav` covers what goes IN it.
+ * - **Dressing rather than replacing.** `pageHeader` in the shell config sets the header's
+ *   variant, accent and title face; `hideControls` turns off search and filters. Reach for a
+ *   slot only when you need your design system's own COMPONENT, not a recolour or a toggle.
  *
  * Keyed by the specifier as the IMPORTER writes it, because that is what `onResolve` sees. A
  * relative specifier is only meaningful next to the file that wrote it, so each entry also
- * carries the directory it must be imported from — otherwise a slot for `./page-header` would
- * also capture some future unrelated `./page-header` elsewhere in the tree.
+ * carries the directory it must be imported from; otherwise a slot for `./page-header` would
+ * also capture some future unrelated `./page-header` elsewhere in the tree. Two of them are
+ * imported from `src/routes`, which is why the specifier climbs out of it.
  */
 export const EDITOR_SLOTS = {
-  /** The sticky panel with the screen's `<h1>` and its primary action. */
+  /** The sticky panel with the screen's `<h1>` and its primary action. Export `PageHeader`. */
   pageHeader: { specifier: "./page-header", from: "src" },
+  /** What `/` renders. Export `HomeScreen`. */
+  home: { specifier: "../home-screen", from: "src/routes" },
+  /** The way back and the title on a detail screen. Export `DetailHeader`. */
+  detailHeader: { specifier: "./detail-header", from: "src" },
+  /** The dialog frame around one media file. Export `MediaDetailFrame`. */
+  mediaDetail: { specifier: "./media-detail", from: "src" },
+  /** The media library grid and its empty state. Export `MediaGrid` and `MediaLibraryEmpty`. */
+  mediaGrid: { specifier: "./media-grid", from: "src" },
+  /** Hooks over the nav and the account menu. Export `navHooks`. */
+  nav: { specifier: "../nav-hooks", from: "src/routes" },
 } as const;
 
 export type EditorSlot = keyof typeof EDITOR_SLOTS;
@@ -107,13 +127,16 @@ export interface BuildEditorOptions {
    */
   styles?: string;
   /**
-   * Replace one of the editor's own components with a module of your own.
+   * Replace one of the editor's own modules with one of your own.
    *
-   * Absolute paths to modules exporting the same shape ours does — see `EDITOR_SLOTS` for the
-   * list and `src/page-header.tsx` for the props. This is the sanctioned form of the thing a
-   * deployment was doing with `onResolve` against our internals: same mechanism, but named,
-   * typechecked, and verified to still resolve, so a release that moves the module is a build
-   * error here instead of a silent no-op in production.
+   * Paths (absolute, or relative to the working directory) to modules exporting the same
+   * names ours do: see `EDITOR_SLOTS` for the list, and type each module against its contract
+   * from `@pramen/cms-editor/slots`. Your modules are bundled into the editor, so they import
+   * `@podoba/react` and React like any other source (from your `designSystem` root when it is
+   * set) and must not import the editor's own internals. This is the sanctioned form of the
+   * thing a deployment was doing with `onResolve` against our internals: same mechanism, but
+   * named, typechecked, and verified to still resolve, so a release that moves the module is a
+   * build error here instead of a silent no-op in production.
    */
   slots?: Partial<Record<EditorSlot, string>>;
   /** Minify. Default true; the watch loop passes false and takes a linked sourcemap. */
@@ -193,7 +216,9 @@ function slotsPlugin(slots: Partial<Record<EditorSlot, string>>, matched: Set<Ed
         build.onResolve({ filter: new RegExp(`^${slot.specifier.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`) }, ({ importer }) => {
           if (dirname(importer) !== from) return undefined;
           matched.add(name);
-          return { path: target };
+          // Absolute, because `onResolve` must hand back one; a relative target (the README's
+          // own example is one) is taken from the working directory, like the other paths here.
+          return { path: resolve(target) };
         });
       }
     },
@@ -296,6 +321,18 @@ export async function buildEditor(opts: BuildEditorOptions): Promise<void> {
   // and a build that made only one of them is more likely a forgotten line than an intent.
   if (opts.designSystem && !opts.styles) {
     console.warn("@pramen/cms-editor: `designSystem` is set but `styles` is not — the bundle will link your podoba while the stylesheet stays compiled against ours. Pass your own Tailwind entry too.");
+  }
+  // Checked up front, by name, for two slips the bundler would report badly: a key that is not
+  // a slot (a typo, or a slot from a newer release) is otherwise silently ignored, and a target
+  // that does not exist surfaces as an unresolved import deep inside one of our files, naming
+  // our source and not the host's config line.
+  for (const [name, target] of Object.entries(opts.slots ?? {})) {
+    if (!(name in EDITOR_SLOTS)) {
+      throw new Error(`@pramen/cms-editor: unknown slot "${name}". This release has: ${Object.keys(EDITOR_SLOTS).join(", ")}.`);
+    }
+    if (typeof target !== "string" || !(await Bun.file(resolve(target)).exists())) {
+      throw new Error(`@pramen/cms-editor: slot "${name}" points at ${JSON.stringify(target)}, which does not exist (relative paths resolve from the working directory, ${process.cwd()}).`);
+    }
   }
   await mkdir(opts.outdir, { recursive: true });
   await styles(opts, dsRoot);

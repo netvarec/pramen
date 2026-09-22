@@ -1,6 +1,6 @@
 // One content type's builder (`/schema/content/:slug`); `new` creates one.
 
-import { createPage, useNavigate } from "@buzola/router";
+import { createPage, useNavigate, useRouter } from "@buzola/router";
 import { useApp } from "../app-context";
 import { Notice } from "../components";
 import { ContentTypeEditor } from "../schema-builder";
@@ -11,6 +11,7 @@ export default createPage()
   .render(function ContentTypeBuilderRoute({ params }) {
     const { api, cms, setError, refreshContentTypes } = useApp();
     const navigate = useNavigate();
+    const router = useRouter();
     if (!cms.canEdit) return <Notice>Authoring types needs an editor role.</Notice>;
     return (
       <ContentTypeEditor
@@ -26,6 +27,7 @@ export default createPage()
           navigate("content-type", { params: { slug } });
         }}
         onBack={() => navigate("schema")}
+        backHref={router.buildPagePath("schema")}
         onError={setError}
       />
     );

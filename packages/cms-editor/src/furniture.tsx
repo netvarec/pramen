@@ -16,6 +16,7 @@ import type { Api } from "./api";
 import { CONTROL, RichText, slugify } from "./fields";
 import { ROW, ROW_BUTTON, WRAP } from "./chrome";
 import { COMMON_COPY } from "./copy";
+import { DetailHeader } from "./detail-header";
 import { LoadFailed, nullableSummary } from "./list-state";
 import { useCrumb } from "./breadcrumb";
 import { PageHeader } from "./page-header";
@@ -181,11 +182,13 @@ function removeAt(items: readonly MenuItem[], path: readonly number[]): { tree: 
   return { tree, removed: removed! };
 }
 
-export function MenuEditor({ api, name, collections, onBack, onDeleted, onError, canEdit }: {
+export function MenuEditor({ api, name, collections, onBack, backHref, onDeleted, onError, canEdit }: {
   api: Api;
   name: string;
   collections: CollectionMeta[];
   onBack: () => void;
+  /** Where `onBack` goes, as an href: the detail header's way back, for a theme that renders it as a link. */
+  backHref: string;
   onDeleted: () => void;
   onError: (s: string) => void;
   canEdit: boolean;
@@ -315,11 +318,9 @@ export function MenuEditor({ api, name, collections, onBack, onDeleted, onError,
 
   return (
     <div className={WRAP}>
-      <div className="mb-4 mt-2 flex items-center gap-3">
-        <Button variant="ghost" size="sm" onPress={onBack}>← Menus</Button>
-        <h1 className="text-[22px] font-normal text-fg">{menu.label}</h1>
+      <DetailHeader title={menu.label} parent="Menus" href={backHref} onBack={onBack}>
         <span className="text-fg-subtle">{menu.name}</span>
-      </div>
+      </DetailHeader>
       <div className="flex max-w-[860px] flex-col gap-4">
         {ok ? <Saved /> : null}
         <Input label="Label" value={label} onChange={setLabel} />
@@ -640,10 +641,12 @@ export function TaxonomiesView({ api, onOpen, onError, canEdit }: { api: Api; on
   );
 }
 
-export function TaxonomyEditor({ api, slug, onBack, onDeleted, onError, canEdit }: {
+export function TaxonomyEditor({ api, slug, onBack, backHref, onDeleted, onError, canEdit }: {
   api: Api;
   slug: string;
   onBack: () => void;
+  /** Where `onBack` goes, as an href: the detail header's way back, for a theme that renders it as a link. */
+  backHref: string;
   onDeleted: () => void;
   onError: (s: string) => void;
   canEdit: boolean;
@@ -724,11 +727,9 @@ export function TaxonomyEditor({ api, slug, onBack, onDeleted, onError, canEdit 
 
   return (
     <div className={WRAP}>
-      <div className="mb-4 mt-2 flex items-center gap-3">
-        <Button variant="ghost" size="sm" onPress={onBack}>← Taxonomies</Button>
-        <h1 className="text-[22px] font-normal text-fg">{tax.label}</h1>
+      <DetailHeader title={tax.label} parent="Taxonomies" href={backHref} onBack={onBack}>
         <span className="text-fg-subtle">{tax.slug}</span>
-      </div>
+      </DetailHeader>
       <div className="flex max-w-[860px] flex-col gap-4">
         <div className="flex flex-col gap-2">
           {tree === null && !treeFailed ? <p className="text-fg-subtle">{COMMON_COPY.loading}</p> : null}
@@ -858,10 +859,12 @@ export function WidgetAreasView({ api, onOpen, onError, canEdit }: { api: Api; o
   );
 }
 
-export function WidgetAreaEditor({ api, name, onBack, onDeleted, onError, canEdit }: {
+export function WidgetAreaEditor({ api, name, onBack, backHref, onDeleted, onError, canEdit }: {
   api: Api;
   name: string;
   onBack: () => void;
+  /** Where `onBack` goes, as an href: the detail header's way back, for a theme that renders it as a link. */
+  backHref: string;
   onDeleted: () => void;
   onError: (s: string) => void;
   canEdit: boolean;
@@ -926,11 +929,9 @@ export function WidgetAreaEditor({ api, name, onBack, onDeleted, onError, canEdi
 
   return (
     <div className={WRAP}>
-      <div className="mb-4 mt-2 flex items-center gap-3">
-        <Button variant="ghost" size="sm" onPress={onBack}>← Widgets</Button>
-        <h1 className="text-[22px] font-normal text-fg">{area.label}</h1>
+      <DetailHeader title={area.label} parent="Widgets" href={backHref} onBack={onBack}>
         <span className="text-fg-subtle">{area.name}</span>
-      </div>
+      </DetailHeader>
       <div className="flex max-w-[860px] flex-col gap-4">
         {ok ? <Saved /> : null}
         <Input label="Label" value={label} onChange={setLabel} />

@@ -1,6 +1,6 @@
 // One block type's builder (`/schema/blocks/:slug`); `new` creates one.
 
-import { createPage, useNavigate } from "@buzola/router";
+import { createPage, useNavigate, useRouter } from "@buzola/router";
 import { useApp } from "../app-context";
 import { Notice } from "../components";
 import { BlockTypeEditor } from "../schema-builder";
@@ -11,6 +11,7 @@ export default createPage()
   .render(function BlockTypeRoute({ params }) {
     const { api, cms, setError } = useApp();
     const navigate = useNavigate();
+    const router = useRouter();
     if (!cms.canEdit) return <Notice>Authoring types needs an editor role.</Notice>;
     return (
       <BlockTypeEditor
@@ -23,6 +24,7 @@ export default createPage()
         slug={params.slug}
         onSaved={(slug) => navigate("block-type", { params: { slug } })}
         onBack={() => navigate("schema")}
+        backHref={router.buildPagePath("schema")}
         onError={setError}
       />
     );

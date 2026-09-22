@@ -93,6 +93,7 @@ export function SidebarChrome({
   onSettings,
   onSignOut,
   onHome,
+  accountItems,
   onGo,
   sameTab,
   confirmNavigation,
@@ -319,7 +320,7 @@ export function SidebarChrome({
             ) : null}
           </nav>
           <div className="ml-auto pl-4">
-            <AccountMenu me={me} theme={theme} onTheme={onTheme} onSettings={onSettings} onSignOut={onSignOut} />
+            <AccountMenu me={me} theme={theme} items={accountItems} onTheme={onTheme} onSettings={onSettings} onSignOut={onSignOut} />
           </div>
         </div>
         {/* `BELOW_CHROME_PAD` is 0 here — the header meets the bar directly, which is the

@@ -18,6 +18,7 @@ import type { Api, BlockTypeInput, ContentTypeInput } from "./api";
 import { CONTROL, slugify } from "./fields";
 import { ROW, ROW_BUTTON, WRAP } from "./chrome";
 import { COMMON_COPY } from "./copy";
+import { DetailHeader } from "./detail-header";
 import { LoadFailed } from "./list-state";
 import type { BlockType, ContentType, DefaultBlockDefinition, FieldDefinition, FieldType, RegionDefinition } from "./types";
 
@@ -536,7 +537,7 @@ const NOTICE_ID = "cms-managed-notice";
 /** Empty-string-to-null, for the optional text columns. */
 const orNull = (s: string): string | null => (s.trim() === "" ? null : s.trim());
 
-export function BlockTypeEditor({ api, codeDefinedTypes, slug, onSaved, onBack, onError }: {
+export function BlockTypeEditor({ api, codeDefinedTypes, slug, onSaved, onBack, backHref, onError }: {
   api: Api;
   /** See `TypesOverview`. */
   codeDefinedTypes: boolean;
@@ -544,6 +545,8 @@ export function BlockTypeEditor({ api, codeDefinedTypes, slug, onSaved, onBack, 
   slug: string;
   onSaved: (slug: string) => void;
   onBack: () => void;
+  /** Where `onBack` goes, as an href: the detail header's way back, for a theme that renders it as a link. */
+  backHref: string;
   onError: (s: string) => void;
 }) {
   const isNew = slug === "new";
@@ -623,11 +626,9 @@ export function BlockTypeEditor({ api, codeDefinedTypes, slug, onSaved, onBack, 
 
   return (
     <div className={WRAP}>
-      <div className="mb-4 mt-2 flex items-center gap-3">
-        <Button variant="ghost" size="sm" onPress={onBack}>← Types</Button>
-        <h1 className="text-[22px] font-normal text-fg">{isNew ? "New block type" : draft.name}</h1>
+      <DetailHeader title={isNew ? "New block type" : draft.name} parent="Types" href={backHref} onBack={onBack}>
         {locked ? <CodeBadge /> : null}
-      </div>
+      </DetailHeader>
       {locked ? <ManagedNotice id={NOTICE_ID} what="block type" defineFn="defineBlockType" slug={draft.slug} owner={owner} /> : null}
       <ReadOnlyFieldset locked={locked} describedBy={NOTICE_ID} label="Block type" className="flex max-w-[860px] flex-col gap-4">
         {ok ? <div className="rounded-lg border border-brand-green bg-brand-green/20 px-3.5 py-2.5 text-small text-fg">saved</div> : null}
@@ -687,13 +688,15 @@ export function BlockTypeEditor({ api, codeDefinedTypes, slug, onSaved, onBack, 
 
 // --- content-type editor --------------------------------------------------------------
 
-export function ContentTypeEditor({ api, codeDefinedTypes, slug, onSaved, onBack, onError }: {
+export function ContentTypeEditor({ api, codeDefinedTypes, slug, onSaved, onBack, backHref, onError }: {
   api: Api;
   /** See `TypesOverview`. */
   codeDefinedTypes: boolean;
   slug: string;
   onSaved: (slug: string) => void;
   onBack: () => void;
+  /** Where `onBack` goes, as an href: the detail header's way back, for a theme that renders it as a link. */
+  backHref: string;
   onError: (s: string) => void;
 }) {
   const isNew = slug === "new";
@@ -779,11 +782,9 @@ export function ContentTypeEditor({ api, codeDefinedTypes, slug, onSaved, onBack
   const locked = codeDefinedTypes && owner !== null;
   return (
     <div className={WRAP}>
-      <div className="mb-4 mt-2 flex items-center gap-3">
-        <Button variant="ghost" size="sm" onPress={onBack}>← Types</Button>
-        <h1 className="text-[22px] font-normal text-fg">{isNew ? "New content type" : draft.name}</h1>
+      <DetailHeader title={isNew ? "New content type" : draft.name} parent="Types" href={backHref} onBack={onBack}>
         {locked ? <CodeBadge /> : null}
-      </div>
+      </DetailHeader>
       {locked ? <ManagedNotice id={NOTICE_ID} what="content type" defineFn="defineContentType" slug={draft.slug} owner={owner} /> : null}
       <ReadOnlyFieldset locked={locked} describedBy={NOTICE_ID} label="Content type" className="flex max-w-[860px] flex-col gap-5">
         {ok ? <div className="rounded-lg border border-brand-green bg-brand-green/20 px-3.5 py-2.5 text-small text-fg">saved</div> : null}

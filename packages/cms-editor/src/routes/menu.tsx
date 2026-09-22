@@ -1,6 +1,6 @@
 // One menu's tree editor (`/menus/:name`).
 
-import { createPage, useNavigate } from "@buzola/router";
+import { createPage, useNavigate, useRouter } from "@buzola/router";
 import { useApp } from "../app-context";
 import { Notice } from "../components";
 import { MenuEditor } from "../furniture";
@@ -11,6 +11,7 @@ export default createPage()
   .render(function MenuRoute({ params }) {
     const { api, cms, collections, setError } = useApp();
     const navigate = useNavigate();
+    const router = useRouter();
     // The nav hides these on a server without the handlers, but a BOOKMARK does not —
     // without this the screen mounts fully interactive and every call 404s. The
     // `/schema` routes already gated on their own capability; these did not.
@@ -23,6 +24,7 @@ export default createPage()
         canEdit={cms.canEdit}
         collections={collections}
         onBack={() => navigate("menus")}
+        backHref={router.buildPagePath("menus")}
         onDeleted={() => navigate("menus")}
         onError={setError}
       />

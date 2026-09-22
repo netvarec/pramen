@@ -14,12 +14,18 @@
 // Split out of `_layout.tsx` so the ordering rule is testable without a DOM: the layout
 // turns entries into buttons, this decides what they are and what order they come in.
 
-import type { BuzolaPageMap } from "@buzola/router";
+import type { AccountMenuItem, EditorPage, NavContext, NavHooks, NavTransform } from "./slots";
+import { EDITOR_PAGES } from "./slots";
 import { NAV_ORDER, type AdminPageMeta, type CmsCapabilities, type CollectionMeta, type ContentType } from "./types";
 
-/** A buzola page id. Typed off the generated page map, so a nav entry naming a route that
- * does not exist is a compile error rather than a tab that navigates nowhere. */
-export type NavPage = keyof BuzolaPageMap;
+/** A buzola page id, so a nav entry naming a route that does not exist is a compile error
+ * rather than a tab that navigates nowhere.
+ *
+ * `EditorPage` rather than `keyof BuzolaPageMap` directly, because this module's types are
+ * part of the public slot contracts (`slots.ts` re-exports `NavEntry`), and the page map only
+ * has keys once the generated route table is in the program, which a theme typechecking
+ * against us does not have, and should not need. `routes/_layout.tsx` proves the two equal. */
+export type NavPage = EditorPage;
 
 /** A host-configured link to a companion tool. */
 export interface ExtraNavLink {
@@ -299,4 +305,117 @@ export function topbarNav(sections: NavSection[]): TopbarNav {
  */
 export function railIsNarrow(choice: boolean, wideViewport: boolean): boolean {
   return choice && wideViewport;
+}
+
+// --- hooks: a deployment's say over the nav -------------------------------------------------
+//
+// The nav is DERIVED (from the session's collections, content types, capabilities and role),
+// and until now the derivation was the whole story: a deployment that wanted "Events" instead
+// of two entries for the same thing, or Users promoted beside the editorial tools, had nothing
+// to change but our source. The one that needed it rewrote `chrome-topbar.tsx` at build time
+// to run its own function over `sections` just before the bar split them, remapped `active`
+// inline beside it, and so had nothing at all for the sidebar.
+//
+// So the hook sits HERE, upstream of both chromes: `_layout.tsx` applies it once and hands
+// the result to whichever chrome is mounted, and the breadcrumb and the account menu read the
+// same result. `NavHooks` in `slots.ts` is the contract; `nav-hooks.ts` is the slot that
+// carries a theme's implementation into the build.
+
+/**
+ * Run a deployment's `transformNav`, and survive it.
+ *
+ * Survive, because this runs in the root layout's render: a throw there is not a nav that
+ * looks wrong, it is a blank admin with no way to reach anything. The editor's own nav is
+ * always a correct answer, so a failing or malformed transform falls back to it and says so.
+ * Empty sections are dropped here rather than trusted to the hook: the topbar renders a
+ * section as a dropdown, and a dropdown with nothing in it is a dead control.
+ */
+export function applyNavTransform(hooks: NavHooks, context: NavContext): NavTransform {
+  const fallback = { sections: context.sections, active: context.active };
+  if (!hooks.transformNav) return fallback;
+  try {
+    const out = hooks.transformNav(context);
+    if (!out || !Array.isArray(out.sections) || typeof out.active !== "string" || !out.sections.every((s) => s && Array.isArray(s.entries))) {
+      console.error("pramen/cms-editor: `transformNav` must return `{ sections, active }`; rendering the nav untransformed.", out);
+      return fallback;
+    }
+    return { sections: out.sections.filter((s) => s.entries.length > 0), active: out.active };
+  } catch (e) {
+    console.error("pramen/cms-editor: `transformNav` threw; rendering the nav untransformed.", e);
+    return fallback;
+  }
+}
+
+/** The account-menu rows this session sees, in order: runtime config first, then the theme's.
+ *
+ * `requiresNav` is checked against the nav the editor BUILT, not the transformed one, and that
+ * is the point of it: the common case is a theme that hides an entry from the nav and moves it
+ * into this menu (Types -> "Content structure"), and checked after the transform the row would
+ * hide itself along with the entry it replaced. The nav's keys are already the capability
+ * answers (`types` exists only for a session that may author the schema, `users` only for an
+ * admin), so a row gated on one cannot offer a screen the session would be refused. */
+export function accountMenuFor(items: readonly AccountMenuItem[], context: NavContext): AccountMenuItem[] {
+  const keys = new Set(context.sections.flatMap((s) => s.entries.map((e) => e.key)));
+  return items.filter((item) => {
+    if (item.requiresNav !== undefined && !keys.has(item.requiresNav)) return false;
+    if (!item.visible) return true;
+    try {
+      return item.visible(context) === true;
+    } catch (e) {
+      console.error(`pramen/cms-editor: the \`visible\` of account-menu item "${item.label}" threw; hiding it.`, e);
+      return false;
+    }
+  });
+}
+
+const PAGES: ReadonlySet<string> = new Set(EDITOR_PAGES);
+const GLYPHS: ReadonlySet<string> = new Set<NavGlyph>(["pages", "collection", "media", "menus", "taxonomies", "widgets", "redirects", "app", "types", "users", "settings", "link"]);
+
+/**
+ * Parse `accountMenu` from the shell's runtime config.
+ *
+ * Same rule as `resolveLayout` and `resolveBrand`: this is JSON a person typed into an Astro
+ * config, read at module load with no error boundary above it, so nothing here may throw. A
+ * row naming a page that does not exist is DROPPED with a warning rather than rendered: a
+ * menu item that navigates nowhere is worse than a missing one, because it looks like it works.
+ * `visible` is not accepted here: JSON cannot carry a function, and `requiresNav` is the
+ * declarative form of the same question.
+ */
+export function resolveAccountMenu(value: unknown): AccountMenuItem[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) {
+    console.warn(`pramen/cms-editor: ignoring \`accountMenu\` ${JSON.stringify(value)}; expected an array of { label, page }.`);
+    return [];
+  }
+  const out: AccountMenuItem[] = [];
+  for (const raw of value as unknown[]) {
+    const row = raw as Record<string, unknown> | null;
+    const label = typeof row?.label === "string" ? row.label.trim() : "";
+    const page = row?.page;
+    if (!label || typeof page !== "string" || !PAGES.has(page)) {
+      console.warn(`pramen/cms-editor: ignoring account-menu item ${JSON.stringify(raw)}; it needs a \`label\` and a \`page\` that is one of ${EDITOR_PAGES.join(", ")}.`);
+      continue;
+    }
+    const item: AccountMenuItem = { label, page: page as EditorPage };
+    const params = row?.params;
+    if (params && typeof params === "object" && !Array.isArray(params)) {
+      const clean = Object.entries(params).filter((e): e is [string, string] => typeof e[1] === "string");
+      if (clean.length > 0) item.params = Object.fromEntries(clean);
+    }
+    if (typeof row?.icon === "string" && GLYPHS.has(row.icon)) item.icon = row.icon as NavGlyph;
+    if (typeof row?.requiresNav === "string" && row.requiresNav.trim()) item.requiresNav = row.requiresNav.trim();
+    out.push(item);
+  }
+  return out;
+}
+
+/** The global the host's shell writes. Structural, like `LayoutHost`, so a test can hand it a
+ * plain object. */
+export interface AccountMenuHost {
+  PRAMEN_CMS_EDITOR?: { accountMenu?: unknown };
+}
+
+/** Pull the account-menu config off a host global, tolerating its absence. */
+export function readAccountMenuConfig(host: AccountMenuHost | undefined): unknown {
+  return host?.PRAMEN_CMS_EDITOR?.accountMenu;
 }

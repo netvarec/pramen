@@ -53,6 +53,12 @@ declare global {
        * `?token=…`. Unset, a preview link points at the CMS's own redeem endpoint, which
        * answers with JSON — see `preview.ts`. */
       previewUrl?: string;
+      /** Rows added to the account menu, each opening a screen of the editor. Parsed and
+       * validated by `resolveAccountMenu` in `nav.ts`; see `AccountMenuItem` in `slots.ts`. */
+      accountMenu?: unknown;
+      /** Optional list controls this deployment turns off: `"mediaSearch"`, `"mediaFilters"`,
+       * `"relationSearch"`. See `controls.ts`. */
+      hideControls?: unknown;
     };
   }
 }

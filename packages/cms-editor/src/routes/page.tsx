@@ -2,7 +2,7 @@
 // `?tab=` so a specific panel is deep-linkable and survives refresh; block selection
 // stays local (it's a transient in-canvas overlay).
 
-import { createPage, useNavigate } from "@buzola/router";
+import { createPage, useNavigate, useRouter } from "@buzola/router";
 import { Button } from "@podoba/react";
 import { useEffect, useState } from "react";
 import { useApp } from "../app-context";
@@ -15,6 +15,7 @@ export default createPage()
   .render(function PageEditorRoute({ params }) {
     const { api, cms, contentTypes, setError, setNavGuard } = useApp();
     const navigate = useNavigate();
+    const router = useRouter();
     const [page, setPage] = useState<Page | null>(null);
     const [blockTypes, setBlockTypes] = useState<BlockType[]>([]);
     const [missing, setMissing] = useState(false);
@@ -46,6 +47,9 @@ export default createPage()
       if (splitsByType(contentTypes, cms) && ownType) navigate("type", { params: { slug: ownType.slug } });
       else navigate("home");
     };
+    // The same decision as an href, for the detail header. Derived from the same condition
+    // rather than from `backToList`, which only navigates.
+    const backHref = splitsByType(contentTypes, cms) && ownType ? router.buildPagePath("type", { slug: ownType.slug }) : router.buildPagePath("home");
 
     // The visible set comes from the server (`visibleTabs`), so a deep link to `?tab=i18n`
     // on a single-locale deployment falls back to settings — and the URL is REWRITTEN to
@@ -73,6 +77,7 @@ export default createPage()
         tab={tab}
         onTab={setTab}
         onBack={backToList}
+        backHref={backHref}
         // Named for where it actually goes. On a per-type deployment `backToList` lands in
         // this page's OWN type list, and a button labelled "Pages" then named a pooled list
         // that deployment does not have.

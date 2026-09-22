@@ -11,6 +11,7 @@ import StarterKit from "@tiptap/starter-kit";
 import { useCallback, useEffect, useId, useRef, useState, type DragEvent, type ReactNode } from "react";
 import type { Api } from "./api";
 import { COMMON_COPY } from "./copy";
+import { controlShown } from "./controls";
 import { LoadFailed, usePagedList } from "./list-state";
 import { isRichTextDoc, richTextToPlainText } from "./rich-text";
 import type { FieldDefinition, FieldValue, FieldValues, Media, ReferenceOption, ReferenceResult, RichTextDoc } from "./types";
@@ -1105,15 +1106,19 @@ function ReferencePicker({ api, from, title, selected, multiple, onPick, onClose
       closeLabel={COMMON_COPY.close}
       onOpenChange={(open) => !open && onClose()}
     >
-      <input
-        className={`${CONTROL} mb-3`}
-        type="search"
-        autoFocus
-        placeholder="Search"
-        aria-label="Search"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-      />
+      {/* A deployment may hide it (`hideControls: ["relationSearch"]`, see `controls.ts`). The
+          query then stays empty, so the picker pages through every option instead. */}
+      {controlShown("relationSearch") ? (
+        <input
+          className={`${CONTROL} mb-3`}
+          type="search"
+          autoFocus
+          placeholder="Search"
+          aria-label="Search"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+      ) : null}
       {err ? <div className="mb-2 rounded-lg border border-danger bg-surface-card px-3.5 py-2.5 text-small text-danger">{err}</div> : null}
       <div className="flex flex-col gap-1">
         {items.map((opt) => {

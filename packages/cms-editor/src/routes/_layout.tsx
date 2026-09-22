@@ -14,18 +14,34 @@
 // containment rules in `mount.ts`); the difference between the chromes is markup. Adding a
 // third shape means writing a component, not re-deriving state.
 
-import { Outlet, useNavigate, useRoute, useRouter } from "@buzola/router";
+import { Outlet, useNavigate, useRoute, useRouter, type BuzolaPageMap } from "@buzola/router";
 import { useState } from "react";
 import { useApp } from "../app-context";
 import { BreadcrumbProvider } from "../breadcrumb";
 import { CHROME_LAYOUT } from "../chrome";
 import { ErrorBanner, SidebarChrome } from "../chrome-sidebar";
 import { TopbarChrome } from "../chrome-topbar";
-import type { ChromeProps, NavRoute } from "../chrome-shared";
+import type { AccountMenuEntry, ChromeProps, NavRoute } from "../chrome-shared";
 import { pagesHidden, splitsByType } from "../components";
 import { opensInSameTab } from "../mount";
 import { setTheme, useTheme } from "../theme";
-import { buildNav, navSections, navSectionsAreLabelled, type ExtraNavLink } from "../nav";
+import { accountMenuFor, applyNavTransform, buildNav, navSections, navSectionsAreLabelled, readAccountMenuConfig, resolveAccountMenu, type AccountMenuHost, type ExtraNavLink } from "../nav";
+import { navHooks } from "../nav-hooks";
+import type { EditorPage, NavContext } from "../slots";
+
+/** `EditorPage` (the public contract's list of screens, in `slots.ts`) and the router's own
+ * page map must be the same set, in BOTH directions: a page missing from the contract cannot
+ * be named by a theme, and a page in the contract that the router lacks is an account-menu
+ * row that navigates nowhere. Written out there so a theme's typecheck needs no route table;
+ * proved here, where the route table is in the program, so the two cannot drift. */
+type Assert<T extends true> = T;
+export type EditorPagesMatchRouter = Assert<
+  [EditorPage] extends [keyof BuzolaPageMap] ? ([keyof BuzolaPageMap] extends [EditorPage] ? true : false) : false
+>;
+
+/** Account-menu rows from the shell's runtime config, resolved once per page load like
+ * `CHROME_LAYOUT`. A theme's rows (`navHooks.accountMenu`) follow them. */
+const CONFIGURED_ACCOUNT_MENU = resolveAccountMenu(readAccountMenuConfig(globalThis as AccountMenuHost));
 
 /**
  * The slug segment under `prefix`, DECODED.
@@ -109,12 +125,18 @@ export default function RootLayout() {
   // Same rule as the landing redirect and the page editor's back target — see `splitsByType`.
   const splitByType = splitsByType(contentTypes, cms, hidePages);
   const nav = buildNav({ collections, adminPages, contentTypes, cms, hidePages, splitByType, isAdmin, extraNav });
-  const sections = navSections(nav);
+  // A deployment's say over the nav (`slots.nav`, see `nav-hooks.ts`), applied HERE so both
+  // chromes, the breadcrumb and the account menu all read the one transformed answer. The
+  // context is the nav as built, which is also what `requiresNav` is checked against.
+  const navContext: NavContext = { sections: navSections(nav), active, isAdmin, me };
+  const { sections, active: lit } = applyNavTransform(navHooks, navContext);
   const labelled = navSectionsAreLabelled(sections);
   // The section half of the breadcrumb, and the way back to its list. Taken from the entry
   // that is LIT rather than re-derived from the path: the nav already answered "where am I",
-  // and a second answer computed differently is a second answer that can disagree.
-  const activeEntry = nav.find((e) => e.key === active);
+  // and a second answer computed differently is a second answer that can disagree. Looked up
+  // in the TRANSFORMED nav, so a renamed entry is named by its new label and a remapped
+  // highlight brings its crumb with it.
+  const activeEntry = sections.flatMap((s) => s.entries).find((e) => e.key === lit);
   const sectionCrumb: NavRoute | undefined = activeEntry?.kind === "route" ? activeEntry : undefined;
   // …and the detail half, published by whatever screen is mounted (see `breadcrumb.tsx`).
   const [crumb, setCrumb] = useState<string | null>(null);
@@ -132,10 +154,19 @@ export default function RootLayout() {
   const onGo = (entry: NavRoute): boolean =>
     guarded(() => navigate(entry.page as never, entry.params ? ({ params: entry.params } as never) : (undefined as never)))();
 
+  // The deployment's account-menu rows, filtered for this session and made into guarded
+  // navigations, so a chrome renders them without knowing what any of them is.
+  const accountItems: AccountMenuEntry[] = accountMenuFor([...CONFIGURED_ACCOUNT_MENU, ...(navHooks.accountMenu ?? [])], navContext).map((item, i) => ({
+    id: `extra:${i}`,
+    label: item.label,
+    ...(item.icon ? { icon: item.icon } : {}),
+    onSelect: guarded(() => navigate(item.page as never, item.params ? ({ params: item.params } as never) : (undefined as never))),
+  }));
+
   const chrome: ChromeProps = {
     sections,
     labelled,
-    active,
+    active: lit,
     sectionCrumb,
     crumb,
     me,
@@ -144,6 +175,7 @@ export default function RootLayout() {
     onSettings: guarded(() => navigate("settings")),
     onSignOut: guarded(reconfigure),
     onHome: guarded(() => navigate("home")),
+    accountItems,
     onGo,
     sameTab: (link) => opensInSameTab(link.href, link.target, basePath, documentUrl),
     confirmNavigation,

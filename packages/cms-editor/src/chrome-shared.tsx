@@ -15,11 +15,25 @@ import { Avatar, UserMenu, UserMenuItem } from "@podoba/react";
 import { useEffect, useState, type ReactNode } from "react";
 import type { Me } from "./app-context";
 import { DarkThemeIcon, LightThemeIcon, NAV_GLYPHS, SettingsIcon, SignOutIcon } from "./icons";
-import type { ExtraNavLink, NavEntry, NavIcon, NavSection } from "./nav";
+import type { ExtraNavLink, NavEntry, NavGlyph, NavIcon, NavSection } from "./nav";
 
 /** A nav entry that goes somewhere in the SPA — the half a chrome navigates rather than
  * links to. Narrowed here so neither chrome has to re-derive the discriminant. */
 export type NavRoute = Extract<NavEntry, { kind: "route" }>;
+
+/** A deployment's own row in the account menu (`accountMenu` in the shell config, or
+ * `navHooks.accountMenu` in a theme), resolved by the layout: already filtered for this
+ * session, already wrapped in the unsaved-changes guard. A chrome renders it and calls
+ * `onSelect`, and never needs to know what any particular row is for. That is the difference
+ * from how the first one was added, as an `onStructure`/`showStructure` pair threaded by hand
+ * through the layout, this module and both chromes. */
+export interface AccountMenuEntry {
+  id: string;
+  label: string;
+  icon?: NavGlyph;
+  /** Navigates, through the guard. Returns whether it went, like the callbacks below. */
+  onSelect: () => boolean;
+}
 
 /** Everything a chrome is handed. */
 export interface ChromeProps {
@@ -49,6 +63,8 @@ export interface ChromeProps {
   onSettings: () => boolean;
   onSignOut: () => boolean;
   onHome: () => boolean;
+  /** The deployment's own account-menu rows, in order. Usually empty. */
+  accountItems: AccountMenuEntry[];
   onGo: (entry: NavRoute) => boolean;
   /** Whether a host link may navigate the CURRENT tab — `opensInSameTab`, applied by the
    * layout because it depends on the router's base path. */
@@ -126,6 +142,7 @@ export function AccountMenu({
   me,
   theme,
   compact = false,
+  items,
   onTheme,
   onSettings,
   onSignOut,
@@ -133,10 +150,16 @@ export function AccountMenu({
   me: Me | null;
   theme: string;
   compact?: boolean;
+  /** The deployment's own rows, between the theme toggle and Settings. */
+  items: AccountMenuEntry[];
   onTheme: () => void;
   onSettings: () => void;
   onSignOut: () => void;
 }) {
+  // Looked up by id rather than switched on, because the rows are data: the built-in keys can
+  // never collide with them (`extra:` prefix), and nothing here changes when a deployment adds
+  // one.
+  const byId = new Map(items.map((item) => [item.id, item]));
   // The server-resolved identity, which is a username rather than a display name — this app
   // has no profile. Falling back to "account" keeps the avatar's initials from reading as "?"
   // in the window between boot and the `me` call landing.
@@ -154,12 +177,21 @@ export function AccountMenu({
         if (key === "theme") onTheme();
         else if (key === "settings") onSettings();
         else if (key === "signout") onSignOut();
+        else byId.get(String(key))?.onSelect();
       }}
     >
       <UserMenuItem id="theme" className="gap-2.5">
         {theme === "dark" ? <LightThemeIcon className="h-[15px] w-[15px]" /> : <DarkThemeIcon className="h-[15px] w-[15px]" />}
         {theme === "dark" ? "Light theme" : "Dark theme"}
       </UserMenuItem>
+      {items.map((item) => (
+        <UserMenuItem key={item.id} id={item.id} className="gap-2.5">
+          {/* An empty 15px box when there is no glyph, so the label still lines up with the
+              built-in rows' labels. */}
+          {item.icon ? <NavIconSlot icon={{ kind: "glyph", name: item.icon }} /> : <span aria-hidden="true" className="h-[15px] w-[15px] shrink-0" />}
+          {item.label}
+        </UserMenuItem>
+      ))}
       <UserMenuItem id="settings" className="gap-2.5">
         <SettingsIcon className="h-[15px] w-[15px]" />
         Settings

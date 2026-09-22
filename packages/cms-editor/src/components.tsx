@@ -6,13 +6,18 @@ import { Button, Dialog, type DialogSize, DropdownMenu, DropdownMenuItem, Dropdo
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Api, ApiError } from "./api";
 import { CONTROL, FieldForm, formatWhen, fromLocalInput, slugify, toLocalInput } from "./fields";
-import { BELOW_APP_BAR, BELOW_PAGE_TOOLBAR, CONTENT, INSPECTOR_MAX_H, PAGE_TOOLBAR_H, ROW, ROW_BUTTON, TILE_BUTTON, WRAP } from "./chrome";
+import { BELOW_APP_BAR, BELOW_PAGE_TOOLBAR, CONTENT, INSPECTOR_MAX_H, PAGE_TOOLBAR_H, ROW, ROW_BUTTON, WRAP } from "./chrome";
 import { COMMON_COPY } from "./copy";
 import { listSummary, LoadFailed, usePagedList, type ListPhase } from "./list-state";
 import { useCrumb } from "./breadcrumb";
 import { PageHeader } from "./page-header";
+import { DetailHeader } from "./detail-header";
+import { MediaGrid, MediaLibraryEmpty } from "./media-grid";
+import { MediaDetailFrame } from "./media-detail";
+import { controlShown } from "./controls";
 import { pagePreviewHref, sitePreviewUrl } from "./preview";
 import type { Config } from "./api";
+import type { HomeLanding, MediaTile } from "./slots";
 import { useApp, type Me } from "./app-context";
 import { isRichTextDoc, richTextToPlainText } from "./rich-text";
 import { flattenTerms } from "./furniture";
@@ -125,6 +130,33 @@ export function pagesHidden(): boolean {
  */
 export function splitsByType(contentTypes: ContentType[] | null, cms: CmsCapabilities, hidePages = pagesHidden()): boolean {
   return !hidePages && cms.pagesByType && contentTypes !== null && contentTypes.length > 1;
+}
+
+/**
+ * Where `/` lands, as data: the decision `routes/home.tsx` used to make inline, lifted out so a
+ * home screen of a deployment's own (`slots.home`) is HANDED it instead of re-deriving it.
+ *
+ * The rules are unchanged, and each one is here because `/` once landed somewhere wrong:
+ *
+ * - Collections-only (`hidePages`): `/` would be the page list, which such a deployment does
+ *   not have (fetching it errors outright where `cmsSchema` was never spread), so it hands off
+ *   to the first collection, or to nothing when there is none.
+ * - Split by type: the pooled list has no tab of its own to be reached from, so it lands on the
+ *   first type's list. A type with an empty slug is skipped: `/types/` matches no route, and
+ *   redirecting into it left `/` permanently blank.
+ * - Content types not answered yet: nothing is decided. Rendering the pooled list first paints
+ *   (and fetches) the very screen a split exists to retire, a round trip before redirecting.
+ */
+export function homeLanding(input: { hidePages: boolean; collections: CollectionMeta[]; contentTypes: ContentType[] | null; cms: CmsCapabilities }): HomeLanding {
+  const { hidePages, collections, contentTypes, cms } = input;
+  if (hidePages) {
+    const first = collections[0]?.slug;
+    return first ? { kind: "collection", slug: first } : { kind: "none" };
+  }
+  const firstType = (contentTypes ?? []).find((t) => t.slug !== "")?.slug;
+  if (splitsByType(contentTypes, cms, hidePages) && firstType !== undefined) return { kind: "type", slug: firstType };
+  if (contentTypes === null) return { kind: "pending" };
+  return { kind: "pages" };
 }
 
 // --- presentational primitives (podoba tokens; replaces styles.ts classes) ---
@@ -653,7 +685,7 @@ function CollectionWorkflow({
   );
 }
 
-export function CollectionEditor({ api, def, id, onSaved, onDeleted, onBack, onError }: { api: Api; def: CollectionMeta; id: string | null; onSaved: () => void; onDeleted: () => void; onBack: () => void; onError: (s: string) => void }) {
+export function CollectionEditor({ api, def, id, onSaved, onDeleted, onBack, backHref, onError }: { api: Api; def: CollectionMeta; id: string | null; onSaved: () => void; onDeleted: () => void; onBack: () => void; backHref: string; onError: (s: string) => void }) {
   const isNew = id === null;
   const [values, setValues] = useState<FieldValues>({});
   const [loading, setLoading] = useState(!isNew);
@@ -719,10 +751,7 @@ export function CollectionEditor({ api, def, id, onSaved, onDeleted, onBack, onE
 
   return (
     <div className={WRAP}>
-      <div className="mb-4 mt-2 flex items-center gap-3">
-        <Button variant="ghost" size="sm" onPress={onBack}>← {def.pluralLabel}</Button>
-        <h1 className="text-[22px] font-normal text-fg">{isNew ? `New ${def.label.toLowerCase()}` : `Edit ${def.label.toLowerCase()}`}</h1>
-      </div>
+      <DetailHeader title={isNew ? `New ${def.label.toLowerCase()}` : `Edit ${def.label.toLowerCase()}`} parent={def.pluralLabel} href={backHref} onBack={onBack} />
       {missing ? (
         <p className="text-fg-subtle">Not found.</p>
       ) : loading ? (
@@ -750,8 +779,14 @@ export function CollectionEditor({ api, def, id, onSaved, onDeleted, onBack, onE
 // --- page editor -------------------------------------------------------------
 
 /**
- * The page editor's toolbar: where you are, what state the page is in, and the three things
- * you came to do.
+ * The page editor's toolbar: what state the page is in, and the three things you came to do.
+ *
+ * WHERE you are (the way back and the page's title) moved out of it, into the `DetailHeader`
+ * above it that every other detail screen already opens with. The toolbar had its own copy of
+ * that pattern, so a deployment that brought its own detail header had to rewrite the toolbar
+ * too (hide its back button and title) or show both. One header per screen now, and the
+ * toolbar is only the page's state and its actions; the title stays reachable once the header
+ * has scrolled away through the crumb the editor publishes to the chrome.
  *
  * It exists because none of that was anywhere. The editor opened onto three columns of panels
  * with no header; the status appeared twice (a rail card and an inspector row) and the actions
@@ -761,13 +796,9 @@ export function CollectionEditor({ api, def, id, onSaved, onDeleted, onBack, onE
  *
  * Sticky, because a long page scrolls away from it and the save state has to stay visible.
  */
-function PageToolbar({ page, dirtyCount, onBack, backLabel, onAct, busy }: {
+function PageToolbar({ page, dirtyCount, onAct, busy }: {
   page: Page;
   dirtyCount: number;
-  onBack: () => void;
-  /** The list this page belongs to — "Pages", or the content type's own name on a
-   * per-type deployment, where back goes to that type's list and not the pooled one. */
-  backLabel: string;
   onAct: (action: string) => void;
   busy: boolean;
 }) {
@@ -826,10 +857,9 @@ function PageToolbar({ page, dirtyCount, onBack, backLabel, onAct, busy }: {
   return (
     <>
     <div className={`sticky ${BELOW_APP_BAR} z-20 -mx-[var(--pramen-gutter)] flex ${PAGE_TOOLBAR_H} items-center gap-3 border-b border-border bg-surface px-[var(--pramen-gutter)]`}>
-      <Button variant="ghost" size="sm" className="shrink-0" onPress={onBack}>← {backLabel}</Button>
-      <span className="min-w-0 truncate font-medium text-fg">{page.title}</span>
-      {/* Beside the title, because it is a fact ABOUT the page — among the buttons it read as
-          another control. */}
+      {/* First, because it is a fact ABOUT the page; among the buttons it read as another
+          control. It stayed here rather than moving up with the title: publishing is done
+          from this bar, so the state it changes has to stay on screen with it. */}
       <Pill status={page.status}>{page.status}</Pill>
       <span className="flex-1" />
       {/* ONE line of truth about saving. Page fields and blocks autosave; this says so, and
@@ -867,12 +897,27 @@ function PageToolbar({ page, dirtyCount, onBack, backLabel, onAct, busy }: {
   );
 }
 
-export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, backLabel, onChange, registerGuard }: { api: Api; page: Page; blockTypes: BlockType[]; tab: InspectorTab; onTab: (t: InspectorTab) => void; onBack: () => void; backLabel: string; onChange: (p: Page) => void; registerGuard: (fn: (() => boolean) | null) => void }) {
+export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, backLabel, backHref, onChange, registerGuard }: {
+  api: Api;
+  page: Page;
+  blockTypes: BlockType[];
+  tab: InspectorTab;
+  onTab: (t: InspectorTab) => void;
+  onBack: () => void;
+  /** The list this page belongs to: "Pages", or the content type's own name on a per-type
+   * deployment, where back goes to that type's list and not the pooled one. */
+  backLabel: string;
+  /** `onBack`'s destination as an href, for the detail header. */
+  backHref: string;
+  onChange: (p: Page) => void;
+  registerGuard: (fn: (() => boolean) | null) => void;
+}) {
   const { cms: { multilingual, siteFurniture, canEdit } } = useApp();
-  // NO detail crumb, deliberately. The toolbar below names the page and carries its status,
-  // so publishing one put the title in the app bar 40px above where the toolbar already says
-  // it — the "title in three places" this redesign removed. The section crumb stays; it names
-  // the list you came from, which the toolbar's back button only points at.
+  // The detail crumb is the page's title. It was deliberately NOT published while the sticky
+  // toolbar carried the title (that put it in the app bar 40px above where the toolbar already
+  // said it). The title now lives in the detail header, which scrolls away with the page, so
+  // the crumb is what keeps the open page named once it has.
+  useCrumb(page.title);
   const [ct, setCt] = useState<ContentType | null>(null);
   const [assembled, setAssembled] = useState<AssembledPage | null>(null);
   const [err, setErr] = useState("");
@@ -1038,7 +1083,8 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, backLabe
 
   return (
     <div className="px-[var(--pramen-gutter)] pb-16">
-      <PageToolbar page={page} dirtyCount={dirtyCount} busy={acting} onAct={act} backLabel={backLabel} onBack={() => { if (confirmLeave()) onBack(); }} />
+      <DetailHeader title={page.title} parent={backLabel} href={backHref} onBack={() => { if (confirmLeave()) onBack(); }} />
+      <PageToolbar page={page} dirtyCount={dirtyCount} busy={acting} onAct={act} />
       {err ? <Banner>{err}</Banner> : null}
 
       {/* Two columns, always. There was a third — an outline listing each region and its block
@@ -1752,6 +1798,11 @@ const ALL_TAGS = "__all";
 
 export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) => void }) {
   const { cms: { mediaTerms, mediaDownload, canEdit } } = useApp();
+  // A deployment may turn either half of the toolbar off (`hideControls`, see `controls.ts`).
+  // Hidden means not rendered, never "rendered and ignored": the state each one drives stays
+  // at its default, so the grid is the whole library.
+  const showSearch = controlShown("mediaSearch");
+  const showFilters = controlShown("mediaFilters");
   const [selected, setSelected] = useState<Media | null>(null);
   const [busy, setBusy] = useState(false);
   // The file input the header's Upload button drives. It stays in the DOM (hidden) rather
@@ -1876,65 +1927,73 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
             SCREEN's identity and its one primary action, and a row of controls in it would be
             the mint-pill mistake again — a second cluster competing with the artwork. They sit
             with the thing they act on. */}
-        <div className="mb-4 flex flex-wrap items-center gap-2">
-          {/* Matches the filename AND the alt text — the only human description a media row
-              carries, so searching for "logo" finds the file somebody described as one even
-              when the upload was called `IMG_2831.png`. */}
-          <SearchField
-            aria-label="Search media"
-            placeholder="Search files…"
-            value={query}
-            onChange={setQuery}
-            className="w-[220px] shrink-0"
-          />
-          {/* A menu, not podoba's `Select`: that is a form FIELD — a stacked visible label
-              over a trigger, sized and spaced for a form — and in a toolbar it would stand a
-              head taller than the chips beside it. A trigger showing the current order is the
-              toolbar shape, and it is the same RAC menu pattern underneath. */}
-          <DropdownMenuTrigger>
-            <Button variant="secondary" size="sm" className="shrink-0 px-3 py-1 text-compact">
-              {MEDIA_SORT_LABELS[sort]}
-            </Button>
-            <DropdownMenu aria-label="Sort media" onAction={(k) => setSort(k as MediaSort)}>
-              {MEDIA_SORTS.map((v) => (
-                <DropdownMenuItem key={v} id={v}>{MEDIA_SORT_LABELS[v]}</DropdownMenuItem>
-              ))}
-            </DropdownMenu>
-          </DropdownMenuTrigger>
-          {/* A menu rather than chips, unlike `kind`: the buckets are a closed set of five that
-              fits on the row, where terms are however many an editor has authored. It sits
-              BESIDE the sort menu rather than after the chips, so the row groups by control
-              type — two triggers, then the chip bar — instead of trailing a seventh pill that
-              reads as another type bucket. Drawn only once a vocabulary HAS a term: a filter
-              offering nothing to filter by can only disappoint. */}
-          {mediaTerms && taggable.length > 0 ? (
-            <DropdownMenuTrigger>
-              <Button variant="secondary" size="sm" className="shrink-0 px-3 py-1 text-compact">
-                {term ? (taggable.find((t) => t.id === term)?.label ?? "Tag") : "All tags"}
-              </Button>
-              <DropdownMenu aria-label="Filter media by tag" onAction={(k) => setTerm(k === ALL_TAGS ? null : String(k))}>
-                <DropdownMenuItem id={ALL_TAGS}>All tags</DropdownMenuItem>
-                {/* Qualified by vocabulary here, where a flat menu gives hierarchy nowhere to
-                    show; the trigger stays the bare term, which is what the row is filtered by. */}
-                {taggable.map((t) => (
-                  <DropdownMenuItem key={t.id} id={t.id}>{t.group} · {t.label}</DropdownMenuItem>
-                ))}
-              </DropdownMenu>
-            </DropdownMenuTrigger>
-          ) : null}
-          {/* Buttons, not a second dropdown: five buckets is few enough to show, and a filter
-              you can see the state of without opening it is the point of a filter bar. "All"
-              is `null` rather than a sixth kind — the server's absent-means-everything, said
-              once, on the side that has the state. */}
-          <div className="flex flex-wrap items-center gap-1">
-            <FilterChip active={kind === null} onPress={() => setKind(null)}>All</FilterChip>
-            {MEDIA_KINDS.map((k) => (
-              <FilterChip key={k} active={kind === k} onPress={() => setKind(kind === k ? null : k)}>
-                {MEDIA_KIND_LABELS[k]}
-              </FilterChip>
-            ))}
+        {showSearch || showFilters ? (
+          <div className="mb-4 flex flex-wrap items-center gap-2">
+            {/* Matches the filename AND the alt text: the only human description a media row
+                carries, so searching for "logo" finds the file somebody described as one even
+                when the upload was called `IMG_2831.png`. */}
+            {showSearch ? (
+              <SearchField
+                aria-label="Search media"
+                placeholder="Search files…"
+                value={query}
+                onChange={setQuery}
+                className="w-[220px] shrink-0"
+              />
+            ) : null}
+            {showFilters ? (
+              <>
+                {/* A menu, not podoba's `Select`: that is a form FIELD (a stacked visible label
+                    over a trigger, sized and spaced for a form), and in a toolbar it would stand a
+                    head taller than the chips beside it. A trigger showing the current order is the
+                    toolbar shape, and it is the same RAC menu pattern underneath. */}
+                <DropdownMenuTrigger>
+                  <Button variant="secondary" size="sm" className="shrink-0 px-3 py-1 text-compact">
+                    {MEDIA_SORT_LABELS[sort]}
+                  </Button>
+                  <DropdownMenu aria-label="Sort media" onAction={(k) => setSort(k as MediaSort)}>
+                    {MEDIA_SORTS.map((v) => (
+                      <DropdownMenuItem key={v} id={v}>{MEDIA_SORT_LABELS[v]}</DropdownMenuItem>
+                    ))}
+                  </DropdownMenu>
+                </DropdownMenuTrigger>
+                {/* A menu rather than chips, unlike `kind`: the buckets are a closed set of five that
+                    fits on the row, where terms are however many an editor has authored. It sits
+                    BESIDE the sort menu rather than after the chips, so the row groups by control
+                    type (two triggers, then the chip bar) instead of trailing a seventh pill that
+                    reads as another type bucket. Drawn only once a vocabulary HAS a term: a filter
+                    offering nothing to filter by can only disappoint. */}
+                {mediaTerms && taggable.length > 0 ? (
+                  <DropdownMenuTrigger>
+                    <Button variant="secondary" size="sm" className="shrink-0 px-3 py-1 text-compact">
+                      {term ? (taggable.find((t) => t.id === term)?.label ?? "Tag") : "All tags"}
+                    </Button>
+                    <DropdownMenu aria-label="Filter media by tag" onAction={(k) => setTerm(k === ALL_TAGS ? null : String(k))}>
+                      <DropdownMenuItem id={ALL_TAGS}>All tags</DropdownMenuItem>
+                      {/* Qualified by vocabulary here, where a flat menu gives hierarchy nowhere to
+                          show; the trigger stays the bare term, which is what the row is filtered by. */}
+                      {taggable.map((t) => (
+                        <DropdownMenuItem key={t.id} id={t.id}>{t.group} · {t.label}</DropdownMenuItem>
+                      ))}
+                    </DropdownMenu>
+                  </DropdownMenuTrigger>
+                ) : null}
+                {/* Buttons, not a second dropdown: five buckets is few enough to show, and a filter
+                    you can see the state of without opening it is the point of a filter bar. "All"
+                    is `null` rather than a sixth kind: the server's absent-means-everything, said
+                    once, on the side that has the state. */}
+                <div className="flex flex-wrap items-center gap-1">
+                  <FilterChip active={kind === null} onPress={() => setKind(null)}>All</FilterChip>
+                  {MEDIA_KINDS.map((k) => (
+                    <FilterChip key={k} active={kind === k} onPress={() => setKind(kind === k ? null : k)}>
+                      {MEDIA_KIND_LABELS[k]}
+                    </FilterChip>
+                  ))}
+                </div>
+              </>
+            ) : null}
           </div>
-        </div>
+        ) : null}
         {list.phase === "failed" ? (
           <LoadFailed onRetry={list.reload} />
         ) : list.phase === "loading" && media.length === 0 ? (
@@ -1951,21 +2010,12 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
               <Button variant="secondary" size="sm" onPress={() => { setQuery(""); setSearch(""); setKind(null); setTerm(null); }}>Clear filters</Button>
             </div>
           ) : (
-            <p className="text-fg-subtle">No media yet. Upload images to use them in blocks and SEO.</p>
+            <MediaLibraryEmpty title="No media yet." description="Upload images to use them in blocks and SEO." />
           )
         ) : (
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-2.5">
-            {media.map((m) => (
-              // A button, not a `<div onClick>`: the grid is the only way into a file's detail
-              // (alt text, tags, delete), and a div left all of that out of reach of the keyboard.
-              // The thumbnail is the ORIGINAL file, so it loads lazily: a page of sixty was
-              // sixty full-size downloads up front, most of them below the fold.
-              <button type="button" key={m.id} className={`${TILE_BUTTON} overflow-hidden rounded-lg border bg-surface-card ${selected?.id === m.id ? "border-fg" : "border-border"}`} onClick={() => setSelected(m)}>
-                {isImage(m) ? <img loading="lazy" decoding="async" className="block h-[130px] w-full object-cover" src={api.resolve(`/media/${m.file.key}`)} alt={m.alt ?? ""} /> : <div className="flex h-[130px] items-center justify-center bg-surface-muted font-mono text-xs text-fg-subtle">{ext(m)}</div>}
-                <div className="truncate px-2 py-1.5 text-[11px] text-fg-muted">{m.file.filename ?? m.id}</div>
-              </button>
-            ))}
-          </div>
+          // The grid is a slot (`slots.mediaGrid`, see `media-grid.tsx`): the editor decides
+          // what a tile SAYS and what opening it does, the slot decides how it looks.
+          <MediaGrid label="Media library" tiles={media.map((m) => mediaTile(api, m, selected?.id === m.id, () => setSelected(m)))} />
         )}
         {list.hasMore ? (
           <div className="mt-3.5 text-center">
@@ -2104,13 +2154,19 @@ function MediaDetail({ api, media, taxa, terms, canEdit, canDownload, onClose, o
     }
   };
 
+  // The frame is a slot (`slots.mediaDetail`, see `media-detail.tsx`); what goes in it stays
+  // here, in three named parts, so a theme arranges them without re-implementing any of them.
   return (
-    <Modal onClose={onClose} size="lg" title={<><Dim>Media</Dim> {media.file.filename ?? ""}</>}>
-      {isImage(media) ? (
+    <MediaDetailFrame
+      onClose={onClose}
+      closeLabel={COMMON_COPY.close}
+      title={<><Dim>Media</Dim> {media.file.filename ?? ""}</>}
+      preview={isImage(media) ? (
         <img className="mx-auto mb-3.5 block max-h-[340px] max-w-full rounded-lg bg-surface-muted object-contain" src={url} alt={media.alt ?? ""} />
       ) : (
         <div className="mb-3.5 flex h-[200px] items-center justify-center rounded-lg bg-surface-muted font-mono text-fg-subtle">{ext(media)}</div>
       )}
+      details={<>
       <div className="mb-4">
         <Input label="Alt text (for accessibility & SEO)" value={alt} onChange={setAlt} placeholder="Describe the image…" />
       </div>
@@ -2127,6 +2183,8 @@ function MediaDetail({ api, media, taxa, terms, canEdit, canDownload, onClose, o
         </span>
       </KV>
       {taxa.length > 0 ? <MediaTerms api={api} mediaId={media.id} taxa={taxa} terms={terms} canEdit={canEdit} onSaved={onTermsSaved} onError={onError} /> : null}
+      </>}
+      actions={
       <div className="mt-3.5 flex items-center gap-2">
         <Button onPress={save} isDisabled={busy || alt === (media.alt ?? "")}>Save</Button>
         <Button variant="secondary" size="sm" onPress={preview}>Preview</Button>
@@ -2136,7 +2194,8 @@ function MediaDetail({ api, media, taxa, terms, canEdit, canDownload, onClose, o
         <Button variant="ghost" className="text-danger" onPress={del} isDisabled={busy}>Delete</Button>
         <Button variant="ghost" onPress={onClose}>Close</Button>
       </div>
-    </Modal>
+      }
+    />
   );
 }
 
@@ -2480,6 +2539,24 @@ function AboutCard({ cfg, me }: { cfg: Config; me: Me | null }) {
 }
 
 // --- helpers ---
+
+/** One media row as the grid slot sees it (`MediaTile` in `slots.ts`). Exported for the test
+ * that pins what a theme's grid is handed. */
+export function mediaTile(api: Pick<Api, "resolve">, m: Media, selected: boolean, onOpen: () => void): MediaTile {
+  return {
+    id: m.id,
+    filename: m.file.filename ?? m.id,
+    size: m.file.size,
+    sizeLabel: fmtBytes(m.file.size),
+    ext: ext(m),
+    contentType: m.file.contentType,
+    src: isImage(m) ? api.resolve(`/media/${m.file.key}`) : null,
+    alt: m.alt ?? "",
+    selected,
+    onOpen,
+  };
+}
+
 function isImage(m: Media): boolean {
   return (m.file.contentType ?? "").startsWith("image/");
 }

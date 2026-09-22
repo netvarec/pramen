@@ -26,10 +26,11 @@
 // viewport on every scroll. So it condenses — same panel, same artwork, same button, a third
 // of the height — which is the only version of "keep it" that a long list can afford.
 
-import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { BELOW_APP_BAR, CONTENT } from "./chrome";
 import { CoverArt } from "./cover";
 import { pageHeaderStyle } from "./page-header-style";
+import type { PageHeaderProps } from "./slots";
 
 /** TWO thresholds, not one — this is hysteresis, and without it the header flickers.
  *
@@ -84,7 +85,7 @@ function useCondensed(): boolean {
  * which is a cover you cannot see; `/70` clears the type (which ends around 26% of the width)
  * and lets the field read across the rest.
  */
-export function PageHeader({ lead, em, children }: { lead: string; em: string; children?: ReactNode }) {
+export function PageHeader({ lead, em, children }: PageHeaderProps) {
   const condensed = useCondensed();
   // A deployment's own dressing (`pageHeader` in the shell config — see `page-header-style.ts`).
   // Read from module state rather than taken as a prop: it is one deployment-wide setting, and
