@@ -1,7 +1,7 @@
 // Schema-driven field forms: one input per FieldDefinition type, recursively composed for
 // group/repeater. Media fields open a picker (upload + choose from the library).
 
-import { Button, Heading, Input, ModalDialog, ModalOverlay, ModalSurface, Text, Textarea } from "@podoba/react";
+import { Button, Dialog, Input, Text, Textarea } from "@podoba/react";
 import { BlockEditor } from "@podoba/react/editor";
 import { generateHTML, generateJSON } from "@tiptap/core";
 import Highlight from "@tiptap/extension-highlight";
@@ -10,6 +10,8 @@ import TaskList from "@tiptap/extension-task-list";
 import StarterKit from "@tiptap/starter-kit";
 import { useCallback, useEffect, useId, useRef, useState, type DragEvent, type ReactNode } from "react";
 import type { Api } from "./api";
+import { COMMON_COPY } from "./copy";
+import { LoadFailed, usePagedList } from "./list-state";
 import { isRichTextDoc, richTextToPlainText } from "./rich-text";
 import type { FieldDefinition, FieldValue, FieldValues, Media, ReferenceOption, ReferenceResult, RichTextDoc } from "./types";
 
@@ -810,15 +812,28 @@ function MediaField({ value, onChange, api }: { value: unknown; onChange: (v: st
   );
 }
 
+/** Page size for the media picker. It used to call `listMedia()` bare, which the server caps
+ * at its default of 50 with no way past it: in a library of a few hundred files the picker
+ * offered the newest fifty, and everything older could not be put into a field at all. */
+const PICKER_PAGE_SIZE = 60;
+
+/**
+ * Choose (or upload) a file for a media field.
+ *
+ * On podoba's composed `Dialog`, like every other modal in the editor. It was assembled by
+ * hand from `ModalOverlay` + `ModalSurface` + `ModalDialog` + a `Heading`, which podoba keeps
+ * for edge-to-edge compositions; what that cost was the ✕, the labelling heading slot and the
+ * size presets, so the picker was the one dialog that could only be left by finding the word
+ * "close" at the bottom of a scrolled grid (or by knowing that Esc works).
+ *
+ * The tiles are buttons. They were `<div onClick>`, so a keyboard could open the picker and
+ * then do nothing in it: Tab went from the upload input straight to the close button.
+ */
 export function MediaPicker({ api, onClose, onPick }: { api: Api; onClose: () => void; onPick: (id: string) => void }) {
-  const [media, setMedia] = useState<Media[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
-  const refresh = () => api.listMedia().then(setMedia).catch((e) => setErr(String(e.message ?? e)));
-  useEffect(() => {
-    refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const fetchPage = useCallback((offset: number, limit: number) => api.listMedia({ limit, offset }), [api]);
+  const list = usePagedList(fetchPage, PICKER_PAGE_SIZE, setErr);
   const upload = async (file: File) => {
     setBusy(true);
     setErr("");
@@ -832,37 +847,52 @@ export function MediaPicker({ api, onClose, onPick }: { api: Api; onClose: () =>
     }
   };
   return (
-    <ModalOverlay isOpen isDismissable onOpenChange={(open) => !open && onClose()}>
-      <ModalSurface className="w-full max-w-[680px] px-9 py-8">
-        <ModalDialog className="max-h-[86vh] overflow-auto outline-none">
-          <Heading level="1" className="mb-5 font-normal">
-            Choose <span className="text-fg-subtle">a file</span> from the library
-          </Heading>
-          {err ? (
-            <div className="my-2 rounded-lg border border-danger bg-surface-card px-3.5 py-2.5 text-small text-danger">{err}</div>
-          ) : null}
-          <label className="mb-4 flex w-full flex-col gap-2">
-            <Text size="small" weight="medium">
-              Upload a new file
-            </Text>
-            <input type="file" className="text-small text-fg-muted" disabled={busy} onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
-          </label>
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-2.5">
-            {media.map((m) => (
-              <div key={m.id} className="cursor-pointer overflow-hidden rounded-lg border border-border bg-surface-card" onClick={() => onPick(m.id)}>
-                {(m.file.contentType ?? "").startsWith("image/") ? <img className="block h-[130px] w-full object-cover" src={api.resolve(`/media/${m.file.key}`)} alt="" /> : <div className="h-[130px] bg-surface-muted" />}
-                <div className="truncate px-2 py-1.5 text-caption text-fg-muted">{m.file.filename ?? m.id}</div>
-              </div>
-            ))}
-          </div>
-          <div className="mt-3 text-right">
-            <Button variant="ghost" onPress={onClose}>
-              close
-            </Button>
-          </div>
-        </ModalDialog>
-      </ModalSurface>
-    </ModalOverlay>
+    <Dialog
+      isOpen
+      isDismissable
+      size="lg"
+      title={<>Choose <span className="text-fg-subtle">a file</span> from the library</>}
+      closeLabel={COMMON_COPY.close}
+      onOpenChange={(open) => !open && onClose()}
+    >
+      {err ? (
+        <div className="my-2 rounded-lg border border-danger bg-surface-card px-3.5 py-2.5 text-small text-danger">{err}</div>
+      ) : null}
+      <label className="mb-4 flex w-full flex-col gap-2">
+        <Text size="small" weight="medium">
+          Upload a new file
+        </Text>
+        <input type="file" className="text-small text-fg-muted" disabled={busy} onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
+      </label>
+      {list.phase === "loading" ? <p className="text-sm text-fg-subtle">{COMMON_COPY.loading}</p> : null}
+      {list.phase === "failed" ? <LoadFailed onRetry={list.reload} /> : null}
+      {list.phase === "ready" && list.rows.length === 0 ? <p className="text-sm text-fg-subtle">The library is empty. Upload a file above.</p> : null}
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-2.5">
+        {list.rows.map((m) => (
+          <button
+            type="button"
+            key={m.id}
+            className="block w-full cursor-pointer overflow-hidden rounded-lg border border-border bg-surface-card text-left outline-none transition-colors hover:border-fg focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={() => onPick(m.id)}
+          >
+            {/* The filename is the button's name; the thumbnail adds nothing a screen reader
+                can use, and the file's own alt text describes the image, not the choice. */}
+            {(m.file.contentType ?? "").startsWith("image/") ? <img loading="lazy" decoding="async" className="block h-[130px] w-full object-cover" src={api.resolve(`/media/${m.file.key}`)} alt="" /> : <div className="h-[130px] bg-surface-muted" />}
+            <div className="truncate px-2 py-1.5 text-caption text-fg-muted">{m.file.filename ?? m.id}</div>
+          </button>
+        ))}
+      </div>
+      {list.hasMore ? (
+        <div className="mt-3 text-center">
+          <Button variant="secondary" size="sm" isDisabled={list.loading} onPress={list.loadMore}>{COMMON_COPY.loadMore}</Button>
+        </div>
+      ) : null}
+      <div className="mt-3 text-right">
+        <Button variant="ghost" onPress={onClose}>
+          close
+        </Button>
+      </div>
+    </Dialog>
   );
 }
 
@@ -1030,6 +1060,11 @@ function ReferencePicker({ api, from, title, selected, multiple, onPick, onClose
   const [err, setErr] = useState("");
   // Debounced: the fetch keys on `term`, so typing does not fire a request per character.
   const [term, setTerm] = useState("");
+  // The term the list on screen is FOR. Debouncing spaces requests out but does not order
+  // their answers: "ab" can come back after "abc" and replace its results with the wrong
+  // ones. Every response checks it still answers the current term before it lands.
+  const current = useRef(term);
+  current.current = term;
 
   useEffect(() => {
     const id = setTimeout(() => setTerm(search.trim()), 250);
@@ -1040,9 +1075,11 @@ function ReferencePicker({ api, from, title, selected, multiple, onPick, onClose
     (offset: number) => {
       setLoading(true);
       setErr("");
+      const asked = term;
       return api
         .call<ReferenceResult>(from, { search: term || undefined, limit: REFERENCE_PAGE_SIZE, offset })
         .then((raw) => {
+          if (asked !== current.current) return;
           const r = asReferenceResult(raw);
           setItems((prev) => (offset === 0 ? r.items : [...prev, ...r.items]));
           // A handler that omits `hasMore` is taken at its word only when it returned a
@@ -1050,8 +1087,8 @@ function ReferencePicker({ api, from, title, selected, multiple, onPick, onClose
           // collection lists use.
           setHasMore(r.hasMore ?? r.items.length === REFERENCE_PAGE_SIZE);
         })
-        .catch((e: unknown) => setErr(String((e as Error)?.message ?? e)))
-        .finally(() => setLoading(false));
+        .catch((e: unknown) => { if (asked === current.current) setErr(String((e as Error)?.message ?? e)); })
+        .finally(() => { if (asked === current.current) setLoading(false); });
     },
     [api, from, term],
   );
@@ -1059,54 +1096,55 @@ function ReferencePicker({ api, from, title, selected, multiple, onPick, onClose
   useEffect(() => { void load(0); }, [load]);
 
   return (
-    <ModalOverlay isOpen isDismissable onOpenChange={(open) => !open && onClose()}>
-      <ModalSurface className="w-full max-w-[560px] px-9 py-8">
-        <ModalDialog className="max-h-[86vh] overflow-auto outline-none">
-          <Heading level="1" className="mb-5 font-normal">
-            Choose <span className="text-fg-subtle">{title.toLowerCase()}</span>
-          </Heading>
-          <input
-            className={`${CONTROL} mb-3`}
-            type="search"
-            autoFocus
-            placeholder="Search"
-            aria-label="Search"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-          {err ? <div className="mb-2 rounded-lg border border-danger bg-surface-card px-3.5 py-2.5 text-small text-danger">{err}</div> : null}
-          <div className="flex flex-col gap-1">
-            {items.map((opt) => {
-              const already = selected.includes(opt.value);
-              return (
-                <button
-                  key={opt.value}
-                  type="button"
-                  disabled={already}
-                  onClick={() => onPick(opt)}
-                  className="flex items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors hover:bg-surface-muted disabled:opacity-40"
-                >
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm text-fg">{opt.label}</span>
-                    {opt.hint ? <span className="block truncate text-caption text-fg-subtle">{opt.hint}</span> : null}
-                  </span>
-                  {already ? <span className="shrink-0 text-caption text-fg-subtle">selected</span> : null}
-                </button>
-              );
-            })}
-            {!loading && items.length === 0 ? <p className="px-3 py-2 text-sm text-fg-subtle">Nothing matches.</p> : null}
-            {loading ? <p className="px-3 py-2 text-sm text-fg-subtle">Loading...</p> : null}
-          </div>
-          {hasMore && !loading ? (
-            <div className="mt-3 text-center">
-              <Button variant="secondary" size="sm" onPress={() => void load(items.length)}>Load more</Button>
-            </div>
-          ) : null}
-          <div className="mt-3 text-right">
-            <Button variant="ghost" onPress={onClose}>{multiple ? "done" : "close"}</Button>
-          </div>
-        </ModalDialog>
-      </ModalSurface>
-    </ModalOverlay>
+    // On podoba's composed `Dialog` for the same reasons as `MediaPicker` above.
+    <Dialog
+      isOpen
+      isDismissable
+      size="md"
+      title={<>Choose <span className="text-fg-subtle">{title.toLowerCase()}</span></>}
+      closeLabel={COMMON_COPY.close}
+      onOpenChange={(open) => !open && onClose()}
+    >
+      <input
+        className={`${CONTROL} mb-3`}
+        type="search"
+        autoFocus
+        placeholder="Search"
+        aria-label="Search"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+      />
+      {err ? <div className="mb-2 rounded-lg border border-danger bg-surface-card px-3.5 py-2.5 text-small text-danger">{err}</div> : null}
+      <div className="flex flex-col gap-1">
+        {items.map((opt) => {
+          const already = selected.includes(opt.value);
+          return (
+            <button
+              key={opt.value}
+              type="button"
+              disabled={already}
+              onClick={() => onPick(opt)}
+              className="flex items-center gap-3 rounded-lg px-3 py-2 text-left outline-none transition-colors hover:bg-surface-muted focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40"
+            >
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm text-fg">{opt.label}</span>
+                {opt.hint ? <span className="block truncate text-caption text-fg-subtle">{opt.hint}</span> : null}
+              </span>
+              {already ? <span className="shrink-0 text-caption text-fg-subtle">selected</span> : null}
+            </button>
+          );
+        })}
+        {!loading && items.length === 0 ? <p className="px-3 py-2 text-sm text-fg-subtle">Nothing matches.</p> : null}
+        {loading ? <p className="px-3 py-2 text-sm text-fg-subtle">{COMMON_COPY.loading}</p> : null}
+      </div>
+      {hasMore && !loading ? (
+        <div className="mt-3 text-center">
+          <Button variant="secondary" size="sm" onPress={() => void load(items.length)}>{COMMON_COPY.loadMore}</Button>
+        </div>
+      ) : null}
+      <div className="mt-3 text-right">
+        <Button variant="ghost" onPress={onClose}>{multiple ? "done" : "close"}</Button>
+      </div>
+    </Dialog>
   );
 }
