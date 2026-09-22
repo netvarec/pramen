@@ -662,6 +662,66 @@ there are no backward-compatibility guarantees yet.
 
 ### Fixed
 
+- **Lists said "None yet" before they had asked (`@pramen/cms-editor`).** Every list screen
+  held its rows as an empty array and read the header from its length, so "the first fetch
+  has not landed", "it landed with nothing" and "it failed" all rendered the same: "None
+  yet", "0 menus", "No users yet. Invite someone". A slow network looked like an empty media
+  library and a 500 looked like a fresh install, with the empty-state copy sitting under the
+  error banner and contradicting it. The one consumer that rebuilds this editor patched
+  `mediaReady` / `usersReady` flags into our source to tell them apart.
+
+  The paged lists (pages, collection rows, media, users, the media picker) now go through
+  one `usePagedList` hook over a pure reducer (`list-state.tsx`), and the header comes from
+  `listSummary`: "Loading…" until the first page of the current query lands, the count
+  after, and "Not loaded" plus a "Try again" line if it never did. A reload after an upload or
+  a create keeps the count on screen until the new one is known, and a failed "Load more"
+  leaves the rows already shown alone. The furniture lists (menus, redirects, vocabularies,
+  widget areas) already kept `null` for "not answered" and then threw it away on the error
+  path by setting `[]`; they keep it now. The types overview, the page's History tab, the
+  term tree and the menu / vocabulary / widget-area editors, which showed "Loading…" forever
+  after a failed fetch, say so and offer a retry.
+
+  Two more of the same kind. A late answer to an earlier query no longer lands on top of the
+  current one: the media library's debounced search (and its filters) and the reference
+  picker's search could show the results for "ab" under "abc". And the `/collections/:slug`
+  and `/apps/:slug` routes told "still loading" from "unknown slug" by `length === 0`, so on
+  a deployment with no collections (or a session that may open no admin page) a stale link
+  said "Loading…" forever; the app context now carries `collectionsReady` and
+  `adminPagesReady` for them.
+
+- **Lists could not go past their first page in two places (`@pramen/cms-editor`).** The
+  media picker called `listMedia()` bare, which the server caps at 50: in a larger library
+  the older files could not be put into a field at all. The users screen asked for 200 and
+  had no way past them, and called that many "200 accounts". Both page now, with "Load more".
+
+- **Things you could click but not reach from the keyboard (`@pramen/cms-editor`).** The
+  media picker's files, the media library's tiles, and the rows of the page, collection,
+  menu, vocabulary, widget-area and types lists were `<div onClick>`: invisible to Tab and
+  announced as plain text, so with a keyboard you could open the picker and then do nothing
+  in it. They are buttons now, with a `focus-visible` ring (`ROW_BUTTON` / `TILE_BUTTON` in
+  `chrome.ts`), so Enter and Space work with no key handling of ours. The roles pills on the
+  users screen (the only way to edit someone's roles) are a button too, and the content-type
+  cards in the create-page dialog carry `aria-pressed`, since which one was chosen was said by
+  a border colour alone.
+
+- **The two pickers were the only hand-assembled dialogs (`@pramen/cms-editor`).** The media
+  picker and the reference picker were built from `ModalOverlay` + `ModalSurface` +
+  `ModalDialog` + a `Heading`, which podoba keeps for edge-to-edge compositions, so they had
+  no ✕, no labelling title slot and their own max-widths (680px / 560px). They are on the
+  composed `Dialog` now (`size="lg"` / `"md"`), like every other modal in the editor; the
+  reference picker's search box works as before.
+
+- **Every dialog names its close button (`@pramen/cms-editor`).** podoba defaults
+  `closeLabel` to "Close", which is a string no translation can reach. The editor's dialogs
+  now pass it explicitly from `COMMON_COPY` (`copy.ts`), a small table of the words more than
+  one screen says (close, loading, not loaded, try again, load more), grouped so the i18n
+  pass has one place to lift them from.
+
+- **Smaller ones found on the way (`@pramen/cms-editor`).** "Create" in the create-page
+  dialog stayed pressable while `createPage` was in flight, so a double click filed the page
+  twice. Media thumbnails (the original files) load lazily, so opening the library or the
+  picker no longer downloads a full page of originals up front.
+
 - **One `media` field holding something other than an id took down the whole page editor
   (`@pramen/cms-editor`).** `MediaField` rendered the raw stored value as the fallback for a
   missing filename. React refuses an object as a child, so a field holding
