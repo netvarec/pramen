@@ -180,6 +180,10 @@ function Pill({ status, children }: { status?: string; children: ReactNode }) {
  *
  * `size` is passed straight through, so picking a modal's weight is one prop rather than a
  * `wide` boolean that meant 680px and nothing else.
+ *
+ * `closeLabel` is passed even though podoba's default is the same word: a default inside the
+ * design system is a string no translation can reach, so every dialog in the editor names its
+ * ✕ from `COMMON_COPY`.
  */
 function Modal({
   onClose,
@@ -195,7 +199,7 @@ function Modal({
   children: ReactNode;
 }) {
   return (
-    <Dialog isOpen isDismissable size={size} title={title} description={description} onOpenChange={(open) => !open && onClose()}>
+    <Dialog isOpen isDismissable size={size} title={title} description={description} closeLabel={COMMON_COPY.close} onOpenChange={(open) => !open && onClose()}>
       {children}
     </Dialog>
   );

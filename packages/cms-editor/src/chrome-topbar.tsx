@@ -26,6 +26,7 @@
 // hand-rolled handlers.
 
 import { Button, Dialog, DialogTrigger, Topbar, UserMenu, UserMenuItem } from "@podoba/react";
+import { COMMON_COPY } from "./copy";
 import type { ReactNode } from "react";
 import { APP_BAR_H, BELOW_CHROME_PAD } from "./chrome";
 import { AccountMenu, NavIconSlot, type ChromeProps, type NavRoute } from "./chrome-shared";
@@ -146,7 +147,7 @@ export function TopbarChrome({
             <Button variant="ghost" size="sm" aria-label="Show navigation" className="rounded-md px-2 py-2 text-fg-muted">
               <MenuToggleIcon className="h-4 w-4" />
             </Button>
-            <Dialog title="Navigation" closeLabel="Close" size="sm">
+            <Dialog title="Navigation" closeLabel={COMMON_COPY.close} size="sm">
               {({ close }) => (
                 <div className="flex flex-col gap-4">
                   {sections.map((section) => (
