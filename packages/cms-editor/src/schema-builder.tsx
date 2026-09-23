@@ -17,7 +17,8 @@ import { useUnsavedGuard } from "./app-context";
 import type { Api, BlockTypeInput, ContentTypeInput } from "./api";
 import { CONTROL, slugify } from "./fields";
 import { ROW, ROW_BUTTON, WRAP } from "./chrome";
-import { COMMON_COPY } from "./copy";
+import { getI18n, useI18n, type TextKey } from "./i18n";
+import { rich } from "./i18n/rich";
 import { DetailHeader } from "./detail-header";
 import { LoadFailed } from "./list-state";
 import type { BlockType, ContentType, DefaultBlockDefinition, FieldDefinition, FieldType, RegionDefinition } from "./types";
@@ -42,6 +43,32 @@ const NESTING: readonly FieldType[] = ["group", "repeater"];
 
 /** The text-ish types a `slug` may follow — same list the server checks. */
 const SLUG_SOURCES: readonly FieldType[] = ["text", "textarea", "select", "url"];
+
+/** Each field type's label in the picker. English shows the machine value; the stored value is
+ * always the machine value, whatever the label says. */
+const FIELD_TYPE_KEYS = {
+  text: "fieldSchema.type.text",
+  textarea: "fieldSchema.type.textarea",
+  richtext: "fieldSchema.type.richtext",
+  url: "fieldSchema.type.url",
+  number: "fieldSchema.type.number",
+  boolean: "fieldSchema.type.boolean",
+  date: "fieldSchema.type.date",
+  datetime: "fieldSchema.type.datetime",
+  publish: "fieldSchema.type.publish",
+  slug: "fieldSchema.type.slug",
+  media: "fieldSchema.type.media",
+  select: "fieldSchema.type.select",
+  reference: "fieldSchema.type.reference",
+  repeater: "fieldSchema.type.repeater",
+  group: "fieldSchema.type.group",
+} as const satisfies Record<FieldType, TextKey>;
+
+/** A field type's label, falling back to the machine value for a type this mirror lacks. */
+function fieldTypeLabel(type: FieldType): string {
+  const key = (FIELD_TYPE_KEYS as Partial<Record<string, TextKey>>)[type];
+  return key ? getI18n().t(key) : type;
+}
 
 
 /** A field name: an object key in a `fields` bag and a property name in generated TS. */
@@ -91,10 +118,11 @@ export function FieldSchemaEditor({ schema, onChange, depth = 0 }: { schema: Fie
     onChange([...schema, { name: `field${n}`, type: "text" }]);
   };
 
+  const { t } = useI18n();
   const names = schema.map((f) => f.name);
   return (
     <div className="flex flex-col gap-2">
-      {schema.length === 0 ? <p className="text-sm text-fg-subtle">No fields yet.</p> : null}
+      {schema.length === 0 ? <p className="text-sm text-fg-subtle">{t("fieldSchema.empty")}</p> : null}
       {schema.map((f, i) => (
         <FieldRow
           key={i}
@@ -110,9 +138,9 @@ export function FieldSchemaEditor({ schema, onChange, depth = 0 }: { schema: Fie
         />
       ))}
       {depth + 1 < MAX_FIELD_DEPTH ? (
-        <Button variant="secondary" size="sm" className="self-start" onPress={add}>+ Add field</Button>
+        <Button variant="secondary" size="sm" className="self-start" onPress={add}>{t("fieldSchema.add")}</Button>
       ) : (
-        <p className="text-caption text-fg-subtle">Fields cannot nest deeper than {MAX_FIELD_DEPTH} levels.</p>
+        <p className="text-caption text-fg-subtle">{t("fieldSchema.maxDepth", { max: MAX_FIELD_DEPTH })}</p>
       )}
     </div>
   );
@@ -129,6 +157,7 @@ function FieldRow({ def, siblings, siblingFields, index, count, depth, onChange,
   onMove: (d: number) => void;
   onDelete: () => void;
 }) {
+  const { t } = useI18n();
   const patch = (p: Partial<FieldDefinition>) => onChange({ ...def, ...p });
   const duplicate = siblings.filter((n) => n === def.name).length > 1;
   const badName = def.name !== "" && !FIELD_NAME.test(def.name);
@@ -154,16 +183,16 @@ function FieldRow({ def, siblings, siblingFields, index, count, depth, onChange,
       <div className="flex items-center gap-2 border-b border-border px-3 py-2">
         <span className="text-caption text-fg-subtle">{index + 1}</span>
         <span className="min-w-0 flex-1 truncate text-sm text-fg">
-          {def.label || def.name} <span className="text-fg-subtle">· {def.type}</span>
+          {def.label || def.name} <span className="text-fg-subtle">· {fieldTypeLabel(def.type)}</span>
         </span>
-        <button type="button" className="px-1.5 text-fg-subtle hover:text-fg disabled:opacity-30" title="Move up" disabled={index === 0} onClick={() => onMove(-1)}>↑</button>
-        <button type="button" className="px-1.5 text-fg-subtle hover:text-fg disabled:opacity-30" title="Move down" disabled={index === count - 1} onClick={() => onMove(1)}>↓</button>
-        <button type="button" className="px-1.5 text-fg-subtle hover:text-danger" title="Remove" onClick={onDelete}>✕</button>
+        <button type="button" className="px-1.5 text-fg-subtle hover:text-fg disabled:opacity-30" title={t("fieldSchema.moveUp")} disabled={index === 0} onClick={() => onMove(-1)}>↑</button>
+        <button type="button" className="px-1.5 text-fg-subtle hover:text-fg disabled:opacity-30" title={t("fieldSchema.moveDown")} disabled={index === count - 1} onClick={() => onMove(1)}>↓</button>
+        <button type="button" className="px-1.5 text-fg-subtle hover:text-danger" title={t("common.remove")} onClick={onDelete}>✕</button>
       </div>
       <div className="flex flex-col gap-3 p-3.5">
         <div className="grid grid-cols-3 gap-3 max-[720px]:grid-cols-1">
           <label className="flex flex-col gap-1.5">
-            <span className="text-caption text-fg-subtle">Label</span>
+            <span className="text-caption text-fg-subtle">{t("fieldSchema.label")}</span>
             <input
               className={CONTROL}
               value={def.label ?? ""}
@@ -180,36 +209,36 @@ function FieldRow({ def, siblings, siblingFields, index, count, depth, onChange,
             />
           </label>
           <label className="flex flex-col gap-1.5">
-            <span className="text-caption text-fg-subtle">Name (the stored key)</span>
+            <span className="text-caption text-fg-subtle">{t("fieldSchema.name")}</span>
             <input className={CONTROL} value={def.name} onChange={(e) => patch({ name: e.target.value.trim() })} />
           </label>
           <label className="flex flex-col gap-1.5">
-            <span className="text-caption text-fg-subtle">Type</span>
+            <span className="text-caption text-fg-subtle">{t("fieldSchema.type")}</span>
             <select className={CONTROL} value={def.type} onChange={(e) => retype(e.target.value as FieldType)}>
-              {FIELD_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+              {FIELD_TYPES.map((type) => <option key={type} value={type}>{fieldTypeLabel(type)}</option>)}
             </select>
           </label>
         </div>
 
-        {duplicate ? <p className="text-caption text-danger">Two fields here are called “{def.name}” — they would write the same key, and one could never be saved.</p> : null}
-        {badName ? <p className="text-caption text-danger">A name must start with a letter or underscore and hold only letters, digits and underscores.</p> : null}
+        {duplicate ? <p className="text-caption text-danger">{t("fieldSchema.duplicate", { name: def.name })}</p> : null}
+        {badName ? <p className="text-caption text-danger">{t("fieldSchema.badName")}</p> : null}
 
         {/* Full width, and under the three-up row: this is the one input here that takes a
             sentence rather than a word, and it is the only place a field's meaning can be
             written down where the person filling it in will read it. */}
         <label className="flex flex-col gap-1.5">
-          <span className="text-caption text-fg-subtle">Help text (optional)</span>
+          <span className="text-caption text-fg-subtle">{t("fieldSchema.help")}</span>
           <input
             className={CONTROL}
             value={def.description ?? ""}
-            placeholder="What this field means, when it applies, what empty does"
+            placeholder={t("fieldSchema.helpPlaceholder")}
             onChange={(e) => patch({ description: e.target.value || undefined })}
           />
         </label>
 
         <label className="flex items-center gap-2">
           <input type="checkbox" checked={def.required === true} onChange={(e) => patch({ required: e.target.checked || undefined })} />
-          <span className="text-sm text-fg">Required</span>
+          <span className="text-sm text-fg">{t("fieldSchema.required")}</span>
         </label>
 
         {def.type === "select" ? <SelectExtras def={def} patch={patch} /> : null}
@@ -219,10 +248,10 @@ function FieldRow({ def, siblings, siblingFields, index, count, depth, onChange,
 
         {NESTING.includes(def.type) ? (
           <div className="rounded-lg border border-border bg-surface-card p-3.5">
-            <p className="mb-2 text-caption text-fg-subtle">Nested fields</p>
+            <p className="mb-2 text-caption text-fg-subtle">{t("fieldSchema.nested")}</p>
             <FieldSchemaEditor schema={def.fields ?? []} onChange={(fields) => patch({ fields })} depth={depth + 1} />
             {(def.fields ?? []).length === 0 ? (
-              <p className="mt-2 text-caption text-danger">A {def.type} needs at least one nested field.</p>
+              <p className="mt-2 text-caption text-danger">{t("fieldSchema.nestedNeeded", { type: fieldTypeLabel(def.type) })}</p>
             ) : null}
           </div>
         ) : null}
@@ -232,6 +261,7 @@ function FieldRow({ def, siblings, siblingFields, index, count, depth, onChange,
 }
 
 function SelectExtras({ def, patch }: { def: FieldDefinition; patch: (p: Partial<FieldDefinition>) => void }) {
+  const { t } = useI18n();
   const usingHandler = Boolean(def.optionsFrom);
   return (
     <div className="flex flex-col gap-2">
@@ -241,11 +271,11 @@ function SelectExtras({ def, patch }: { def: FieldDefinition; patch: (p: Partial
           checked={usingHandler}
           onChange={(e) => patch(e.target.checked ? { optionsFrom: "", options: undefined } : { optionsFrom: undefined, options: [] })}
         />
-        <span className="text-sm text-fg">Fetch the options from a query handler</span>
+        <span className="text-sm text-fg">{t("fieldSchema.optionsFromHandler")}</span>
       </label>
       {usingHandler ? (
         <label className="flex flex-col gap-1.5">
-          <span className="text-caption text-fg-subtle">Handler name (returns <code>{"{ value, label }[]"}</code>)</span>
+          <span className="text-caption text-fg-subtle">{rich(t("fieldSchema.optionsHandler", { shape: "{ value, label }[]" }), { code: (s) => <code>{s}</code> })}</span>
           <input className={CONTROL} value={def.optionsFrom ?? ""} onChange={(e) => patch({ optionsFrom: e.target.value.trim() })} />
         </label>
       ) : (
@@ -270,6 +300,7 @@ function SelectExtras({ def, patch }: { def: FieldDefinition; patch: (p: Partial
  * rich-text control uses, for the same reason.
  */
 function OptionsTextarea({ options, onChange }: { options: readonly string[]; onChange: (v: string[]) => void }) {
+  const { t } = useI18n();
   const [text, setText] = useState(() => options.join("\n"));
   const emitted = useRef<readonly string[] | null>(null);
   useEffect(() => {
@@ -278,7 +309,7 @@ function OptionsTextarea({ options, onChange }: { options: readonly string[]; on
   }, [options]);
   return (
     <label className="flex flex-col gap-1.5">
-      <span className="text-caption text-fg-subtle">Options, one per line</span>
+      <span className="text-caption text-fg-subtle">{t("fieldSchema.options")}</span>
       <textarea
         className={`${CONTROL} h-auto min-h-20 py-2.5`}
         value={text}
@@ -294,30 +325,33 @@ function OptionsTextarea({ options, onChange }: { options: readonly string[]; on
 }
 
 function ReferenceExtras({ def, patch }: { def: FieldDefinition; patch: (p: Partial<FieldDefinition>) => void }) {
+  const { t } = useI18n();
   return (
     <div className="flex flex-col gap-2">
       <label className="flex flex-col gap-1.5">
         <span className="text-caption text-fg-subtle">
-          Handler name — answers <code>{"{ search, limit, offset }"}</code> and <code>{"{ ids }"}</code>
+          {rich(t("fieldSchema.referenceHandler", { query: "{ search, limit, offset }", ids: "{ ids }" }), { code: (s) => <code>{s}</code> })}
         </span>
         <input className={CONTROL} value={def.referenceFrom ?? ""} onChange={(e) => patch({ referenceFrom: e.target.value.trim() })} />
       </label>
       <label className="flex items-center gap-2">
         <input type="checkbox" checked={def.multiple === true} onChange={(e) => patch({ multiple: e.target.checked || undefined })} />
-        <span className="text-sm text-fg">Allow several</span>
+        <span className="text-sm text-fg">{t("fieldSchema.referenceMultiple")}</span>
       </label>
-      {def.referenceFrom ? null : <p className="text-caption text-danger">A reference needs a handler to resolve it.</p>}
+      {def.referenceFrom ? null : <p className="text-caption text-danger">{t("fieldSchema.referenceNeedsHandler")}</p>}
     </div>
   );
 }
 
 function SlugExtras({ def, siblingFields, patch }: { def: FieldDefinition; siblingFields: FieldDefinition[]; patch: (p: Partial<FieldDefinition>) => void }) {
+  const { t } = useI18n();
   const sources = siblingFields.filter((f) => f.name !== def.name && SLUG_SOURCES.includes(f.type));
+  const types = SLUG_SOURCES.map(fieldTypeLabel).join(" / ");
   return (
     <label className="flex flex-col gap-1.5">
-      <span className="text-caption text-fg-subtle">Derived from (a text field beside it — optional)</span>
+      <span className="text-caption text-fg-subtle">{t("fieldSchema.slugFrom")}</span>
       <select className={CONTROL} value={def.from ?? ""} onChange={(e) => patch({ from: e.target.value || undefined })}>
-        <option value="">— typed by hand —</option>
+        <option value="">{t("fieldSchema.slugByHand")}</option>
         {/* Only fields the server will ACCEPT as a source. `SLUG_SOURCES` was declared for
             this check and then used only in the hint below, so the dropdown offered every
             sibling — including a `number` or a `media` — and picking one made the whole type
@@ -325,22 +359,23 @@ function SlugExtras({ def, siblingFields, patch }: { def: FieldDefinition; sibli
         {sources.map((f) => <option key={f.name} value={f.name}>{f.label ?? f.name}</option>)}
       </select>
       <span className="text-caption text-fg-subtle">
-        {sources.length > 0 ? `The source must be a ${SLUG_SOURCES.join(" / ")} field.` : `No ${SLUG_SOURCES.join(" / ")} field stands beside this one yet.`}
+        {sources.length > 0 ? t("fieldSchema.slugSourceHint", { types }) : t("fieldSchema.slugNoSource", { types })}
       </span>
     </label>
   );
 }
 
 function RepeaterExtras({ def, patch }: { def: FieldDefinition; patch: (p: Partial<FieldDefinition>) => void }) {
+  const { t } = useI18n();
   const num = (v: string) => (v === "" ? undefined : Math.max(0, Math.trunc(Number(v))));
   return (
     <div className="grid grid-cols-2 gap-3 max-[720px]:grid-cols-1">
       <label className="flex flex-col gap-1.5">
-        <span className="text-caption text-fg-subtle">Minimum items</span>
+        <span className="text-caption text-fg-subtle">{t("fieldSchema.repeaterMin")}</span>
         <input className={CONTROL} type="number" min={0} value={def.min ?? ""} onChange={(e) => patch({ min: num(e.target.value) })} />
       </label>
       <label className="flex flex-col gap-1.5">
-        <span className="text-caption text-fg-subtle">Maximum items</span>
+        <span className="text-caption text-fg-subtle">{t("fieldSchema.repeaterMax")}</span>
         <input className={CONTROL} type="number" min={1} value={def.max ?? ""} onChange={(e) => patch({ max: num(e.target.value) })} />
       </label>
     </div>
@@ -358,9 +393,10 @@ function RepeaterExtras({ def, patch }: { def: FieldDefinition; patch: (p: Parti
 
 /** The marker on a code-defined row in the overview lists. */
 function CodeBadge() {
+  const { t } = useI18n();
   return (
-    <span className="shrink-0 rounded-full border border-border px-2 py-0.5 text-caption text-fg-subtle" title="Defined in code — read-only here">
-      code
+    <span className="shrink-0 rounded-full border border-border px-2 py-0.5 text-caption text-fg-subtle" title={t("schema.codeBadgeTitle")}>
+      {t("schema.codeBadge")}
     </span>
   );
 }
@@ -372,13 +408,18 @@ function CodeBadge() {
  * straight past every control and never reached the one paragraph explaining why the screen
  * was empty. It is also what the fieldset's `aria-describedby` points at. */
 function ManagedNotice({ id, what, defineFn, slug, owner }: { id: string; what: string; defineFn: string; slug: string; owner?: string | null }) {
+  const { t } = useI18n();
+  const message = t("schema.managed.body", {
+    what,
+    call: `${defineFn}("${slug}", …)`,
+    owner: owner && owner !== "cms" ? t("schema.managed.owner", { owner }) : "",
+  });
   return (
     <div id={id} className="mb-4 max-w-[860px] rounded-lg border border-border bg-surface-muted px-3.5 py-3 text-small text-fg-muted">
-      This {what} is <strong className="font-medium text-fg">defined in code</strong> —{" "}
-      <code className="text-fg">{defineFn}("{slug}", …)</code>, applied on every boot by{" "}
-      <code className="text-fg">cmsBootstrap</code>{owner && owner !== "cms" ? <> (owner <code className="text-fg">{owner}</code>)</> : null}.
-      It is read-only here: a change saved from this screen would be reverted at the next deploy or
-      cold start. Edit the declaration and redeploy.
+      {rich(message, {
+        strong: (s) => <strong className="font-medium text-fg">{s}</strong>,
+        code: (s) => <code className="text-fg">{s}</code>,
+      })}
     </div>
   );
 }
@@ -445,28 +486,28 @@ export function TypesOverview({ api, codeDefinedTypes, onOpenBlockType, onOpenCo
     return () => { live = false; };
   }, [api, onError, attempt]);
   const retry = () => setAttempt((n) => n + 1);
+  const i18n = useI18n();
+  const { t } = i18n;
 
   return (
     <div className={WRAP}>
       <div className="mb-6 mt-6">
         <h1 className="m-0 text-[40px] font-normal leading-[1.1] tracking-[-0.01em]">
-          <span className="block text-fg-subtle">The shape of</span>
-          <span className="block text-fg">this site</span>
+          <span className="block text-fg-subtle">{t("schema.titleLead")}</span>
+          <span className="block text-fg">{t("schema.titleMain")}</span>
         </h1>
         <p className="mt-3 max-w-[62ch] text-sm text-fg-muted">
-          A <strong className="font-medium text-fg">block type</strong> is a set of fields an editor fills in.
-          A <strong className="font-medium text-fg">content type</strong> is a kind of page: the regions it has, and which block types may go in each.
-          Nothing can be authored until there is one of each.
+          {rich(t("schema.intro"), { strong: (s) => <strong className="font-medium text-fg">{s}</strong> })}
         </p>
       </div>
 
       <TypeSection
-        title="Block types"
-        empty="No block types yet. A page is built from these, so start here."
+        title={t("schema.blockTypes")}
+        empty={t("schema.blockTypesEmpty")}
         rows={blockTypes}
         failed={failed.block}
         onRetry={retry}
-        newLabel="+ New block type"
+        newLabel={t("schema.newBlockType")}
         onNew={() => onOpenBlockType("new")}
         render={(bt) => (
           <button type="button" className={`${ROW} ${ROW_BUTTON}`} key={bt.id} onClick={() => onOpenBlockType(bt.slug)}>
@@ -474,25 +515,25 @@ export function TypesOverview({ api, codeDefinedTypes, onOpenBlockType, onOpenCo
             <span className="min-w-0 flex-1 truncate font-medium">{bt.name}</span>
             {codeDefinedTypes && bt.managedBy ? <CodeBadge /> : null}
             <span className="shrink-0 truncate text-fg-subtle">{bt.slug}</span>
-            <span className="shrink-0 text-caption text-fg-subtle">{(bt.fieldsSchema ?? []).length} field(s)</span>
+            <span className="shrink-0 text-caption text-fg-subtle">{i18n.tp("schema.fieldCount", (bt.fieldsSchema ?? []).length)}</span>
           </button>
         )}
       />
 
       <TypeSection
-        title="Content types"
-        empty="No content types yet. A page needs one — it is what declares the regions blocks go into."
+        title={t("schema.contentTypes")}
+        empty={t("schema.contentTypesEmpty")}
         rows={contentTypes}
         failed={failed.content}
         onRetry={retry}
-        newLabel="+ New content type"
+        newLabel={t("schema.newContentType")}
         onNew={() => onOpenContentType("new")}
         render={(ct) => (
           <button type="button" className={`${ROW} ${ROW_BUTTON}`} key={ct.id} onClick={() => onOpenContentType(ct.slug)}>
             <span className="min-w-0 flex-1 truncate font-medium">{ct.name}</span>
             {codeDefinedTypes && ct.managedBy ? <CodeBadge /> : null}
             <span className="shrink-0 truncate text-fg-subtle">{ct.slug}</span>
-            <span className="shrink-0 text-caption text-fg-subtle">{(ct.regions ?? []).length} region(s)</span>
+            <span className="shrink-0 text-caption text-fg-subtle">{i18n.tp("schema.regionCount", (ct.regions ?? []).length)}</span>
           </button>
         )}
       />
@@ -510,6 +551,7 @@ function TypeSection<T>({ title, empty, rows, failed, onRetry, newLabel, onNew, 
   onNew: () => void;
   render: (row: T) => React.ReactNode;
 }) {
+  const { t } = useI18n();
   return (
     <section className="mb-8">
       <div className="mb-2 flex items-center gap-3">
@@ -519,7 +561,7 @@ function TypeSection<T>({ title, empty, rows, failed, onRetry, newLabel, onNew, 
       {rows === null && failed ? (
         <LoadFailed onRetry={onRetry} />
       ) : rows === null ? (
-        <p className="text-fg-subtle">{COMMON_COPY.loading}</p>
+        <p className="text-fg-subtle">{t("common.loading")}</p>
       ) : rows.length === 0 ? (
         <p className="text-fg-subtle">{empty}</p>
       ) : (
@@ -549,6 +591,7 @@ export function BlockTypeEditor({ api, codeDefinedTypes, slug, onSaved, onBack, 
   backHref: string;
   onError: (s: string) => void;
 }) {
+  const { t } = useI18n();
   const isNew = slug === "new";
   const [draft, setDraft] = useState<BlockTypeInput>({ name: "", slug: "", fieldsSchema: [] });
   const [id, setId] = useState<string | null>(null);
@@ -618,28 +661,28 @@ export function BlockTypeEditor({ api, codeDefinedTypes, slug, onSaved, onBack, 
     }
   };
 
-  if (missing) return <div className={WRAP}><p className="pt-8 text-fg-subtle">Unknown block type: {slug}</p></div>;
-  if (loading) return <div className={WRAP}><p className="pt-8 text-fg-subtle">Loading…</p></div>;
+  if (missing) return <div className={WRAP}><p className="pt-8 text-fg-subtle">{t("blockType.unknown", { slug })}</p></div>;
+  if (loading) return <div className={WRAP}><p className="pt-8 text-fg-subtle">{t("common.loading")}</p></div>;
 
   // An owner means nothing on a server that does not declare the capability.
   const locked = codeDefinedTypes && owner !== null;
 
   return (
     <div className={WRAP}>
-      <DetailHeader title={isNew ? "New block type" : draft.name} parent="Types" href={backHref} onBack={onBack}>
+      <DetailHeader title={isNew ? t("blockType.new") : draft.name} parent={t("schema.parent")} href={backHref} onBack={onBack}>
         {locked ? <CodeBadge /> : null}
       </DetailHeader>
-      {locked ? <ManagedNotice id={NOTICE_ID} what="block type" defineFn="defineBlockType" slug={draft.slug} owner={owner} /> : null}
-      <ReadOnlyFieldset locked={locked} describedBy={NOTICE_ID} label="Block type" className="flex max-w-[860px] flex-col gap-4">
-        {ok ? <div className="rounded-lg border border-brand-green bg-brand-green/20 px-3.5 py-2.5 text-small text-fg">saved</div> : null}
+      {locked ? <ManagedNotice id={NOTICE_ID} what={t("schema.managed.blockType")} defineFn="defineBlockType" slug={draft.slug} owner={owner} /> : null}
+      <ReadOnlyFieldset locked={locked} describedBy={NOTICE_ID} label={t("blockType.formLabel")} className="flex max-w-[860px] flex-col gap-4">
+        {ok ? <div className="rounded-lg border border-brand-green bg-brand-green/20 px-3.5 py-2.5 text-small text-fg">{t("schema.savedFlash")}</div> : null}
         <div className="grid grid-cols-2 gap-3 max-[720px]:grid-cols-1">
           <Input
-            label="Name"
+            label={t("schema.name")}
             value={draft.name}
             onChange={(name) => setDraft((d) => ({ ...d, name, ...(slugFollows ? { slug: slugify(name) } : {}) }))}
           />
           <label className="flex flex-col gap-2">
-            <span className="text-sm font-medium text-fg">Slug {isNew ? null : <span className="text-fg-subtle">(fixed)</span>}</span>
+            <span className="text-sm font-medium text-fg">{t("schema.slug")} {isNew ? null : <span className="text-fg-subtle">{t("schema.slugFixed")}</span>}</span>
             <input
               className={CONTROL}
               value={draft.slug}
@@ -648,28 +691,27 @@ export function BlockTypeEditor({ api, codeDefinedTypes, slug, onSaved, onBack, 
             />
             <span className="text-caption text-fg-subtle">
               {isNew
-                ? "The key a front end maps to a component. Lowercase letters, digits, hyphens or underscores."
-                : "A block type's slug is its registry key — renaming it would orphan every block of this type."}
+                ? t("blockType.slugHelpNew")
+                : t("blockType.slugHelpFixed")}
             </span>
           </label>
         </div>
         <div className="grid grid-cols-2 gap-3 max-[720px]:grid-cols-1">
           <label className="flex flex-col gap-2">
-            <span className="text-sm font-medium text-fg">Icon</span>
-            <input className={CONTROL} value={draft.icon ?? ""} placeholder="e.g. 🖼" onChange={(e) => setDraft((d) => ({ ...d, icon: orNull(e.target.value) }))} />
+            <span className="text-sm font-medium text-fg">{t("blockType.icon")}</span>
+            <input className={CONTROL} value={draft.icon ?? ""} placeholder={t("blockType.iconPlaceholder")} onChange={(e) => setDraft((d) => ({ ...d, icon: orNull(e.target.value) }))} />
           </label>
           <label className="flex flex-col gap-2">
-            <span className="text-sm font-medium text-fg">Category</span>
-            <input className={CONTROL} value={draft.category ?? ""} placeholder="e.g. Layout" onChange={(e) => setDraft((d) => ({ ...d, category: orNull(e.target.value) }))} />
+            <span className="text-sm font-medium text-fg">{t("blockType.category")}</span>
+            <input className={CONTROL} value={draft.category ?? ""} placeholder={t("blockType.categoryPlaceholder")} onChange={(e) => setDraft((d) => ({ ...d, category: orNull(e.target.value) }))} />
           </label>
         </div>
-        <Textarea label="Description" value={draft.description ?? ""} onChange={(v) => setDraft((d) => ({ ...d, description: orNull(v) }))} />
+        <Textarea label={t("blockType.description")} value={draft.description ?? ""} onChange={(v) => setDraft((d) => ({ ...d, description: orNull(v) }))} />
 
         <div>
-          <Heading level="2" className="mb-2 font-normal">Fields</Heading>
+          <Heading level="2" className="mb-2 font-normal">{t("blockType.fields")}</Heading>
           <p className="mb-3 max-w-[62ch] text-caption text-fg-subtle">
-            These are what an editor fills in for every block of this type. Removing one leaves the values already
-            written under its name in the store, but nothing will render or edit them.
+            {t("blockType.fieldsHelp")}
           </p>
           <FieldSchemaEditor schema={draft.fieldsSchema ?? []} onChange={(fieldsSchema) => setDraft((d) => ({ ...d, fieldsSchema }))} />
         </div>
@@ -677,7 +719,7 @@ export function BlockTypeEditor({ api, codeDefinedTypes, slug, onSaved, onBack, 
         {locked ? null : (
           <div className="mt-2">
             <Button onPress={save} isDisabled={busy || draft.name.trim() === "" || draft.slug.trim() === ""}>
-              {busy ? "Saving…" : isNew ? "Create" : "Save"}
+              {busy ? t("common.saving") : isNew ? t("common.create") : t("common.save")}
             </Button>
           </div>
         )}
@@ -699,8 +741,13 @@ export function ContentTypeEditor({ api, codeDefinedTypes, slug, onSaved, onBack
   backHref: string;
   onError: (s: string) => void;
 }) {
+  const { t } = useI18n();
+  const i18n = useI18n();
   const isNew = slug === "new";
-  const [draft, setDraft] = useState<ContentTypeInput>({ name: "", slug: "", regions: [{ name: "content", label: "Content", allowedTypes: null }], fieldsSchema: [], defaultBlocks: [] });
+  // The one region a new type starts with. Its label is stored with the type, so it is written
+  // in the editor's language; the name is a key and stays `content`.
+  const [initial] = useState<ContentTypeInput>(() => ({ name: "", slug: "", regions: [{ name: "content", label: t("contentType.defaultRegionLabel"), allowedTypes: null }], fieldsSchema: [], defaultBlocks: [] }));
+  const [draft, setDraft] = useState<ContentTypeInput>(initial);
   const [id, setId] = useState<string | null>(null);
   const [owner, setOwner] = useState<string | null>(null);
   const [blockTypes, setBlockTypes] = useState<BlockType[]>([]);
@@ -709,7 +756,7 @@ export function ContentTypeEditor({ api, codeDefinedTypes, slug, onSaved, onBack
   const [busy, setBusy] = useState(false);
   const [ok, setOk] = useState(false);
   const [slugFollows, setSlugFollows] = useState(isNew);
-  const [baseline, setBaseline] = useState<string>(() => JSON.stringify({ name: "", slug: "", regions: [{ name: "content", label: "Content", allowedTypes: null }], fieldsSchema: [], defaultBlocks: [] }));
+  const [baseline, setBaseline] = useState<string>(() => JSON.stringify(initial));
   useUnsavedGuard(JSON.stringify(draft) !== baseline);
 
   useEffect(() => {
@@ -753,7 +800,7 @@ export function ContentTypeEditor({ api, codeDefinedTypes, slug, onSaved, onBack
     const orphaned = (draft.defaultBlocks ?? []).filter((b) => !regions.some((r) => r.name === b.region));
     if (orphaned.length > 0) {
       const names = [...new Set(orphaned.map((b) => b.region))].join(", ");
-      if (!confirm(`${orphaned.length} default block(s) point at a region that no longer exists (${names}). Remove them and save?`)) return;
+      if (!confirm(i18n.tp("contentType.orphanedConfirm", orphaned.length, { names }))) return;
       setDraft((d) => ({ ...d, defaultBlocks: (d.defaultBlocks ?? []).filter((b) => regions.some((r) => r.name === b.region)) }));
       return; // The author saves again against the cleaned draft — nothing is dropped unseen.
     }
@@ -775,27 +822,27 @@ export function ContentTypeEditor({ api, codeDefinedTypes, slug, onSaved, onBack
     }
   };
 
-  if (missing) return <div className={WRAP}><p className="pt-8 text-fg-subtle">Unknown content type: {slug}</p></div>;
-  if (loading) return <div className={WRAP}><p className="pt-8 text-fg-subtle">Loading…</p></div>;
+  if (missing) return <div className={WRAP}><p className="pt-8 text-fg-subtle">{t("contentType.unknown", { slug })}</p></div>;
+  if (loading) return <div className={WRAP}><p className="pt-8 text-fg-subtle">{t("common.loading")}</p></div>;
 
   const regions = draft.regions ?? [];
   const locked = codeDefinedTypes && owner !== null;
   return (
     <div className={WRAP}>
-      <DetailHeader title={isNew ? "New content type" : draft.name} parent="Types" href={backHref} onBack={onBack}>
+      <DetailHeader title={isNew ? t("contentType.new") : draft.name} parent={t("schema.parent")} href={backHref} onBack={onBack}>
         {locked ? <CodeBadge /> : null}
       </DetailHeader>
-      {locked ? <ManagedNotice id={NOTICE_ID} what="content type" defineFn="defineContentType" slug={draft.slug} owner={owner} /> : null}
-      <ReadOnlyFieldset locked={locked} describedBy={NOTICE_ID} label="Content type" className="flex max-w-[860px] flex-col gap-5">
-        {ok ? <div className="rounded-lg border border-brand-green bg-brand-green/20 px-3.5 py-2.5 text-small text-fg">saved</div> : null}
+      {locked ? <ManagedNotice id={NOTICE_ID} what={t("schema.managed.contentType")} defineFn="defineContentType" slug={draft.slug} owner={owner} /> : null}
+      <ReadOnlyFieldset locked={locked} describedBy={NOTICE_ID} label={t("contentType.formLabel")} className="flex max-w-[860px] flex-col gap-5">
+        {ok ? <div className="rounded-lg border border-brand-green bg-brand-green/20 px-3.5 py-2.5 text-small text-fg">{t("schema.savedFlash")}</div> : null}
         <div className="grid grid-cols-2 gap-3 max-[720px]:grid-cols-1">
           <Input
-            label="Name"
+            label={t("schema.name")}
             value={draft.name}
             onChange={(name) => setDraft((d) => ({ ...d, name, ...(slugFollows ? { slug: slugify(name) } : {}) }))}
           />
           <label className="flex flex-col gap-2">
-            <span className="text-sm font-medium text-fg">Slug {isNew ? null : <span className="text-fg-subtle">(fixed)</span>}</span>
+            <span className="text-sm font-medium text-fg">{t("schema.slug")} {isNew ? null : <span className="text-fg-subtle">{t("schema.slugFixed")}</span>}</span>
             <input
               className={CONTROL}
               value={draft.slug}
@@ -803,15 +850,15 @@ export function ContentTypeEditor({ api, codeDefinedTypes, slug, onSaved, onBack
               onChange={(e) => { setSlugFollows(false); setDraft((d) => ({ ...d, slug: e.target.value.trim() })); }}
             />
             <span className="text-caption text-fg-subtle">
-              {isNew ? "A URL segment: lowercase letters, digits and single hyphens." : "This slug addresses the type's own page list — renaming it would break every link to it."}
+              {isNew ? t("contentType.slugHelpNew") : t("contentType.slugHelpFixed")}
             </span>
           </label>
         </div>
 
         <div>
-          <Heading level="2" className="mb-2 font-normal">Regions</Heading>
+          <Heading level="2" className="mb-2 font-normal">{t("contentType.regions")}</Heading>
           <p className="mb-3 max-w-[62ch] text-caption text-fg-subtle">
-            A region is a named slot on the page. The allow-list decides what may be placed there; leave it empty for “any block type”.
+            {t("contentType.regionsHelp")}
           </p>
           <RegionsEditor
             regions={regions}
@@ -830,17 +877,17 @@ export function ContentTypeEditor({ api, codeDefinedTypes, slug, onSaved, onBack
         </div>
 
         <div>
-          <Heading level="2" className="mb-2 font-normal">Page fields</Heading>
+          <Heading level="2" className="mb-2 font-normal">{t("contentType.pageFields")}</Heading>
           <p className="mb-3 max-w-[62ch] text-caption text-fg-subtle">
-            Structured data on the page itself, beside its blocks — a lead image, a byline, a category.
+            {t("contentType.pageFieldsHelp")}
           </p>
           <FieldSchemaEditor schema={draft.fieldsSchema ?? []} onChange={(fieldsSchema) => setDraft((d) => ({ ...d, fieldsSchema }))} />
         </div>
 
         <div>
-          <Heading level="2" className="mb-2 font-normal">Default blocks</Heading>
+          <Heading level="2" className="mb-2 font-normal">{t("contentType.defaultBlocks")}</Heading>
           <p className="mb-3 max-w-[62ch] text-caption text-fg-subtle">
-            Created automatically in a region when a page of this type is created.
+            {t("contentType.defaultBlocksHelp")}
           </p>
           <DefaultBlocksEditor
             blocks={draft.defaultBlocks ?? []}
@@ -853,9 +900,9 @@ export function ContentTypeEditor({ api, codeDefinedTypes, slug, onSaved, onBack
         {locked ? null : (
           <div>
             <Button onPress={save} isDisabled={busy || draft.name.trim() === "" || draft.slug.trim() === "" || regions.length === 0}>
-              {busy ? "Saving…" : isNew ? "Create" : "Save"}
+              {busy ? t("common.saving") : isNew ? t("common.create") : t("common.save")}
             </Button>
-            {regions.length === 0 ? <p className="mt-2 text-caption text-danger">A content type needs at least one region.</p> : null}
+            {regions.length === 0 ? <p className="mt-2 text-caption text-danger">{t("contentType.needsRegion")}</p> : null}
           </div>
         )}
       </ReadOnlyFieldset>
@@ -872,6 +919,7 @@ function RegionsEditor({ regions, blockTypes, onChange, onRegionRemoved }: {
    * deleted an author's default blocks one keystroke into editing a name. */
   onRegionRemoved: (name: string) => void;
 }) {
+  const { t } = useI18n();
   const set = (i: number, r: RegionDefinition) => onChange(regions.map((x, j) => (j === i ? r : x)));
   const add = () => {
     let n = regions.length + 1;
@@ -893,25 +941,25 @@ function RegionsEditor({ regions, blockTypes, onChange, onRegionRemoved }: {
         <div key={i} className="rounded-lg border border-border bg-surface-muted p-3.5">
           <div className="mb-3 grid grid-cols-[1fr_1fr_auto] items-end gap-3 max-[720px]:grid-cols-1">
             <label className="flex flex-col gap-1.5">
-              <span className="text-caption text-fg-subtle">Name (the key blocks are placed under)</span>
+              <span className="text-caption text-fg-subtle">{t("regions.name")}</span>
               <input className={CONTROL} value={r.name} onChange={(e) => set(i, { ...r, name: e.target.value.trim() })} />
             </label>
             <label className="flex flex-col gap-1.5">
-              <span className="text-caption text-fg-subtle">Label</span>
+              <span className="text-caption text-fg-subtle">{t("regions.label")}</span>
               <input className={CONTROL} value={r.label ?? ""} placeholder={r.name} onChange={(e) => set(i, { ...r, label: e.target.value || undefined })} />
             </label>
             <button
               type="button"
               className="px-2 py-2 text-fg-subtle hover:text-danger"
-              title="Remove region"
+              title={t("regions.remove")}
               onClick={() => { onChange(regions.filter((_, j) => j !== i)); onRegionRemoved(r.name); }}
             >✕</button>
           </div>
           <p className="mb-1.5 text-caption text-fg-subtle">
-            Allowed block types {r.allowedTypes === null || r.allowedTypes === undefined ? <span className="text-fg">— any</span> : null}
+            {t("regions.allowed")} {r.allowedTypes === null || r.allowedTypes === undefined ? <span className="text-fg">{t("regions.allowedAny")}</span> : null}
           </p>
           <div className="flex flex-wrap gap-x-4 gap-y-1.5">
-            {blockTypes.length === 0 ? <span className="text-caption text-fg-subtle">No block types defined yet.</span> : null}
+            {blockTypes.length === 0 ? <span className="text-caption text-fg-subtle">{t("regions.noBlockTypes")}</span> : null}
             {blockTypes.map((bt) => (
               <label key={bt.slug} className="flex items-center gap-1.5">
                 <input type="checkbox" checked={(r.allowedTypes ?? []).includes(bt.slug)} onChange={() => toggle(i, bt.slug)} />
@@ -921,7 +969,7 @@ function RegionsEditor({ regions, blockTypes, onChange, onRegionRemoved }: {
           </div>
         </div>
       ))}
-      <Button variant="secondary" size="sm" className="self-start" onPress={add}>+ Add region</Button>
+      <Button variant="secondary" size="sm" className="self-start" onPress={add}>{t("regions.add")}</Button>
     </div>
   );
 }
@@ -932,6 +980,7 @@ function DefaultBlocksEditor({ blocks, regions, blockTypes, onChange }: {
   blockTypes: BlockType[];
   onChange: (b: DefaultBlockDefinition[]) => void;
 }) {
+  const { t } = useI18n();
   const set = (i: number, b: DefaultBlockDefinition) => onChange(blocks.map((x, j) => (j === i ? b : x)));
   const allowedIn = (region: string): BlockType[] => {
     const allowed = regions.find((r) => r.name === region)?.allowedTypes;
@@ -948,7 +997,7 @@ function DefaultBlocksEditor({ blocks, regions, blockTypes, onChange }: {
         return (
           <div key={i} className="grid grid-cols-[1fr_1fr_auto] items-end gap-3 rounded-lg border border-border bg-surface-muted p-3.5 max-[720px]:grid-cols-1">
             <label className="flex flex-col gap-1.5">
-              <span className="text-caption text-fg-subtle">Region</span>
+              <span className="text-caption text-fg-subtle">{t("defaultBlocks.region")}</span>
               <select
                 className={CONTROL}
                 value={b.region}
@@ -965,16 +1014,16 @@ function DefaultBlocksEditor({ blocks, regions, blockTypes, onChange }: {
               </select>
             </label>
             <label className="flex flex-col gap-1.5">
-              <span className="text-caption text-fg-subtle">Block type</span>
+              <span className="text-caption text-fg-subtle">{t("defaultBlocks.blockType")}</span>
               <select className={CONTROL} value={b.blockTypeSlug} onChange={(e) => set(i, { ...b, blockTypeSlug: e.target.value })}>
                 {options.map((bt) => <option key={bt.slug} value={bt.slug}>{bt.name}</option>)}
               </select>
             </label>
-            <button type="button" className="px-2 py-2 text-fg-subtle hover:text-danger" title="Remove" onClick={() => onChange(blocks.filter((_, j) => j !== i))}>✕</button>
+            <button type="button" className="px-2 py-2 text-fg-subtle hover:text-danger" title={t("common.remove")} onClick={() => onChange(blocks.filter((_, j) => j !== i))}>✕</button>
           </div>
         );
       })}
-      <Button variant="secondary" size="sm" className="self-start" onPress={add} isDisabled={regions.length === 0 || blockTypes.length === 0}>+ Add default block</Button>
+      <Button variant="secondary" size="sm" className="self-start" onPress={add} isDisabled={regions.length === 0 || blockTypes.length === 0}>{t("defaultBlocks.add")}</Button>
     </div>
   );
 }

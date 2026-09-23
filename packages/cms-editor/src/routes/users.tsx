@@ -7,19 +7,21 @@ import { Button } from "@podoba/react";
 import { useApp } from "../app-context";
 import { CONTENT } from "../chrome";
 import { UsersView } from "../components";
+import { useI18n } from "../i18n";
 
 export default createPage()
   .route("/users")
   .render(function Users() {
     const { api, me, isAdmin, setError } = useApp();
     const navigate = useNavigate();
+    const { t } = useI18n();
 
-    if (me === null) return <div className={`${CONTENT} pt-8`}><p className="text-fg-subtle">Loading…</p></div>;
+    if (me === null) return <div className={`${CONTENT} pt-8`}><p className="text-fg-subtle">{t("common.loading")}</p></div>;
     if (!isAdmin) {
       return (
         <div className={`${CONTENT} flex items-center gap-2 pt-8`}>
-          <p className="text-fg-subtle">Admins only.</p>
-          <Button variant="ghost" size="sm" onPress={() => navigate("home")}>← back to pages</Button>
+          <p className="text-fg-subtle">{t("users.adminsOnly")}</p>
+          <Button variant="ghost" size="sm" onPress={() => navigate("home")}>{t("pages.backToPages")}</Button>
         </div>
       );
     }

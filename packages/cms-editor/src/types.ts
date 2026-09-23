@@ -2,6 +2,8 @@
 // @pramen/cms) so the editor stays a self-contained browser app with no server-package
 // dependency — it speaks to the CMS purely over HTTP.
 
+import type { TextKey } from "./i18n";
+
 /** Any JSON value — the wire form of everything the CMS stores. */
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
@@ -146,6 +148,25 @@ export interface BlockType {
   managedBy?: string | null;
 }
 
+/**
+ * How the editor words one kind of entry: a content type's pages, a collection's rows. Mirror
+ * of `EntryLabels` in @pramen/cms, where a type or collection declares it.
+ *
+ * Written in the language the deployment runs its editor in, like the type's `name`. Both are
+ * optional; what is missing falls back to neutral catalog wording ("+ New page" / "+ Nový
+ * obsah"), because a label cannot be slotted into a fixed sentence without getting grammar
+ * wrong: "+ New Articles" in English, the gender of "Nový" in Czech.
+ */
+export interface EntryLabels {
+  /** The create action and the create dialog's title: "New article", "Nový článek". The
+   * button renders it after a "+". */
+  newItem?: string;
+  /** The noun a count uses, per plural category of the editor's language, WITHOUT the number:
+   * `{ one: "článek", few: "články", many: "článku", other: "článků" }`. `other` is required;
+   * a category left out uses it. */
+  count?: { other: string; zero?: string; one?: string; two?: string; few?: string; many?: string };
+}
+
 export interface ContentType {
   id: string;
   name: string;
@@ -155,6 +176,9 @@ export interface ContentType {
   defaultBlocks?: DefaultBlockDefinition[] | null;
   /** See `BlockType.managedBy`. */
   managedBy?: string | null;
+  /** The type's own wording for its pages. Absent from an older server and from a type that
+   * declares none. */
+  labels?: EntryLabels | null;
 }
 
 /** A collection: one of the host app's own pramen entities, edited generically via a
@@ -165,6 +189,8 @@ export interface CollectionMeta {
   slug: string;
   label: string;
   pluralLabel: string;
+  /** The collection's own wording for its rows. See {@link EntryLabels}. */
+  labels?: EntryLabels | null;
   icon?: string;
   /** Where this collection sits in the primary nav — see {@link NAV_ORDER}. Filled in
    * server-side, so the editor sorts one list of numbers. Optional here only because an
@@ -409,12 +435,12 @@ export interface Taxonomy {
 export const TAXONOMY_TARGETS = ["page", "media"] as const;
 export type TaxonomyTarget = (typeof TAXONOMY_TARGETS)[number];
 
-/** What each target is called on screen — plural, because each names the SET of things the
- * vocabulary would classify. */
-export const TAXONOMY_TARGET_LABELS = {
-  page: "Pages",
-  media: "Media",
-} satisfies Record<TaxonomyTarget, string>;
+/** What each target is called on screen, as catalog keys: plural, because each names the SET
+ * of things the vocabulary would classify. */
+export const TAXONOMY_TARGET_KEYS = {
+  page: "taxonomies.target.page",
+  media: "taxonomies.target.media",
+} as const satisfies Record<TaxonomyTarget, TextKey>;
 
 export interface Term {
   id: string;
@@ -553,25 +579,25 @@ export function adminPageKind(meta: AdminPageMeta): AdminPageKind {
 export const MEDIA_SORTS = ["newest", "oldest", "name", "name_desc", "largest", "smallest"] as const;
 export type MediaSort = (typeof MEDIA_SORTS)[number];
 
-/** What each sort is called on screen. */
-export const MEDIA_SORT_LABELS = {
-  newest: "Newest first",
-  oldest: "Oldest first",
-  name: "Name A–Z",
-  name_desc: "Name Z–A",
-  largest: "Largest first",
-  smallest: "Smallest first",
-} satisfies Record<MediaSort, string>;
+/** What each sort is called on screen, as catalog keys resolved at render. */
+export const MEDIA_SORT_KEYS = {
+  newest: "media.sort.newest",
+  oldest: "media.sort.oldest",
+  name: "media.sort.name",
+  name_desc: "media.sort.name_desc",
+  largest: "media.sort.largest",
+  smallest: "media.sort.smallest",
+} as const satisfies Record<MediaSort, TextKey>;
 
 /** The coarse type buckets the library filters by. */
 export const MEDIA_KINDS = ["image", "video", "audio", "document", "other"] as const;
 export type MediaKind = (typeof MEDIA_KINDS)[number];
 
-/** …and their labels. Plural, because each names a SET the filter narrows to. */
-export const MEDIA_KIND_LABELS = {
-  image: "Images",
-  video: "Video",
-  audio: "Audio",
-  document: "Documents",
-  other: "Other",
-} satisfies Record<MediaKind, string>;
+/** …and their labels, as catalog keys. Plural, because each names a SET the filter narrows to. */
+export const MEDIA_KIND_KEYS = {
+  image: "media.kind.image",
+  video: "media.kind.video",
+  audio: "media.kind.audio",
+  document: "media.kind.document",
+  other: "media.kind.other",
+} as const satisfies Record<MediaKind, TextKey>;

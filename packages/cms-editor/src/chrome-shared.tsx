@@ -14,6 +14,7 @@
 import { Avatar, UserMenu, UserMenuItem } from "@podoba/react";
 import { useEffect, useState, type ReactNode } from "react";
 import type { Me } from "./app-context";
+import { useI18n } from "./i18n";
 import { DarkThemeIcon, LightThemeIcon, NAV_GLYPHS, SettingsIcon, SignOutIcon } from "./icons";
 import type { ExtraNavLink, NavEntry, NavGlyph, NavIcon, NavSection } from "./nav";
 
@@ -159,14 +160,15 @@ export function AccountMenu({
   // Looked up by id rather than switched on, because the rows are data: the built-in keys can
   // never collide with them (`extra:` prefix), and nothing here changes when a deployment adds
   // one.
+  const { t } = useI18n();
   const byId = new Map(items.map((item) => [item.id, item]));
   // The server-resolved identity, which is a username rather than a display name — this app
   // has no profile. Falling back to "account" keeps the avatar's initials from reading as "?"
   // in the window between boot and the `me` call landing.
-  const who = me?.userId ?? "account";
+  const who = me?.userId ?? t("account.fallbackName");
   return (
     <UserMenu
-      triggerLabel={`Account — ${who}`}
+      triggerLabel={t("account.trigger", { who })}
       trigger={
         <>
           <Avatar name={who} size="sm" ring={false} />
@@ -182,7 +184,7 @@ export function AccountMenu({
     >
       <UserMenuItem id="theme" className="gap-2.5">
         {theme === "dark" ? <LightThemeIcon className="h-[15px] w-[15px]" /> : <DarkThemeIcon className="h-[15px] w-[15px]" />}
-        {theme === "dark" ? "Light theme" : "Dark theme"}
+        {theme === "dark" ? t("theme.light") : t("theme.dark")}
       </UserMenuItem>
       {items.map((item) => (
         <UserMenuItem key={item.id} id={item.id} className="gap-2.5">
@@ -194,11 +196,11 @@ export function AccountMenu({
       ))}
       <UserMenuItem id="settings" className="gap-2.5">
         <SettingsIcon className="h-[15px] w-[15px]" />
-        Settings
+        {t("account.settings")}
       </UserMenuItem>
       <UserMenuItem id="signout" className="gap-2.5">
         <SignOutIcon className="h-[15px] w-[15px]" />
-        Sign out
+        {t("account.signOut")}
       </UserMenuItem>
     </UserMenu>
   );

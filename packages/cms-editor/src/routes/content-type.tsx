@@ -3,6 +3,7 @@
 import { createPage, useNavigate, useRouter } from "@buzola/router";
 import { useApp } from "../app-context";
 import { Notice } from "../components";
+import { useI18n } from "../i18n";
 import { ContentTypeEditor } from "../schema-builder";
 
 export default createPage()
@@ -11,8 +12,9 @@ export default createPage()
   .render(function ContentTypeBuilderRoute({ params }) {
     const { api, cms, setError, refreshContentTypes } = useApp();
     const navigate = useNavigate();
+    const { t } = useI18n();
     const router = useRouter();
-    if (!cms.canEdit) return <Notice>Authoring types needs an editor role.</Notice>;
+    if (!cms.canEdit) return <Notice>{t("schema.needsEditor")}</Notice>;
     return (
       <ContentTypeEditor
         api={api}

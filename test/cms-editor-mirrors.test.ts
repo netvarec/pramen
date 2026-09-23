@@ -18,6 +18,7 @@
 // build something that 400s on save.
 
 import { describe, expect, test } from "bun:test";
+import { en } from "../packages/cms-editor/src/i18n/catalog";
 import {
   ADMIN_ELEMENT_TYPES,
   FIELD_TYPES,
@@ -32,13 +33,13 @@ import {
   ADMIN_ELEMENT_TYPES as EDITOR_ADMIN_ELEMENT_TYPES,
   ADMIN_PAGE_KINDS as EDITOR_ADMIN_PAGE_KINDS,
   MAX_MENU_DEPTH as EDITOR_MAX_MENU_DEPTH,
-  MEDIA_KIND_LABELS,
+  MEDIA_KIND_KEYS,
   MEDIA_KINDS as EDITOR_MEDIA_KINDS,
-  MEDIA_SORT_LABELS,
+  MEDIA_SORT_KEYS,
   MEDIA_SORTS as EDITOR_MEDIA_SORTS,
   NAV_ORDER as EDITOR_NAV_ORDER,
   REDIRECT_STATUSES as EDITOR_REDIRECT_STATUSES,
-  TAXONOMY_TARGET_LABELS,
+  TAXONOMY_TARGET_KEYS,
   TAXONOMY_TARGETS as EDITOR_TAXONOMY_TARGETS,
 } from "../packages/cms-editor/src/types";
 import { FIELD_TYPES as EDITOR_FIELD_TYPES } from "../packages/cms-editor/src/schema-builder";
@@ -103,8 +104,8 @@ describe("the media library's sort and filter vocabularies", () => {
   test("every sort and kind the editor offers has a label", () => {
     // A missing entry renders `undefined` in the menu, which is the kind of hole a type can
     // catch and a test should prove has been caught.
-    for (const k of EDITOR_MEDIA_KINDS) expect(MEDIA_KIND_LABELS[k]).toBeTruthy();
-    for (const s of EDITOR_MEDIA_SORTS) expect(MEDIA_SORT_LABELS[s]).toBeTruthy();
+    for (const k of EDITOR_MEDIA_KINDS) expect(en[MEDIA_KIND_KEYS[k]]).toBeString();
+    for (const s of EDITOR_MEDIA_SORTS) expect(en[MEDIA_SORT_KEYS[s]]).toBeString();
   });
 
   test("the sorts are the ones the server resolves", () => {
@@ -126,6 +127,6 @@ describe("what a vocabulary may be scoped to", () => {
   });
 
   test("every target has a label", () => {
-    for (const t of EDITOR_TAXONOMY_TARGETS) expect(TAXONOMY_TARGET_LABELS[t]).toBeTruthy();
+    for (const t of EDITOR_TAXONOMY_TARGETS) expect(en[TAXONOMY_TARGET_KEYS[t]]).toBeString();
   });
 });

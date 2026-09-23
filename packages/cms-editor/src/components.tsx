@@ -7,7 +7,9 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { Api, ApiError } from "./api";
 import { CONTROL, FieldForm, formatWhen, fromLocalInput, slugify, toLocalInput } from "./fields";
 import { BELOW_APP_BAR, BELOW_PAGE_TOOLBAR, CONTENT, INSPECTOR_MAX_H, PAGE_TOOLBAR_H, ROW, ROW_BUTTON, WRAP } from "./chrome";
-import { COMMON_COPY } from "./copy";
+import { getI18n, t, useI18n, type TextKey } from "./i18n";
+import { rich } from "./i18n/rich";
+import { collectionCountForms, collectionNewButton, declaredNewItem, pageCountForms, pageNewButton } from "./entry-labels";
 import { listSummary, LoadFailed, usePagedList, type ListPhase } from "./list-state";
 import { useCrumb } from "./breadcrumb";
 import { PageHeader } from "./page-header";
@@ -22,7 +24,7 @@ import { useApp, type Me } from "./app-context";
 import { isRichTextDoc, richTextToPlainText } from "./rich-text";
 import { flattenTerms } from "./furniture";
 import type { AssembledPage, AuditEntry, BlockType, CmsCapabilities, CollectionMeta, ContentType, FieldDefinition, FieldValue, FieldValues, Media, MediaKind, MediaSort, Page, RegionDefinition, RenderedBlock, Taxonomy, Term } from "./types";
-import { MEDIA_KIND_LABELS, MEDIA_KINDS, MEDIA_SORT_LABELS, MEDIA_SORTS } from "./types";
+import { MEDIA_KIND_KEYS, MEDIA_KINDS, MEDIA_SORT_KEYS, MEDIA_SORTS } from "./types";
 
 export type InspectorTab = "settings" | "seo" | "i18n" | "terms" | "audit";
 // `workflow` is deliberately NOT here any more. Publishing is what someone opened the editor
@@ -34,13 +36,23 @@ export const INSPECTOR_TABS: InspectorTab[] = ["settings", "seo", "i18n", "terms
 /** What each tab is called on screen. A table rather than a CSS `capitalize`, which renders
  * "seo" as "Seo" and "i18n" as "I18n" — both wrong, and wrong in the one place a reader is
  * scanning for the word they want. */
-export const INSPECTOR_TAB_LABELS = {
-  settings: "Settings",
-  seo: "SEO",
-  i18n: "Translations",
-  terms: "Terms",
-  audit: "History",
-} satisfies Record<InspectorTab, string>;
+export const INSPECTOR_TAB_KEYS = {
+  settings: "pageEditor.tab.settings",
+  seo: "pageEditor.tab.seo",
+  i18n: "pageEditor.tab.i18n",
+  terms: "pageEditor.tab.terms",
+  audit: "pageEditor.tab.audit",
+} as const satisfies Record<InspectorTab, TextKey>;
+
+/** The same labels, in the active language. Getters, so each read translates at the time it
+ * is made rather than when this module is first evaluated. */
+export const INSPECTOR_TAB_LABELS: Readonly<Record<InspectorTab, string>> = {
+  get settings() { return t(INSPECTOR_TAB_KEYS.settings); },
+  get seo() { return t(INSPECTOR_TAB_KEYS.seo); },
+  get i18n() { return t(INSPECTOR_TAB_KEYS.i18n); },
+  get terms() { return t(INSPECTOR_TAB_KEYS.terms); },
+  get audit() { return t(INSPECTOR_TAB_KEYS.audit); },
+};
 
 /** One workflow transition the page can make from where it is. */
 export interface PageAction {
@@ -74,23 +86,23 @@ export function pageWorkflowActions(status: string): PageAction[] {
   switch (status) {
     case "review":
       return [
-        { label: "Approve & publish", action: "approve" },
-        { label: "Reject", action: "reject" },
+        { label: t("workflow.approve"), action: "approve" },
+        { label: t("workflow.reject"), action: "reject" },
         // The solo operator's escape from the two-actor pipeline — same endpoint the draft
         // path offers, kept reachable so a reviewer is not forced through their own review.
-        { label: "Publish directly", action: "publishPage" },
+        { label: t("workflow.publishDirectly"), action: "publishPage" },
       ];
     case "published":
       return [
         // "changes", not "Publish": the page is already published, so the bare verb would
         // read as a no-op and leave the button looking like it belongs to some other page.
-        { label: "Publish changes", action: "publishPage" },
-        { label: "Unpublish", action: "unpublishPage" },
+        { label: t("workflow.publishChanges"), action: "publishPage" },
+        { label: t("workflow.unpublish"), action: "unpublishPage" },
       ];
     default: // draft | rejected | archived
       return [
-        { label: "Publish", action: "publishPage" },
-        { label: "Submit for review", action: "submitForReview" },
+        { label: t("workflow.publish"), action: "publishPage" },
+        { label: t("workflow.submitForReview"), action: "submitForReview" },
       ];
   }
 }
@@ -186,6 +198,25 @@ function Section({ children }: { children: ReactNode }) {
   return <div className="mb-2 mt-[18px] text-sm text-fg-subtle first:mt-0">{children}</div>;
 }
 
+/** The status words a pill can show, by status. Anything else (a status this build has not
+ * heard of) is shown as the server wrote it. */
+const STATUS_KEYS: Readonly<Record<string, TextKey>> = {
+  draft: "workflow.status.draft",
+  review: "workflow.status.review",
+  in_review: "workflow.status.in_review",
+  published: "workflow.status.published",
+  rejected: "workflow.status.rejected",
+  archived: "workflow.status.archived",
+  scheduled: "workflow.status.scheduled",
+};
+
+/** A workflow status in the active language; `null` stays empty, an unknown one stays raw. */
+function statusLabel(status: string | null | undefined): string {
+  if (status == null) return "";
+  const key = Object.prototype.hasOwnProperty.call(STATUS_KEYS, status) ? STATUS_KEYS[status] : undefined;
+  return key ? t(key) : status;
+}
+
 function Pill({ status, children }: { status?: string; children: ReactNode }) {
   // Token-only colors (no hardcoded hex) so status pills flip correctly under the
   // podoba dark theme. `fg-on-brand` is the AA-safe ink on the fixed brand surfaces.
@@ -215,7 +246,7 @@ function Pill({ status, children }: { status?: string; children: ReactNode }) {
  *
  * `closeLabel` is passed even though podoba's default is the same word: a default inside the
  * design system is a string no translation can reach, so every dialog in the editor names its
- * ✕ from `COMMON_COPY`.
+ * ✕ from the catalog (`common.close`).
  */
 function Modal({
   onClose,
@@ -231,7 +262,7 @@ function Modal({
   children: ReactNode;
 }) {
   return (
-    <Dialog isOpen isDismissable size={size} title={title} description={description} closeLabel={COMMON_COPY.close} onOpenChange={(open) => !open && onClose()}>
+    <Dialog isOpen isDismissable size={size} title={title} description={description} closeLabel={t("common.close")} onOpenChange={(open) => !open && onClose()}>
       {children}
     </Dialog>
   );
@@ -287,7 +318,12 @@ const PAGE_LIST_SIZE = 50;
  * a count that is really the server's cap. */
 export function PageList({ api, type, onOpen, onError }: { api: Api; type?: ContentType; onOpen: (p: Page) => void; onError: (s: string) => void }) {
   // From the SERVER (listCmsCapabilities), not a local flag — see `CmsCapabilities`.
-  const { cms: { multilingual } } = useApp();
+  const { cms: { multilingual }, contentTypes } = useApp();
+  const { t } = useI18n();
+  // Whose words the list uses: its own type's, or on the pooled list the ONE type there is.
+  // A single-type deployment lists its pages pooled at `/`, and it is exactly the deployment
+  // that would otherwise never see the labels it declared.
+  const wording = type ?? (contentTypes?.length === 1 ? contentTypes[0] : undefined);
   const [blockTypes, setBlockTypes] = useState<BlockType[]>([]);
   const [creating, setCreating] = useState(false);
   const contentType = type?.slug;
@@ -313,11 +349,11 @@ export function PageList({ api, type, onOpen, onError }: { api: Api; type?: Cont
   // must read exactly as it did before types had tabs. `type.name` is a label a host writes
   // (often plural, it labels the tab), so it heads the screen and is never bent into a noun
   // phrase — "+ New Articles" is what guessing at grammar produces.
-  const count = listSummary(list.phase, pages.length, { empty: "None yet", one: "1 page total", many: (n) => `${n} pages total` }, list.hasMore);
+  const count = listSummary(list.phase, pages.length, { empty: t("common.noneYet"), forms: pageCountForms(wording) }, list.hasMore);
   return (
     <>
-      <Hero lead={type?.name ?? "Pages"} em={count}>
-        <Button className="shrink-0" onPress={() => setCreating(true)}>+ New page</Button>
+      <Hero lead={type?.name ?? t("pages.lead")} em={count}>
+        <Button className="shrink-0" onPress={() => setCreating(true)}>{pageNewButton(wording)}</Button>
       </Hero>
       <div className={WRAP}>
         <div className="flex flex-col gap-2">
@@ -326,15 +362,15 @@ export function PageList({ api, type, onOpen, onError }: { api: Api; type?: Cont
               <span className="flex-1 truncate font-medium">{p.title}</span>
               <span className="text-fg-subtle">/{p.slug}</span>
               {multilingual ? <span className="text-fg-subtle">{p.locale}</span> : null}
-              <Pill status={p.status}>{p.status}</Pill>
+              <Pill status={p.status}>{statusLabel(p.status)}</Pill>
             </button>
           ))}
-          {list.phase === "ready" && pages.length === 0 ? <p className="text-fg-subtle">No pages yet. {blockTypes.length === 0 ? "Define block types + a content type first (via the API/admin)." : "Create one."}</p> : null}
+          {list.phase === "ready" && pages.length === 0 ? <p className="text-fg-subtle">{blockTypes.length === 0 ? t("pages.emptyNoTypes") : t("pages.empty")}</p> : null}
           {list.phase === "failed" ? <LoadFailed onRetry={list.reload} /> : null}
         </div>
         {list.hasMore ? (
           <div className="mt-4 flex justify-center">
-            <Button variant="ghost" onPress={list.loadMore} isDisabled={list.loading}>{list.loading ? COMMON_COPY.loading : COMMON_COPY.loadMore}</Button>
+            <Button variant="ghost" onPress={list.loadMore} isDisabled={list.loading}>{list.loading ? t("common.loading") : t("common.loadMore")}</Button>
           </div>
         ) : null}
       </div>
@@ -347,6 +383,7 @@ function CreatePage({ api, type, onClose, onCreated, onError }: { api: Api; type
   // The app context already holds this list — a second fetch per modal open is a second
   // cache of one list in one tree, with its own error policy.
   const { contentTypes } = useApp();
+  const { t } = useI18n();
   const cts = contentTypes ?? [];
   const [typeId, setTypeId] = useState(type?.id ?? "");
   const [title, setTitle] = useState("");
@@ -386,11 +423,11 @@ function CreatePage({ api, type, onClose, onCreated, onError }: { api: Api; type
     <Modal
       onClose={onClose}
       size="full"
+      // A type that declared its own `newItem` ("Nový článek") is named by it, plainly;
+      // otherwise the catalog's sentence, with its dimmed words marked up in the message.
       title={
-        <>
-          Create a <Dim>new page</Dim>
-          {type ? <> in <Dim>{type.name}</Dim></> : null} and define the essentials<Dim>.</Dim>
-        </>
+        declaredNewItem(type ?? cts.find((c) => c.id === typeId) ?? (cts.length === 1 ? cts[0] : undefined)) ??
+        rich(type ? t("createPage.titleInType", { type: type.name }) : t("createPage.title"), { dim: (s) => <Dim>{s}</Dim> })
       }
     >
       {/* `m-auto`, not `mx-auto`: `size="full"` makes the dialog body a flex column, so auto
@@ -398,7 +435,7 @@ function CreatePage({ api, type, onClose, onCreated, onError }: { api: Api; type
           small form that had lost its modal. */}
       <div className="m-auto flex w-full max-w-[560px] flex-col gap-4">
         <div className={`w-full flex-col gap-2 ${type ? "hidden" : "flex"}`}>
-          <span className="text-sm font-medium text-fg">Content type</span>
+          <span className="text-sm font-medium text-fg">{t("createPage.contentType")}</span>
           {/* Visible cards, not a dropdown: the type is an easy-to-miss choice, and picking the
               wrong one puts the entry under a different route. Cards make the selection deliberate. */}
           <div className="flex flex-wrap gap-2">
@@ -422,11 +459,11 @@ function CreatePage({ api, type, onClose, onCreated, onError }: { api: Api; type
             ))}
           </div>
         </div>
-        <Input label="Title" value={title} onChange={setTitle} />
-        <Input label="Slug" value={slug} onChange={setSlug} placeholder={slugify(title)} />
+        <Input label={t("createPage.titleLabel")} value={title} onChange={setTitle} />
+        <Input label={t("createPage.slugLabel")} value={slug} onChange={setSlug} placeholder={slugify(title)} />
         <div className="mt-2 flex justify-end gap-2">
-          <Button variant="ghost" onPress={onClose}>cancel</Button>
-          <Button onPress={create} isDisabled={busy || !typeId || !title}>Create</Button>
+          <Button variant="ghost" onPress={onClose}>{t("createPage.cancel")}</Button>
+          <Button onPress={create} isDisabled={busy || !typeId || !title}>{t("common.create")}</Button>
         </div>
       </div>
     </Modal>
@@ -444,13 +481,13 @@ function CreatePage({ api, type, onClose, onCreated, onError }: { api: Api; type
  * A `richtext` column is a document tree, so flatten it to words rather than showing "—". */
 function cellText(v: unknown): string {
   if (v == null) return "";
-  if (typeof v === "boolean") return v ? "yes" : "no";
-  if (Array.isArray(v)) return v.length === 1 ? "1 item" : `${v.length} items`;
+  if (typeof v === "boolean") return v ? t("collection.yes") : t("collection.no");
+  if (Array.isArray(v)) return getI18n().tp("collection.items", v.length);
   if (isRichTextDoc(v)) {
     const text = richTextToPlainText(v).replace(/\s+/g, " ").trim();
     return text.length > 80 ? text.slice(0, 80) + "…" : text;
   }
-  if (typeof v === "object") return "—";
+  if (typeof v === "object") return "–";
   return String(v);
 }
 
@@ -467,16 +504,13 @@ export function CollectionList({ api, def, onOpen, onNew, onError }: { api: Api;
   const list = usePagedList(fetchPage, COLLECTION_PAGE_SIZE, onError);
   const rows = list.rows;
 
+  const { t } = useI18n();
   const labelOf = (col: string) => def.fields.find((f) => f.name === col)?.label ?? col;
-  const count = listSummary(list.phase, rows.length, {
-    empty: "None yet",
-    one: `1 ${def.label.toLowerCase()}`,
-    many: (n) => `${n} ${def.pluralLabel.toLowerCase()}`,
-  }, list.hasMore);
+  const count = listSummary(list.phase, rows.length, { empty: t("common.noneYet"), forms: collectionCountForms(def) }, list.hasMore);
   return (
     <>
       <Hero lead={def.pluralLabel} em={count}>
-        <Button className="shrink-0" onPress={onNew}>+ New {def.label.toLowerCase()}</Button>
+        <Button className="shrink-0" onPress={onNew}>{collectionNewButton(def)}</Button>
       </Hero>
       <div className={WRAP}>
         <div className="flex flex-col gap-2">
@@ -485,20 +519,20 @@ export function CollectionList({ api, def, onOpen, onNew, onError }: { api: Api;
             const [first, ...rest] = def.list;
             return (
               <button type="button" className={`${ROW} ${ROW_BUTTON}`} key={id} onClick={() => onOpen(id)}>
-                <span className="flex-1 truncate font-medium">{cellText(row[first ?? def.titleField]) || <Dim>untitled</Dim>}</span>
+                <span className="flex-1 truncate font-medium">{cellText(row[first ?? def.titleField]) || <Dim>{t("common.untitled")}</Dim>}</span>
                 {rest.map((col) => (
                   <span className="truncate text-fg-subtle" key={col} title={labelOf(col)}>{cellText(row[col])}</span>
                 ))}
               </button>
             );
           })}
-          {list.phase === "ready" && rows.length === 0 ? <p className="text-fg-subtle">No {def.pluralLabel.toLowerCase()} yet. Create one.</p> : null}
+          {list.phase === "ready" && rows.length === 0 ? <p className="text-fg-subtle">{t("collection.empty", { pluralLabel: def.pluralLabel.toLowerCase() })}</p> : null}
           {list.phase === "failed" ? <LoadFailed onRetry={list.reload} /> : null}
-          {list.loading ? <p className="text-fg-subtle">{COMMON_COPY.loading}</p> : null}
+          {list.loading ? <p className="text-fg-subtle">{t("common.loading")}</p> : null}
         </div>
         {list.hasMore && !list.loading ? (
           <div className="mt-3.5 text-center">
-            <Button variant="secondary" size="sm" onPress={list.loadMore}>{COMMON_COPY.loadMore}</Button>
+            <Button variant="secondary" size="sm" onPress={list.loadMore}>{t("common.loadMore")}</Button>
           </div>
         ) : null}
       </div>
@@ -532,6 +566,7 @@ function CollectionWorkflow({
   onChanged: (row: FieldValues) => void;
   onError: (s: string) => void;
 }) {
+  const { t } = useI18n();
   const supports = def.supports ?? [];
   const [busy, setBusy] = useState(false);
   const [scheduling, setScheduling] = useState(false);
@@ -571,9 +606,9 @@ function CollectionWorkflow({
 
   const saveSchedule = async () => {
     const at = publishAt ? fromLocalInput(publishAt) : null;
-    if (!at) return onError("Pick a publication date and time first.");
+    if (!at) return onError(t("workflow.pickDate"));
     const down = takedownAt ? fromLocalInput(takedownAt) : null;
-    if (takedownAt && !down) return onError("That takedown date is not a valid date and time.");
+    if (takedownAt && !down) return onError(t("workflow.invalidTakedown"));
     // `unpublishAt` is PATCH semantics server-side: omitted leaves an existing takedown
     // standing, `null` cancels it. Send it explicitly whenever the scheduler is open, so
     // what the editor sees in the two inputs is exactly what is stored.
@@ -613,59 +648,56 @@ function CollectionWorkflow({
   };
 
   const restore = async (revisionId: string) => {
-    if (!confirm("Restore this version? The current content is snapshotted first, so this is itself undoable.")) return;
+    if (!confirm(t("revisions.restoreConfirm"))) return;
     if (await act("collectionRestoreRevision", { revisionId })) setRevisions(null);
   };
 
   return (
     <div className="flex flex-col gap-3 rounded-[14px] border border-border bg-surface-card px-[18px] py-4">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-fg-subtle">Status</span>
-        <Pill status={status}>{status}</Pill>
-        {publishedAt && published ? <span className="text-fg-subtle">since {formatWhen(publishedAt)}</span> : null}
-        {scheduledAt ? <span className="text-accent-strong">publishes {formatWhen(scheduledAt)}</span> : null}
-        {unpublishAt ? <span className="text-danger">comes down {formatWhen(unpublishAt)}</span> : null}
+        <span className="text-fg-subtle">{t("workflow.status")}</span>
+        <Pill status={status}>{statusLabel(status)}</Pill>
+        {publishedAt && published ? <span className="text-fg-subtle">{t("workflow.since", { when: formatWhen(publishedAt) })}</span> : null}
+        {scheduledAt ? <span className="text-accent-strong">{t("workflow.publishes", { when: formatWhen(scheduledAt) })}</span> : null}
+        {unpublishAt ? <span className="text-danger">{t("workflow.comesDown", { when: formatWhen(unpublishAt) })}</span> : null}
       </div>
       <div className="flex flex-wrap items-center gap-2">
         {supports.includes("drafts") && !published ? (
-          <Button size="sm" isDisabled={busy} onPress={() => void act("collectionPublish")}>Publish now</Button>
+          <Button size="sm" isDisabled={busy} onPress={() => void act("collectionPublish")}>{t("workflow.publishNow")}</Button>
         ) : null}
         {supports.includes("drafts") && published ? (
-          <Button variant="secondary" size="sm" isDisabled={busy} onPress={() => void act("collectionUnpublish")}>Unpublish</Button>
+          <Button variant="secondary" size="sm" isDisabled={busy} onPress={() => void act("collectionUnpublish")}>{t("workflow.unpublish")}</Button>
         ) : null}
         {supports.includes("scheduling") ? (
-          <Button variant="secondary" size="sm" isDisabled={busy} onPress={openScheduler}>{scheduledAt ? "Change schedule" : "Schedule…"}</Button>
+          <Button variant="secondary" size="sm" isDisabled={busy} onPress={openScheduler}>{scheduledAt ? t("workflow.changeSchedule") : t("workflow.schedule")}</Button>
         ) : null}
         {supports.includes("preview") ? (
-          <Button variant="ghost" size="sm" isDisabled={busy} onPress={() => void mintPreview()}>Preview link</Button>
+          <Button variant="ghost" size="sm" isDisabled={busy} onPress={() => void mintPreview()}>{t("workflow.previewLink")}</Button>
         ) : null}
         {supports.includes("revisions") ? (
-          <Button variant="ghost" size="sm" isDisabled={busy} onPress={() => void loadRevisions()}>{revisions ? "Hide history" : "History"}</Button>
+          <Button variant="ghost" size="sm" isDisabled={busy} onPress={() => void loadRevisions()}>{revisions ? t("workflow.hideHistory") : t("workflow.history")}</Button>
         ) : null}
       </div>
       {scheduling ? (
         <div className="flex flex-col gap-2 border-t border-border pt-3">
           <label className="flex flex-col gap-1 text-sm">
-            <span className="font-medium text-fg">Publish at</span>
+            <span className="font-medium text-fg">{t("workflow.publishAt")}</span>
             <input className={CONTROL} type="datetime-local" value={publishAt} onChange={(e) => setPublishAt(e.target.value)} />
           </label>
           <label className="flex flex-col gap-1 text-sm">
-            <span className="font-medium text-fg">Take down at (optional)</span>
+            <span className="font-medium text-fg">{t("workflow.takeDownAt")}</span>
             <input className={CONTROL} type="datetime-local" value={takedownAt} onChange={(e) => setTakedownAt(e.target.value)} />
           </label>
-          <p className="text-fg-subtle">
-            Scheduling does not take a live row down — it publishes at the first instant. A takedown must be after the publication time. Leave it empty to
-            cancel one.
-          </p>
+          <p className="text-fg-subtle">{t("workflow.scheduleHelp")}</p>
           <div className="flex gap-2">
-            <Button size="sm" isDisabled={busy} onPress={() => void saveSchedule()}>Save schedule</Button>
-            <Button variant="ghost" size="sm" onPress={() => setScheduling(false)}>Cancel</Button>
+            <Button size="sm" isDisabled={busy} onPress={() => void saveSchedule()}>{t("workflow.saveSchedule")}</Button>
+            <Button variant="ghost" size="sm" onPress={() => setScheduling(false)}>{t("common.cancel")}</Button>
           </div>
         </div>
       ) : null}
       {preview ? (
         <div className="border-t border-border pt-3 text-sm">
-          <span className="text-fg-subtle">Preview link (copied): </span>
+          <span className="text-fg-subtle">{t("workflow.previewCopied")}</span>
           <a className="break-all underline" href={preview} target="_blank" rel="noreferrer">{preview}</a>
         </div>
       ) : null}
@@ -674,11 +706,11 @@ function CollectionWorkflow({
           {revisions.map((r) => (
             <div className={`${ROW} text-xs`} key={r.id}>
               <span className="rounded-full bg-surface-muted px-2 py-0.5 font-mono text-xs text-fg-muted">#{r.revision}</span>
-              <span className="flex-1 truncate text-fg-subtle">{r.note ?? "edit"} · {r.actor ?? "system"} · {formatWhen(r.createdAt)}</span>
-              <Button variant="ghost" size="sm" isDisabled={busy} onPress={() => void restore(r.id)}>Restore</Button>
+              <span className="flex-1 truncate text-fg-subtle">{r.note ?? t("revisions.edit")} · {r.actor ?? t("revisions.system")} · {formatWhen(r.createdAt)}</span>
+              <Button variant="ghost" size="sm" isDisabled={busy} onPress={() => void restore(r.id)}>{t("revisions.restore")}</Button>
             </div>
           ))}
-          {revisions.length === 0 ? <p className="text-fg-subtle">No history yet.</p> : null}
+          {revisions.length === 0 ? <p className="text-fg-subtle">{t("revisions.empty")}</p> : null}
         </div>
       ) : null}
     </div>
@@ -686,6 +718,7 @@ function CollectionWorkflow({
 }
 
 export function CollectionEditor({ api, def, id, onSaved, onDeleted, onBack, backHref, onError }: { api: Api; def: CollectionMeta; id: string | null; onSaved: () => void; onDeleted: () => void; onBack: () => void; backHref: string; onError: (s: string) => void }) {
+  const { t } = useI18n();
   const isNew = id === null;
   const [values, setValues] = useState<FieldValues>({});
   const [loading, setLoading] = useState(!isNew);
@@ -698,7 +731,10 @@ export function CollectionEditor({ api, def, id, onSaved, onDeleted, onBack, bac
   // crumb and the row a reader clicked to get here say the same thing, rather than two
   // renderings of one `FieldValue` that can disagree about a rich-text or array cell.
   const title = cellText(values[def.titleField]);
-  useCrumb(isNew ? `New ${def.label.toLowerCase()}` : title || undefined);
+  // A collection that declared its own `newItem` ("Nová přednáška") is named by it; the
+  // catalog's fallback is neutral in a language whose "New" has to agree with the noun.
+  const newTitle = declaredNewItem(def) ?? t("collectionItem.new", { label: def.label.toLowerCase() });
+  useCrumb(isNew ? newTitle : title || undefined);
   const [busy, setBusy] = useState(false);
   const [ok, setOk] = useState(false);
 
@@ -737,7 +773,7 @@ export function CollectionEditor({ api, def, id, onSaved, onDeleted, onBack, bac
     }
   };
   const del = async () => {
-    if (isNew || !confirm(`Delete this ${def.label.toLowerCase()}? This cannot be undone.`)) return;
+    if (isNew || !confirm(t("collectionItem.deleteConfirm", { label: def.label.toLowerCase() }))) return;
     setBusy(true);
     try {
       await api.call("collectionDelete", { collection: def.slug, id });
@@ -751,14 +787,14 @@ export function CollectionEditor({ api, def, id, onSaved, onDeleted, onBack, bac
 
   return (
     <div className={WRAP}>
-      <DetailHeader title={isNew ? `New ${def.label.toLowerCase()}` : `Edit ${def.label.toLowerCase()}`} parent={def.pluralLabel} href={backHref} onBack={onBack} />
+      <DetailHeader title={isNew ? newTitle : t("collectionItem.edit", { label: def.label.toLowerCase() })} parent={def.pluralLabel} href={backHref} onBack={onBack} />
       {missing ? (
-        <p className="text-fg-subtle">Not found.</p>
+        <p className="text-fg-subtle">{t("collectionItem.notFound")}</p>
       ) : loading ? (
-        <p className="text-fg-subtle">Loading…</p>
+        <p className="text-fg-subtle">{t("common.loading")}</p>
       ) : (
         <div className="flex max-w-[720px] flex-col gap-4">
-          {ok ? <Banner ok>saved</Banner> : null}
+          {ok ? <Banner ok>{t("collectionItem.saved")}</Banner> : null}
           {/* Publishing is a separate, separately-gated call — `status` is a managed column
               the ordinary save cannot touch — so the workflow controls live outside the
               form. Only on an existing row: there is nothing to publish until it exists. */}
@@ -767,8 +803,8 @@ export function CollectionEditor({ api, def, id, onSaved, onDeleted, onBack, bac
           ) : null}
           <FieldForm schema={def.fields} value={values} onChange={setValues} api={api} />
           <div className="mt-2 flex items-center gap-2">
-            <Button onPress={save} isDisabled={busy}>{busy ? "Saving…" : isNew ? "Create" : "Save"}</Button>
-            {!isNew ? <Button variant="ghost" className="text-danger" onPress={del} isDisabled={busy}>Delete</Button> : null}
+            <Button onPress={save} isDisabled={busy}>{busy ? t("common.saving") : isNew ? t("common.create") : t("common.save")}</Button>
+            {!isNew ? <Button variant="ghost" className="text-danger" onPress={del} isDisabled={busy}>{t("common.delete")}</Button> : null}
           </div>
         </div>
       )}
@@ -805,6 +841,8 @@ function PageToolbar({ page, dirtyCount, onAct, busy }: {
   const [preview, setPreview] = useState<string | null>(null);
   const [minting, setMinting] = useState(false);
   const { api, setError } = useApp();
+  const i18n = useI18n();
+  const { t } = i18n;
   const actions = pageWorkflowActions(String(page.status));
   const [primary, ...rest] = actions;
 
@@ -860,22 +898,22 @@ function PageToolbar({ page, dirtyCount, onAct, busy }: {
       {/* First, because it is a fact ABOUT the page; among the buttons it read as another
           control. It stayed here rather than moving up with the title: publishing is done
           from this bar, so the state it changes has to stay on screen with it. */}
-      <Pill status={page.status}>{page.status}</Pill>
+      <Pill status={page.status}>{statusLabel(page.status)}</Pill>
       <span className="flex-1" />
       {/* ONE line of truth about saving. Page fields and blocks autosave; this says so, and
           says when they have not finished — replacing two identically-labelled "Save" buttons
           that saved different halves of the screen and a third surface that saved silently. */}
       <span className="shrink-0 text-caption text-fg-subtle">
-        {dirtyCount > 0 ? <span className="text-accent-strong">● saving {dirtyCount} change{dirtyCount === 1 ? "" : "s"}…</span> : "all changes saved"}
+        {dirtyCount > 0 ? <span className="text-accent-strong">{i18n.tp("pageEditor.savingChanges", dirtyCount)}</span> : t("pageEditor.allSaved")}
       </span>
       <Button variant="secondary" size="sm" className="shrink-0" isDisabled={minting} onPress={() => void mintPreview()}>
-        {minting ? "Minting…" : "Preview"}
+        {minting ? t("pageEditor.minting") : t("pageEditor.preview")}
       </Button>
       {primary ? <Button size="sm" className="shrink-0" isDisabled={busy} onPress={() => onAct(primary.action)}>{primary.label}</Button> : null}
       {rest.length > 0 ? (
         <DropdownMenuTrigger>
-          <Button variant="ghost" size="sm" className="shrink-0 px-2" aria-label="More actions">⋯</Button>
-          <DropdownMenu aria-label="More page actions" onAction={(k) => onAct(String(k))}>
+          <Button variant="ghost" size="sm" className="shrink-0 px-2" aria-label={t("pageEditor.moreActions")}>⋯</Button>
+          <DropdownMenu aria-label={t("pageEditor.morePageActions")} onAction={(k) => onAct(String(k))}>
             {rest.map((a) => <DropdownMenuItem key={a.action} id={a.action}>{a.label}</DropdownMenuItem>)}
           </DropdownMenu>
         </DropdownMenuTrigger>
@@ -888,9 +926,9 @@ function PageToolbar({ page, dirtyCount, onAct, busy }: {
         transient answer, not a permanent row. */}
     {preview ? (
       <div className="mt-3 flex items-center gap-2 rounded-lg bg-surface-muted px-3 py-2 text-caption">
-        <span className="shrink-0 text-fg-subtle">Preview opened in a new tab — link copied:</span>
+        <span className="shrink-0 text-fg-subtle">{t("pageEditor.previewOpened")}</span>
         <a className="min-w-0 flex-1 truncate underline" href={preview} target="_blank" rel="noreferrer">{preview}</a>
-        <Button variant="ghost" size="sm" className="shrink-0 px-2" aria-label="Hide the preview link" onPress={() => setPreview(null)}>✕</Button>
+        <Button variant="ghost" size="sm" className="shrink-0 px-2" aria-label={t("pageEditor.hidePreviewLink")} onPress={() => setPreview(null)}>✕</Button>
       </div>
     ) : null}
     </>
@@ -913,6 +951,7 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, backLabe
   registerGuard: (fn: (() => boolean) | null) => void;
 }) {
   const { cms: { multilingual, siteFurniture, canEdit } } = useApp();
+  const { t } = useI18n();
   // The detail crumb is the page's title. It was deliberately NOT published while the sticky
   // toolbar carried the title (that put it in the app bar 40px above where the toolbar already
   // said it). The title now lives in the detail header, which scrolls away with the page, so
@@ -946,7 +985,7 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, backLabe
   // whole lifetime. Synchronous by design — a caller decides whether to navigate on the
   // return value, which a modal dialog could not answer in time.
   const confirmLeave = useCallback(
-    () => dirtyRef.current.size === 0 || window.confirm(`You have ${dirtyRef.current.size} unsaved change${dirtyRef.current.size === 1 ? "" : "s"}. Leave without saving?`),
+    () => dirtyRef.current.size === 0 || window.confirm(getI18n().tp("pageEditor.leaveUnsaved", dirtyRef.current.size)),
     [],
   );
   useEffect(() => {
@@ -1146,7 +1185,7 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, backLabe
           );
         })}
         {regions.length === 0 && pageSchema.length === 0
-          ? <p className="text-fg-subtle">This page's content type defines no fields or regions.</p>
+          ? <p className="text-fg-subtle">{t("pageEditor.noFieldsOrRegions")}</p>
           : null}
       </div>
 
@@ -1155,14 +1194,14 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, backLabe
             one is underlined and Capitalised, so which panel you are in is visible without
             comparing background tints. */}
         <div className="-mt-1 mb-4 flex gap-1 border-b border-border">
-          {visibleTabs(multilingual, siteFurniture).map((t) => (
+          {visibleTabs(multilingual, siteFurniture).map((name) => (
             <button
-              key={t}
+              key={name}
               type="button"
-              className={`-mb-px border-b-2 px-2 pb-2 pt-1 text-sm ${tab === t ? "border-fg font-medium text-fg" : "border-transparent text-fg-muted hover:text-fg"}`}
-              onClick={() => onTab(t)}
+              className={`-mb-px border-b-2 px-2 pb-2 pt-1 text-sm ${tab === name ? "border-fg font-medium text-fg" : "border-transparent text-fg-muted hover:text-fg"}`}
+              onClick={() => onTab(name)}
             >
-              {INSPECTOR_TAB_LABELS[t]}
+              {t(INSPECTOR_TAB_KEYS[name])}
             </button>
           ))}
         </div>
@@ -1200,6 +1239,7 @@ function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, o
   onDropBlock: () => void;
   onDragEndBlock: () => void;
 }) {
+  const { t } = useI18n();
   const [fields, setFields] = useState<FieldValues | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
@@ -1290,40 +1330,40 @@ function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, o
         }}
         onDragEnd={onDragEndBlock}
         className="absolute -left-6 top-1.5 cursor-grab select-none px-1 text-fg-subtle opacity-0 transition-opacity hover:text-fg group-hover:opacity-100 active:cursor-grabbing"
-        title="Drag to reorder"
+        title={t("blocks.dragToReorder")}
       >⠿</span>
 
       {/* Header — subtle type label + state + actions, mostly revealed on hover. */}
       <div className="flex items-center gap-2 opacity-60 transition-opacity group-hover:opacity-100">
-        <button type="button" className="w-4 shrink-0 text-fg-subtle hover:text-fg" title={collapsed ? "Expand" : "Collapse"} onClick={() => setCollapsed((c) => !c)}>{collapsed ? "▸" : "▾"}</button>
+        <button type="button" className="w-4 shrink-0 text-fg-subtle hover:text-fg" title={collapsed ? t("blocks.expand") : t("blocks.collapse")} aria-label={collapsed ? t("blocks.expand") : t("blocks.collapse")} onClick={() => setCollapsed((c) => !c)}>{collapsed ? "▸" : "▾"}</button>
         <span className="text-caption font-medium uppercase tracking-wide text-fg-subtle">{name}</span>
-        {block.is_shared ? <span className="text-caption text-accent-strong">shared</span> : null}
-        <span className={`text-caption ${dirty && saveState !== "saving" ? "text-accent-strong" : "text-fg-subtle"}`}>{saveState === "saving" ? "saving…" : saveState === "saved" ? "saved ✓" : dirty ? "● unsaved" : ""}</span>
+        {block.is_shared ? <span className="text-caption text-accent-strong">{t("blocks.shared")}</span> : null}
+        <span className={`text-caption ${dirty && saveState !== "saving" ? "text-accent-strong" : "text-fg-subtle"}`}>{saveState === "saving" ? t("blocks.saving") : saveState === "saved" ? t("blocks.saved") : dirty ? t("blocks.unsaved") : ""}</span>
         <span className="flex-1" />
-        <Button variant="ghost" size="sm" isDisabled={isFirst} onPress={() => onMove(-1)}>↑</Button>
-        <Button variant="ghost" size="sm" isDisabled={isLast} onPress={() => onMove(1)}>↓</Button>
-        <Button variant="ghost" size="sm" className="text-danger" onPress={onRemove}>✕</Button>
+        <Button variant="ghost" size="sm" aria-label={t("blocks.moveUp")} isDisabled={isFirst} onPress={() => onMove(-1)}>↑</Button>
+        <Button variant="ghost" size="sm" aria-label={t("blocks.moveDown")} isDisabled={isLast} onPress={() => onMove(1)}>↓</Button>
+        <Button variant="ghost" size="sm" aria-label={t("blocks.remove")} className="text-danger" onPress={onRemove}>✕</Button>
       </div>
 
       {collapsed ? (
         <div className="cursor-pointer truncate pb-1 pl-6 text-small text-fg-subtle" onClick={() => setCollapsed(false)}>
-          {fields == null ? "…" : blockPreview(fields) || <span className="italic">empty</span>}
+          {fields == null ? "…" : blockPreview(fields) || <span className="italic">{t("blocks.empty")}</span>}
         </div>
       ) : (
         <div className="pb-1 pl-6">
           {fields == null ? (
-            <p className="text-small text-fg-subtle">loading…</p>
+            <p className="text-small text-fg-subtle">{t("blocks.loading")}</p>
           ) : schema.length === 0 ? (
-            <p className="text-small text-fg-subtle">This block has no editable fields.</p>
+            <p className="text-small text-fg-subtle">{t("blocks.noFields")}</p>
           ) : (
             <>
               <FieldForm schema={schema} value={fields} onChange={change} api={api} />
               {dirty || saveState === "saving" ? (
                 <div className="mt-2 flex items-center gap-2">
                   <Button variant="secondary" size="sm" onPress={() => void save()} isDisabled={!dirty || saveState === "saving" || block.pending}>
-                    {saveState === "saving" ? "Saving…" : "Save now"}
+                    {saveState === "saving" ? t("common.saving") : t("blocks.saveNow")}
                   </Button>
-                  <span className="text-caption text-fg-subtle">{saveState === "saving" ? "" : "Autosaving…"}</span>
+                  <span className="text-caption text-fg-subtle">{saveState === "saving" ? "" : t("blocks.autosaving")}</span>
                 </div>
               ) : null}
             </>
@@ -1339,6 +1379,7 @@ function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, o
 // region's allowed block types (type to filter; ↑/↓ + Enter to pick, Esc/blur to
 // close). Insertion appends to the region; reorder via drag to position.
 function Inserter({ allowed, btBySlug, onAdd, compact }: { allowed: string[]; btBySlug: Map<string, BlockType>; onAdd: (slug: string) => void; compact?: boolean }) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [idx, setIdx] = useState(0);
@@ -1363,7 +1404,7 @@ function Inserter({ allowed, btBySlug, onAdd, compact }: { allowed: string[]; bt
         <button
           type="button"
           onClick={() => setOpen(true)}
-          aria-label="Insert block here"
+          aria-label={t("blocks.insertHere")}
           className="group/ins flex h-3 w-full items-center justify-center opacity-0 transition-opacity hover:opacity-100"
         >
           <span className="flex h-full w-full items-center">
@@ -1381,7 +1422,7 @@ function Inserter({ allowed, btBySlug, onAdd, compact }: { allowed: string[]; bt
         className="flex w-full items-center gap-2 rounded-lg px-1 py-1.5 text-left text-small text-fg-subtle opacity-70 transition-colors hover:bg-surface-muted hover:text-fg-muted hover:opacity-100"
       >
         <span className="text-base leading-none">＋</span>
-        <span>Add block</span>
+        <span>{t("blocks.add")}</span>
       </button>
     );
   }
@@ -1390,7 +1431,7 @@ function Inserter({ allowed, btBySlug, onAdd, compact }: { allowed: string[]; bt
       <input
         ref={inputRef}
         value={q}
-        placeholder="Filter blocks…"
+        placeholder={t("blocks.filter")}
         spellCheck={false}
         className="mb-1 w-full rounded-md bg-surface px-2.5 py-1.5 text-small text-fg outline-none placeholder:text-fg-subtle"
         onChange={(e) => setQ(e.target.value)}
@@ -1404,7 +1445,7 @@ function Inserter({ allowed, btBySlug, onAdd, compact }: { allowed: string[]; bt
       />
       <div className="max-h-64 overflow-auto">
         {items.length === 0 ? (
-          <div className="px-2.5 py-2 text-small text-fg-subtle">No matching block types</div>
+          <div className="px-2.5 py-2 text-small text-fg-subtle">{t("blocks.noMatches")}</div>
         ) : (
           items.map((x, n) => (
             <button
@@ -1433,6 +1474,7 @@ function Inserter({ allowed, btBySlug, onAdd, compact }: { allowed: string[]; bt
  */
 function PageMeta({ api, page, onSaved, onError }: { api: Api; page: Page; onSaved: (p: Page) => void; onError: (s: string) => void }) {
   const { cms: { multilingual, locales } } = useApp();
+  const { t } = useI18n();
   const [title, setTitle] = useState(page.title);
   const [slug, setSlug] = useState(page.slug);
   const [locale, setLocale] = useState(page.locale);
@@ -1468,17 +1510,17 @@ function PageMeta({ api, page, onSaved, onError }: { api: Api; page: Page; onSav
 
   return (
     <div className="flex flex-col gap-4">
-      {ok ? <Banner ok>saved</Banner> : null}
-      <Input label="Title" value={title} onChange={setTitle} />
-      <Input label="Slug" value={slug} onChange={setSlug} />
+      {ok ? <Banner ok>{t("pageEditor.saved")}</Banner> : null}
+      <Input label={t("pageEditor.titleLabel")} value={title} onChange={setTitle} />
+      <Input label={t("pageEditor.slugLabel")} value={slug} onChange={setSlug} />
       {/* A SELECT over the declared locales, not free text: a typo'd or blank locale saves
           fine, previews fine (the editor round-trips the same string) and then 404s on the
           live site, which is the hardest kind of wrong to see. */}
       {multilingual ? (
         <label className="flex flex-col gap-1 text-sm">
-          <span className="font-medium text-fg">Locale</span>
+          <span className="font-medium text-fg">{t("pageEditor.locale")}</span>
           <select className={CONTROL} value={locale} onChange={(e) => setLocale(e.target.value)}>
-            {locales.includes(locale) ? null : <option value={locale}>{locale || "(unset)"} — not a declared locale</option>}
+            {locales.includes(locale) ? null : <option value={locale}>{t("pageEditor.localeUndeclared", { locale: locale || t("pageEditor.localeUnset") })}</option>}
             {locales.map((l) => <option key={l} value={l}>{l}</option>)}
           </select>
         </label>
@@ -1488,7 +1530,7 @@ function PageMeta({ api, page, onSaved, onError }: { api: Api; page: Page; onSav
           uniqueness check on every one. Named for what it saves, since it is no longer the
           only Save on screen by accident. */}
       <Button onPress={save} isDisabled={busy || !changed || !title.trim() || !slug.trim()}>
-        {busy ? "Saving…" : "Save settings"}
+        {busy ? t("common.saving") : t("pageEditor.saveSettings")}
       </Button>
     </div>
   );
@@ -1496,6 +1538,7 @@ function PageMeta({ api, page, onSaved, onError }: { api: Api; page: Page; onSav
 
 /** The page's own FIELDS — its content. Rendered in the canvas, at full width. */
 function PageFields({ api, page, schema, initialFields, onDirtyChange, onError }: { api: Api; page: Page; schema: FieldDefinition[]; initialFields: FieldValues; onDirtyChange: (id: string, dirty: boolean) => void; onError: (s: string) => void }) {
+  const { t } = useI18n();
   const [fields, setFields] = useState<FieldValues>(initialFields);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
 
@@ -1560,9 +1603,9 @@ function PageFields({ api, page, schema, initialFields, onDirtyChange, onError }
         {/* NOT "Content". A region is very often named `content`, and the two headings then
             sat one above the other on the same canvas, both reading CONTENT and meaning
             different things. These are the page's OWN fields. */}
-        <span className="text-caption font-medium uppercase tracking-wide text-fg-subtle">Page fields</span>
+        <span className="text-caption font-medium uppercase tracking-wide text-fg-subtle">{t("pageEditor.pageFields")}</span>
         <span className={`text-caption ${dirty && saveState !== "saving" ? "text-accent-strong" : "text-fg-subtle"}`}>
-          {saveState === "saving" ? "saving…" : saveState === "saved" ? "saved ✓" : dirty ? "● unsaved" : ""}
+          {saveState === "saving" ? t("blocks.saving") : saveState === "saved" ? t("blocks.saved") : dirty ? t("blocks.unsaved") : ""}
         </span>
       </div>
       <FieldForm schema={schema} value={fields} onChange={setFields} api={api} />
@@ -1571,6 +1614,7 @@ function PageFields({ api, page, schema, initialFields, onDirtyChange, onError }
 }
 
 function SeoPanel({ api, page, onError }: { api: Api; page: Page; onError: (s: string) => void }) {
+  const { t } = useI18n();
   const [f, setF] = useState({ metaTitle: page.metaTitle ?? "", metaDescription: page.metaDescription ?? "", canonicalUrl: page.canonicalUrl ?? "", robots: page.robots ?? "", ogTitle: page.ogTitle ?? "", ogDescription: page.ogDescription ?? "" });
   const [ok, setOk] = useState(false);
   const save = async () => {
@@ -1590,20 +1634,21 @@ function SeoPanel({ api, page, onError }: { api: Api; page: Page; onError: (s: s
     );
   return (
     <div className="flex flex-col gap-4">
-      <Section>SEO</Section>
-      {ok ? <Banner ok>saved</Banner> : null}
-      {F("metaTitle", "Meta title")}
-      {F("metaDescription", "Meta description", true)}
-      {F("canonicalUrl", "Canonical URL")}
-      {F("robots", "Robots (e.g. noindex)")}
-      {F("ogTitle", "OG title")}
-      {F("ogDescription", "OG description", true)}
-      <Button className="w-full" onPress={save}>Save SEO</Button>
+      <Section>{t("seo.heading")}</Section>
+      {ok ? <Banner ok>{t("pageEditor.saved")}</Banner> : null}
+      {F("metaTitle", t("seo.metaTitle"))}
+      {F("metaDescription", t("seo.metaDescription"), true)}
+      {F("canonicalUrl", t("seo.canonicalUrl"))}
+      {F("robots", t("seo.robots"))}
+      {F("ogTitle", t("seo.ogTitle"))}
+      {F("ogDescription", t("seo.ogDescription"), true)}
+      <Button className="w-full" onPress={save}>{t("seo.save")}</Button>
     </div>
   );
 }
 
 function I18n({ api, page, onError }: { api: Api; page: Page; onError: (s: string) => void }) {
+  const { t } = useI18n();
   const [translations, setTranslations] = useState<{ id: string; locale: string; slug: string; status: string }[]>([]);
   const [locale, setLocale] = useState("");
   const refresh = useCallback(() => api.call<typeof translations>("listTranslations", { pageId: page.id }).then(setTranslations).catch((e) => onError(errMsg(e))), [api, page.id, onError]);
@@ -1619,19 +1664,19 @@ function I18n({ api, page, onError }: { api: Api; page: Page; onError: (s: strin
   };
   return (
     <div>
-      <Section>Translations</Section>
+      <Section>{t("pageEditor.translations")}</Section>
       <div className="flex flex-col gap-2">
-        {translations.map((t) => (
-          <div className={ROW} key={t.id}>
-            <span className="flex-1 truncate font-medium">{t.locale}</span>
-            <span className="text-fg-subtle">/{t.slug}</span>
-            <Pill status={t.status}>{t.status}</Pill>
+        {translations.map((tr) => (
+          <div className={ROW} key={tr.id}>
+            <span className="flex-1 truncate font-medium">{tr.locale}</span>
+            <span className="text-fg-subtle">/{tr.slug}</span>
+            <Pill status={tr.status}>{statusLabel(tr.status)}</Pill>
           </div>
         ))}
       </div>
       <div className="mt-2 flex items-end gap-1.5">
-        <Input label="" value={locale} onChange={setLocale} placeholder="locale (e.g. cs)" />
-        <Button variant="secondary" onPress={create} isDisabled={!locale}>add</Button>
+        <Input label="" value={locale} onChange={setLocale} placeholder={t("pageEditor.localePlaceholder")} />
+        <Button variant="secondary" onPress={create} isDisabled={!locale}>{t("pageEditor.addTranslation")}</Button>
       </div>
     </div>
   );
@@ -1648,6 +1693,7 @@ function I18n({ api, page, onError }: { api: Api; page: Page; onError: (s: strin
  * one end of it race into a state neither asked for.
  */
 function PageTerms({ api, pageId, canEdit, onError }: { api: Api; pageId: string; canEdit: boolean; onError: (s: string) => void }) {
+  const { t } = useI18n();
   const [taxa, setTaxa] = useState<Taxonomy[] | null>(null);
   const [terms, setTerms] = useState<Record<string, Term[]>>({});
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
@@ -1667,7 +1713,7 @@ function PageTerms({ api, pageId, canEdit, onError }: { api: Api; pageId: string
         // a time made the panel's open cost N+1 serial round trips for data that has no
         // ordering dependency between the calls.
         const [trees, assigned] = await Promise.all([
-          Promise.all(list.map(async (t) => [t.slug, flattenTerms(await api.getTermTree(t.slug)).map((f) => f.term)] as const)),
+          Promise.all(list.map(async (tx) => [tx.slug, flattenTerms(await api.getTermTree(tx.slug)).map((f) => f.term)] as const)),
           api.listPageTerms(pageId),
         ]);
         if (!live) return;
@@ -1697,21 +1743,21 @@ function PageTerms({ api, pageId, canEdit, onError }: { api: Api; pageId: string
     } catch (e) { onError(errMsg(e)); } finally { setBusy(false); }
   };
 
-  if (taxa === null) return <p className="text-fg-subtle">Loading…</p>;
+  if (taxa === null) return <p className="text-fg-subtle">{t("common.loading")}</p>;
   // Not "none defined": the list is narrowed to the vocabularies that apply to PAGES, so a
   // site whose only vocabulary is media-only would read as having none — and send an editor
   // off to create a duplicate of the one it already has.
-  if (taxa.length === 0) return <p className="text-fg-subtle">No vocabularies apply to pages yet — set one up under Taxonomies.</p>;
+  if (taxa.length === 0) return <p className="text-fg-subtle">{t("terms.noVocabularies")}</p>;
 
   return (
     <div className="flex flex-col gap-4">
-      {ok ? <Banner ok>saved</Banner> : null}
-      {taxa.map((t) => (
-        <div key={t.id}>
-          <Section>{t.label}</Section>
+      {ok ? <Banner ok>{t("pageEditor.saved")}</Banner> : null}
+      {taxa.map((tx) => (
+        <div key={tx.id}>
+          <Section>{tx.label}</Section>
           <div className="flex flex-col gap-1">
-            {(terms[t.slug] ?? []).length === 0 ? <span className="text-caption text-fg-subtle">No terms yet.</span> : null}
-            {(terms[t.slug] ?? []).map((term) => (
+            {(terms[tx.slug] ?? []).length === 0 ? <span className="text-caption text-fg-subtle">{t("terms.noTerms")}</span> : null}
+            {(terms[tx.slug] ?? []).map((term) => (
               <label key={term.id} className="flex items-center gap-2">
                 {/* `setPageTerms` is editor-gated, so a reviewer got live checkboxes and a
                     Save button that 403s — the one new write surface that did not take
@@ -1723,7 +1769,7 @@ function PageTerms({ api, pageId, canEdit, onError }: { api: Api; pageId: string
           </div>
         </div>
       ))}
-      {canEdit ? <Button size="sm" className="self-start" onPress={save} isDisabled={busy}>{busy ? "Saving…" : "Save terms"}</Button> : null}
+      {canEdit ? <Button size="sm" className="self-start" onPress={save} isDisabled={busy}>{busy ? t("common.saving") : t("terms.save")}</Button> : null}
     </div>
   );
 }
@@ -1731,6 +1777,7 @@ function PageTerms({ api, pageId, canEdit, onError }: { api: Api; pageId: string
 function AuditLog({ api, pageId, onError }: { api: Api; pageId: string; onError: (s: string) => void }) {
   // `null` until answered: "No history yet." is a claim about the page, and it used to be
   // what the tab said while the fetch was still in flight (and after it failed).
+  const { t } = useI18n();
   const [rows, setRows] = useState<AuditEntry[] | null>(null);
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -1744,17 +1791,17 @@ function AuditLog({ api, pageId, onError }: { api: Api; pageId: string; onError:
   }, [api, pageId, onError, attempt]);
   return (
     <div>
-      <Section>Audit trail</Section>
+      <Section>{t("revisions.auditTrail")}</Section>
       <div className="flex flex-col gap-2">
         {(rows ?? []).map((a) => (
           <div className={`${ROW} text-xs`} key={a.id}>
             <span className="rounded-full bg-surface-muted px-2 py-0.5 font-mono text-xs text-fg-muted">{a.action}</span>
-            <span className="flex-1 truncate text-fg-subtle">{a.fromStatus} → {a.toStatus}</span>
-            <span className="text-fg-subtle">{a.actor ?? "system"}</span>
+            <span className="flex-1 truncate text-fg-subtle">{statusLabel(a.fromStatus)} → {statusLabel(a.toStatus)}</span>
+            <span className="text-fg-subtle">{a.actor ?? t("revisions.system")}</span>
           </div>
         ))}
-        {rows?.length === 0 ? <p className="text-fg-subtle">No history yet.</p> : null}
-        {rows === null && !failed ? <p className="text-fg-subtle">{COMMON_COPY.loading}</p> : null}
+        {rows?.length === 0 ? <p className="text-fg-subtle">{t("revisions.empty")}</p> : null}
+        {rows === null && !failed ? <p className="text-fg-subtle">{t("common.loading")}</p> : null}
         {rows === null && failed ? <LoadFailed onRetry={() => setAttempt((n) => n + 1)} /> : null}
       </div>
     </div>
@@ -1789,7 +1836,8 @@ const SEARCH_DEBOUNCE_MS = 250;
  * that matched nothing. The header used to say "None yet" for both, which reads as "this CMS
  * has no media" while sixty files sit one cleared chip away. */
 export function mediaCountLabel(phase: ListPhase, count: number, hasMore: boolean, narrowed: boolean): string {
-  return listSummary(phase, count, { empty: narrowed ? "No matches" : "None yet", one: "1 file", many: (n) => `${n} files` }, hasMore);
+  const i18n = getI18n();
+  return listSummary(phase, count, { empty: narrowed ? i18n.t("common.noMatches") : i18n.t("common.noneYet"), forms: i18n.forms("media.count") }, hasMore);
 }
 
 /** The tag menu's "no filter" row. A menu item needs an id and `null` is not one, so the
@@ -1798,6 +1846,7 @@ const ALL_TAGS = "__all";
 
 export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) => void }) {
   const { cms: { mediaTerms, mediaDownload, canEdit } } = useApp();
+  const { t } = useI18n();
   // A deployment may turn either half of the toolbar off (`hideControls`, see `controls.ts`).
   // Hidden means not rendered, never "rendered and ignored": the state each one drives stays
   // at its default, so the grid is the whole library.
@@ -1840,7 +1889,7 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
     (async () => {
       try {
         const list = await api.listTaxonomies("media");
-        const trees = await Promise.all(list.map(async (t) => [t.slug, flattenTerms(await api.getTermTree(t.slug)).map((f) => f.term)] as const));
+        const trees = await Promise.all(list.map(async (tx) => [tx.slug, flattenTerms(await api.getTermTree(tx.slug)).map((f) => f.term)] as const));
         if (!live) return;
         setTaxa(list);
         setTerms(Object.fromEntries(trees));
@@ -1854,7 +1903,7 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
   }, [api, mediaTerms]);
   // Flattened for the filter menu, which is one list rather than a tree: a menu has no room
   // for indentation to read as hierarchy, so the vocabulary is spelled out per row instead.
-  const taggable = taxa.flatMap((t) => (terms[t.slug] ?? []).map((x) => ({ id: x.id, label: x.label, group: t.label })));
+  const taggable = taxa.flatMap((tx) => (terms[tx.slug] ?? []).map((x) => ({ id: x.id, label: x.label, group: tx.label })));
   /** Whether what is on screen is a NARROWING of the library rather than the library. */
   const narrowed = kind !== null || term !== null || search !== "";
 
@@ -1886,7 +1935,7 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
     }
   };
   const purge = async (id: string) => {
-    if (!confirm("Delete this file permanently? The file itself is removed and cannot be recovered.")) return;
+    if (!confirm(t("media.purgeConfirm"))) return;
     try {
       await api.purgeMedia(id);
       loadTrash();
@@ -1911,7 +1960,7 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
 
   return (
     <>
-      <Hero lead="Media" em={mediaCountLabel(list.phase, media.length, list.hasMore, narrowed)}>
+      <Hero lead={t("media.lead")} em={mediaCountLabel(list.phase, media.length, list.hasMore, narrowed)}>
         {/* A real `Button` driving a hidden input, not a `<label>` painted to look like one.
             The lookalike had to restate podoba's primary fill by hand, and once the mint
             wrapper was gone the two "primary" actions in this app were visibly different
@@ -1919,7 +1968,7 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
             (mint) everywhere else. */}
         <input ref={fileInput} type="file" multiple hidden disabled={busy} onChange={(e) => { upload(e.target.files); e.target.value = ""; }} />
         <Button className="shrink-0" isDisabled={busy} onPress={() => fileInput.current?.click()}>
-          {busy ? "Uploading…" : "+ Upload"}
+          {busy ? t("media.uploading") : t("media.upload")}
         </Button>
       </Hero>
       <div className={WRAP}>
@@ -1934,8 +1983,8 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
                 when the upload was called `IMG_2831.png`. */}
             {showSearch ? (
               <SearchField
-                aria-label="Search media"
-                placeholder="Search files…"
+                aria-label={t("media.searchLabel")}
+                placeholder={t("media.searchPlaceholder")}
                 value={query}
                 onChange={setQuery}
                 className="w-[220px] shrink-0"
@@ -1949,11 +1998,11 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
                     toolbar shape, and it is the same RAC menu pattern underneath. */}
                 <DropdownMenuTrigger>
                   <Button variant="secondary" size="sm" className="shrink-0 px-3 py-1 text-compact">
-                    {MEDIA_SORT_LABELS[sort]}
+                    {t(MEDIA_SORT_KEYS[sort])}
                   </Button>
-                  <DropdownMenu aria-label="Sort media" onAction={(k) => setSort(k as MediaSort)}>
+                  <DropdownMenu aria-label={t("media.sortLabel")} onAction={(k) => setSort(k as MediaSort)}>
                     {MEDIA_SORTS.map((v) => (
-                      <DropdownMenuItem key={v} id={v}>{MEDIA_SORT_LABELS[v]}</DropdownMenuItem>
+                      <DropdownMenuItem key={v} id={v}>{t(MEDIA_SORT_KEYS[v])}</DropdownMenuItem>
                     ))}
                   </DropdownMenu>
                 </DropdownMenuTrigger>
@@ -1966,14 +2015,14 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
                 {mediaTerms && taggable.length > 0 ? (
                   <DropdownMenuTrigger>
                     <Button variant="secondary" size="sm" className="shrink-0 px-3 py-1 text-compact">
-                      {term ? (taggable.find((t) => t.id === term)?.label ?? "Tag") : "All tags"}
+                      {term ? (taggable.find((x) => x.id === term)?.label ?? t("media.tag")) : t("media.allTags")}
                     </Button>
-                    <DropdownMenu aria-label="Filter media by tag" onAction={(k) => setTerm(k === ALL_TAGS ? null : String(k))}>
-                      <DropdownMenuItem id={ALL_TAGS}>All tags</DropdownMenuItem>
+                    <DropdownMenu aria-label={t("media.tagFilterLabel")} onAction={(k) => setTerm(k === ALL_TAGS ? null : String(k))}>
+                      <DropdownMenuItem id={ALL_TAGS}>{t("media.allTags")}</DropdownMenuItem>
                       {/* Qualified by vocabulary here, where a flat menu gives hierarchy nowhere to
                           show; the trigger stays the bare term, which is what the row is filtered by. */}
-                      {taggable.map((t) => (
-                        <DropdownMenuItem key={t.id} id={t.id}>{t.group} · {t.label}</DropdownMenuItem>
+                      {taggable.map((x) => (
+                        <DropdownMenuItem key={x.id} id={x.id}>{x.group} · {x.label}</DropdownMenuItem>
                       ))}
                     </DropdownMenu>
                   </DropdownMenuTrigger>
@@ -1983,10 +2032,10 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
                     is `null` rather than a sixth kind: the server's absent-means-everything, said
                     once, on the side that has the state. */}
                 <div className="flex flex-wrap items-center gap-1">
-                  <FilterChip active={kind === null} onPress={() => setKind(null)}>All</FilterChip>
+                  <FilterChip active={kind === null} onPress={() => setKind(null)}>{t("media.kind.all")}</FilterChip>
                   {MEDIA_KINDS.map((k) => (
                     <FilterChip key={k} active={kind === k} onPress={() => setKind(kind === k ? null : k)}>
-                      {MEDIA_KIND_LABELS[k]}
+                      {t(MEDIA_KIND_KEYS[k])}
                     </FilterChip>
                   ))}
                 </div>
@@ -1997,7 +2046,7 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
         {list.phase === "failed" ? (
           <LoadFailed onRetry={list.reload} />
         ) : list.phase === "loading" && media.length === 0 ? (
-          <p className="text-fg-subtle">{COMMON_COPY.loading}</p>
+          <p className="text-fg-subtle">{t("common.loading")}</p>
         ) : media.length === 0 ? (
           // "No media yet" is a claim about the LIBRARY, and this list is a narrowing of it.
           // Search, type and tag are all new, so this is a state the screen could not reach
@@ -2006,39 +2055,36 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
           // nothing — and the way out is to clear it, not to upload a file.
           narrowed ? (
             <div className="flex flex-wrap items-center gap-3">
-              <p className="text-fg-subtle">No files match this filter.</p>
-              <Button variant="secondary" size="sm" onPress={() => { setQuery(""); setSearch(""); setKind(null); setTerm(null); }}>Clear filters</Button>
+              <p className="text-fg-subtle">{t("media.noFilterMatches")}</p>
+              <Button variant="secondary" size="sm" onPress={() => { setQuery(""); setSearch(""); setKind(null); setTerm(null); }}>{t("media.clearFilters")}</Button>
             </div>
           ) : (
-            <MediaLibraryEmpty title="No media yet." description="Upload images to use them in blocks and SEO." />
+            <MediaLibraryEmpty title={t("media.emptyTitle")} description={t("media.emptyDescription")} />
           )
         ) : (
           // The grid is a slot (`slots.mediaGrid`, see `media-grid.tsx`): the editor decides
           // what a tile SAYS and what opening it does, the slot decides how it looks.
-          <MediaGrid label="Media library" tiles={media.map((m) => mediaTile(api, m, selected?.id === m.id, () => setSelected(m)))} />
+          <MediaGrid label={t("media.gridLabel")} tiles={media.map((m) => mediaTile(api, m, selected?.id === m.id, () => setSelected(m)))} />
         )}
         {list.hasMore ? (
           <div className="mt-3.5 text-center">
-            <Button variant="secondary" size="sm" isDisabled={list.loading} onPress={list.loadMore}>{COMMON_COPY.loadMore}</Button>
+            <Button variant="secondary" size="sm" isDisabled={list.loading} onPress={list.loadMore}>{t("common.loadMore")}</Button>
           </div>
         ) : null}
         {trash.length > 0 ? (
           <div className="mt-6 border-t border-border pt-4">
             <button type="button" className="text-small text-fg-muted underline" onClick={() => setShowTrash((v) => !v)}>
-              {showTrash ? "Hide" : "Show"} trash ({trash.length})
+              {t(showTrash ? "media.trash.hide" : "media.trash.show", { count: getI18n().number(trash.length) })}
             </button>
             {showTrash ? (
               <>
-                <p className="mt-2 text-small text-fg-subtle">
-                  Trashed files are hidden from the library but the file itself still exists — a page published
-                  while it was in use keeps showing it. Delete permanently to remove the file.
-                </p>
+                <p className="mt-2 text-small text-fg-subtle">{t("media.trash.help")}</p>
                 <div className="mt-2.5 flex flex-col gap-1.5">
                   {trash.map((m) => (
                     <div key={m.id} className="flex items-center gap-2.5 rounded-lg border border-border bg-surface-muted px-3 py-2">
                       <span className="flex-1 truncate text-small text-fg-muted">{m.file?.filename ?? m.id}</span>
-                      <Button variant="secondary" size="sm" onPress={() => restore(m.id)}>Restore</Button>
-                      <Button variant="secondary" size="sm" onPress={() => purge(m.id)}>Delete permanently</Button>
+                      <Button variant="secondary" size="sm" onPress={() => restore(m.id)}>{t("media.restore")}</Button>
+                      <Button variant="secondary" size="sm" onPress={() => purge(m.id)}>{t("media.deletePermanently")}</Button>
                     </div>
                   ))}
                 </div>
@@ -2070,6 +2116,8 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
 }
 
 function MediaDetail({ api, media, taxa, terms, canEdit, canDownload, onClose, onSaved, onDeleted, onTermsSaved, onError }: { api: Api; media: Media; taxa: Taxonomy[]; terms: Record<string, Term[]>; canEdit: boolean; canDownload: boolean; onClose: () => void; onSaved: (m: Media) => void; onDeleted: (id: string) => void; onTermsSaved: () => void; onError: (s: string) => void }) {
+  const i18n = useI18n();
+  const { t } = i18n;
   const [alt, setAlt] = useState(media.alt ?? "");
   const [busy, setBusy] = useState(false);
   useEffect(() => setAlt(media.alt ?? ""), [media]);
@@ -2142,7 +2190,7 @@ function MediaDetail({ api, media, taxa, terms, canEdit, canDownload, onClose, o
   };
 
   const del = async () => {
-    if (!confirm("Move this file to the trash? It disappears from the library, but a page published while it was in use keeps showing it — delete it permanently from the trash to remove the file itself.")) return;
+    if (!confirm(t("media.trashConfirm"))) return;
     setBusy(true);
     try {
       await api.deleteMedia(media.id);
@@ -2159,8 +2207,8 @@ function MediaDetail({ api, media, taxa, terms, canEdit, canDownload, onClose, o
   return (
     <MediaDetailFrame
       onClose={onClose}
-      closeLabel={COMMON_COPY.close}
-      title={<><Dim>Media</Dim> {media.file.filename ?? ""}</>}
+      closeLabel={t("common.close")}
+      title={rich(t("media.detailTitle", { filename: media.file.filename ?? "" }), { dim: (s) => <Dim>{s}</Dim> })}
       preview={isImage(media) ? (
         <img className="mx-auto mb-3.5 block max-h-[340px] max-w-full rounded-lg bg-surface-muted object-contain" src={url} alt={media.alt ?? ""} />
       ) : (
@@ -2168,16 +2216,16 @@ function MediaDetail({ api, media, taxa, terms, canEdit, canDownload, onClose, o
       )}
       details={<>
       <div className="mb-4">
-        <Input label="Alt text (for accessibility & SEO)" value={alt} onChange={setAlt} placeholder="Describe the image…" />
+        <Input label={t("media.altLabel")} value={alt} onChange={setAlt} placeholder={t("media.altPlaceholder")} />
       </div>
       <KV>
-        <span>Type</span>
-        <span>{media.file.contentType ?? "—"}</span>
-        <span>Size</span>
+        <span>{t("media.type")}</span>
+        <span>{media.file.contentType ?? "–"}</span>
+        <span>{t("media.size")}</span>
         <span>{fmtBytes(media.file.size)}</span>
-        <span>Uploaded</span>
-        <span>{media.file.uploadedAt ? new Date(media.file.uploadedAt).toLocaleString() : (media.createdAt ?? "—")}</span>
-        <span>URL</span>
+        <span>{t("media.uploaded")}</span>
+        <span>{media.file.uploadedAt ? i18n.dateTime(media.file.uploadedAt) : (media.createdAt ?? "–")}</span>
+        <span>{t("media.url")}</span>
         <span className="break-all">
           <a className="underline underline-offset-2" href={url} target="_blank" rel="noreferrer">/media/{media.file.key}</a>
         </span>
@@ -2186,13 +2234,13 @@ function MediaDetail({ api, media, taxa, terms, canEdit, canDownload, onClose, o
       </>}
       actions={
       <div className="mt-3.5 flex items-center gap-2">
-        <Button onPress={save} isDisabled={busy || alt === (media.alt ?? "")}>Save</Button>
-        <Button variant="secondary" size="sm" onPress={preview}>Preview</Button>
-        {canDownload ? <Button variant="secondary" size="sm" onPress={download} isDisabled={busy}>Download</Button> : null}
-        <Button variant="secondary" size="sm" onPress={() => navigator.clipboard?.writeText(url)}>Copy URL</Button>
+        <Button onPress={save} isDisabled={busy || alt === (media.alt ?? "")}>{t("common.save")}</Button>
+        <Button variant="secondary" size="sm" onPress={preview}>{t("media.preview")}</Button>
+        {canDownload ? <Button variant="secondary" size="sm" onPress={download} isDisabled={busy}>{t("media.download")}</Button> : null}
+        <Button variant="secondary" size="sm" onPress={() => navigator.clipboard?.writeText(url)}>{t("media.copyUrl")}</Button>
         <span className="flex-1" />
-        <Button variant="ghost" className="text-danger" onPress={del} isDisabled={busy}>Delete</Button>
-        <Button variant="ghost" onPress={onClose}>Close</Button>
+        <Button variant="ghost" className="text-danger" onPress={del} isDisabled={busy}>{t("common.delete")}</Button>
+        <Button variant="ghost" onPress={onClose}>{t("common.close")}</Button>
       </div>
       }
     />
@@ -2209,6 +2257,7 @@ function MediaDetail({ api, media, taxa, terms, canEdit, canDownload, onClose, o
  * each patching one end of it race into a state neither asked for.
  */
 function MediaTerms({ api, mediaId, taxa, terms, canEdit, onSaved, onError }: { api: Api; mediaId: string; taxa: Taxonomy[]; terms: Record<string, Term[]>; canEdit: boolean; onSaved: () => void; onError: (s: string) => void }) {
+  const { t } = useI18n();
   const [selected, setSelected] = useState<Set<string> | null>(null);
   const [busy, setBusy] = useState(false);
   const [ok, setOk] = useState(false);
@@ -2218,7 +2267,7 @@ function MediaTerms({ api, mediaId, taxa, terms, canEdit, onSaved, onError }: { 
     setSelected(null);
     api
       .listMediaTerms(mediaId)
-      .then((rows) => { if (live) setSelected(new Set(rows.map((t) => t.id))); })
+      .then((rows) => { if (live) setSelected(new Set(rows.map((x) => x.id))); })
       .catch((e) => { if (live) { setSelected(new Set()); onError(errMsg(e)); } });
     return () => { live = false; };
   }, [api, mediaId, onError]);
@@ -2243,20 +2292,20 @@ function MediaTerms({ api, mediaId, taxa, terms, canEdit, onSaved, onError }: { 
 
   // Until the assignments arrive the checkboxes would all read unchecked, and a save from
   // that state would silently clear every tag the file has.
-  if (selected === null) return <div className="mt-4 border-t border-border pt-3.5 text-small text-fg-subtle">Loading tags…</div>;
+  if (selected === null) return <div className="mt-4 border-t border-border pt-3.5 text-small text-fg-subtle">{t("media.loadingTags")}</div>;
 
   return (
     <div className="mt-4 border-t border-border pt-3.5">
-      <Section>Tags</Section>
-      {ok ? <Banner ok>saved</Banner> : null}
+      <Section>{t("media.tags")}</Section>
+      {ok ? <Banner ok>{t("media.saved")}</Banner> : null}
       <div className="flex flex-col gap-2.5">
-        {taxa.map((t) => {
-          const list = terms[t.slug] ?? [];
+        {taxa.map((tx) => {
+          const list = terms[tx.slug] ?? [];
           return (
-            <div key={t.id}>
-              <div className="mb-1 text-caption text-fg-subtle">{t.label}</div>
+            <div key={tx.id}>
+              <div className="mb-1 text-caption text-fg-subtle">{tx.label}</div>
               {list.length === 0 ? (
-                <span className="text-caption text-fg-subtle">No terms yet.</span>
+                <span className="text-caption text-fg-subtle">{t("media.noTerms")}</span>
               ) : (
                 <div className="flex flex-wrap gap-x-4 gap-y-1">
                   {list.map((term) => (
@@ -2273,7 +2322,7 @@ function MediaTerms({ api, mediaId, taxa, terms, canEdit, onSaved, onError }: { 
           );
         })}
       </div>
-      {canEdit ? <Button size="sm" variant="secondary" className="mt-2.5 self-start" onPress={save} isDisabled={busy}>{busy ? "Saving…" : "Save tags"}</Button> : null}
+      {canEdit ? <Button size="sm" variant="secondary" className="mt-2.5 self-start" onPress={save} isDisabled={busy}>{busy ? t("common.saving") : t("media.saveTags")}</Button> : null}
     </div>
   );
 }
@@ -2301,6 +2350,8 @@ function rolesOf(u: UserRow): string[] {
 const USERS_PAGE_SIZE = 200;
 
 export function UsersView({ api, me, onError }: { api: Api; me: Me | null; onError: (s: string) => void }) {
+  const i18n = useI18n();
+  const { t } = i18n;
   const [inviting, setInviting] = useState(false);
   const [busy, setBusy] = useState<string>("");
 
@@ -2325,7 +2376,7 @@ export function UsersView({ api, me, onError }: { api: Api; me: Me | null; onErr
     finally { setBusy(""); }
   };
   const del = async (u: UserRow) => {
-    if (!confirm(`Delete user ${u.username}? This cannot be undone.`)) return;
+    if (!confirm(t("users.deleteConfirm", { username: u.username }))) return;
     setBusy(u.username);
     try { await api.call("deleteUser", { username: u.username }); refresh(); }
     catch (e) { onError(errMsg(e)); }
@@ -2334,8 +2385,8 @@ export function UsersView({ api, me, onError }: { api: Api; me: Me | null; onErr
 
   return (
     <>
-      <Hero lead="Users" em={listSummary(list.phase, users.length, { empty: "None yet", one: "1 account", many: (n) => `${n} accounts` }, list.hasMore)}>
-        <Button className="shrink-0" onPress={() => setInviting(true)}>+ Invite</Button>
+      <Hero lead={t("users.lead")} em={listSummary(list.phase, users.length, { empty: t("common.noneYet"), forms: i18n.forms("users.count") }, list.hasMore)}>
+        <Button className="shrink-0" onPress={() => setInviting(true)}>{t("users.invite")}</Button>
       </Hero>
       <div className={WRAP}>
         <div className="flex flex-col gap-2">
@@ -2346,24 +2397,24 @@ export function UsersView({ api, me, onError }: { api: Api; me: Me | null; onErr
             return (
               <div className={`${ROW} flex-wrap items-start`} key={u.username}>
                 <div className="flex min-w-[200px] flex-1 flex-col gap-0.5">
-                  <span className="font-semibold">{u.username}{isMe ? <span className="ml-1.5 font-normal text-fg-subtle">(you)</span> : null}</span>
+                  <span className="font-semibold">{u.username}{isMe ? <span className="ml-1.5 font-normal text-fg-subtle">{t("users.you")}</span> : null}</span>
                   {u.email && u.email !== u.username ? <span className="text-xs text-fg-subtle">{u.email}</span> : null}
-                  {u.createdAt ? <span className="text-[11px] text-fg-subtle">joined {new Date(Number(u.createdAt)).toLocaleDateString()}</span> : null}
+                  {u.createdAt ? <span className="text-[11px] text-fg-subtle">{t("users.joined", { date: i18n.date(Number(u.createdAt)) })}</span> : null}
                 </div>
                 <RolesInput value={roles} disabled={busy === u.username} onSave={(next) => setRoles(u, next)} />
-                <Pill status={active ? "active" : "inactive"}>{active ? "active" : "inactive"}</Pill>
-                <Button variant="ghost" size="sm" isDisabled={busy === u.username || isMe} onPress={() => setActive(u, !active)}>{active ? "Deactivate" : "Activate"}</Button>
-                <Button variant="ghost" size="sm" className="text-danger" isDisabled={busy === u.username || isMe} onPress={() => del(u)}>Delete</Button>
+                <Pill status={active ? "active" : "inactive"}>{active ? t("users.active") : t("users.inactive")}</Pill>
+                <Button variant="ghost" size="sm" isDisabled={busy === u.username || isMe} onPress={() => setActive(u, !active)}>{active ? t("users.deactivate") : t("users.activate")}</Button>
+                <Button variant="ghost" size="sm" className="text-danger" isDisabled={busy === u.username || isMe} onPress={() => del(u)}>{t("common.delete")}</Button>
               </div>
             );
           })}
-          {list.phase === "ready" && users.length === 0 ? <p className="text-fg-subtle">No users yet. Invite someone to get started.</p> : null}
-          {list.phase === "loading" ? <p className="text-fg-subtle">{COMMON_COPY.loading}</p> : null}
+          {list.phase === "ready" && users.length === 0 ? <p className="text-fg-subtle">{t("users.empty")}</p> : null}
+          {list.phase === "loading" ? <p className="text-fg-subtle">{t("common.loading")}</p> : null}
           {list.phase === "failed" ? <LoadFailed onRetry={list.reload} /> : null}
         </div>
         {list.hasMore ? (
           <div className="mt-3.5 text-center">
-            <Button variant="secondary" size="sm" isDisabled={list.loading} onPress={list.loadMore}>{COMMON_COPY.loadMore}</Button>
+            <Button variant="secondary" size="sm" isDisabled={list.loading} onPress={list.loadMore}>{t("common.loadMore")}</Button>
           </div>
         ) : null}
       </div>
@@ -2373,6 +2424,7 @@ export function UsersView({ api, me, onError }: { api: Api; me: Me | null; onErr
 }
 
 function RolesInput({ value, disabled, onSave }: { value: string[]; disabled: boolean; onSave: (roles: string[]) => void }) {
+  const { t } = useI18n();
   const [text, setText] = useState(value.join(", "));
   const [editing, setEditing] = useState(false);
   useEffect(() => { setText(value.join(", ")); }, [value]);
@@ -2399,13 +2451,14 @@ function RolesInput({ value, disabled, onSave }: { value: string[]; disabled: bo
   return (
     // A button, so the roles can be edited from the keyboard: this was a `<span onClick>`, and
     // the only way to change someone's roles was to click on the pills.
-    <button type="button" className="flex cursor-pointer flex-wrap gap-1 rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring" disabled={disabled} onClick={() => setEditing(true)} title="Click to edit">
-      {value.length === 0 ? <Pill>no roles</Pill> : value.map((r) => <Pill key={r} status={r === "admin" ? "published" : undefined}>{r}</Pill>)}
+    <button type="button" className="flex cursor-pointer flex-wrap gap-1 rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring" disabled={disabled} onClick={() => setEditing(true)} title={t("users.clickToEdit")}>
+      {value.length === 0 ? <Pill>{t("users.noRoles")}</Pill> : value.map((r) => <Pill key={r} status={r === "admin" ? "published" : undefined}>{r}</Pill>)}
     </button>
   );
 }
 
 function InviteUser({ api, onClose, onInvited, onError }: { api: Api; onClose: () => void; onInvited: () => void; onError: (s: string) => void }) {
+  const { t } = useI18n();
   const [email, setEmail] = useState("");
   const [roles, setRoles] = useState("editor");
   const [busy, setBusy] = useState(false);
@@ -2424,15 +2477,15 @@ function InviteUser({ api, onClose, onInvited, onError }: { api: Api; onClose: (
   return (
     <Modal
       onClose={onClose}
-      title={<>Invite an <Dim>editor</Dim> or teammate</>}
-      description="They'll get a one-time magic link that logs them in and creates their account."
+      title={rich(t("invite.title"), { dim: (s) => <Dim>{s}</Dim> })}
+      description={t("invite.description")}
     >
       <div className="flex flex-col gap-4">
-        <Input label="Email" type="email" autoFocus value={email} onChange={setEmail} placeholder="them@example.com" />
-        <Input label="Roles (comma-separated — e.g. editor, reviewer, admin)" value={roles} onChange={setRoles} placeholder="editor" />
+        <Input label={t("invite.email")} type="email" autoFocus value={email} onChange={setEmail} placeholder={t("invite.emailPlaceholder")} />
+        <Input label={t("invite.roles")} value={roles} onChange={setRoles} placeholder="editor" />
         <div className="mt-2 flex justify-end gap-2">
-          <Button variant="ghost" onPress={onClose}>Cancel</Button>
-          <Button onPress={invite} isDisabled={busy || !email}>{busy ? "Sending…" : "Send invite"}</Button>
+          <Button variant="ghost" onPress={onClose}>{t("common.cancel")}</Button>
+          <Button onPress={invite} isDisabled={busy || !email}>{busy ? t("invite.sending") : t("invite.send")}</Button>
         </div>
       </div>
     </Modal>
@@ -2442,9 +2495,10 @@ function InviteUser({ api, onClose, onInvited, onError }: { api: Api; onClose: (
 // --- settings ----------------------------------------------------------------
 
 export function SettingsView({ api, cfg, me, onSignOut, onError }: { api: Api; cfg: Config; me: Me | null; onSignOut: () => void; onError: (s: string) => void }) {
+  const { t } = useI18n();
   return (
     <>
-      <Hero lead="Settings" em={me?.userId ?? "your account"} />
+      <Hero lead={t("settings.lead")} em={me?.userId ?? t("settings.yourAccount")} />
       <div className={`${WRAP} grid grid-cols-2 gap-5 max-[820px]:grid-cols-1`}>
         <MyAccountCard api={api} me={me} onError={onError} onSignOut={onSignOut} />
         <AboutCard cfg={cfg} me={me} />
@@ -2454,6 +2508,7 @@ export function SettingsView({ api, cfg, me, onSignOut, onError }: { api: Api; c
 }
 
 function MyAccountCard({ api, me, onError, onSignOut }: { api: Api; me: Me | null; onError: (s: string) => void; onSignOut: () => void }) {
+  const { t } = useI18n();
   const [email, setEmail] = useState("");
   const [pwCurrent, setPwCurrent] = useState("");
   const [pwNew, setPwNew] = useState("");
@@ -2463,7 +2518,7 @@ function MyAccountCard({ api, me, onError, onSignOut }: { api: Api; me: Me | nul
 
   const saveEmail = async () => {
     setBusy(true);
-    try { await api.call("changeEmail", { email }); setEmail(""); flash("Contact email updated"); }
+    try { await api.call("changeEmail", { email }); setEmail(""); flash(t("settings.emailUpdated")); }
     catch (e) { onError(errMsg(e)); }
     finally { setBusy(false); }
   };
@@ -2487,7 +2542,7 @@ function MyAccountCard({ api, me, onError, onSignOut }: { api: Api; me: Me | nul
     try {
       const res = await api.call<{ firstPassword?: boolean }>("changePassword", { currentPassword: pwCurrent, newPassword: pwNew });
       setPwCurrent(""); setPwNew("");
-      flash(res?.firstPassword ? "Password set — you can now sign in with it" : "Password updated");
+      flash(res?.firstPassword ? t("settings.passwordSet") : t("settings.passwordUpdated"));
     }
     catch (e) { onError(errMsg(e)); }
     finally { setBusy(false); }
@@ -2495,44 +2550,45 @@ function MyAccountCard({ api, me, onError, onSignOut }: { api: Api; me: Me | nul
 
   return (
     <Card>
-      <Section>My account</Section>
+      <Section>{t("settings.myAccount")}</Section>
       {msg ? <Banner ok>{msg}</Banner> : null}
       <KV className="mb-4">
-        <span>Username</span><span>{me?.userId ?? "—"}</span>
-        <span>Roles</span><span>{(me?.roles ?? []).join(", ") || "—"}</span>
+        <span>{t("settings.username")}</span><span>{me?.userId ?? "–"}</span>
+        <span>{t("settings.roles")}</span><span>{(me?.roles ?? []).join(", ") || "–"}</span>
       </KV>
       <div className="flex flex-col gap-4">
-        <Input label="Change contact email" type="email" value={email} onChange={setEmail} placeholder="you@example.com" />
-        <Button className="w-full" onPress={saveEmail} isDisabled={busy || !email}>Save email</Button>
+        <Input label={t("settings.changeEmail")} type="email" value={email} onChange={setEmail} placeholder={t("settings.emailPlaceholder")} />
+        <Button className="w-full" onPress={saveEmail} isDisabled={busy || !email}>{t("settings.saveEmail")}</Button>
         <Input
-          label="Current password"
-          description="Leave this empty if you have only ever signed in with a link — then you have no password yet, and this sets your first one."
+          label={t("settings.currentPassword")}
+          description={t("settings.currentPasswordHelp")}
           type="password"
           value={pwCurrent}
           onChange={setPwCurrent}
           autoComplete="current-password"
         />
-        <Input label="New password (at least 8 characters)" type="password" value={pwNew} onChange={setPwNew} autoComplete="new-password" />
+        <Input label={t("settings.newPassword")} type="password" value={pwNew} onChange={setPwNew} autoComplete="new-password" />
         {/* Enabled on the NEW password alone. Requiring the current one here is what made
             the form unusable for the accounts that need it most; the server still requires
             it wherever there is one to require. "Save" rather than "Change", because for
             half the people reading this there is nothing yet to change. */}
-        <Button className="w-full" onPress={savePassword} isDisabled={busy || pwNew.length < 8}>Save password</Button>
-        <Button variant="ghost" className="mt-2 w-full text-danger" onPress={onSignOut}>Sign out</Button>
+        <Button className="w-full" onPress={savePassword} isDisabled={busy || pwNew.length < 8}>{t("settings.savePassword")}</Button>
+        <Button variant="ghost" className="mt-2 w-full text-danger" onPress={onSignOut}>{t("settings.signOut")}</Button>
       </div>
     </Card>
   );
 }
 
 function AboutCard({ cfg, me }: { cfg: Config; me: Me | null }) {
+  const { t } = useI18n();
   return (
     <Card>
-      <Section>About</Section>
+      <Section>{t("settings.about")}</Section>
       <KV>
-        <span>Tenant</span><span>{cfg.tenant || "main"}</span>
-        <span>API</span><span className="break-all">{cfg.baseUrl}</span>
-        <span>Signed in as</span><span>{me?.userId ?? "—"}</span>
-        <span>Editor</span><span>pramen · cms-editor</span>
+        <span>{t("settings.tenant")}</span><span>{cfg.tenant || "main"}</span>
+        <span>{t("settings.api")}</span><span className="break-all">{cfg.baseUrl}</span>
+        <span>{t("settings.signedInAs")}</span><span>{me?.userId ?? "–"}</span>
+        <span>{t("settings.editor")}</span><span>pramen · cms-editor</span>
       </KV>
     </Card>
   );
@@ -2583,12 +2639,16 @@ export function fallbackFilename(m: Media): string {
 }
 
 function fmtBytes(n?: number): string {
-  if (!n || n <= 0) return "—";
+  if (!n || n <= 0) return "–";
   const u = ["B", "KB", "MB", "GB"];
   let i = 0;
   let v = n;
   while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
-  return `${v < 10 && i > 0 ? v.toFixed(1) : Math.round(v)} ${u[i]}`;
+  // The one decimal in the locale's own separator ("1.5 MB" / "1,5 MB"); whole numbers stay
+  // ungrouped, since they are all below 1024.
+  const i18n = getI18n();
+  const decimal = new Intl.NumberFormat(i18n.tag ?? i18n.locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  return `${v < 10 && i > 0 ? decimal.format(v) : Math.round(v)} ${u[i]}`;
 }
 
 export function errMsg(e: unknown): string {

@@ -7,6 +7,7 @@ import { Button } from "@podoba/react";
 import { useEffect, useState } from "react";
 import { useApp } from "../app-context";
 import { Notice, PageEditor, errMsg, splitsByType, visibleTabs, type InspectorTab } from "../components";
+import { useI18n } from "../i18n";
 import type { BlockType, Page } from "../types";
 
 export default createPage()
@@ -14,6 +15,7 @@ export default createPage()
   .route("/pages/:pageId")
   .render(function PageEditorRoute({ params }) {
     const { api, cms, contentTypes, setError, setNavGuard } = useApp();
+    const { t } = useI18n();
     const navigate = useNavigate();
     const router = useRouter();
     const [page, setPage] = useState<Page | null>(null);
@@ -42,7 +44,7 @@ export default createPage()
     // sorts FIRST BY NAME on a split deployment, so "← all pages" from an article landed the
     // editor in some other type's list — with the `replace` overwriting `/`, so Back could not
     // undo it either. Falls back to `home` when the type is unknown (not loaded, or gone).
-    const ownType = (contentTypes ?? []).find((t) => t.id === page?.typeId);
+    const ownType = (contentTypes ?? []).find((c) => c.id === page?.typeId);
     const backToList = () => {
       if (splitsByType(contentTypes, cms) && ownType) navigate("type", { params: { slug: ownType.slug } });
       else navigate("home");
@@ -58,16 +60,16 @@ export default createPage()
     // adding a history entry, so reconciling costs nothing.
     const shown = visibleTabs(cms.multilingual, cms.siteFurniture);
     const tab: InspectorTab = shown.includes(params.tab as InspectorTab) ? (params.tab as InspectorTab) : "settings";
-    const setTab = (t: InspectorTab) => navigate("page", { params: { pageId: params.pageId, tab: t }, replace: true });
+    const setTab = (next: InspectorTab) => navigate("page", { params: { pageId: params.pageId, tab: next }, replace: true });
     useEffect(() => {
       if (params.tab !== undefined && params.tab !== tab) setTab(tab);
     }, [params.tab, tab]);
 
     if (missing) {
       // No page ⇒ no type to go back to; `home` lands on the first list either way.
-      return <Notice action={<Button variant="ghost" size="sm" onPress={() => navigate("home")}>← all pages</Button>}>Page not found.</Notice>;
+      return <Notice action={<Button variant="ghost" size="sm" onPress={() => navigate("home")}>{t("pages.backToAll")}</Button>}>{t("pages.notFound")}</Notice>;
     }
-    if (!page) return <Notice>Loading…</Notice>;
+    if (!page) return <Notice>{t("common.loading")}</Notice>;
 
     return (
       <PageEditor
@@ -81,7 +83,7 @@ export default createPage()
         // Named for where it actually goes. On a per-type deployment `backToList` lands in
         // this page's OWN type list, and a button labelled "Pages" then named a pooled list
         // that deployment does not have.
-        backLabel={splitsByType(contentTypes, cms) && ownType ? ownType.name : "Pages"}
+        backLabel={splitsByType(contentTypes, cms) && ownType ? ownType.name : t("pages.lead")}
         onChange={setPage}
         registerGuard={setNavGuard}
       />

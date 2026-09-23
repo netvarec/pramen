@@ -15,6 +15,8 @@
 // the decision is testable without dragging in the router and the design system.
 
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { t } from "./i18n";
+import { rich } from "./i18n/rich";
 
 interface Props {
   /** Named in the message — a deployment with three panels needs to know which one. */
@@ -32,7 +34,7 @@ interface State {
  * something a reader can act on, and `String(undefined)` is not it. */
 export function panelFailureMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
-  return message.trim() === "" ? "threw a value with no message" : message;
+  return message.trim() === "" ? t("panel.noMessage") : message;
 }
 
 export class PanelBoundary extends Component<Props, State> {
@@ -59,7 +61,7 @@ export class PanelBoundary extends Component<Props, State> {
     if (this.state.failure === null) return this.props.children;
     return (
       <div role="alert" className="rounded-panel border border-border bg-surface-card px-6 py-5 text-sm text-fg-muted">
-        <p className="mb-1 text-fg">The <strong>{this.props.slug}</strong> panel failed to render.</p>
+        <p className="mb-1 text-fg">{rich(t("panel.failed", { slug: this.props.slug }), { strong: (s) => <strong>{s}</strong> })}</p>
         <p className="font-mono text-caption">{this.state.failure}</p>
       </div>
     );

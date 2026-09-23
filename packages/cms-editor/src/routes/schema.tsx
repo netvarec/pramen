@@ -9,6 +9,7 @@
 import { createPage, useNavigate } from "@buzola/router";
 import { useApp } from "../app-context";
 import { Notice } from "../components";
+import { useI18n } from "../i18n";
 import { TypesOverview } from "../schema-builder";
 
 export default createPage()
@@ -16,11 +17,12 @@ export default createPage()
   .render(function SchemaRoute() {
     const { api, cms, setError } = useApp();
     const navigate = useNavigate();
+    const { t } = useI18n();
 
     // Every handler behind this screen is editor-gated, so a reviewer-only session would
     // get a builder where each save 403s. The nav hides the tab for the same reason; this
     // is the deep-link half of it.
-    if (!cms.canEdit) return <Notice>Authoring types needs an editor role.</Notice>;
+    if (!cms.canEdit) return <Notice>{t("schema.needsEditor")}</Notice>;
 
     return (
       <TypesOverview

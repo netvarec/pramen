@@ -16,7 +16,7 @@
 
 import { Button } from "@podoba/react";
 import { useCallback, useEffect, useReducer, useRef } from "react";
-import { COMMON_COPY } from "./copy";
+import { getI18n, useI18n, type PluralForms } from "./i18n";
 
 /**
  * `loading`: the first page of the CURRENT query is in flight, so nothing on screen may
@@ -170,23 +170,26 @@ export function usePagedList<T>(
 export interface CountWords {
   /** Said when the answer is zero ("None yet", or "No matches" under a filter). */
   empty: string;
-  one: string;
-  /** Given the number already formatted, with a trailing "+" when there may be more. */
-  many: (n: string) => string;
+  /** The count, one form per plural category of the active language (`i18n.forms(key)`, or
+   * `labelledForms` for a type's own nouns). `{count}` is the formatted number, with a trailing
+   * "+" when there may be more. */
+  forms: PluralForms;
 }
 
 /**
  * The header's summary of a list: a count only once there is one to give.
  *
  * `hasMore` makes "50" into "50+", since a full page is not a total. A single row that may
- * have more behind it is "1+" in the plural rather than "1 file", which would be a claim.
+ * have more behind it is "1+" in the plural rather than "1 file", which would be a claim: the
+ * plural form of "N+" is picked for N + 1, the smallest number it can stand for past what is
+ * shown, which is plural in every language this editor ships.
  */
 export function listSummary(phase: ListPhase, count: number, words: CountWords, hasMore = false): string {
-  if (phase === "loading") return COMMON_COPY.loading;
-  if (phase === "failed" && count === 0) return COMMON_COPY.loadFailed;
+  const i18n = getI18n();
+  if (phase === "loading") return i18n.t("common.loading");
+  if (phase === "failed" && count === 0) return i18n.t("common.loadFailed");
   if (count === 0) return words.empty;
-  if (count === 1 && !hasMore) return words.one;
-  return words.many(`${count}${hasMore ? "+" : ""}`);
+  return i18n.plural(hasMore ? count + 1 : count, words.forms, { count: `${i18n.number(count)}${hasMore ? "+" : ""}` });
 }
 
 /** The same question for a list held as `T[] | null` (null = not answered yet), which is how
@@ -200,10 +203,11 @@ export function nullableSummary<T>(rows: readonly T[] | null, failed: boolean, w
  * it the empty-state copy ("No pages yet. Create one.") rendered under the error banner and
  * contradicted it. */
 export function LoadFailed({ onRetry }: { onRetry: () => void }) {
+  const { t } = useI18n();
   return (
     <div className="flex flex-wrap items-center gap-3">
-      <p className="text-fg-subtle">{COMMON_COPY.loadFailedBody}</p>
-      <Button variant="secondary" size="sm" onPress={onRetry}>{COMMON_COPY.retry}</Button>
+      <p className="text-fg-subtle">{t("common.loadFailedBody")}</p>
+      <Button variant="secondary" size="sm" onPress={onRetry}>{t("common.retry")}</Button>
     </div>
   );
 }

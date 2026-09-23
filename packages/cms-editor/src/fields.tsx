@@ -10,8 +10,9 @@ import TaskList from "@tiptap/extension-task-list";
 import StarterKit from "@tiptap/starter-kit";
 import { useCallback, useEffect, useId, useRef, useState, type DragEvent, type ReactNode } from "react";
 import type { Api } from "./api";
-import { COMMON_COPY } from "./copy";
 import { controlShown } from "./controls";
+import { getI18n, useI18n } from "./i18n";
+import { rich } from "./i18n/rich";
 import { LoadFailed, usePagedList } from "./list-state";
 import { isRichTextDoc, richTextToPlainText } from "./rich-text";
 import type { FieldDefinition, FieldValue, FieldValues, Media, ReferenceOption, ReferenceResult, RichTextDoc } from "./types";
@@ -89,7 +90,7 @@ export function fromLocalInput(local: string): string | null {
 
 export function formatWhen(value: string): string {
   const at = new Date(value);
-  return Number.isNaN(at.getTime()) ? value : at.toLocaleString();
+  return Number.isNaN(at.getTime()) ? value : getI18n().dateTime(at);
 }
 
 /**
@@ -124,6 +125,7 @@ function useTickAt(at: number | null): void {
  * to the first one (publishing the row).
  */
 function PublishControl({ value, onChange }: { value: string; onChange: (v: string | null) => void }) {
+  const { t } = useI18n();
   const [scheduling, setScheduling] = useState(false);
   // The picker's own text, kept separate from the stored instant. A `datetime-local`
   // reports "" for ANY incomplete state, so deleting the year to retype it would
@@ -137,10 +139,10 @@ function PublishControl({ value, onChange }: { value: string; onChange: (v: stri
   useTickAt(scheduled ? at : null);
 
   const status = !published
-    ? { text: "Not published", tone: "text-fg-muted" }
+    ? { text: t("field.publish.notPublished"), tone: "text-fg-muted" }
     : scheduled
-      ? { text: `Scheduled for ${formatWhen(value)}`, tone: "text-accent-strong" }
-      : { text: `Published ${formatWhen(value)}`, tone: "text-fg" };
+      ? { text: t("field.publish.scheduledFor", { when: formatWhen(value) }), tone: "text-accent-strong" }
+      : { text: t("field.publish.publishedAt", { when: formatWhen(value) }), tone: "text-fg" };
 
   const toggleScheduler = () => {
     setDraft(toLocalInput(value));
@@ -155,17 +157,17 @@ function PublishControl({ value, onChange }: { value: string; onChange: (v: stri
             hand-typing the current time, the very thing this control exists to remove. */}
         {!published || scheduled ? (
           <Button size="sm" onPress={() => { setScheduling(false); onChange(new Date().toISOString()); }}>
-            Publish now
+            {t("field.publish.now")}
           </Button>
         ) : null}
         <Button variant="secondary" size="sm" onPress={toggleScheduler}>
-          {scheduled ? "Change schedule" : published ? "Change time" : "Schedule…"}
+          {scheduled ? t("field.publish.changeSchedule") : published ? t("field.publish.changeTime") : t("field.publish.schedule")}
         </Button>
         {published ? (
           // Clearing the value is what takes the row off the site — the read policy is
           // scoped to this field being set.
           <Button variant="ghost" size="sm" className="text-danger" onPress={() => { setScheduling(false); onChange(null); }}>
-            Unpublish
+            {t("field.publish.unpublish")}
           </Button>
         ) : null}
       </div>
@@ -431,7 +433,7 @@ export function RichText({ value, onChange }: { value: RichTextDoc | string | nu
     onChange(doc);
   };
 
-  return <BlockEditor value={html} onChange={handleChange} minHeight={180} placeholder="Write, or press '/' for blocks…" />;
+  return <BlockEditor value={html} onChange={handleChange} minHeight={180} placeholder={getI18n().t("richText.placeholder")} />;
 }
 
 /**
@@ -447,6 +449,7 @@ export function RichText({ value, onChange }: { value: RichTextDoc | string | nu
  * because dragging is unavailable to keyboard users and awkward on touch.
  */
 function Repeater({ def, value, onChange, api, label, description, descriptionId }: { def: FieldDefinition; value: FieldValues[]; onChange: (v: FieldValues[]) => void; api: Api; label: ReactNode; description?: string; descriptionId?: string }) {
+  const { t } = useI18n();
   const items = Array.isArray(value) ? value : [];
   const fields = def.fields ?? [];
   // One field, and not itself a tall control — the case where the card is pure overhead.
@@ -520,7 +523,7 @@ function Repeater({ def, value, onChange, api, label, description, descriptionId
       }}
       onDragEnd={() => setDrag(null)}
       className="cursor-grab select-none px-1 text-fg-subtle transition-colors hover:text-fg active:cursor-grabbing"
-      title="Drag to reorder"
+      title={t("repeater.dragToReorder")}
       aria-hidden
     >⠿</span>
   );
@@ -543,9 +546,9 @@ function Repeater({ def, value, onChange, api, label, description, descriptionId
 
   const actions = (i: number) => (
     <div className="flex shrink-0 items-center">
-      <button type="button" className="px-1.5 text-fg-subtle hover:text-fg disabled:opacity-30" title="Move up" disabled={i === 0} onClick={() => move(i, -1)}>↑</button>
-      <button type="button" className="px-1.5 text-fg-subtle hover:text-fg disabled:opacity-30" title="Move down" disabled={i === items.length - 1} onClick={() => move(i, 1)}>↓</button>
-      <button type="button" className="px-1.5 text-fg-subtle hover:text-danger disabled:opacity-30" title="Remove" disabled={atMin} onClick={() => del(i)}>✕</button>
+      <button type="button" className="px-1.5 text-fg-subtle hover:text-fg disabled:opacity-30" title={t("repeater.moveUp")} aria-label={t("repeater.moveUp")} disabled={i === 0} onClick={() => move(i, -1)}>↑</button>
+      <button type="button" className="px-1.5 text-fg-subtle hover:text-fg disabled:opacity-30" title={t("repeater.moveDown")} aria-label={t("repeater.moveDown")} disabled={i === items.length - 1} onClick={() => move(i, 1)}>↓</button>
+      <button type="button" className="px-1.5 text-fg-subtle hover:text-danger disabled:opacity-30" title={t("common.remove")} aria-label={t("common.remove")} disabled={atMin} onClick={() => del(i)}>✕</button>
     </div>
   );
 
@@ -556,7 +559,7 @@ function Repeater({ def, value, onChange, api, label, description, descriptionId
           for is only useful before you start adding to it. */}
       {description && descriptionId ? <FieldHint id={descriptionId}>{description}</FieldHint> : null}
 
-      {items.length === 0 ? <span className="text-sm text-fg-muted">None yet.</span> : null}
+      {items.length === 0 ? <span className="text-sm text-fg-muted">{t("repeater.empty")}</span> : null}
 
       <div className={`flex flex-col ${compact ? "gap-1" : "gap-2"}`}>
         {items.map((it, i) =>
@@ -597,7 +600,7 @@ function Repeater({ def, value, onChange, api, label, description, descriptionId
       {/* Named, not a bare "+ Add": a content type with several repeaters would otherwise
           render several buttons with identical accessible names. */}
       <Button variant="secondary" size="sm" className="self-start" onPress={add} isDisabled={atMax}>
-        + Add {def.label ?? def.name}
+        {t("repeater.add", { label: def.label ?? def.name })}
       </Button>
     </div>
   );
@@ -671,6 +674,7 @@ function SlugField({ def, label, description, descriptionId, value, source, onCh
     onChange(next);
   }, [source, value, def.from, onChange]);
 
+  const { t } = useI18n();
   const suggestion = source ? slugify(source) : "";
   const canGenerate = Boolean(suggestion) && suggestion !== value;
 
@@ -697,7 +701,7 @@ function SlugField({ def, label, description, descriptionId, value, source, onCh
           className="self-start text-caption text-fg-subtle underline hover:text-fg"
           onClick={() => { derived.current = suggestion; touched.current = false; onChange(suggestion); }}
         >
-          Generate from {def.from}: {suggestion}
+          {t("field.slug.generateFrom", { from: def.from ?? "", suggestion })}
         </button>
       ) : null}
     </FieldShell>
@@ -723,7 +727,7 @@ function SelectField({ def, value, onChange, api, ariaLabel, describedBy }: { de
   const opts = from ? dyn ?? [] : (def.options ?? []).map((o) => ({ value: o, label: o }));
   return (
     <select className={CONTROL} aria-label={ariaLabel} aria-describedby={describedBy} value={value ?? ""} onChange={(e) => onChange(e.target.value || null)}>
-      <option value="">{loading ? "Načítám…" : "—"}</option>
+      <option value="">{loading ? getI18n().t("common.loading") : getI18n().t("field.select.none")}</option>
       {opts.map((o) => (
         <option key={o.value} value={o.value}>{o.label}</option>
       ))}
@@ -772,6 +776,7 @@ export function mediaFieldValue(value: unknown): { id: string | null; label: str
 
 function MediaField({ value, onChange, api }: { value: unknown; onChange: (v: string | null) => void; api: Api }) {
   const [open, setOpen] = useState(false);
+  const { t } = useI18n();
   const [media, setMedia] = useState<Media | null>(null);
   const { id, label, hasValue } = mediaFieldValue(value);
   useEffect(() => {
@@ -792,11 +797,11 @@ function MediaField({ value, onChange, api }: { value: unknown; onChange: (v: st
   return (
     <div>
       <div className="flex items-center gap-3 rounded-[14px] border border-transparent bg-surface-card px-[18px] py-3.5">
-        {media ? <img className="h-10 w-10 rounded object-cover" src={api.resolve(`/media/${media.file.key}`)} alt="" /> : <span className="text-fg-subtle">no media</span>}
+        {media ? <img className="h-10 w-10 rounded object-cover" src={api.resolve(`/media/${media.file.key}`)} alt="" /> : <span className="text-fg-subtle">{t("mediaField.none")}</span>}
         <span className="flex-1 truncate text-fg-subtle">{media?.file.filename ?? label}</span>
-        <Button variant="secondary" size="sm" onPress={() => setOpen(true)}>pick</Button>
+        <Button variant="secondary" size="sm" onPress={() => setOpen(true)}>{t("mediaField.pick")}</Button>
         {hasValue ? (
-          <Button variant="ghost" size="sm" className="text-danger" onPress={() => onChange(null)}>clear</Button>
+          <Button variant="ghost" size="sm" className="text-danger" onPress={() => onChange(null)}>{t("mediaField.clear")}</Button>
         ) : null}
       </div>
       {open ? (
@@ -831,6 +836,7 @@ const PICKER_PAGE_SIZE = 60;
  * then do nothing in it: Tab went from the upload input straight to the close button.
  */
 export function MediaPicker({ api, onClose, onPick }: { api: Api; onClose: () => void; onPick: (id: string) => void }) {
+  const { t } = useI18n();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const fetchPage = useCallback((offset: number, limit: number) => api.listMedia({ limit, offset }), [api]);
@@ -852,8 +858,8 @@ export function MediaPicker({ api, onClose, onPick }: { api: Api; onClose: () =>
       isOpen
       isDismissable
       size="lg"
-      title={<>Choose <span className="text-fg-subtle">a file</span> from the library</>}
-      closeLabel={COMMON_COPY.close}
+      title={rich(t("picker.media.title"), { dim: (s) => <span className="text-fg-subtle">{s}</span> })}
+      closeLabel={t("common.close")}
       onOpenChange={(open) => !open && onClose()}
     >
       {err ? (
@@ -861,13 +867,13 @@ export function MediaPicker({ api, onClose, onPick }: { api: Api; onClose: () =>
       ) : null}
       <label className="mb-4 flex w-full flex-col gap-2">
         <Text size="small" weight="medium">
-          Upload a new file
+          {t("picker.media.upload")}
         </Text>
         <input type="file" className="text-small text-fg-muted" disabled={busy} onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
       </label>
-      {list.phase === "loading" ? <p className="text-sm text-fg-subtle">{COMMON_COPY.loading}</p> : null}
+      {list.phase === "loading" ? <p className="text-sm text-fg-subtle">{t("common.loading")}</p> : null}
       {list.phase === "failed" ? <LoadFailed onRetry={list.reload} /> : null}
-      {list.phase === "ready" && list.rows.length === 0 ? <p className="text-sm text-fg-subtle">The library is empty. Upload a file above.</p> : null}
+      {list.phase === "ready" && list.rows.length === 0 ? <p className="text-sm text-fg-subtle">{t("picker.media.empty")}</p> : null}
       <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-2.5">
         {list.rows.map((m) => (
           <button
@@ -885,12 +891,12 @@ export function MediaPicker({ api, onClose, onPick }: { api: Api; onClose: () =>
       </div>
       {list.hasMore ? (
         <div className="mt-3 text-center">
-          <Button variant="secondary" size="sm" isDisabled={list.loading} onPress={list.loadMore}>{COMMON_COPY.loadMore}</Button>
+          <Button variant="secondary" size="sm" isDisabled={list.loading} onPress={list.loadMore}>{t("common.loadMore")}</Button>
         </div>
       ) : null}
       <div className="mt-3 text-right">
         <Button variant="ghost" onPress={onClose}>
-          close
+          {t("picker.close")}
         </Button>
       </div>
     </Dialog>
@@ -974,13 +980,14 @@ function useReferenceLabels(api: Api, from: string | undefined, ids: readonly st
 /** What a stored id renders as while it is being resolved, and after it could not be. */
 function referenceLabel(id: string, known: Map<string, ReferenceOption>): { label: string; muted: boolean } {
   const hit = known.get(id);
-  if (!hit) return { label: "Loading...", muted: true };
+  if (!hit) return { label: getI18n().t("relation.loading"), muted: true };
   // An empty label is the recorded "no such record" — show the raw id, because that is the
   // only thing left that identifies what the row points at.
   return hit.label ? { label: hit.label, muted: false } : { label: id, muted: true };
 }
 
 function ReferenceField({ def, value, onChange, api, ariaLabel }: { def: FieldDefinition; value: FieldValue; onChange: (v: FieldValue) => void; api: Api; ariaLabel?: string }) {
+  const { t } = useI18n();
   const multiple = def.multiple === true;
   // `unknown[]` before filtering: `FieldValue` is a union that INCLUDES array members, so
   // `Array.isArray` narrows to a union of array types and the type-guard overload of
@@ -1005,13 +1012,13 @@ function ReferenceField({ def, value, onChange, api, ariaLabel }: { def: FieldDe
   // silently does nothing when clicked — this is a schema mistake, and the person seeing it
   // is the one who can fix it.
   if (!def.referenceFrom) {
-    return <span className="text-sm text-danger">This reference field declares no `referenceFrom` handler.</span>;
+    return <span className="text-sm text-danger">{t("relation.noHandler")}</span>;
   }
 
   return (
     <div className="flex flex-col gap-2">
       {ids.length === 0 ? (
-        <span className="text-sm text-fg-muted">Nothing selected.</span>
+        <span className="text-sm text-fg-muted">{t("relation.nothingSelected")}</span>
       ) : (
         <div className="flex flex-col gap-1">
           {ids.map((id) => {
@@ -1021,14 +1028,14 @@ function ReferenceField({ def, value, onChange, api, ariaLabel }: { def: FieldDe
               <div key={id} className="flex items-center gap-2 rounded-[14px] bg-surface-card px-4 py-2.5">
                 <span className={`min-w-0 flex-1 truncate text-sm ${muted ? "text-fg-subtle" : "text-fg"}`}>{label}</span>
                 {hint ? <span className="shrink-0 text-caption text-fg-subtle">{hint}</span> : null}
-                <Button variant="ghost" size="sm" className="text-danger" onPress={() => remove(id)}>remove</Button>
+                <Button variant="ghost" size="sm" className="text-danger" onPress={() => remove(id)}>{t("relation.remove")}</Button>
               </div>
             );
           })}
         </div>
       )}
       <Button variant="secondary" size="sm" className="self-start" aria-label={ariaLabel} onPress={() => setPicking(true)}>
-        {multiple ? "+ Add" : ids.length > 0 ? "Change" : "Choose"}
+        {multiple ? t("relation.add") : ids.length > 0 ? t("relation.change") : t("relation.choose")}
       </Button>
       {picking ? (
         <ReferencePicker
@@ -1054,6 +1061,7 @@ function ReferencePicker({ api, from, title, selected, multiple, onPick, onClose
   onPick: (opt: ReferenceOption) => void;
   onClose: () => void;
 }) {
+  const { t } = useI18n();
   const [search, setSearch] = useState("");
   const [items, setItems] = useState<ReferenceOption[]>([]);
   const [hasMore, setHasMore] = useState(false);
@@ -1102,8 +1110,8 @@ function ReferencePicker({ api, from, title, selected, multiple, onPick, onClose
       isOpen
       isDismissable
       size="md"
-      title={<>Choose <span className="text-fg-subtle">{title.toLowerCase()}</span></>}
-      closeLabel={COMMON_COPY.close}
+      title={rich(t("picker.relation.title", { title: title.toLowerCase() }), { dim: (s) => <span className="text-fg-subtle">{s}</span> })}
+      closeLabel={t("common.close")}
       onOpenChange={(open) => !open && onClose()}
     >
       {/* A deployment may hide it (`hideControls: ["relationSearch"]`, see `controls.ts`). The
@@ -1113,8 +1121,8 @@ function ReferencePicker({ api, from, title, selected, multiple, onPick, onClose
           className={`${CONTROL} mb-3`}
           type="search"
           autoFocus
-          placeholder="Search"
-          aria-label="Search"
+          placeholder={t("common.search")}
+          aria-label={t("common.search")}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
@@ -1135,20 +1143,20 @@ function ReferencePicker({ api, from, title, selected, multiple, onPick, onClose
                 <span className="block truncate text-sm text-fg">{opt.label}</span>
                 {opt.hint ? <span className="block truncate text-caption text-fg-subtle">{opt.hint}</span> : null}
               </span>
-              {already ? <span className="shrink-0 text-caption text-fg-subtle">selected</span> : null}
+              {already ? <span className="shrink-0 text-caption text-fg-subtle">{t("picker.selected")}</span> : null}
             </button>
           );
         })}
-        {!loading && items.length === 0 ? <p className="px-3 py-2 text-sm text-fg-subtle">Nothing matches.</p> : null}
-        {loading ? <p className="px-3 py-2 text-sm text-fg-subtle">{COMMON_COPY.loading}</p> : null}
+        {!loading && items.length === 0 ? <p className="px-3 py-2 text-sm text-fg-subtle">{t("picker.noMatches")}</p> : null}
+        {loading ? <p className="px-3 py-2 text-sm text-fg-subtle">{t("common.loading")}</p> : null}
       </div>
       {hasMore && !loading ? (
         <div className="mt-3 text-center">
-          <Button variant="secondary" size="sm" onPress={() => void load(items.length)}>{COMMON_COPY.loadMore}</Button>
+          <Button variant="secondary" size="sm" onPress={() => void load(items.length)}>{t("common.loadMore")}</Button>
         </div>
       ) : null}
       <div className="mt-3 text-right">
-        <Button variant="ghost" onPress={onClose}>{multiple ? "done" : "close"}</Button>
+        <Button variant="ghost" onPress={onClose}>{multiple ? t("picker.done") : t("picker.close")}</Button>
       </div>
     </Dialog>
   );

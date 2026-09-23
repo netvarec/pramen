@@ -34,6 +34,7 @@ import { Button, Card, Text } from "@podoba/react";
 import { APP_BAR_H, BELOW_CHROME_PAD } from "./chrome";
 import { AccountMenu, MD_BREAKPOINT, NavIconSlot, useMediaQuery, type ChromeProps } from "./chrome-shared";
 import { BRAND } from "./brand";
+import { useI18n } from "./i18n";
 import {
   GroupFoldedIcon,
   GroupFoldedIcon as CrumbSeparatorIcon,
@@ -99,6 +100,7 @@ export function SidebarChrome({
   confirmNavigation,
   children,
 }: ChromeProps) {
+  const { t } = useI18n();
   // Below `md` the rail collapses to a disclosure under the brand row. A DISCLOSURE, not an
   // overlay drawer: an overlay owes the reader a focus trap, a restore and an Esc handler,
   // and the pieces to do that properly (react-aria's ModalOverlay) are podoba's dependency,
@@ -157,7 +159,7 @@ export function SidebarChrome({
           left there, and a border that appeared only in one theme would be a rule with no
           reason a reader could see. */}
       <aside
-        aria-label="Sidebar"
+        aria-label={t("chrome.sidebar")}
         className="border-b border-border bg-surface-card md:sticky md:top-0 md:h-screen md:self-start md:overflow-y-auto md:border-b-0 md:border-r"
       >
         <div className="flex min-h-full flex-col">
@@ -168,7 +170,7 @@ export function SidebarChrome({
             <button
               type="button"
               onClick={onHome}
-              aria-label={`${BRAND.spoken} — home`}
+              aria-label={t("chrome.home", { brand: BRAND.spoken })}
               className={`flex min-w-0 items-center gap-2 rounded-md py-1.5 text-left transition-colors hover:bg-surface-muted ${railNarrow ? "md:flex-none md:px-1.5" : "flex-1 px-2"}`}
             >
               {/* The mark. One letter of the deployment's own name, which is the only glyph
@@ -187,7 +189,7 @@ export function SidebarChrome({
             <Button
               variant="ghost"
               size="sm"
-              aria-label={menuOpen ? "Hide navigation" : "Show navigation"}
+              aria-label={menuOpen ? t("chrome.hideNav") : t("chrome.showNav")}
               aria-expanded={menuOpen}
               aria-controls="pramen-cms-nav"
               className="shrink-0 rounded-md px-2 py-2 text-fg-muted md:hidden"
@@ -198,7 +200,7 @@ export function SidebarChrome({
           </div>
 
           <div id="pramen-cms-nav" className={`${menuOpen ? "flex" : "hidden"} flex-1 flex-col md:flex`}>
-            <nav aria-label="Primary" className={`flex flex-col pb-2 ${railNarrow ? "md:px-1.5" : ""} px-2`}>
+            <nav aria-label={t("chrome.primaryNav")} className={`flex flex-col pb-2 ${railNarrow ? "md:px-1.5" : ""} px-2`}>
               {sections.map((section) => {
                 // Only a LABELLED group can be folded: the header is the control, so without
                 // one there would be no way back — and an unlabelled rail is the
@@ -279,7 +281,7 @@ export function SidebarChrome({
           <Button
             variant="ghost"
             size="sm"
-            aria-label={railNarrow ? "Expand the sidebar" : "Collapse the sidebar"}
+            aria-label={railNarrow ? t("chrome.expandSidebar") : t("chrome.collapseSidebar")}
             aria-expanded={!railNarrow}
             className="-ml-2 hidden rounded-md px-2 py-1.5 text-fg-muted hover:text-fg md:inline-flex"
             onPress={() => setRailChoice((narrow) => !narrow)}
@@ -290,7 +292,7 @@ export function SidebarChrome({
               otherwise — a link to the page you are already on is a link that does nothing,
               and the only thing more annoying than no breadcrumb is one that lies about being
               navigable. */}
-          <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1 text-compact">
+          <nav aria-label={t("breadcrumb.label")} className="flex min-w-0 items-center gap-1 text-compact">
             {sectionCrumb ? (
               crumb ? (
                 <Button

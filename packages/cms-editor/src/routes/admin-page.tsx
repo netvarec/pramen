@@ -15,6 +15,7 @@
 import { createPage, useNavigate, useRouter } from "@buzola/router";
 import { useMemo, useSyncExternalStore } from "react";
 import { useApp } from "../app-context";
+import { useI18n } from "../i18n";
 import { AdminPageView } from "../blockkit";
 import { Notice } from "../components";
 import { PanelBoundary } from "../panel-boundary";
@@ -29,6 +30,7 @@ export default createPage()
   .render(function AdminPageRoute({ params }) {
     const { api, adminPages, adminPagesReady, setError } = useApp();
     const navigate = useNavigate();
+    const { t } = useI18n();
     const def = adminPages.find((p) => p.slug === params.slug);
 
     // `listAdminPages` is role-FILTERED server-side, so an absent slug means either "still
@@ -36,8 +38,8 @@ export default createPage()
     // list has arrived at all, exactly as the collection route does it.
     if (!def) {
       return (
-        <Notice action={adminPagesReady ? <Button variant="ghost" size="sm" onPress={() => navigate("home")}>← Pages</Button> : undefined}>
-          {!adminPagesReady ? "Loading…" : `Unknown page: ${params.slug}`}
+        <Notice action={adminPagesReady ? <Button variant="ghost" size="sm" onPress={() => navigate("home")}>{t("adminPage.back")}</Button> : undefined}>
+          {!adminPagesReady ? t("common.loading") : t("adminPage.unknown", { slug: params.slug })}
         </Notice>
       );
     }
@@ -60,6 +62,7 @@ export default createPage()
 function PanelRoute({ slug }: { slug: string }) {
   const { api, setError } = useApp();
   const theme = useTheme();
+  const { t } = useI18n();
   const basePath = useRouter().basePath;
   const version = useSyncExternalStore(subscribePanels, panelsVersion, panelsVersion);
   // `version` is the snapshot, not the value — a stable number is what a store hook needs,
@@ -89,8 +92,8 @@ function PanelRoute({ slug }: { slug: string }) {
       <Notice>
         {refused ??
           (panelsSettled()
-            ? `No panel is registered for '${slug}'. Check that this deployment's panel bundle is listed in the admin's \`panels\` config and calls registerPanel({ slug: "${slug}", … }).`
-            : "Loading…")}
+            ? t("adminPage.panelMissing", { slug })
+            : t("common.loading"))}
       </Notice>
     );
   }

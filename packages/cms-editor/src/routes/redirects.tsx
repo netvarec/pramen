@@ -3,6 +3,7 @@
 import { createPage } from "@buzola/router";
 import { useApp } from "../app-context";
 import { Notice } from "../components";
+import { t } from "../i18n";
 import { RedirectsView } from "../furniture";
 
 export default createPage()
@@ -12,6 +13,6 @@ export default createPage()
     // The nav hides these on a server without the handlers, but a BOOKMARK does not —
     // without this the screen mounts fully interactive and every call 404s. The
     // `/schema` routes already gated on their own capability; these did not.
-    if (!cms.siteFurniture) return <Notice>This deployment's CMS does not provide site furniture.</Notice>;
+    if (!cms.siteFurniture) return <Notice>{t("furniture.unavailable")}</Notice>;
     return <RedirectsView api={api} canEdit={cms.canEdit} onError={setError} />;
   });

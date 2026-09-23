@@ -20,6 +20,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { Api } from "./api";
 import { CONTROL } from "./fields";
 import { WRAP } from "./chrome";
+import { getI18n, useI18n } from "./i18n";
 import { ADMIN_ELEMENT_TYPES } from "./types";
 import type { AdminBlock, AdminCell, AdminElement, AdminInput, AdminPageResponse, JsonValue } from "./types";
 
@@ -37,6 +38,7 @@ interface Fired {
 }
 
 export function AdminPageView({ api, slug, label, onError }: { api: Api; slug: string; label: string; onError: (s: string) => void }) {
+  const { t } = useI18n();
   const [res, setRes] = useState<AdminPageResponse | null>(null);
   /**
    * Every input on the page, keyed by `action_id`, held HERE rather than per block.
@@ -95,7 +97,7 @@ export function AdminPageView({ api, slug, label, onError }: { api: Api; slug: s
     <div className={WRAP}>
       <div className="mb-6 mt-6 flex items-center gap-3">
         <h1 className="m-0 text-[32px] font-normal leading-[1.1] tracking-[-0.01em] text-fg">{label}</h1>
-        {busy ? <span className="text-caption text-fg-subtle">working…</span> : null}
+        {busy ? <span className="text-caption text-fg-subtle">{t("blockkit.working")}</span> : null}
       </div>
       {toast ? (
         <div className={`mb-4 rounded-lg border px-3.5 py-2.5 text-small ${toast.tone === "error" ? "border-danger bg-surface-card text-danger" : toast.tone === "success" ? "border-brand-green bg-brand-green/20 text-fg" : "border-border bg-surface-card text-fg-muted"}`}>
@@ -103,7 +105,7 @@ export function AdminPageView({ api, slug, label, onError }: { api: Api; slug: s
         </div>
       ) : null}
       {res === null ? (
-        <p className="text-fg-subtle">{failed ? "This screen could not be loaded." : "Loading…"}</p>
+        <p className="text-fg-subtle">{failed ? t("blockkit.loadFailed") : t("common.loading")}</p>
       ) : (
         <BlockList
           blocks={res.blocks}
@@ -222,12 +224,12 @@ function BlockView({ block, values, setValue, disabled, onFire }: { block: Admin
     default:
       // An unknown block type comes from a server newer than this editor. Named rather than
       // skipped: a page whose one meaningful block silently vanished looks like missing data.
-      return <p className="text-caption text-fg-subtle">[unsupported block: {(block as { type: string }).type}]</p>;
+      return <p className="text-caption text-fg-subtle">{getI18n().t("blockkit.unsupportedBlock", { type: (block as { type: string }).type })}</p>;
   }
 }
 
 function TableBlock({ block, values, setValue, disabled, onFire }: { block: Extract<AdminBlock, { type: "table" }>; disabled: boolean; onFire: (f: Fired) => void } & ValueBag) {
-  if (block.rows.length === 0) return <p className="text-sm text-fg-subtle">{block.empty ?? "Nothing here."}</p>;
+  if (block.rows.length === 0) return <p className="text-sm text-fg-subtle">{block.empty ?? getI18n().t("blockkit.tableEmpty")}</p>;
   return (
     // Wide tables scroll INSIDE their own container; the page must not scroll sideways.
     <div className="overflow-x-auto rounded-lg border border-border bg-surface-card">
@@ -276,10 +278,10 @@ function isElementCell(v: AdminCell | undefined): v is AdminElement {
 
 function cell(v: AdminCell | undefined): string {
   if (v === null || v === undefined) return "";
-  if (typeof v === "boolean") return v ? "yes" : "no";
+  if (typeof v === "boolean") return getI18n().t(v ? "blockkit.yes" : "blockkit.no");
   // An object that is not an element cannot reach a browser through a checked response; if
   // one does, it is named rather than stringified into `[object Object]`.
-  if (typeof v === "object") return `[unsupported cell: ${String(v.type)}]`;
+  if (typeof v === "object") return getI18n().t("blockkit.unsupportedCell", { type: String(v.type) });
   return String(v);
 }
 
@@ -350,7 +352,7 @@ function FormBlock({ block, values, setValue, disabled, onFire }: { block: Extra
       <div className="mt-1">
         <Button type="submit" isDisabled={disabled || missing.length > 0}>{block.submit.label}</Button>
         {missing.length > 0 ? (
-          <span className="ml-3 text-caption text-fg-subtle">Fill in: {missing.map((f) => f.label ?? f.action_id).join(", ")}</span>
+          <span className="ml-3 text-caption text-fg-subtle">{getI18n().t("blockkit.fillIn", { fields: missing.map((f) => f.label ?? f.action_id).join(", ") })}</span>
         ) : null}
       </div>
     </form>
@@ -440,7 +442,7 @@ function InputView({ input, value, onChange, disabled }: { input: AdminInput; va
       {label}
       {input.type === "select" ? (
         <select className={CONTROL} value={typeof value === "string" ? value : ""} disabled={disabled} aria-invalid={input.error ? true : undefined} aria-label={input.label ?? input.action_id} onChange={(e) => onChange(e.target.value)}>
-          <option value="">—</option>
+          <option value="">{getI18n().t("field.select.none")}</option>
           {input.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
       ) : input.type === "number_input" ? (

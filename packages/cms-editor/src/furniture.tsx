@@ -15,13 +15,14 @@ import { useApp, useUnsavedGuard } from "./app-context";
 import type { Api } from "./api";
 import { CONTROL, RichText, slugify } from "./fields";
 import { ROW, ROW_BUTTON, WRAP } from "./chrome";
-import { COMMON_COPY } from "./copy";
 import { DetailHeader } from "./detail-header";
+import { getI18n, useI18n, type TextKey } from "./i18n";
+import { rich } from "./i18n/rich";
 import { LoadFailed, nullableSummary } from "./list-state";
 import { useCrumb } from "./breadcrumb";
 import { PageHeader } from "./page-header";
 import type { CollectionMeta, Menu, MenuItem, MenuItemKind, Page, Redirect, RichTextDoc, Taxonomy, Term, Widget, WidgetArea } from "./types";
-import { MAX_MENU_DEPTH, REDIRECT_STATUSES, TAXONOMY_TARGET_LABELS, TAXONOMY_TARGETS } from "./types";
+import { MAX_MENU_DEPTH, REDIRECT_STATUSES, TAXONOMY_TARGET_KEYS, TAXONOMY_TARGETS } from "./types";
 import type { TaxonomyTarget } from "./types";
 
 
@@ -52,9 +53,10 @@ function useFurnitureList<T>(fetch: () => Promise<T[]>, onError: (s: string) => 
  * retry. The three editors below used to show "Loading…" in both cases, so a failed fetch was
  * a spinner that never ended, with the actual error only in the banner above it. */
 function DetailPending({ failed, onRetry }: { failed: boolean; onRetry: () => void }) {
+  const { t } = useI18n();
   return (
     <div className={WRAP}>
-      <div className="pt-8">{failed ? <LoadFailed onRetry={onRetry} /> : <p className="text-fg-subtle">{COMMON_COPY.loading}</p>}</div>
+      <div className="pt-8">{failed ? <LoadFailed onRetry={onRetry} /> : <p className="text-fg-subtle">{t("common.loading")}</p>}</div>
     </div>
   );
 }
@@ -65,7 +67,8 @@ function DetailPending({ failed, onRetry }: { failed: boolean; onRetry: () => vo
 const Head = PageHeader;
 
 function Saved() {
-  return <div className="rounded-lg border border-brand-green bg-brand-green/20 px-3.5 py-2.5 text-small text-fg">saved</div>;
+  const { t } = useI18n();
+  return <div className="rounded-lg border border-brand-green bg-brand-green/20 px-3.5 py-2.5 text-small text-fg">{t("furniture.saved")}</div>;
 }
 
 /** A `name`/`slug` key field with the same rule the server enforces, following a label
@@ -77,11 +80,12 @@ function KeyFields({ label, keyValue, onLabel, onKey, keyHint }: {
   onKey: (v: string) => void;
   keyHint: string;
 }) {
+  const { t } = useI18n();
   return (
     <div className="grid grid-cols-2 gap-3 max-[720px]:grid-cols-1">
-      <Input label="Label" value={label} onChange={onLabel} />
+      <Input label={t("furniture.label")} value={label} onChange={onLabel} />
       <label className="flex flex-col gap-2">
-        <span className="text-sm font-medium text-fg">Key</span>
+        <span className="text-sm font-medium text-fg">{t("furniture.key")}</span>
         <input className={CONTROL} value={keyValue} onChange={(e) => onKey(e.target.value.trim())} />
         <span className="text-caption text-fg-subtle">{keyHint}</span>
       </label>
@@ -92,6 +96,8 @@ function KeyFields({ label, keyValue, onLabel, onKey, keyHint }: {
 // --- menus ----------------------------------------------------------------------------
 
 export function MenusView({ api, onOpen, onError, canEdit }: { api: Api; onOpen: (name: string) => void; onError: (s: string) => void; canEdit: boolean }) {
+  const i18n = useI18n();
+  const { t } = i18n;
   const { rows: menus, failed, refresh } = useFurnitureList(useCallback(() => api.listMenus(), [api]), onError);
   const [label, setLabel] = useState("");
   const [name, setName] = useState("");
@@ -109,31 +115,31 @@ export function MenusView({ api, onOpen, onError, canEdit }: { api: Api; onOpen:
 
   return (
     <>
-      <Head lead="Navigation" em={nullableSummary(menus, failed, { empty: "0 menus", one: "1 menu", many: (n) => `${n} menus` })} />
+      <Head lead={t("menus.lead")} em={nullableSummary(menus, failed, { empty: t("menus.none"), forms: i18n.forms("menus.count") })} />
       <div className={WRAP}>
         <div className="flex flex-col gap-2">
-        {menus === null && !failed ? <p className="text-fg-subtle">{COMMON_COPY.loading}</p> : null}
+        {menus === null && !failed ? <p className="text-fg-subtle">{t("common.loading")}</p> : null}
         {failed ? <LoadFailed onRetry={refresh} /> : null}
-        {menus?.length === 0 ? <p className="text-fg-subtle">No menus yet. A menu is read by name — <code>getMenu(&quot;primary&quot;)</code> — from your layout.</p> : null}
+        {menus?.length === 0 ? <p className="text-fg-subtle">{rich(t("menus.empty"), { code: (s) => <code>{s}</code> })}</p> : null}
         {(menus ?? []).map((m) => (
           <button type="button" key={m.id} className={`${ROW} ${ROW_BUTTON}`} onClick={() => onOpen(m.name)}>
             <span className="min-w-0 flex-1 truncate font-medium">{m.label}</span>
             <span className="shrink-0 truncate text-fg-subtle">{m.name}</span>
-            <span className="shrink-0 text-caption text-fg-subtle">{countItems(m.items ?? [])} item(s)</span>
+            <span className="shrink-0 text-caption text-fg-subtle">{i18n.tp("menus.itemCount", countItems(m.items ?? []))}</span>
           </button>
         ))}
       </div>
       {canEdit ? (
         <div className="mt-6 max-w-[720px] rounded-lg border border-border bg-surface-muted p-4">
-          <Heading level="2" className="mb-3 font-normal">New menu</Heading>
+          <Heading level="2" className="mb-3 font-normal">{t("menus.new")}</Heading>
           <KeyFields
             label={label}
             keyValue={name}
             onLabel={(v) => { setLabel(v); if (!nameTouched) setName(slugify(v)); }}
             onKey={(v) => { setNameTouched(true); setName(v); }}
-            keyHint="What your layout asks for. Not renameable afterwards."
+            keyHint={t("furniture.keyHint.layout")}
           />
-          <Button className="mt-3" onPress={create} isDisabled={busy || !label.trim() || !name.trim()}>Create menu</Button>
+          <Button className="mt-3" onPress={create} isDisabled={busy || !label.trim() || !name.trim()}>{t("menus.create")}</Button>
         </div>
       ) : null}
       </div>
@@ -193,6 +199,7 @@ export function MenuEditor({ api, name, collections, onBack, backHref, onDeleted
   onError: (s: string) => void;
   canEdit: boolean;
 }) {
+  const { t } = useI18n();
   const [menu, setMenu] = useState<Menu | null>(null);
   const [items, setItems] = useState<MenuItem[]>([]);
   // The app bar's trailing crumb — the menu's LABEL once it has loaded, not the `name` key in
@@ -267,7 +274,7 @@ export function MenuEditor({ api, name, collections, onBack, backHref, onDeleted
   };
 
   const del = async () => {
-    if (!menu || !confirm(`Delete the menu “${menu.label}”? Any layout reading it will render nothing.`)) return;
+    if (!menu || !confirm(t("menu.confirmDelete", { label: menu.label }))) return;
     setBusy(true);
     try { await api.deleteMenu(menu.id); onDeleted(); } catch (e) { onError(errText(e)); } finally { setBusy(false); }
   };
@@ -311,21 +318,21 @@ export function MenuEditor({ api, name, collections, onBack, backHref, onDeleted
     list.splice(index + 1, 0, removed);
     setItems(tree);
   };
-  const add = () => setItems([...items, { id: crypto.randomUUID(), label: "New item", kind: "custom", url: "/" }]);
+  const add = () => setItems([...items, { id: crypto.randomUUID(), label: t("menu.newItem"), kind: "custom", url: "/" }]);
 
-  if (missing) return <div className={WRAP}><p className="pt-8 text-fg-subtle">Unknown menu: {name}</p></div>;
+  if (missing) return <div className={WRAP}><p className="pt-8 text-fg-subtle">{t("menu.unknown", { name })}</p></div>;
   if (!menu) return <DetailPending failed={loadFailed} onRetry={() => { setLoadFailed(false); setAttempt((n) => n + 1); }} />;
 
   return (
     <div className={WRAP}>
-      <DetailHeader title={menu.label} parent="Menus" href={backHref} onBack={onBack}>
+      <DetailHeader title={menu.label} parent={t("menu.parent")} href={backHref} onBack={onBack}>
         <span className="text-fg-subtle">{menu.name}</span>
       </DetailHeader>
       <div className="flex max-w-[860px] flex-col gap-4">
         {ok ? <Saved /> : null}
-        <Input label="Label" value={label} onChange={setLabel} />
+        <Input label={t("furniture.label")} value={label} onChange={setLabel} />
         <div className="flex flex-col gap-2">
-          {flat.length === 0 ? <p className="text-sm text-fg-subtle">No items yet.</p> : null}
+          {flat.length === 0 ? <p className="text-sm text-fg-subtle">{t("menu.noItems")}</p> : null}
           {flat.map(({ item, path, depth }) => (
             <div key={item.id} style={{ marginLeft: depth * 24 }}>
               <MenuItemRow
@@ -345,9 +352,9 @@ export function MenuEditor({ api, name, collections, onBack, backHref, onDeleted
         </div>
         {canEdit ? (
           <div className="flex items-center gap-2">
-            <Button variant="secondary" size="sm" onPress={add}>+ Add item</Button>
-            <Button onPress={save} isDisabled={busy}>{busy ? "Saving…" : "Save menu"}</Button>
-            <Button variant="ghost" className="text-danger" onPress={del} isDisabled={busy}>Delete menu</Button>
+            <Button variant="secondary" size="sm" onPress={add}>{t("menu.addItem")}</Button>
+            <Button onPress={save} isDisabled={busy}>{busy ? t("common.saving") : t("menu.save")}</Button>
+            <Button variant="ghost" className="text-danger" onPress={del} isDisabled={busy}>{t("menu.delete")}</Button>
           </div>
         ) : null}
       </div>
@@ -355,11 +362,11 @@ export function MenuEditor({ api, name, collections, onBack, backHref, onDeleted
   );
 }
 
-const MENU_KINDS: { value: MenuItemKind; label: string }[] = [
-  { value: "custom", label: "A URL" },
-  { value: "page", label: "A page" },
-  { value: "term", label: "A term" },
-  { value: "collection", label: "A collection" },
+const MENU_KINDS: { value: MenuItemKind; label: TextKey }[] = [
+  { value: "custom", label: "menu.kind.custom" },
+  { value: "page", label: "menu.kind.page" },
+  { value: "term", label: "menu.kind.term" },
+  { value: "collection", label: "menu.kind.collection" },
 ];
 
 function MenuItemRow({ item, depth, pages, terms, collections, onPatch, onMove, onIndent, onOutdent, onRemove }: {
@@ -374,17 +381,18 @@ function MenuItemRow({ item, depth, pages, terms, collections, onPatch, onMove, 
   onOutdent: () => void;
   onRemove: () => void;
 }) {
+  const { t } = useI18n();
   const kind = item.kind ?? "custom";
   return (
     <div className="rounded-lg border border-border bg-surface-muted p-3.5">
       <div className="grid grid-cols-[1fr_auto] gap-3">
         <div className="grid grid-cols-2 gap-3 max-[720px]:grid-cols-1">
           <label className="flex flex-col gap-1.5">
-            <span className="text-caption text-fg-subtle">Label</span>
+            <span className="text-caption text-fg-subtle">{t("furniture.label")}</span>
             <input className={CONTROL} value={item.label} onChange={(e) => onPatch({ label: e.target.value })} />
           </label>
           <label className="flex flex-col gap-1.5">
-            <span className="text-caption text-fg-subtle">Points at</span>
+            <span className="text-caption text-fg-subtle">{t("menu.item.pointsAt")}</span>
             <select
               className={CONTROL}
               value={kind}
@@ -392,50 +400,50 @@ function MenuItemRow({ item, depth, pages, terms, collections, onPatch, onMove, 
               // `ref` alongside a `url` and store whichever the server happens to read.
               onChange={(e) => onPatch({ kind: e.target.value as MenuItemKind, ref: null, url: e.target.value === "custom" ? "/" : undefined })}
             >
-              {MENU_KINDS.map((k) => <option key={k.value} value={k.value}>{k.label}</option>)}
+              {MENU_KINDS.map((k) => <option key={k.value} value={k.value}>{t(k.label)}</option>)}
             </select>
           </label>
         </div>
         <div className="flex shrink-0 items-start gap-0.5 pt-5">
-          <button type="button" className="px-1.5 text-fg-subtle hover:text-fg" title="Move up" onClick={() => onMove(-1)}>↑</button>
-          <button type="button" className="px-1.5 text-fg-subtle hover:text-fg" title="Move down" onClick={() => onMove(1)}>↓</button>
-          <button type="button" className="px-1.5 text-fg-subtle hover:text-fg disabled:opacity-30" title="Nest under the item above" disabled={depth + 1 >= MAX_MENU_DEPTH} onClick={onIndent}>→</button>
-          <button type="button" className="px-1.5 text-fg-subtle hover:text-fg disabled:opacity-30" title="Move out a level" disabled={depth === 0} onClick={onOutdent}>←</button>
-          <button type="button" className="px-1.5 text-fg-subtle hover:text-danger" title="Remove" onClick={onRemove}>✕</button>
+          <button type="button" className="px-1.5 text-fg-subtle hover:text-fg" title={t("furniture.moveUp")} onClick={() => onMove(-1)}>↑</button>
+          <button type="button" className="px-1.5 text-fg-subtle hover:text-fg" title={t("furniture.moveDown")} onClick={() => onMove(1)}>↓</button>
+          <button type="button" className="px-1.5 text-fg-subtle hover:text-fg disabled:opacity-30" title={t("menu.item.indent")} disabled={depth + 1 >= MAX_MENU_DEPTH} onClick={onIndent}>→</button>
+          <button type="button" className="px-1.5 text-fg-subtle hover:text-fg disabled:opacity-30" title={t("menu.item.outdent")} disabled={depth === 0} onClick={onOutdent}>←</button>
+          <button type="button" className="px-1.5 text-fg-subtle hover:text-danger" title={t("common.remove")} onClick={onRemove}>✕</button>
         </div>
       </div>
 
       <div className="mt-3 grid grid-cols-2 gap-3 max-[720px]:grid-cols-1">
         {kind === "custom" ? (
           <label className="flex flex-col gap-1.5">
-            <span className="text-caption text-fg-subtle">URL</span>
-            <input className={CONTROL} value={item.url ?? ""} placeholder="/about or https://…" onChange={(e) => onPatch({ url: e.target.value })} />
+            <span className="text-caption text-fg-subtle">{t("menu.item.url")}</span>
+            <input className={CONTROL} value={item.url ?? ""} placeholder={t("menu.item.urlPlaceholder")} onChange={(e) => onPatch({ url: e.target.value })} />
           </label>
         ) : (
           <label className="flex flex-col gap-1.5">
-            <span className="text-caption text-fg-subtle">Target</span>
+            <span className="text-caption text-fg-subtle">{t("menu.item.target")}</span>
             <select className={CONTROL} value={item.ref ?? ""} onChange={(e) => onPatch({ ref: e.target.value || null })}>
-              <option value="">— pick one —</option>
+              <option value="">{t("furniture.pickOne")}</option>
               {kind === "page" ? pages.map((p) => <option key={p.id} value={p.id}>{p.title} ({p.slug})</option>) : null}
-              {kind === "term" ? terms.map((t) => <option key={t.id} value={t.id}>{t.taxonomy}: {t.label}</option>) : null}
+              {kind === "term" ? terms.map((term) => <option key={term.id} value={term.id}>{term.taxonomy}: {term.label}</option>) : null}
               {kind === "collection" ? collections.map((c) => <option key={c.slug} value={c.slug}>{c.pluralLabel}</option>) : null}
             </select>
           </label>
         )}
         <label className="flex flex-col gap-1.5">
-          <span className="text-caption text-fg-subtle">Opens in</span>
+          <span className="text-caption text-fg-subtle">{t("menu.item.opensIn")}</span>
           <select className={CONTROL} value={item.target ?? ""} onChange={(e) => onPatch({ target: e.target.value || undefined })}>
-            <option value="">this tab</option>
-            <option value="_blank">a new tab</option>
+            <option value="">{t("menu.item.sameTab")}</option>
+            <option value="_blank">{t("menu.item.newTab")}</option>
           </select>
         </label>
       </div>
       {kind !== "custom" && !item.ref ? (
-        <p className="mt-2 text-caption text-danger">Pick a target, or this item cannot be saved.</p>
+        <p className="mt-2 text-caption text-danger">{t("menu.item.needsTarget")}</p>
       ) : null}
       {kind !== "custom" ? (
         <p className="mt-2 text-caption text-fg-subtle">
-          The URL is worked out when the menu is read, so it follows the target. An item whose target is unpublished or gone is left out of the public menu rather than rendered as a dead link.
+          {t("menu.item.resolvedHint")}
         </p>
       ) : null}
     </div>
@@ -445,6 +453,8 @@ function MenuItemRow({ item, depth, pages, terms, collections, onPatch, onMove, 
 // --- redirects ------------------------------------------------------------------------
 
 export function RedirectsView({ api, onError, canEdit }: { api: Api; onError: (s: string) => void; canEdit: boolean }) {
+  const i18n = useI18n();
+  const { t } = i18n;
   const { rows, failed, refresh } = useFurnitureList<Redirect>(useCallback(() => api.listRedirects(), [api]), onError);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
@@ -463,22 +473,21 @@ export function RedirectsView({ api, onError, canEdit }: { api: Api; onError: (s
     try { await api.updateRedirect(r.id, p); refresh(); } catch (e) { onError(errText(e)); }
   };
   const del = async (r: Redirect) => {
-    if (!confirm(`Delete the redirect from ${r.fromPath}?`)) return;
+    if (!confirm(t("redirects.confirmDelete", { from: r.fromPath }))) return;
     try { await api.deleteRedirect(r.id); refresh(); } catch (e) { onError(errText(e)); }
   };
 
   return (
     <>
-      <Head lead="Old URLs, kept alive" em={nullableSummary(rows, failed, { empty: "0 redirects", one: "1 redirect", many: (n) => `${n} redirects` })} />
+      <Head lead={t("redirects.lead")} em={nullableSummary(rows, failed, { empty: t("redirects.none"), forms: i18n.forms("redirects.count") })} />
       <div className={WRAP}>
         <p className="mb-4 max-w-[62ch] text-sm text-fg-muted">
-        Changing a page&apos;s slug changes a live URL and breaks every link to it. A redirect is how the old one keeps working.
-        Disabling one keeps the record of what the old URL was, which deleting it does not.
+        {t("redirects.intro")}
       </p>
       <div className="flex flex-col gap-2">
-        {rows === null && !failed ? <p className="text-fg-subtle">{COMMON_COPY.loading}</p> : null}
+        {rows === null && !failed ? <p className="text-fg-subtle">{t("common.loading")}</p> : null}
         {failed ? <LoadFailed onRetry={refresh} /> : null}
-        {rows?.length === 0 ? <p className="text-fg-subtle">No redirects yet.</p> : null}
+        {rows?.length === 0 ? <p className="text-fg-subtle">{t("redirects.empty")}</p> : null}
         {(rows ?? []).map((r) => (
           <div key={r.id} className={`${ROW} ${r.enabled ? "" : "opacity-60"}`}>
             <span className="min-w-0 flex-1 truncate font-medium">{r.fromPath}</span>
@@ -487,8 +496,8 @@ export function RedirectsView({ api, onError, canEdit }: { api: Api; onError: (s
             <span className="shrink-0 text-caption text-fg-subtle">{r.status}</span>
             {canEdit ? (
               <>
-                <Button variant="ghost" size="sm" onPress={() => patch(r, { enabled: !r.enabled })}>{r.enabled ? "disable" : "enable"}</Button>
-                <Button variant="ghost" size="sm" className="text-danger" onPress={() => del(r)}>delete</Button>
+                <Button variant="ghost" size="sm" onPress={() => patch(r, { enabled: !r.enabled })}>{r.enabled ? t("redirects.disable") : t("redirects.enable")}</Button>
+                <Button variant="ghost" size="sm" className="text-danger" onPress={() => del(r)}>{t("furniture.delete")}</Button>
               </>
             ) : null}
           </div>
@@ -496,24 +505,24 @@ export function RedirectsView({ api, onError, canEdit }: { api: Api; onError: (s
       </div>
       {canEdit ? (
         <div className="mt-6 max-w-[860px] rounded-lg border border-border bg-surface-muted p-4">
-          <Heading level="2" className="mb-3 font-normal">New redirect</Heading>
+          <Heading level="2" className="mb-3 font-normal">{t("redirects.new")}</Heading>
           <div className="grid grid-cols-[1fr_1fr_auto] gap-3 max-[720px]:grid-cols-1">
             <label className="flex flex-col gap-1.5">
-              <span className="text-caption text-fg-subtle">From (a path on this site)</span>
-              <input className={CONTROL} value={from} placeholder="/old-page" onChange={(e) => setFrom(e.target.value)} />
+              <span className="text-caption text-fg-subtle">{t("redirects.from")}</span>
+              <input className={CONTROL} value={from} placeholder={t("redirects.fromPlaceholder")} onChange={(e) => setFrom(e.target.value)} />
             </label>
             <label className="flex flex-col gap-1.5">
-              <span className="text-caption text-fg-subtle">To (a path, or a full URL)</span>
-              <input className={CONTROL} value={to} placeholder="/new-page" onChange={(e) => setTo(e.target.value)} />
+              <span className="text-caption text-fg-subtle">{t("redirects.to")}</span>
+              <input className={CONTROL} value={to} placeholder={t("redirects.toPlaceholder")} onChange={(e) => setTo(e.target.value)} />
             </label>
             <label className="flex flex-col gap-1.5">
-              <span className="text-caption text-fg-subtle">Status</span>
+              <span className="text-caption text-fg-subtle">{t("redirects.status")}</span>
               <select className={CONTROL} value={status} onChange={(e) => setStatus(Number(e.target.value))}>
-                {REDIRECT_STATUSES.map((s) => <option key={s} value={s}>{s}{s === 301 || s === 308 ? " permanent" : " temporary"}</option>)}
+                {REDIRECT_STATUSES.map((s) => <option key={s} value={s}>{t(s === 301 || s === 308 ? "redirects.status.permanent" : "redirects.status.temporary", { status: s })}</option>)}
               </select>
             </label>
           </div>
-          <Button className="mt-3" onPress={create} isDisabled={busy || !from.trim() || !to.trim()}>Add redirect</Button>
+          <Button className="mt-3" onPress={create} isDisabled={busy || !from.trim() || !to.trim()}>{t("redirects.add")}</Button>
         </div>
       ) : null}
       </div>
@@ -528,6 +537,7 @@ export function RedirectsView({ api, onError, canEdit }: { api: Api; onError: (s
  * whatever the CMS grows next, where an explicit `["page","media"]` freezes it at today's two.
  * So "Everything" is its own option, not the all-checked case. */
 function AppliesToField({ value, onChange, disabled }: { value: TaxonomyTarget[] | null; onChange: (v: TaxonomyTarget[] | null) => void; disabled?: boolean }) {
+  const { t: tr } = useI18n();
   const toggle = (t: TaxonomyTarget) => {
     const next = (value ?? []).includes(t) ? (value ?? []).filter((x) => x !== t) : [...(value ?? []), t];
     // Unchecking the last one would mean a vocabulary nothing can use, which the server
@@ -536,20 +546,20 @@ function AppliesToField({ value, onChange, disabled }: { value: TaxonomyTarget[]
   };
   return (
     <div className="mt-3">
-      <span className="text-caption text-fg-subtle">Applies to</span>
+      <span className="text-caption text-fg-subtle">{tr("taxonomies.appliesTo")}</span>
       {/* "Everything" gets its own line rather than sitting in the row as a third peer: a radio
           beside two checkboxes reads as one group with mismatched controls, when it is actually
           the choice ABOVE them — pick everything, or pick which. */}
       <div className="mt-1 flex flex-col gap-1">
         <label className="flex items-center gap-2">
           <input type="radio" checked={value === null} disabled={disabled} onChange={() => onChange(null)} />
-          <span className="text-sm text-fg">Everything</span>
+          <span className="text-sm text-fg">{tr("taxonomies.appliesTo.everything")}</span>
         </label>
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 pl-5">
           {TAXONOMY_TARGETS.map((t) => (
             <label key={t} className="flex items-center gap-2">
               <input type="checkbox" checked={(value ?? []).includes(t)} disabled={disabled} onChange={() => toggle(t)} />
-              <span className="text-sm text-fg">{TAXONOMY_TARGET_LABELS[t]}</span>
+              <span className="text-sm text-fg">{tr(TAXONOMY_TARGET_KEYS[t])}</span>
             </label>
           ))}
         </div>
@@ -560,9 +570,11 @@ function AppliesToField({ value, onChange, disabled }: { value: TaxonomyTarget[]
 
 /** How a vocabulary's scope reads in a list row. */
 function appliesToText(t: Taxonomy): string {
+  const i18n = getI18n();
   const list = t.appliesTo;
-  if (!Array.isArray(list) || list.length === 0) return "everything";
-  return list.map((x) => TAXONOMY_TARGET_LABELS[x] ?? x).join(" + ").toLowerCase();
+  if (!Array.isArray(list) || list.length === 0) return i18n.t("taxonomies.everything");
+  const keys: Readonly<Record<string, TextKey>> = TAXONOMY_TARGET_KEYS;
+  return list.map((x) => (keys[x] ? i18n.t(keys[x]) : x)).join(" + ").toLowerCase();
 }
 
 
@@ -570,6 +582,7 @@ export function TaxonomiesView({ api, onOpen, onError, canEdit }: { api: Api; on
   // No target: this is the screen that EDITS the scope, so it has to show a vocabulary it
   // has narrowed away. Otherwise narrowing one to Media would remove it from the only
   // place that could widen it again.
+  const { t: tr } = useI18n();
   const { rows: taxa, failed, refresh } = useFurnitureList(useCallback(() => api.listTaxonomies(), [api]), onError);
   const [label, setLabel] = useState("");
   const [slug, setSlug] = useState("");
@@ -599,41 +612,40 @@ export function TaxonomiesView({ api, onOpen, onError, canEdit }: { api: Api; on
 
   return (
     <>
-      <Head lead="How this site" em="is classified" />
+      <Head lead={tr("taxonomies.lead")} em={tr("taxonomies.leadEm")} />
       <div className={WRAP}>
         <p className="mb-4 max-w-[62ch] text-sm text-fg-muted">
-        A vocabulary is a way of grouping pages — categories, tags, regions. There are no built-in ones:
-        a deployment declares what it sorts by, the same way it declares its content types.
+        {tr("taxonomies.intro")}
       </p>
       <div className="flex flex-col gap-2">
-        {taxa === null && !failed ? <p className="text-fg-subtle">{COMMON_COPY.loading}</p> : null}
+        {taxa === null && !failed ? <p className="text-fg-subtle">{tr("common.loading")}</p> : null}
         {failed ? <LoadFailed onRetry={refresh} /> : null}
-        {taxa?.length === 0 ? <p className="text-fg-subtle">No vocabularies yet.</p> : null}
+        {taxa?.length === 0 ? <p className="text-fg-subtle">{tr("taxonomies.empty")}</p> : null}
         {(taxa ?? []).map((t) => (
           <button type="button" key={t.id} className={`${ROW} ${ROW_BUTTON}`} onClick={() => onOpen(t.slug)}>
             <span className="min-w-0 flex-1 truncate font-medium">{t.label}</span>
             <span className="shrink-0 truncate text-fg-subtle">{t.slug}</span>
-            <span className="shrink-0 text-caption text-fg-subtle">{t.hierarchical ? "nested" : "flat"}</span>
+            <span className="shrink-0 text-caption text-fg-subtle">{t.hierarchical ? tr("taxonomies.nested") : tr("taxonomies.flat")}</span>
             {scopable ? <span className="shrink-0 text-caption text-fg-subtle">{appliesToText(t)}</span> : null}
           </button>
         ))}
       </div>
       {canEdit ? (
         <div className="mt-6 max-w-[720px] rounded-lg border border-border bg-surface-muted p-4">
-          <Heading level="2" className="mb-3 font-normal">New vocabulary</Heading>
+          <Heading level="2" className="mb-3 font-normal">{tr("taxonomies.new")}</Heading>
           <KeyFields
             label={label}
             keyValue={slug}
             onLabel={(v) => { setLabel(v); if (!slugTouched) setSlug(slugify(v)); }}
             onKey={(v) => { setSlugTouched(true); setSlug(v); }}
-            keyHint="A URL segment — terms live under it. Not renameable afterwards."
+            keyHint={tr("taxonomies.keyHint")}
           />
           <label className="mt-3 flex items-center gap-2">
             <input type="checkbox" checked={hierarchical} onChange={(e) => setHierarchical(e.target.checked)} />
-            <span className="text-sm text-fg">Terms can nest (categories rather than tags)</span>
+            <span className="text-sm text-fg">{tr("taxonomies.hierarchical")}</span>
           </label>
           {scopable ? <AppliesToField value={appliesTo} onChange={setAppliesTo} /> : null}
-          <Button className="mt-3" onPress={create} isDisabled={busy || !label.trim() || !slug.trim()}>Create vocabulary</Button>
+          <Button className="mt-3" onPress={create} isDisabled={busy || !label.trim() || !slug.trim()}>{tr("taxonomies.create")}</Button>
         </div>
       ) : null}
       </div>
@@ -651,6 +663,7 @@ export function TaxonomyEditor({ api, slug, onBack, backHref, onDeleted, onError
   onError: (s: string) => void;
   canEdit: boolean;
 }) {
+  const { t: tr } = useI18n();
   const [tax, setTax] = useState<Taxonomy | null>(null);
   const [tree, setTree] = useState<Term[] | null>(null);
   const [treeFailed, setTreeFailed] = useState(false);
@@ -693,7 +706,7 @@ export function TaxonomyEditor({ api, slug, onBack, backHref, onDeleted, onError
     } catch (e) { onError(errText(e)); } finally { setBusy(false); }
   };
   const delTerm = async (t: Term) => {
-    if (!confirm(`Delete “${t.label}”? Pages tagged with it lose the tag; any terms under it move to the top level.`)) return;
+    if (!confirm(tr("taxonomyTerms.confirmDelete", { label: t.label }))) return;
     try { await api.deleteTerm(t.id); refreshTerms(); } catch (e) { onError(errText(e)); }
   };
   const renameTerm = async (t: Term, label: string) => {
@@ -718,75 +731,74 @@ export function TaxonomyEditor({ api, slug, onBack, backHref, onDeleted, onError
   };
 
   const delTaxonomy = async () => {
-    if (!tax || !confirm(`Delete the vocabulary “${tax.label}”? Every term in it goes too, along with every page's assignments.`)) return;
+    if (!tax || !confirm(tr("taxonomy.confirmDelete", { label: tax.label }))) return;
     try { await api.deleteTaxonomy(tax.id); onDeleted(); } catch (e) { onError(errText(e)); }
   };
 
-  if (missing) return <div className={WRAP}><p className="pt-8 text-fg-subtle">Unknown vocabulary: {slug}</p></div>;
+  if (missing) return <div className={WRAP}><p className="pt-8 text-fg-subtle">{tr("taxonomy.unknown", { slug })}</p></div>;
   if (!tax) return <DetailPending failed={loadFailed} onRetry={() => { setLoadFailed(false); setAttempt((n) => n + 1); }} />;
 
   return (
     <div className={WRAP}>
-      <DetailHeader title={tax.label} parent="Taxonomies" href={backHref} onBack={onBack}>
+      <DetailHeader title={tax.label} parent={tr("taxonomy.parent")} href={backHref} onBack={onBack}>
         <span className="text-fg-subtle">{tax.slug}</span>
       </DetailHeader>
       <div className="flex max-w-[860px] flex-col gap-4">
         <div className="flex flex-col gap-2">
-          {tree === null && !treeFailed ? <p className="text-fg-subtle">{COMMON_COPY.loading}</p> : null}
+          {tree === null && !treeFailed ? <p className="text-fg-subtle">{tr("common.loading")}</p> : null}
           {tree === null && treeFailed ? <LoadFailed onRetry={refreshTerms} /> : null}
-          {tree?.length === 0 ? <p className="text-fg-subtle">No terms yet.</p> : null}
+          {tree?.length === 0 ? <p className="text-fg-subtle">{tr("taxonomyTerms.empty")}</p> : null}
           {flat.map(({ term, depth }) => (
             <div key={term.id} className={ROW} style={{ marginLeft: depth * 24 }}>
               <input
                 className={`${CONTROL} flex-1`}
                 defaultValue={term.label}
-                aria-label={`Label for ${term.label}`}
+                aria-label={tr("taxonomyTerms.labelFor", { label: term.label })}
                 disabled={!canEdit}
                 // Committed on blur, not per keystroke: each save is a round trip, and a
                 // rename mid-word would land a term called "Ne".
                 onBlur={(e) => renameTerm(term, e.target.value.trim())}
               />
               <span className="shrink-0 truncate text-fg-subtle">{term.slug}</span>
-              {canEdit ? <Button variant="ghost" size="sm" className="text-danger" onPress={() => delTerm(term)}>delete</Button> : null}
+              {canEdit ? <Button variant="ghost" size="sm" className="text-danger" onPress={() => delTerm(term)}>{tr("furniture.delete")}</Button> : null}
             </div>
           ))}
         </div>
 
         {canEdit ? (
           <div className="rounded-lg border border-border bg-surface-muted p-4">
-            <Heading level="2" className="mb-3 font-normal">New term</Heading>
+            <Heading level="2" className="mb-3 font-normal">{tr("taxonomyTerms.new")}</Heading>
             <KeyFields
               label={termLabel}
               keyValue={termSlug}
               onLabel={(v) => { setTermLabel(v); if (!termSlugTouched) setTermSlug(slugify(v)); }}
               onKey={(v) => { setTermSlugTouched(true); setTermSlug(v); }}
-              keyHint="The URL segment for this term."
+              keyHint={tr("taxonomyTerms.keyHint")}
             />
             {tax.hierarchical ? (
               <label className="mt-3 flex flex-col gap-1.5">
-                <span className="text-caption text-fg-subtle">Nested under</span>
+                <span className="text-caption text-fg-subtle">{tr("taxonomyTerms.parent")}</span>
                 <select className={CONTROL} value={parentId} onChange={(e) => setParentId(e.target.value)}>
-                  <option value="">— top level —</option>
-                  {flat.map(({ term, depth }) => <option key={term.id} value={term.id}>{"— ".repeat(depth)}{term.label}</option>)}
+                  <option value="">{tr("taxonomyTerms.topLevel")}</option>
+                  {flat.map(({ term, depth }) => <option key={term.id} value={term.id}>{"\u00a0\u00a0\u00a0".repeat(depth)}{term.label}</option>)}
                 </select>
               </label>
             ) : null}
-            <Button className="mt-3" onPress={addTerm} isDisabled={busy || !termLabel.trim() || !termSlug.trim()}>Add term</Button>
+            <Button className="mt-3" onPress={addTerm} isDisabled={busy || !termLabel.trim() || !termSlug.trim()}>{tr("taxonomyTerms.add")}</Button>
           </div>
         ) : null}
 
         {canEdit && scopable ? (
           <div className="rounded-lg border border-border bg-surface-muted p-4">
-            <Heading level="2" className="mb-1 font-normal">Where this vocabulary is offered</Heading>
+            <Heading level="2" className="mb-1 font-normal">{tr("taxonomy.scope.title")}</Heading>
             <p className="max-w-[62ch] text-caption text-fg-subtle">
-              Narrowing is refused while the vocabulary is still assigned to something it would stop applying to —
-              remove those assignments first, so nothing is left tagged with a vocabulary you can no longer see.
+              {tr("taxonomy.scope.hint")}
             </p>
             <AppliesToField value={tax.appliesTo ?? null} onChange={setAppliesTo} />
           </div>
         ) : null}
 
-        {canEdit ? <Button variant="ghost" className="self-start text-danger" onPress={delTaxonomy}>Delete this vocabulary</Button> : null}
+        {canEdit ? <Button variant="ghost" className="self-start text-danger" onPress={delTaxonomy}>{tr("taxonomy.delete")}</Button> : null}
       </div>
     </div>
   );
@@ -806,6 +818,8 @@ export function flattenTerms(tree: readonly Term[], depth = 0): FlatTerm[] {
 // --- widget areas ---------------------------------------------------------------------
 
 export function WidgetAreasView({ api, onOpen, onError, canEdit }: { api: Api; onOpen: (name: string) => void; onError: (s: string) => void; canEdit: boolean }) {
+  const i18n = useI18n();
+  const { t } = i18n;
   const { rows: areas, failed, refresh } = useFurnitureList(useCallback(() => api.listWidgetAreas(), [api]), onError);
   const [label, setLabel] = useState("");
   const [name, setName] = useState("");
@@ -823,35 +837,34 @@ export function WidgetAreasView({ api, onOpen, onError, canEdit }: { api: Api; o
 
   return (
     <>
-      <Head lead="Parts of the layout" em="you can fill in" />
+      <Head lead={t("widgets.lead")} em={t("widgets.leadEm")} />
       <div className={WRAP}>
         <p className="mb-4 max-w-[62ch] text-sm text-fg-muted">
-        A widget area is a named slot in your layout — a sidebar, a footer column — that an editor fills without touching code.
-        Your layout reads one by name: <code>getWidgetArea(&quot;sidebar&quot;)</code>.
+        {rich(t("widgets.intro"), { code: (s) => <code>{s}</code> })}
       </p>
       <div className="flex flex-col gap-2">
-        {areas === null && !failed ? <p className="text-fg-subtle">{COMMON_COPY.loading}</p> : null}
+        {areas === null && !failed ? <p className="text-fg-subtle">{t("common.loading")}</p> : null}
         {failed ? <LoadFailed onRetry={refresh} /> : null}
-        {areas?.length === 0 ? <p className="text-fg-subtle">No widget areas yet.</p> : null}
+        {areas?.length === 0 ? <p className="text-fg-subtle">{t("widgets.empty")}</p> : null}
         {(areas ?? []).map((a) => (
           <button type="button" key={a.id} className={`${ROW} ${ROW_BUTTON}`} onClick={() => onOpen(a.name)}>
             <span className="min-w-0 flex-1 truncate font-medium">{a.label}</span>
             <span className="shrink-0 truncate text-fg-subtle">{a.name}</span>
-            <span className="shrink-0 text-caption text-fg-subtle">{(a.widgets ?? []).length} widget(s)</span>
+            <span className="shrink-0 text-caption text-fg-subtle">{i18n.tp("widgets.count", (a.widgets ?? []).length)}</span>
           </button>
         ))}
       </div>
       {canEdit ? (
         <div className="mt-6 max-w-[720px] rounded-lg border border-border bg-surface-muted p-4">
-          <Heading level="2" className="mb-3 font-normal">New widget area</Heading>
+          <Heading level="2" className="mb-3 font-normal">{t("widgets.new")}</Heading>
           <KeyFields
             label={label}
             keyValue={name}
             onLabel={(v) => { setLabel(v); if (!nameTouched) setName(slugify(v)); }}
             onKey={(v) => { setNameTouched(true); setName(v); }}
-            keyHint="What your layout asks for. Not renameable afterwards."
+            keyHint={t("furniture.keyHint.layout")}
           />
-          <Button className="mt-3" onPress={create} isDisabled={busy || !label.trim() || !name.trim()}>Create widget area</Button>
+          <Button className="mt-3" onPress={create} isDisabled={busy || !label.trim() || !name.trim()}>{t("widgets.create")}</Button>
         </div>
       ) : null}
       </div>
@@ -869,6 +882,7 @@ export function WidgetAreaEditor({ api, name, onBack, backHref, onDeleted, onErr
   onError: (s: string) => void;
   canEdit: boolean;
 }) {
+  const { t } = useI18n();
   const [area, setArea] = useState<WidgetArea | null>(null);
   const [label, setLabel] = useState("");
   const [widgets, setWidgets] = useState<Widget[]>([]);
@@ -910,7 +924,7 @@ export function WidgetAreaEditor({ api, name, onBack, backHref, onDeleted, onErr
     } catch (e) { onError(errText(e)); } finally { setBusy(false); }
   };
   const del = async () => {
-    if (!area || !confirm(`Delete the widget area “${area.label}”?`)) return;
+    if (!area || !confirm(t("widgetArea.confirmDelete", { label: area.label }))) return;
     try { await api.deleteWidgetArea(area.id); onDeleted(); } catch (e) { onError(errText(e)); }
   };
 
@@ -924,19 +938,19 @@ export function WidgetAreaEditor({ api, name, onBack, backHref, onDeleted, onErr
     setWidgets(next);
   };
 
-  if (missing) return <div className={WRAP}><p className="pt-8 text-fg-subtle">Unknown widget area: {name}</p></div>;
+  if (missing) return <div className={WRAP}><p className="pt-8 text-fg-subtle">{t("widgetArea.unknown", { name })}</p></div>;
   if (!area) return <DetailPending failed={loadFailed} onRetry={() => { setLoadFailed(false); setAttempt((n) => n + 1); }} />;
 
   return (
     <div className={WRAP}>
-      <DetailHeader title={area.label} parent="Widgets" href={backHref} onBack={onBack}>
+      <DetailHeader title={area.label} parent={t("widgetArea.parent")} href={backHref} onBack={onBack}>
         <span className="text-fg-subtle">{area.name}</span>
       </DetailHeader>
       <div className="flex max-w-[860px] flex-col gap-4">
         {ok ? <Saved /> : null}
-        <Input label="Label" value={label} onChange={setLabel} />
+        <Input label={t("furniture.label")} value={label} onChange={setLabel} />
         <div className="flex flex-col gap-2">
-          {widgets.length === 0 ? <p className="text-sm text-fg-subtle">No widgets yet.</p> : null}
+          {widgets.length === 0 ? <p className="text-sm text-fg-subtle">{t("widgetArea.empty")}</p> : null}
           {widgets.map((w, i) => (
             <WidgetRow
               key={w.id}
@@ -950,17 +964,24 @@ export function WidgetAreaEditor({ api, name, onBack, backHref, onDeleted, onErr
         </div>
         {canEdit ? (
           <div className="flex flex-wrap items-center gap-2">
-            <Button variant="secondary" size="sm" onPress={() => setWidgets([...widgets, { id: crypto.randomUUID(), type: "content", content: { type: "doc", content: [] } }])}>+ Text</Button>
-            <Button variant="secondary" size="sm" onPress={() => setWidgets([...widgets, { id: crypto.randomUUID(), type: "menu", menuName: menus[0]?.name ?? "" }])}>+ Menu</Button>
-            <Button variant="secondary" size="sm" onPress={() => setWidgets([...widgets, { id: crypto.randomUUID(), type: "component", componentId: "" }])}>+ Component</Button>
-            <Button onPress={save} isDisabled={busy}>{busy ? "Saving…" : "Save"}</Button>
-            <Button variant="ghost" className="text-danger" onPress={del} isDisabled={busy}>Delete area</Button>
+            <Button variant="secondary" size="sm" onPress={() => setWidgets([...widgets, { id: crypto.randomUUID(), type: "content", content: { type: "doc", content: [] } }])}>{t("widgetArea.addText")}</Button>
+            <Button variant="secondary" size="sm" onPress={() => setWidgets([...widgets, { id: crypto.randomUUID(), type: "menu", menuName: menus[0]?.name ?? "" }])}>{t("widgetArea.addMenu")}</Button>
+            <Button variant="secondary" size="sm" onPress={() => setWidgets([...widgets, { id: crypto.randomUUID(), type: "component", componentId: "" }])}>{t("widgetArea.addComponent")}</Button>
+            <Button onPress={save} isDisabled={busy}>{busy ? t("common.saving") : t("common.save")}</Button>
+            <Button variant="ghost" className="text-danger" onPress={del} isDisabled={busy}>{t("widgetArea.delete")}</Button>
           </div>
         ) : null}
       </div>
     </div>
   );
 }
+
+/** The name of each widget kind, shown on its card. */
+const WIDGET_TYPE_KEYS = {
+  content: "widgetArea.type.content",
+  menu: "widgetArea.type.menu",
+  component: "widgetArea.type.component",
+} as const satisfies Record<Widget["type"], TextKey>;
 
 function WidgetRow({ widget, menus, onChange, onMove, onRemove }: {
   widget: Widget;
@@ -969,37 +990,40 @@ function WidgetRow({ widget, menus, onChange, onMove, onRemove }: {
   onMove: (d: number) => void;
   onRemove: () => void;
 }) {
+  const { t } = useI18n();
   const patch = (p: Partial<Widget>) => onChange({ ...widget, ...p });
+  const typeKeys: Readonly<Record<string, TextKey>> = WIDGET_TYPE_KEYS;
+  const typeKey = typeKeys[widget.type];
   return (
     <div className="rounded-lg border border-border bg-surface-muted">
       <div className="flex items-center gap-2 border-b border-border px-3 py-2">
-        <span className="text-caption text-fg-subtle">{widget.type}</span>
+        <span className="text-caption text-fg-subtle">{typeKey ? t(typeKey) : widget.type}</span>
         <input
           className="min-w-0 flex-1 bg-transparent text-sm text-fg outline-none placeholder:text-fg-subtle"
           value={widget.title ?? ""}
-          placeholder="Title (optional)"
-          aria-label="Widget title"
+          placeholder={t("widgetArea.titlePlaceholder")}
+          aria-label={t("widgetArea.titleLabel")}
           onChange={(e) => patch({ title: e.target.value || null })}
         />
-        <button type="button" className="px-1.5 text-fg-subtle hover:text-fg" title="Move up" onClick={() => onMove(-1)}>↑</button>
-        <button type="button" className="px-1.5 text-fg-subtle hover:text-fg" title="Move down" onClick={() => onMove(1)}>↓</button>
-        <button type="button" className="px-1.5 text-fg-subtle hover:text-danger" title="Remove" onClick={onRemove}>✕</button>
+        <button type="button" className="px-1.5 text-fg-subtle hover:text-fg" title={t("furniture.moveUp")} onClick={() => onMove(-1)}>↑</button>
+        <button type="button" className="px-1.5 text-fg-subtle hover:text-fg" title={t("furniture.moveDown")} onClick={() => onMove(1)}>↓</button>
+        <button type="button" className="px-1.5 text-fg-subtle hover:text-danger" title={t("common.remove")} onClick={onRemove}>✕</button>
       </div>
       <div className="p-3.5">
         {widget.type === "content" ? (
           <RichText value={(widget.content as RichTextDoc | null) ?? null} onChange={(content) => patch({ content })} />
         ) : widget.type === "menu" ? (
           <label className="flex flex-col gap-1.5">
-            <span className="text-caption text-fg-subtle">Menu</span>
+            <span className="text-caption text-fg-subtle">{t("widgetArea.menu")}</span>
             <select className={CONTROL} value={widget.menuName ?? ""} onChange={(e) => patch({ menuName: e.target.value })}>
-              <option value="">— pick one —</option>
+              <option value="">{t("furniture.pickOne")}</option>
               {menus.map((m) => <option key={m.name} value={m.name}>{m.label}</option>)}
             </select>
           </label>
         ) : (
           <div className="flex flex-col gap-3">
             <label className="flex flex-col gap-1.5">
-              <span className="text-caption text-fg-subtle">Component id — your front end maps this to one of its own components</span>
+              <span className="text-caption text-fg-subtle">{t("widgetArea.componentId")}</span>
               <input className={CONTROL} value={widget.componentId ?? ""} onChange={(e) => patch({ componentId: e.target.value.trim() })} />
             </label>
             <JsonProps value={widget.componentProps} onChange={(componentProps) => patch({ componentProps })} />
@@ -1020,9 +1044,10 @@ function WidgetRow({ widget, menus, onChange, onMove, onRemove }: {
 function JsonProps({ value, onChange }: { value: Widget["componentProps"]; onChange: (v: Widget["componentProps"]) => void }) {
   const [text, setText] = useState(() => (value ? JSON.stringify(value, null, 2) : ""));
   const [bad, setBad] = useState(false);
+  const { t } = useI18n();
   return (
     <label className="flex flex-col gap-1.5">
-      <span className="text-caption text-fg-subtle">Props (JSON object, optional)</span>
+      <span className="text-caption text-fg-subtle">{t("widgetArea.props")}</span>
       <textarea
         className={`${CONTROL} h-auto min-h-24 py-2.5 font-mono text-[12px]`}
         value={text}
@@ -1040,7 +1065,7 @@ function JsonProps({ value, onChange }: { value: Widget["componentProps"]; onCha
           }
         }}
       />
-      {bad ? <span className="text-caption text-danger">Not a JSON object — the last valid value is what will be saved.</span> : null}
+      {bad ? <span className="text-caption text-danger">{t("widgetArea.propsInvalid")}</span> : null}
     </label>
   );
 }

@@ -9,6 +9,7 @@ import { publishPanelRuntime, type PanelRuntimeHost } from "./panel-runtime";
 import { loadPanelBundles, readPanelUrls, type PanelHost } from "./panels";
 import { CHROME_LAYOUT, chromeAttr } from "./chrome";
 import { initTheme } from "./theme";
+import { getI18n } from "./i18n";
 
 // Styling is podoba: the compiled Tailwind (podoba preset, with @podoba/tokens' variables
 // and the web font inlined) is a single stylesheet the SHELL links — see scripts/build.ts
@@ -30,6 +31,13 @@ initTheme();
 // Same moment, for the chrome's metrics: `app.css` sizes the bar and every offset beneath it
 // off this attribute, so it has to be there before the first layout.
 chromeAttr(document.documentElement, CHROME_LAYOUT);
+
+// The document's language, for the same reason: a screen reader picks its voice, and the
+// browser its hyphenation and spell-check dictionary, off `<html lang>`. The shell writes the
+// configured value; this re-stamps the one the editor actually RESOLVED, which differs when the
+// configured language has no catalog and the copy fell back to English.
+const i18n = getI18n();
+document.documentElement.lang = i18n.tag ?? i18n.locale;
 
 // The shared React, published FIRST: a panel bundle's very first `import "react"` resolves
 // through the shell's import map to a shim that reads this back out, so the global has to

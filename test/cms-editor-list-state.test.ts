@@ -8,7 +8,7 @@
 // pure summary, so the contract is testable without a DOM.
 
 import { describe, expect, test } from "bun:test";
-import { COMMON_COPY } from "../packages/cms-editor/src/copy";
+import { t } from "../packages/cms-editor/src/i18n";
 import {
   initialPagedList,
   listSummary,
@@ -20,7 +20,7 @@ import {
 } from "../packages/cms-editor/src/list-state";
 import { mediaCountLabel } from "../packages/cms-editor/src/components";
 
-const files: CountWords = { empty: "None yet", one: "1 file", many: (n) => `${n} files` };
+const files: CountWords = { empty: "None yet", forms: { one: "{count} file", other: "{count} files" } };
 
 function run<T>(actions: PagedListAction<T>[], from: PagedListState<T> = initialPagedList<T>()): PagedListState<T> {
   return actions.reduce(pagedListReducer<T>, from);
@@ -29,9 +29,9 @@ function run<T>(actions: PagedListAction<T>[], from: PagedListState<T> = initial
 describe("the header's count", () => {
   test("says nothing about a count while the first page is in flight", () => {
     // The bug itself: zero rows before the answer is not "None yet".
-    expect(listSummary("loading", 0, files)).toBe(COMMON_COPY.loading);
+    expect(listSummary("loading", 0, files)).toBe(t("common.loading"));
     // Nor is a stale grid kept on screen during a filter change a count for the new filter.
-    expect(listSummary("loading", 12, files)).toBe(COMMON_COPY.loading);
+    expect(listSummary("loading", 12, files)).toBe(t("common.loading"));
   });
 
   test("an answered empty list is empty", () => {
@@ -39,7 +39,7 @@ describe("the header's count", () => {
   });
 
   test("a failed first page is not an empty list", () => {
-    expect(listSummary("failed", 0, files)).toBe(COMMON_COPY.loadFailed);
+    expect(listSummary("failed", 0, files)).toBe(t("common.loadFailed"));
     expect(listSummary("failed", 0, files)).not.toBe(files.empty);
   });
 
@@ -52,16 +52,16 @@ describe("the header's count", () => {
   });
 
   test("the media header keeps its two different zeros", () => {
-    expect(mediaCountLabel("loading", 0, false, true)).toBe(COMMON_COPY.loading);
+    expect(mediaCountLabel("loading", 0, false, true)).toBe(t("common.loading"));
     expect(mediaCountLabel("ready", 0, false, false)).toBe("None yet");
     expect(mediaCountLabel("ready", 0, false, true)).toBe("No matches");
     expect(mediaCountLabel("ready", 60, true, false)).toBe("60+ files");
   });
 
   test("the nullable form: null is loading unless the fetch failed", () => {
-    const menus: CountWords = { empty: "0 menus", one: "1 menu", many: (n) => `${n} menus` };
-    expect(nullableSummary(null, false, menus)).toBe(COMMON_COPY.loading);
-    expect(nullableSummary(null, true, menus)).toBe(COMMON_COPY.loadFailed);
+    const menus: CountWords = { empty: "0 menus", forms: { one: "{count} menu", other: "{count} menus" } };
+    expect(nullableSummary(null, false, menus)).toBe(t("common.loading"));
+    expect(nullableSummary(null, true, menus)).toBe(t("common.loadFailed"));
     expect(nullableSummary([], false, menus)).toBe("0 menus");
     expect(nullableSummary([1, 2], false, menus)).toBe("2 menus");
   });

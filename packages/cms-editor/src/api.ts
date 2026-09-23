@@ -1,6 +1,7 @@
 // HTTP client for the CMS handlers. Bearer token + the pramen `{ ok, result }` envelope,
 // same transport shape as @pramen/admin's api.ts. Config is persisted in localStorage.
 
+import { t } from "./i18n";
 import type { AdminPageMeta, AdminPageResponse, AssembledPage, AuditEntry, BlockType, ContentType, Media, Menu, MenuItem, Page, Redirect, Taxonomy, Term, Widget, WidgetArea } from "./types";
 import type { DefaultBlockDefinition, FieldDefinition, MediaKind, MediaSort, RegionDefinition, RpcInput, TaxonomyTarget } from "./types";
 
@@ -130,11 +131,11 @@ export class Api {
     try {
       body = await res.json();
     } catch {
-      throw new ApiError(`non-JSON response (HTTP ${res.status})`, "bad_response", res.status);
+      throw new ApiError(t("api.nonJson", { status: res.status }), "bad_response", res.status);
     }
     if (body.ok !== true) {
-      const msg = body.error ?? `request failed (HTTP ${res.status})`;
-      const hint = res.status === 403 ? " — check your token has an editor/reviewer role" : "";
+      const msg = body.error ?? t("api.requestFailed", { status: res.status });
+      const hint = res.status === 403 ? t("api.forbiddenHint") : "";
       throw new ApiError(msg + hint, body.code ?? "error", res.status);
     }
     return body.result as T;
@@ -144,7 +145,7 @@ export class Api {
   async put(signedUrl: string, body: Blob | ArrayBuffer, contentType: string): Promise<void> {
     const url = signedUrl.startsWith("http") ? signedUrl : `${this.base()}${signedUrl}`;
     const res = await fetch(url, { method: "PUT", headers: { "content-type": contentType }, body });
-    if (!res.ok) throw new ApiError(`upload failed (HTTP ${res.status})`, "upload_failed", res.status);
+    if (!res.ok) throw new ApiError(t("api.uploadFailed", { status: res.status }), "upload_failed", res.status);
   }
 
   /** Absolute URL for a relative media/serving path. */

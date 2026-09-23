@@ -26,11 +26,11 @@
 // hand-rolled handlers.
 
 import { Button, Dialog, DialogTrigger, Topbar, UserMenu, UserMenuItem } from "@podoba/react";
-import { COMMON_COPY } from "./copy";
 import type { ReactNode } from "react";
 import { APP_BAR_H, BELOW_CHROME_PAD } from "./chrome";
 import { AccountMenu, NavIconSlot, type ChromeProps, type NavRoute } from "./chrome-shared";
 import { BRAND } from "./brand";
+import { useI18n } from "./i18n";
 import { GroupFoldedIcon as CrumbSeparatorIcon, GroupOpenIcon, MenuToggleIcon } from "./icons";
 import { topbarNav, type ExtraNavLink, type NavEntry, type NavSection } from "./nav";
 
@@ -51,6 +51,7 @@ export function TopbarChrome({
   confirmNavigation,
   children,
 }: ChromeProps) {
+  const { t } = useI18n();
   const { tabs, menus } = topbarNav(sections);
 
   return (
@@ -79,7 +80,7 @@ export function TopbarChrome({
           <button
             type="button"
             onClick={onHome}
-            aria-label={`${BRAND.spoken} — home`}
+            aria-label={t("chrome.home", { brand: BRAND.spoken })}
             className="flex shrink-0 items-baseline gap-1.5 rounded-md px-1 py-0.5 transition-colors hover:bg-surface-muted"
           >
             <span className="font-semibold text-fg">{BRAND.name}</span>
@@ -104,7 +105,7 @@ export function TopbarChrome({
             // goes — every screen that publishes a crumb also names the record on the screen
             // (the collection editor's "← Lectures / Edit lecture", the page editor's own
             // toolbar). The nav is the thing that cannot be recovered from elsewhere.
-            <nav aria-label="Breadcrumb" className="hidden min-w-0 max-w-[320px] items-center gap-1.5 lg:flex">
+            <nav aria-label={t("breadcrumb.label")} className="hidden min-w-0 max-w-[320px] items-center gap-1.5 lg:flex">
               <CrumbSeparatorIcon aria-hidden="true" className="h-3 w-3 shrink-0 text-fg-subtle" />
               <span aria-current="page" className="min-w-0 truncate font-normal text-fg-muted">
                 {crumb}
@@ -115,7 +116,7 @@ export function TopbarChrome({
 
         {/* `hidden md:flex`: below the breakpoint the bar keeps only the brand and the
             hamburger, exactly as gs's does. */}
-        <Topbar.Nav aria-label="Primary" className="hidden md:flex">
+        <Topbar.Nav aria-label={t("chrome.primaryNav")} className="hidden md:flex">
           {tabs.map((entry) => (
             <TopbarEntry key={entry.key} entry={entry} active={active} onGo={onGo} sameTab={sameTab} confirm={confirmNavigation} />
           ))}
@@ -145,10 +146,10 @@ export function TopbarChrome({
             second layer of popover to escape from. */}
         <div className="ml-auto md:hidden">
           <DialogTrigger>
-            <Button variant="ghost" size="sm" aria-label="Show navigation" className="rounded-md px-2 py-2 text-fg-muted">
+            <Button variant="ghost" size="sm" aria-label={t("chrome.showNav")} className="rounded-md px-2 py-2 text-fg-muted">
               <MenuToggleIcon className="h-4 w-4" />
             </Button>
-            <Dialog title="Navigation" closeLabel={COMMON_COPY.close} size="sm">
+            <Dialog title={t("chrome.navDialog")} closeLabel={t("common.close")} size="sm">
               {({ close }) => (
                 <div className="flex flex-col gap-4">
                   {sections.map((section) => (

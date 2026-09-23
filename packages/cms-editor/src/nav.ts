@@ -16,6 +16,7 @@
 
 import type { AccountMenuItem, EditorPage, NavContext, NavHooks, NavTransform } from "./slots";
 import { EDITOR_PAGES } from "./slots";
+import { t, type TextKey } from "./i18n";
 import { NAV_ORDER, type AdminPageMeta, type CmsCapabilities, type CollectionMeta, type ContentType } from "./types";
 
 /** A buzola page id, so a nav entry naming a route that does not exist is a compile error
@@ -120,7 +121,7 @@ export function buildNav(input: NavInput): NavEntry[] {
         entries.push({ kind: "route", key: `type:${t.slug}`, order: NAV_ORDER.pages, icon: { kind: "glyph", name: "pages" }, label: t.name, page: "type", params: { slug: t.slug } });
       }
     } else {
-      entries.push({ kind: "route", key: "pages", order: NAV_ORDER.pages, icon: { kind: "glyph", name: "pages" }, label: "Pages", page: "home" });
+      entries.push({ kind: "route", key: "pages", order: NAV_ORDER.pages, icon: { kind: "glyph", name: "pages" }, label: t("nav.pages"), page: "home" });
     }
   }
 
@@ -136,16 +137,16 @@ export function buildNav(input: NavInput): NavEntry[] {
     });
   }
 
-  entries.push({ kind: "route", key: "media", order: NAV_ORDER.media, icon: { kind: "glyph", name: "media" }, label: "Media", page: "media" });
+  entries.push({ kind: "route", key: "media", order: NAV_ORDER.media, icon: { kind: "glyph", name: "media" }, label: t("nav.media"), page: "media" });
 
   if (cms.siteFurniture) {
-    entries.push({ kind: "route", key: "menus", order: NAV_ORDER.menus, icon: { kind: "glyph", name: "menus" }, label: "Menus", page: "menus" });
+    entries.push({ kind: "route", key: "menus", order: NAV_ORDER.menus, icon: { kind: "glyph", name: "menus" }, label: t("nav.menus"), page: "menus" });
     // Taxonomies classify PAGES — `cms_page_terms` links a term to a page and to nothing
     // else — so a collections-only deployment has nothing to classify and the section would
     // be a vocabulary editor with no subject.
-    if (!hidePages) entries.push({ kind: "route", key: "taxonomies", order: NAV_ORDER.taxonomies, icon: { kind: "glyph", name: "taxonomies" }, label: "Taxonomies", page: "taxonomies" });
-    entries.push({ kind: "route", key: "widgets", order: NAV_ORDER.widgets, icon: { kind: "glyph", name: "widgets" }, label: "Widgets", page: "widgets" });
-    entries.push({ kind: "route", key: "redirects", order: NAV_ORDER.redirects, icon: { kind: "glyph", name: "redirects" }, label: "Redirects", page: "redirects" });
+    if (!hidePages) entries.push({ kind: "route", key: "taxonomies", order: NAV_ORDER.taxonomies, icon: { kind: "glyph", name: "taxonomies" }, label: t("nav.taxonomies"), page: "taxonomies" });
+    entries.push({ kind: "route", key: "widgets", order: NAV_ORDER.widgets, icon: { kind: "glyph", name: "widgets" }, label: t("nav.widgets"), page: "widgets" });
+    entries.push({ kind: "route", key: "redirects", order: NAV_ORDER.redirects, icon: { kind: "glyph", name: "redirects" }, label: t("nav.redirects"), page: "redirects" });
   }
 
   // A project's own screens, INSIDE the chrome and at a position they choose. This is the
@@ -159,11 +160,11 @@ export function buildNav(input: NavInput): NavEntry[] {
   // Authoring the SCHEMA, not content — so it is gated on `canEdit` (every handler behind
   // it is editor-only) and hidden where there is no block/page builder to define types for.
   if (!hidePages && cms.canEdit) {
-    entries.push({ kind: "route", key: "types", order: NAV_ORDER.types, icon: { kind: "glyph", name: "types" }, label: "Types", page: "schema" });
+    entries.push({ kind: "route", key: "types", order: NAV_ORDER.types, icon: { kind: "glyph", name: "types" }, label: t("nav.types"), page: "schema" });
   }
 
-  if (isAdmin) entries.push({ kind: "route", key: "users", order: NAV_ORDER.users, icon: { kind: "glyph", name: "users" }, label: "Users", page: "users" });
-  entries.push({ kind: "route", key: "settings", order: NAV_ORDER.settings, icon: { kind: "glyph", name: "settings" }, label: "Settings", page: "settings" });
+  if (isAdmin) entries.push({ kind: "route", key: "users", order: NAV_ORDER.users, icon: { kind: "glyph", name: "users" }, label: t("nav.users"), page: "users" });
+  entries.push({ kind: "route", key: "settings", order: NAV_ORDER.settings, icon: { kind: "glyph", name: "settings" }, label: t("nav.settings"), page: "settings" });
 
   for (const link of extraNav) {
     // Keyed on href AND label: two entries may legitimately point at the same href and
@@ -195,7 +196,8 @@ export type NavSectionId = "content" | "site" | "apps" | "system";
 
 export interface NavSection {
   id: NavSectionId;
-  /** The heading. Rendered only when there is more than one section — see `navSections`. */
+  /** The heading, in the editor's language. Rendered only when there is more than one
+   * section (see `navSections`). */
   label: string;
   entries: NavEntry[];
 }
@@ -203,17 +205,17 @@ export interface NavSection {
 /** The bands, in order. `upTo` is EXCLUSIVE, and each is expressed against `NAV_ORDER`
  * rather than a literal so the two cannot drift: a built-in moving to a new position moves
  * with its band. */
-const BANDS: readonly { id: NavSectionId; label: string; upTo: number }[] = [
+const BANDS: readonly { id: NavSectionId; label: TextKey; upTo: number }[] = [
   // Pages / content types, collections, media — the things an editor came here to write.
-  { id: "content", label: "Content", upTo: NAV_ORDER.menus },
+  { id: "content", label: "nav.section.content", upTo: NAV_ORDER.menus },
   // Menus, taxonomies, widget areas, redirects — site-level furniture, not page content.
-  { id: "site", label: "Site", upTo: NAV_ORDER.adminPages },
+  { id: "site", label: "nav.section.site", upTo: NAV_ORDER.adminPages },
   // A project's own Block Kit screens. Their own band rather than a tail of "System",
   // because they are the project's, and the whole point of `adminPage()` is that they are
   // not administration of the CMS.
-  { id: "apps", label: "Apps", upTo: NAV_ORDER.types },
+  { id: "apps", label: "nav.section.apps", upTo: NAV_ORDER.types },
   // Types, users, settings, and host links to companion tools.
-  { id: "system", label: "System", upTo: Number.POSITIVE_INFINITY },
+  { id: "system", label: "nav.section.system", upTo: Number.POSITIVE_INFINITY },
 ];
 
 /** Every section id, in rail order. Derived from `BANDS` rather than written out again, so
@@ -233,7 +235,7 @@ export const NAV_SECTION_IDS: readonly NavSectionId[] = BANDS.map((b) => b.id);
  * `navOrder`).
  */
 export function navSections(entries: NavEntry[]): NavSection[] {
-  const sections: NavSection[] = BANDS.map((b) => ({ id: b.id, label: b.label, entries: [] }));
+  const sections: NavSection[] = BANDS.map((b) => ({ id: b.id, label: t(b.label), entries: [] }));
   for (const entry of entries) {
     // The last band is unbounded, so `find` always hits; the `??` is for the type checker.
     const i = BANDS.findIndex((b) => entry.order < b.upTo);

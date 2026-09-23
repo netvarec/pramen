@@ -7,6 +7,8 @@ import { Button, Input } from "@podoba/react";
 import { createContext, use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Api, clearConfig, isTokenExpired, loadConfig, saveConfig, type Config } from "./api";
 import { BRAND, SETUP_TITLE, type BrandConfig } from "./brand";
+import { getI18n, useI18n } from "./i18n";
+import { rich } from "./i18n/rich";
 import { readBackend, type BackendHost } from "./mount";
 import { DEFAULT_CAPABILITIES, type AdminPageMeta, type CmsCapabilities, type CollectionMeta, type ContentType, type JsonValue } from "./types";
 
@@ -183,7 +185,7 @@ const AppContext = createContext<AppContextValue | null>(null);
  * `beforeunload` too, for the refresh/close half — in-app navigation fires neither, which
  * is why both halves are needed and why the context guard exists at all.
  */
-export function useUnsavedGuard(dirty: boolean, message = "You have unsaved changes. Leave anyway?"): void {
+export function useUnsavedGuard(dirty: boolean, message: string = getI18n().t("session.unsavedChanges")): void {
   const { setNavGuard } = useApp();
   useEffect(() => {
     if (!dirty) return;
@@ -338,6 +340,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
 function Setup({ cfg, onSave }: { cfg: Config; onSave: (c: Config) => void }) {
   const [c, setC] = useState(cfg);
+  const { t } = useI18n();
   return (
     <div className="mx-auto mt-[14vh] w-full max-w-[520px] px-6">
       <div className="rounded-panel border border-border bg-surface-card px-10 py-8 shadow-[0_24px_60px_rgba(30,20,10,0.08)]">
@@ -351,24 +354,18 @@ function Setup({ cfg, onSave }: { cfg: Config; onSave: (c: Config) => void }) {
             is already known invites someone to type the mount path instead of the origin and
             get a stream of "non-JSON response" back. */}
         <p className="mb-6 text-sm text-fg-muted">
-          {BACKEND ? (
-            <>Paste an editor/reviewer JWT to sign in.</>
-          ) : (
-            <>
-              Point at your Worker and paste an editor/reviewer JWT. CORS must allow this origin (<code>CORS_ORIGINS</code>).
-            </>
-          )}
+          {BACKEND ? t("setup.intro") : rich(t("setup.introWithWorker"), { code: (s) => <code>{s}</code> })}
         </p>
         <div className="flex flex-col gap-4">
           {BACKEND ? null : (
             <>
-              <Input label="Worker base URL" value={c.baseUrl} onChange={(baseUrl) => setC({ ...c, baseUrl })} placeholder="https://your-worker.workers.dev" />
-              <Input label="Tenant" value={c.tenant} onChange={(tenant) => setC({ ...c, tenant })} placeholder="main" />
+              <Input label={t("setup.baseUrl")} value={c.baseUrl} onChange={(baseUrl) => setC({ ...c, baseUrl })} placeholder="https://your-worker.workers.dev" />
+              <Input label={t("setup.tenant")} value={c.tenant} onChange={(tenant) => setC({ ...c, tenant })} placeholder="main" />
             </>
           )}
-          <Input label="Bearer token (editor or reviewer)" value={c.token} onChange={(token) => setC({ ...c, token })} placeholder="eyJ…" />
+          <Input label={t("setup.token")} value={c.token} onChange={(token) => setC({ ...c, token })} placeholder="eyJ…" />
           <Button className="mt-2 w-full" onPress={() => onSave(c)} isDisabled={(!BACKEND && !c.baseUrl) || !c.token}>
-            Connect
+            {t("setup.connect")}
           </Button>
         </div>
       </div>

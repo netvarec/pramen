@@ -5,6 +5,7 @@
 import { createPage, useNavigate } from "@buzola/router";
 import { Button } from "@podoba/react";
 import { useApp } from "../app-context";
+import { useI18n } from "../i18n";
 import { CollectionList, Notice } from "../components";
 
 export default createPage()
@@ -13,13 +14,14 @@ export default createPage()
   .render(function CollectionListRoute({ params }) {
     const { api, collections, collectionsReady, setError } = useApp();
     const navigate = useNavigate();
+    const { t } = useI18n();
     const def = collections.find((c) => c.slug === params.slug);
 
     if (!def) {
       // Collections load async; before they arrive (or for a bad slug) show a neutral state.
       return (
-        <Notice action={collectionsReady ? <Button variant="ghost" size="sm" onPress={() => navigate("home")}>← Pages</Button> : undefined}>
-          {!collectionsReady ? "Loading…" : `Unknown collection: ${params.slug}`}
+        <Notice action={collectionsReady ? <Button variant="ghost" size="sm" onPress={() => navigate("home")}>{t("pages.backShort")}</Button> : undefined}>
+          {!collectionsReady ? t("common.loading") : t("collection.unknown", { slug: params.slug })}
         </Notice>
       );
     }

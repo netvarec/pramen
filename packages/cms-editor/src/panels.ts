@@ -31,6 +31,7 @@
 // here can be exercised without a DOM — the same discipline `mount.ts` keeps.
 
 import type { ComponentType } from "react";
+import { t } from "./i18n";
 import type { RpcInput } from "./types";
 
 /** The authenticated transport a panel is handed.
@@ -232,13 +233,13 @@ export function contractRefusal(slug: string, stated: unknown, implemented: numb
   // RUNTIME — the `typeof` is what narrows the value for the comparisons below, and dropping
   // it as redundant is a type error, not a passing simplification.
   if (typeof stated !== "number" || !Number.isInteger(stated) || stated < 1) {
-    return `The '${slug}' panel did not state which panel runtime contract it was built against. Add \`contract: ${implemented}\` to its registerPanel() call and rebuild it against the @pramen/cms-editor this admin serves (React ${PANEL_RUNTIME_REACT_MAJOR}).`;
+    return t("panel.contract.missing", { slug, implemented, react: PANEL_RUNTIME_REACT_MAJOR });
   }
   if (stated < implemented) {
-    return `The '${slug}' panel was built against panel runtime contract ${stated}, and this editor implements ${implemented}. Rebuild the bundle against the @pramen/cms-editor this admin serves (React ${PANEL_RUNTIME_REACT_MAJOR}) and set \`contract: ${implemented}\` in its registerPanel() call.`;
+    return t("panel.contract.stale", { slug, stated, implemented, react: PANEL_RUNTIME_REACT_MAJOR });
   }
   if (stated > implemented) {
-    return `The '${slug}' panel was built against panel runtime contract ${stated}, and this editor implements ${implemented}. Upgrade @pramen/cms-editor — and the shell that serves it — to the release implementing contract ${stated}, or rebuild the panel against this one.`;
+    return t("panel.contract.ahead", { slug, stated, implemented, react: PANEL_RUNTIME_REACT_MAJOR });
   }
   return undefined;
 }
@@ -279,7 +280,7 @@ export function registerPanel(def: PanelRegistration, warn: (msg: string) => voi
   if (mismatch !== undefined) return refuse(slug, mismatch, warn);
   const rendered = typeof def.render;
   if (rendered !== "function") {
-    return refuse(slug, `The '${slug}' panel was ignored: 'render' must be a React component, and this one is of type ${rendered}.`, warn);
+    return refuse(slug, t("panel.renderNotComponent", { slug, type: rendered }), warn);
   }
   if (panels.has(slug)) warn(`pramen/cms-editor: panel '${slug}' was registered twice — the last registration wins.`);
   // A registration that lands CLEARS the slug's refusal: a dev loop that fixes the contract
