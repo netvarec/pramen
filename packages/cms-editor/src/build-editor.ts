@@ -311,7 +311,10 @@ async function fontCss(root: string): Promise<string> {
  */
 async function styles(opts: BuildEditorOptions, dsRoot: string): Promise<void> {
   const out = resolve(opts.outdir, "editor.css");
-  const entry = opts.styles ?? resolve(PKG, "src/app.css");
+  // Absolute before anything else: Tailwind runs with the entry's own directory as its cwd (so
+  // its bare imports resolve from the host's tree), and a relative entry, which every other
+  // path here accepts from the working directory, would be looked for again from inside it.
+  const entry = opts.styles ? resolve(opts.styles) : resolve(PKG, "src/app.css");
   const args = ["@tailwindcss/cli", "-i", entry, "-o", out];
   if (opts.minify !== false) args.push("--minify");
   const proc = Bun.spawn(["bunx", ...args], { cwd: dirname(entry), stdout: "inherit", stderr: "inherit" });

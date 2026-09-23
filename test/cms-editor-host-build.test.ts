@@ -17,7 +17,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { buildEditor, EDITOR_SLOTS, type EditorSlot } from "../packages/cms-editor/src/build-editor";
 
 const EDITOR = resolve(import.meta.dir, "../packages/cms-editor");
@@ -286,6 +286,18 @@ describe("buildEditor", () => {
     const out = await new Response(tsc.stdout).text();
     expect(out).toBe("");
     expect(await tsc.exited).toBe(0);
+  }, 60_000);
+
+  test("a relative `styles` path is taken from the working directory, like every other path", async () => {
+    // Tailwind is spawned with the entry's own directory as its cwd, so a relative entry used to
+    // be looked for a second time from inside that directory, and the build failed with
+    // "input file does not exist" for a file that was right there.
+    const dir = await scratch("rel-styles");
+    const file = join(dir, "host.css");
+    await writeFile(file, `@import "../../src/app.css";\n.host-relative-marker { color: red; }\n`);
+    const outdir = join(dir, "out");
+    await buildEditor({ outdir, minify: false, styles: relative(process.cwd(), file) });
+    expect(await readFile(join(outdir, "editor.css"), "utf8")).toContain(".host-relative-marker");
   }, 60_000);
 
   test("a slot whose module does not exist fails before building, naming the slot", async () => {
