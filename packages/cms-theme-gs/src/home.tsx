@@ -109,9 +109,12 @@ function StatTile({ api, section }: { api: DashboardApi; section: DashboardSecti
     );
     return () => { active = false; };
     // Keyed on the section, not on the loader: `sections` is rebuilt every render, so the
-    // function identity changes while what it counts does not.
+    // function identity changes while what it counts does not. Whether there IS a loader is part
+    // of the key, though: a project's section can get its `stat` only once the session's data has
+    // arrived (praha counts its events panel with the `akce` type's `labels`, and `contentTypes`
+    // is `null` on the first render). Without it that tile would say "loading" forever.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [api, section.key, attempt]);
+  }, [api, section.key, Boolean(load), attempt]);
 
   let title: ReactNode = section.label;
   let footer: ReactNode = section.description;
