@@ -17,6 +17,7 @@
     "./app.css": "./src/app.css",
     "./build": "./src/build-editor.ts",
     "./slots": "./src/slots.ts",
+    "./i18n": "./src/i18n/index.ts",
     "./panel-react.js": "./dist/panel-react.js",
     "./panel-react-dom.js": "./dist/panel-react-dom.js",
     "./panel-jsx-runtime.js": "./dist/panel-jsx-runtime.js",

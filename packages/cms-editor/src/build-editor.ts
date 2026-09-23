@@ -226,6 +226,36 @@ function slotsPlugin(slots: Partial<Record<EditorSlot, string>>, matched: Set<Ed
 }
 
 /**
+ * The package's own public RUNTIME entries, pinned to the source this build is made of.
+ *
+ * A theme's slot imports `@pramen/cms-editor/i18n` by its package name, and the editor's own
+ * files import the same module by a relative path. For the theme to speak the editor's
+ * language those two have to be ONE module in the bundle: the locale is a page-load singleton
+ * held in that module, so a second copy is a second, unconfigured editor language that still
+ * type-checks, still builds, and renders English beside a Czech editor. Left to ordinary
+ * resolution, the package name is resolved from the THEME's directory, and a theme package
+ * that carries its own nested install (a version range that did not dedupe, a linked checkout)
+ * reaches that copy instead. Pinning the specifier to this file makes "same instance" a
+ * property of the build rather than of the host's lockfile. Type-only entries (`./slots`) need
+ * no pin: they are erased.
+ */
+const SELF_ENTRIES: Readonly<Record<string, string>> = {
+  "@pramen/cms-editor/i18n": "src/i18n/index.ts",
+};
+
+function selfEntriesPlugin(): BunPlugin {
+  return {
+    name: "pramen-editor-self-entries",
+    setup(build) {
+      build.onResolve({ filter: /^@pramen\/cms-editor\/[\w-]+$/ }, ({ path }) => {
+        const file = SELF_ENTRIES[path];
+        return file ? { path: resolve(PKG, file) } : undefined;
+      });
+    },
+  };
+}
+
+/**
  * Resolve buzola's virtual route table to the one this package SHIPS.
  *
  * `main.tsx` imports `virtual:buzola/routes`, which in this repo is generated from `src/routes`
@@ -359,6 +389,7 @@ export async function buildEditor(opts: BuildEditorOptions): Promise<void> {
     define: { "process.env.NODE_ENV": JSON.stringify(opts.minify === false ? "development" : "production") },
     plugins: [
       ...(opts.plugins ?? []),
+      selfEntriesPlugin(),
       ...(Object.keys(slots).length > 0 ? [slotsPlugin(slots, matched)] : []),
       ...(opts.designSystem ? [designSystemPlugin(opts.designSystem)] : []),
       shippedRoutesPlugin(),

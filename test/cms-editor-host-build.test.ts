@@ -87,9 +87,15 @@ const THEME: Record<EditorSlot, [string, string]> = {
 export function PageHeader({ lead, em, children }: PageHeaderProps) { return <div data-theme-slot="pageHeader">{lead}{em}{children}</div>; }
 `],
   home: ["home.tsx", `import type { HomeScreenProps } from "@pramen/cms-editor/slots";
+import { defineMessages, useI18n, useLocale } from "@pramen/cms-editor/i18n";
 import { Button } from "@podoba/react";
+const copy = defineMessages({
+  en: { hello: "theme-slot-i18n-hello", files: { one: "{count} file", other: "{count} files" } },
+  cs: { hello: "Ahoj", files: { one: "{count} soubor", few: "{count} soubory", many: "{count} souboru", other: "{count} souborů" } },
+});
 export function HomeScreen({ landing, pageList, href, navigate }: HomeScreenProps) {
-  return <div data-theme-slot="home"><a href={href("media")}>Media</a><Button onPress={() => navigate("schema")}>{landing.kind}</Button>{pageList}</div>;
+  const { t } = useI18n();
+  return <div data-theme-slot="home" data-theme-locale={useLocale()}><a href={href("media")}>{t("common.close")}</a>{copy.t("hello")} {copy.tp("files", 3)}<Button onPress={() => navigate("schema")}>{landing.kind}</Button>{pageList}</div>;
 }
 `],
   detailHeader: ["detail-header.tsx", `import type { DetailHeaderProps } from "@pramen/cms-editor/slots";
@@ -181,6 +187,8 @@ describe("buildEditor", () => {
     // scroll listener still shipped, and the sign that the slot resolved for one importer and
     // not the other.
     expect(js).not.toContain("useCondensed");
+    // The theme's `@pramen/cms-editor/i18n` and the editor's `./i18n` are one module.
+    expect(js.split("cms-editor/src/i18n/index.ts\n").length - 1).toBe(1);
   }, 60_000);
 
   test("every slot still names a module the editor imports", async () => {
@@ -223,6 +231,35 @@ describe("buildEditor", () => {
       expect(js, file).not.toContain(`cms-editor/src/${file}\n`);
     }
     expect(js).not.toContain("useCondensed");
+  }, 60_000);
+
+  test("a theme's i18n import is the editor's own module, even from a nested copy of the package", async () => {
+    // The locale lives in ONE module instance, so a slot reads the editor's language only if
+    // its `@pramen/cms-editor/i18n` is the same module the editor's own files import by a
+    // relative path. Resolved from the theme's directory, the package name can reach a
+    // different install: here a nested `node_modules/@pramen/cms-editor` next to the theme,
+    // which is what a theme package with its own dependency on the editor looks like. Its i18n
+    // entry answers a marker locale. `buildEditor` pins the specifier to its own source, so the
+    // marker must NOT be in the bundle, and the real module must be in it exactly once.
+    // Under the REPO root's `node_modules`, not the editor's: inside the editor package, Bun
+    // resolves `@pramen/cms-editor/*` as a self-reference to that package before it looks at
+    // any nested `node_modules`, so the stray copy would never be reached and the test would
+    // pass with or without the pin.
+    const dir = await mkdtemp(join(EDITOR, "..", "..", "node_modules", ".test-theme-i18n-"));
+    outside.push(dir);
+    const nested = join(dir, "node_modules", "@pramen", "cms-editor");
+    await mkdir(nested, { recursive: true });
+    await writeFile(join(nested, "package.json"), JSON.stringify({ name: "@pramen/cms-editor", version: "0.0.0-nested", type: "module", exports: { "./i18n": "./i18n.ts", "./slots": "./slots.ts" } }));
+    await writeFile(join(nested, "i18n.ts"), `export const useLocale = () => "nested-copy-locale"; export const useI18n = () => ({ t: (k: string) => k }); export const defineMessages = (c: any) => ({ t: (k: string) => c.en[k], tp: (k: string) => k });\n`);
+    await writeFile(join(nested, "slots.ts"), `export {};\n`);
+    // The theme's home screen without podoba, which is not installed at the repo root.
+    const file = join(dir, "home.tsx");
+    await writeFile(file, THEME.home[1].replace(`import { Button } from "@podoba/react";\n`, "").replaceAll("Button", "button").replace("onPress=", "onClick="));
+    const js = await build({ slots: { home: file } });
+    expect(js).toContain("theme-slot-i18n-hello");
+    expect(js).not.toContain("nested-copy-locale");
+    // An unminified bundle opens each module with a `// <path>` comment: one comment, one module.
+    expect(js.split("cms-editor/src/i18n/index.ts\n").length - 1).toBe(1);
   }, 60_000);
 
   test("a theme typechecks against the public contracts alone, strictly", async () => {
