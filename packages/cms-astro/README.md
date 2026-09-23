@@ -108,6 +108,7 @@ pramenCms({
     signInUrl: "/signin/",                     // must be a page that EXISTS
     hidePages: true,                           // collections-only deployments
     layout: "topbar",                          // horizontal nav (Graphic Standard bar); default "sidebar"
+    locale: "cs",                              // the editor's language: "en" (default) or "cs"; see below
     pageHeader: { variant: "flat", accent: "#73e2b2" },  // dress the screen header — see below
     extraNav: [{ label: "Curation", href: "/curate", target: "_self" }],
     panels: ["/admin/curation.js"],            // YOUR React screens inside the chrome
@@ -135,6 +136,16 @@ capability: `"types"` exists only for someone who may author the schema, `"users
 admin. A row naming a page that does not exist is dropped with a warning. For anything a JSON
 config cannot say (renaming or hiding nav entries, a visibility predicate), a theme built with
 `buildEditor()` has the `nav` slot; see that package's README.
+
+### `locale` and `messages`: the editor's language
+
+`locale` picks the editor's message catalog, `"en"` (the default) or `"cs"`, and is written as
+the shell's `<html lang>`. A region subtag (`"cs-CZ"`) is kept for date and number formatting.
+`messages` changes single strings of that catalog by key, for a deployment that wants one word
+different (`{ "nav.settings": "Nastavení účtu" }`); a plural message takes its forms. An
+unknown locale, key or shape is warned about in the browser console and ignored. The words for
+your own content types and collections are declared with them (`labels` in `@pramen/cms`).
+See "`locale` and `messages`" in the editor's README for the details.
 
 ### `pageHeader` — dressing the screen header
 

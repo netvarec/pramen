@@ -95,6 +95,7 @@ admin: {
   // signInUrl: "/signin/",                          // ONLY once that page exists — see the warning
   // hidePages: true,                                // collections-only deployments
   // layout: "topbar",                               // horizontal nav instead of the sidebar — see below
+  // locale: "cs",                                   // the editor's language, "en" (default) or "cs"; see below
   // pageHeader: { variant: "flat", accent: "#73e2b2" },  // dress the screen header — see below
   // extraNav: [{ label: "Curation", href: "/curate", target: "_self" }],
   // panels: ["/admin/curation.js"],                 // your own React screens — see below
@@ -162,6 +163,37 @@ cannot tell Media from a content type, or the panel from the button inside it, w
 rule meant for "the header's action" turns `+ Upload` into "New + Upload" and puts white text
 on a mint fill at 1.58:1. If these tokens do not cover your case, open an issue rather than a
 selector.
+
+### `locale` and `messages`: the editor's language
+
+Every word the editor shows (buttons, headings, dialogs, empty states, error banners,
+`confirm()` prompts, aria-labels, counts, dates) comes from a message catalog. Two ship:
+**`en`** (the default, and what every existing deployment keeps seeing) and **`cs`**.
+
+```js
+admin: {
+  locale: "cs",                                   // or "cs-CZ": the region is kept for dates and numbers
+  messages: {                                     // optional: change single strings of that catalog
+    "nav.settings": "Nastavení účtu",
+    "media.count": { one: "{count} obrázek", few: "{count} obrázky", many: "{count} obrázku", other: "{count} obrázků" },
+  },
+}
+```
+
+- An unknown `locale` is warned about in the console and the editor stays English. The shell's
+  `<html lang>` follows it, and the editor re-stamps the attribute with what it resolved.
+- `messages` is keyed like the catalog (`src/i18n/catalog/*.ts`). A plural message takes one
+  form per CLDR plural category of the language, with `{count}` for the number. An unknown key
+  or a value of the wrong shape is warned about and ignored.
+- Counts use `Intl.PluralRules`, dates `toLocaleString` / `Intl.RelativeTimeFormat`, numbers
+  `Intl.NumberFormat`, all with the configured tag. With no `locale` configured, dates follow
+  the browser's language, as they always did.
+- The words for **your** content types and collections are yours: declare them with the type
+  (`labels: { newItem, count }` on `defineContentType` / `collection`, see `@pramen/cms`), in
+  the editor's language. Without them the editor says a neutral "+ New page" / "+ Nový obsah"
+  and "N pages total" / "N záznamů", rather than guessing a gender or a plural.
+- Text that comes from your app (type and field names, Block Kit pages, server error messages,
+  `extraNav` and `accountMenu` labels) is shown as you wrote it.
 
 ## Panels — your own React screen inside the chrome
 
@@ -380,7 +412,8 @@ export const navHooks: NavHooks = {
 ```
 
 **Your modules import only public things**: `@pramen/cms-editor/slots` for the types,
-`@podoba/react` and React for the rest. Everything a slot needs from the running editor
+`@pramen/cms-editor/i18n` for the editor's language (see below), `@podoba/react` and React for
+the rest. Everything a slot needs from the running editor
 (the API client, the mount prefix, the session's content types, a way to navigate, an
 already-guarded way back) arrives as props. Do not import the editor's internals by relative
 path: a second copy of the app context is a second React context, which throws on first render.
@@ -389,6 +422,49 @@ path: a second copy of the app context is a second React context, which throws o
 `@podoba/*` import in the bundle, the editor's and your slots' alike, to one copy. Without it
 the editor links the podoba this package pins and your slot modules link yours, and two copies
 of a React Aria based design system in one tree do not share their providers.
+
+#### A theme speaks the editor's language: `@pramen/cms-editor/i18n`
+
+A slot is bundled into the editor, so it can read the language the deployment configured and
+translate its own words the same way the editor does:
+
+```tsx
+// src/admin/dashboard.tsx
+import type { HomeScreenProps } from "@pramen/cms-editor/slots";
+import { defineMessages, useI18n, useLocale } from "@pramen/cms-editor/i18n";
+
+const copy = defineMessages({
+  en: { greeting: "Welcome back", files: { one: "{count} file", other: "{count} files" } },
+  cs: { greeting: "Vítejte zpět", files: { one: "{count} soubor", few: "{count} soubory", many: "{count} souboru", other: "{count} souborů" } },
+});
+
+export function HomeScreen({ contentTypes }: HomeScreenProps) {
+  const i18n = useI18n();                        // the editor's own catalog and formatters
+  return (
+    <section lang={useLocale()}>
+      <h1>{copy.t("greeting")}</h1>
+      <p>{copy.tp("files", 3)}</p>                {/* 3 soubory */}
+      <p>{i18n.t("nav.media")}</p>                {/* reuse the editor's wording */}
+      <p>{i18n.relative(Date.now() - 60_000)}</p> {/* před 1 minutou */}
+    </section>
+  );
+}
+```
+
+- `useLocale()` is `"en"` or `"cs"`; `useI18n()` gives `t(key, vars)`, `tp(key, count, vars)`,
+  `plural(count, forms)`, `number`, `date`, `dateTime` and `relative`, all in the editor's
+  language. `t` is also exported bare, for code outside a component.
+- `defineMessages({ en, cs, … })` falls back to `en` per key, so a theme can ship English only
+  and add languages later. `plural(count, forms)` picks a form by the active language's rules.
+- The language is fixed for the page load (it is the shell's config), so these are plain
+  functions over one module-level instance: no provider to mount, callable from event handlers.
+- It is ONE instance. `buildEditor` pins `@pramen/cms-editor/i18n` to the source it is building,
+  so a theme package with its own nested copy of this package still reads the editor's
+  language rather than an unconfigured English of its own.
+- Much of what a slot shows arrives as props already translated (`PageHeaderProps.lead` / `em`,
+  `DetailHeaderProps.parent` / `title`, `MediaGridProps.label`, `MediaLibraryEmptyProps`,
+  `MediaDetailFrameProps.closeLabel`, nav labels), so use `@pramen/cms-editor/i18n` only for
+  words the theme adds.
 
 A few things the contracts decide for you, so a theme does not have to rediscover them:
 

@@ -16,6 +16,41 @@ there are no backward-compatibility guarantees yet.
 
 ### Added
 
+- **The editor speaks Czech, and any deployment can pick its language (`@pramen/cms-editor`,
+  `@pramen/cms-astro`, `@pramen/cms`).** Every word the editor shows (buttons, headings,
+  dialogs, empty states, error banners, `confirm()` prompts, aria-labels, counts, dates) now
+  comes from a message catalog, and two ship: `en` (the default, unchanged apart from the em
+  dashes noted under Changed) and a complete `cs`. The one deployment that ran the editor in
+  Czech rebuilt it with some sixty `.replace()` calls against our source; a `locale` removes
+  them.
+
+  ```ts
+  pramenCms({ admin: { locale: "cs", messages: { "nav.settings": "Nastavení účtu" } } })
+  ```
+
+  `locale` also becomes the shell's `<html lang>` (the editor re-stamps it with what it
+  resolved); an unknown one is warned about and the editor stays English. `messages` replaces
+  single strings of the chosen catalog by key; a bad key or shape is warned about and skipped.
+  Counts are real plural messages over `Intl.PluralRules` (Czech has four categories: 1 soubor,
+  2 soubory, 1,5 souboru, 5 souborů), dates and numbers use `Intl` with the configured tag.
+
+  **Content types and collections declare their own words** (`labels` on `defineContentType` /
+  `collection`, stored in the new `cms_content_types.labels` column, validated by the new
+  `normalizeEntryLabels`): `{ newItem: "Nový článek", count: { one: "článek", few: "články",
+  many: "článku", other: "článků" } }`. The page list's "+ New page" and "N pages total" were
+  the same for every type, and a collection lower-cased its label into "+ New lecture"; a type
+  without labels now falls back to neutral catalog wording ("+ Nový obsah", "5 záznamů") rather
+  than a guessed gender or plural.
+
+  **Themes translate through a public runtime entry, `@pramen/cms-editor/i18n`:** `useLocale()`,
+  `useI18n()` (`t`, `tp`, `plural`, `number`, `date`, `dateTime`, `relative` in the editor's
+  language), `t()` and `plural()` for code outside a component, and `defineMessages({ en, cs })`
+  for a theme's own strings with a per-key English fallback. The language is one module-level
+  instance per page load, and `buildEditor` pins the `@pramen/cms-editor/i18n` specifier to the
+  source it builds, so a slot that imports it by package name (even from a theme with its own
+  nested install) shares the editor's instance; `test/cms-editor-host-build.test.ts` proves it
+  on a bundle.
+
 - **Override slots and nav hooks: a theme replaces the editor's pieces without touching its
   source (`@pramen/cms-editor`, `@pramen/cms-astro`).** `buildEditor({ slots })` had one slot,
   `pageHeader`. The one deployment that rebuilds the editor for its design system got the rest
@@ -402,6 +437,18 @@ there are no backward-compatibility guarantees yet.
   still unmigrated (the same trap `renamedFrom` carries).
 
 ### Changed
+
+- **English copy without em dashes, and real plurals (`@pramen/cms-editor`).** Moving the copy
+  into the catalog changed a few English strings on purpose: every em dash in UI text became a
+  colon, a comma, parentheses or a full stop (e.g. "Example cms: home", "Account: …", "A URL
+  segment: terms live under it", "Roles (comma-separated, e.g. editor, reviewer, admin)"), and
+  the "missing value" placeholder is an en dash; "N item(s)", "N field(s)", "N region(s)",
+  "N widget(s)" and "N default block(s)" are plural messages ("1 item" / "3 items"). The
+  select field's "Načítám…" (hard-coded Czech in an English editor) is now "Loading…". The
+  page editor's ↑ / ↓ / ✕ block controls and the repeater's controls gained accessible names.
+  `COMMON_COPY` (`copy.ts`) is gone, `listSummary`'s `CountWords` is `{ empty, forms }` (plural
+  forms) instead of `{ empty, one, many(n) }`, and `MEDIA_SORT_LABELS` / `MEDIA_KIND_LABELS` /
+  `TAXONOMY_TARGET_LABELS` became `*_KEYS` maps into the catalog.
 
 - **The editor's primary nav is a sidebar with icons and groups (`@pramen/cms-editor`).** It was
   a row of tabs in the podoba topbar, which is a brand-left / few-tabs-right bar and fits a few
