@@ -59,6 +59,27 @@ describe("cmsBootstrap — code-defined content/block type reconcile", () => {
     expect(cts[0].fieldsSchema).toEqual([{ name: "perex", type: "textarea" }, { name: "date", type: "date" }]);
   });
 
+  test("stores a type's declared labels, and patches them on drift", async () => {
+    // How the editor words the type's pages ("+ Nový článek", "3 články"). A column like the
+    // rest, so it converges like the rest: a relabelled type is a drift, not a new row.
+    const driver = await freshStore();
+    const labelled = (newItem: string) => defineContentType("article", { ...article, regions: article.regions, labels: { newItem, count: { one: "článek", few: "články", many: "článku", other: "článků" } } });
+    await cmsBootstrap({ contentTypes: [labelled("Nový článek")] })(ctx(driver));
+    const read = async () => ((await sysDb(driver).find({ from: "cms_content_types" })) as any[]);
+    expect((await read())[0].labels).toEqual({ newItem: "Nový článek", count: { one: "článek", few: "články", many: "článku", other: "článků" } });
+    await cmsBootstrap({ contentTypes: [labelled("Přidat článek")] })(ctx(driver));
+    expect((await read()).length).toBe(1);
+    expect((await read())[0].labels.newItem).toBe("Přidat článek");
+    // And a type that declares none stores null, which the editor reads as "use the catalog".
+    await cmsBootstrap({ contentTypes: [article] })(ctx(driver));
+    expect((await read())[0].labels).toBeNull();
+  });
+
+  test("refuses labels the editor could never show, at construction", () => {
+    const bad = defineContentType("post", { regions: [{ name: "content" }], labels: { count: { one: "post" } as never } });
+    expect(() => cmsBootstrap({ contentTypes: [bad] })).toThrow(/needs `other`/);
+  });
+
   test("is idempotent — re-running does not duplicate", async () => {
     const driver = await freshStore();
     const boot = cmsBootstrap({ blockTypes: [richText, image], contentTypes: [article] });

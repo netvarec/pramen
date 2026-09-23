@@ -322,6 +322,62 @@ export type BlockFieldsOf<D extends BlockTypeDef> = InferBlockFields<D["fieldsSc
 // `app.bootstrap` — so a fresh / reprovisioned database has them without a manual
 // createContentType/createBlockType call.
 
+/**
+ * How the editor words one kind of entry: a content type's pages, a collection's rows.
+ *
+ * Without it the editor says "+ New page" and "3 pages total" for every content type, and
+ * lower-cases a collection's label into "+ New lecture". That is passable English and wrong in
+ * most other languages: a Czech "Nový" has to agree with the gender of the noun after it, and a
+ * count takes one of three noun forms ("1 článek", "3 články", "5 článků"). A deployment running
+ * the editor in Czech patched a table of slugs into the editor's source to get this right, which
+ * put the words for the app's types in the one package that cannot know them. The type is
+ * declared HERE, so its words are declared here too, and the editor only composes them.
+ *
+ * Written in the language the editor runs in (`locale` in the admin config), like `name`. Both
+ * halves are optional; the editor falls back to neutral wording ("+ New page" / "+ Nový obsah",
+ * "N záznamů") for whatever is missing.
+ */
+export interface EntryLabels {
+  /** The create action and the create dialog's title: `"New article"`, `"Nový článek"`. The
+   * button shows it after a `+`. */
+  readonly newItem?: string;
+  /** The noun a count uses, WITHOUT the number, per CLDR plural category of the editor's
+   * language: `{ one: "článek", few: "články", many: "článku", other: "článků" }`. `other` is
+   * required, and a category left out uses it. English needs `one` and `other`. */
+  readonly count?: { readonly other: string } & { readonly [C in "zero" | "one" | "two" | "few" | "many"]?: string };
+}
+
+const PLURAL_CATEGORIES = new Set(["zero", "one", "two", "few", "many", "other"]);
+
+/**
+ * Validate + canonicalize {@link EntryLabels}, rebuilt key by key like every other `t.json()`
+ * column this package writes, so the stored document is exactly the declared shape. `null` for
+ * an absent or empty declaration.
+ */
+export function normalizeEntryLabels(v: unknown, what = "labels"): EntryLabels | null {
+  if (v === undefined || v === null) return null;
+  if (typeof v !== "object" || Array.isArray(v)) throw new BadRequest(`${what} must be an object of { newItem?, count? }`);
+  const o = v as Record<string, unknown>;
+  for (const k of Object.keys(o)) {
+    if (k !== "newItem" && k !== "count") throw new BadRequest(`${what}: unknown key '${k}' (expected newItem, count)`);
+  }
+  const out: { newItem?: string; count?: Record<string, string> } = {};
+  if (o.newItem !== undefined && o.newItem !== null) out.newItem = assertLabel(o.newItem, `${what}.newItem`);
+  if (o.count !== undefined && o.count !== null) {
+    if (typeof o.count !== "object" || Array.isArray(o.count)) throw new BadRequest(`${what}.count must be an object of plural forms`);
+    const count: Record<string, string> = {};
+    for (const [category, noun] of Object.entries(o.count as Record<string, unknown>)) {
+      // A misspelled category ("few " / "plural") would never be selected by any plural rule,
+      // so the form it carries would silently never show.
+      if (!PLURAL_CATEGORIES.has(category)) throw new BadRequest(`${what}.count: unknown plural category '${category}' (expected ${[...PLURAL_CATEGORIES].join(", ")})`);
+      count[category] = assertLabel(noun, `${what}.count.${category}`);
+    }
+    if (count.other === undefined) throw new BadRequest(`${what}.count needs \`other\`, the form every language has`);
+    out.count = count;
+  }
+  return out.newItem === undefined && out.count === undefined ? null : (out as EntryLabels);
+}
+
 /** A developer-authored content type: a page template. Page-level `fields`, named `regions`
  * (each with an optional block-type allow-list), and optional `defaultBlocks` scaffolded when
  * a page of this type is created. Mirror of `BlockTypeDef`; feed to `cmsBootstrap`. */
@@ -332,6 +388,8 @@ export interface ContentTypeDef {
   readonly fields?: readonly FieldDefinition[];
   readonly regions: readonly RegionDefinition[];
   readonly defaultBlocks?: readonly DefaultBlockDefinition[];
+  /** How the editor words this type's pages. See {@link EntryLabels}. */
+  readonly labels?: EntryLabels;
 }
 
 /** Declare a content type in code. Spread the result into `cmsBootstrap({ contentTypes })`:
@@ -340,6 +398,7 @@ export interface ContentTypeDef {
  *     name: "Article",
  *     fields: [{ name: "perex", type: "textarea" }, { name: "date", type: "date" }],
  *     regions: [{ name: "content", allowedTypes: ["rich_text", "image"] }],
+ *     labels: { newItem: "New article", count: { one: "article", other: "articles" } },
  *   }); */
 export function defineContentType(
   slug: string,
@@ -349,10 +408,11 @@ export function defineContentType(
     fields?: readonly FieldDefinition[];
     regions: readonly RegionDefinition[];
     defaultBlocks?: readonly DefaultBlockDefinition[];
+    labels?: EntryLabels;
   },
 ): ContentTypeDef {
   // Pure, for the same reason as `defineBlockType` — `cmsBootstrap` validates.
-  return { slug, name: opts.name ?? slug, description: opts.description, fields: opts.fields, regions: opts.regions, defaultBlocks: opts.defaultBlocks };
+  return { slug, name: opts.name ?? slug, description: opts.description, fields: opts.fields, regions: opts.regions, defaultBlocks: opts.defaultBlocks, labels: opts.labels };
 }
 
 /** The narrow slice of the system Db a reconcile needs. `cmsBootstrap` runs with a SYSTEM
@@ -438,6 +498,7 @@ function validateCmsDefinitions(
         fieldsSchema: normalizeFieldSchema(ct.fields, "fields"),
         regions,
         defaultBlocks: normalizeDefaultBlocks(ct.defaultBlocks, regions),
+        labels: normalizeEntryLabels(ct.labels, "labels"),
       });
     } catch (e) {
       at("content type", ct.slug, e);
@@ -780,6 +841,7 @@ export const cmsSchema = {
     fieldsSchema: t.json(), // FieldDefinition[] for page-level fields
     regions: t.json(), // RegionDefinition[]
     defaultBlocks: t.json(), // DefaultBlockDefinition[]
+    labels: t.json(), // EntryLabels | null: how the editor words this type's pages
     // Which reconciler owns this row. See cms_block_types.managedBy.
     managedBy: t.text(),
     createdAt: defaultTo(t.text(), expr.now()),
@@ -3163,7 +3225,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       },
     }),
 
-    createContentType: mutation(async (ctx, input: { name: string; slug: string; regions: RegionDefinition[]; fieldsSchema?: FieldDefinition[]; defaultBlocks?: DefaultBlockDefinition[] }) => {
+    createContentType: mutation(async (ctx, input: { name: string; slug: string; regions: RegionDefinition[]; fieldsSchema?: FieldDefinition[]; defaultBlocks?: DefaultBlockDefinition[]; labels?: EntryLabels | null }) => {
       const db = cdb(ctx);
       // The same pre-check `createBlockType` and every `create*` in this file already do.
       // It was the one create handler without it, so a duplicate slug surfaced as a raw
@@ -3177,10 +3239,11 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
         regions: input.regions ?? [],
         fieldsSchema: input.fieldsSchema ?? [],
         defaultBlocks: input.defaultBlocks ?? [],
+        labels: input.labels ?? null,
       });
     }, {
       ...editor,
-      input: (raw): { name: string; slug: string; regions: RegionDefinition[]; fieldsSchema?: FieldDefinition[]; defaultBlocks?: DefaultBlockDefinition[] } => {
+      input: (raw): { name: string; slug: string; regions: RegionDefinition[]; fieldsSchema?: FieldDefinition[]; defaultBlocks?: DefaultBlockDefinition[]; labels?: EntryLabels | null } => {
         const o = asObj(raw);
         if (typeof o.name !== "string" || typeof o.slug !== "string") throw new BadRequest("name and slug are required");
         // Non-EMPTY, not merely a string: a content type's slug is a URL segment in the
@@ -3199,6 +3262,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
           regions,
           fieldsSchema: normalizeFieldSchema(o.fieldsSchema),
           defaultBlocks: normalizeDefaultBlocks(o.defaultBlocks, regions),
+          labels: normalizeEntryLabels(o.labels),
         };
       },
     }),
@@ -3236,7 +3300,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
 
     /** Update a content type (found by `id` or `slug`). `slug` is the stable key and is
      * NOT mutable; `name`/`regions`/`fieldsSchema`/`defaultBlocks` are patched. Editor-gated. */
-    updateContentType: mutation(async (ctx, input: { id?: string; slug?: string; name?: string; regions?: RegionDefinition[]; fieldsSchema?: FieldDefinition[]; defaultBlocks?: DefaultBlockDefinition[] }) => {
+    updateContentType: mutation(async (ctx, input: { id?: string; slug?: string; name?: string; regions?: RegionDefinition[]; fieldsSchema?: FieldDefinition[]; defaultBlocks?: DefaultBlockDefinition[]; labels?: EntryLabels | null }) => {
       const db = cdb(ctx);
       if ("regions" in input && (!Array.isArray(input.regions) || input.regions.length === 0)) throw new BadRequest("at least one region is required");
       // `regions` as well, because the `defaultBlocks`-only patch below checks against the
@@ -3246,7 +3310,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       if (!row) throw notFound("content type");
       assertNotManaged(row, "content type", "defineContentType");
       const patch: Record<string, unknown> = {};
-      for (const k of ["name", "regions", "fieldsSchema", "defaultBlocks"] as const) {
+      for (const k of ["name", "regions", "fieldsSchema", "defaultBlocks", "labels"] as const) {
         if (k in input) patch[k] = (input as Record<string, unknown>)[k];
       }
       // A `defaultBlocks` patch that does NOT also send regions is checked here against the
@@ -3258,7 +3322,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       return db.update("cms_content_types", String(row.id), patch);
     }, {
       ...editor,
-      input: (raw): { id?: string; slug?: string; name?: string; regions?: RegionDefinition[]; fieldsSchema?: FieldDefinition[]; defaultBlocks?: DefaultBlockDefinition[] } => {
+      input: (raw): { id?: string; slug?: string; name?: string; regions?: RegionDefinition[]; fieldsSchema?: FieldDefinition[]; defaultBlocks?: DefaultBlockDefinition[]; labels?: EntryLabels | null } => {
         const o = asObj(raw);
         if (typeof o.id !== "string" && typeof o.slug !== "string") throw new BadRequest("id or slug is required");
         const out = { ...o } as Record<string, unknown>;
@@ -3266,6 +3330,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
         if (o.name !== undefined) out.name = assertLabel(o.name, "content type name");
         if (o.regions !== undefined) out.regions = normalizeRegions(o.regions);
         if (o.fieldsSchema !== undefined) out.fieldsSchema = normalizeFieldSchema(o.fieldsSchema);
+        if (o.labels !== undefined) out.labels = normalizeEntryLabels(o.labels);
         // Checked against the regions being SAVED where the same call sends both — patching
         // only `defaultBlocks` cannot see the stored regions from an input parser, and the
         // handler re-checks below.
@@ -5224,6 +5289,10 @@ export interface CollectionDef {
   readonly label: string;
   /** Plural UI label; defaults to `label + "s"`. */
   readonly pluralLabel?: string;
+  /** How the editor words this collection's rows ("+ New lecture", "3 lectures"). See
+   * {@link EntryLabels}; without it the editor lower-cases `label` / `pluralLabel` in English
+   * and says a neutral "záznam" in Czech. */
+  readonly labels?: EntryLabels;
   /** Optional nav icon (emoji or short string). */
   readonly icon?: string;
   /** The edit-form schema — the same DSL as blocks. Each scalar field is a real column
@@ -5280,6 +5349,8 @@ export interface CollectionMeta {
   slug: string;
   label: string;
   pluralLabel: string;
+  /** See {@link CollectionDef.labels}; `null` when the collection declares none. */
+  labels: EntryLabels | null;
   icon?: string;
   /** Nav position — see {@link CollectionDef.navOrder}. Always present in the meta (the
    * default is filled here) so the editor sorts one list of numbers rather than deciding
@@ -5302,6 +5373,7 @@ function collectionMeta(c: CollectionDef): CollectionMeta {
     slug: c.slug,
     label: c.label,
     pluralLabel: c.pluralLabel ?? `${c.label}s`,
+    labels: normalizeEntryLabels(c.labels, `collection '${c.slug}' labels`),
     icon: c.icon,
     navOrder: c.navOrder ?? NAV_ORDER.collections,
     fields: c.fields,

@@ -85,6 +85,36 @@ entry, so doing it there made the returned array stop matching the `as const` li
 `BlockFieldsOf<typeof def>` is inferred from — a cast a component would follow into
 `fields["  title  "] === undefined` with tsc insisting it was fine.
 
+### How the editor words a type: `labels`
+
+The editor says "+ New page" and "N pages total" for every content type unless the type says
+otherwise, and a collection's create button lower-cases its label ("+ New lecture"). That is
+passable English and wrong in most other languages: in Czech, "Nový" has to agree with the
+gender of the noun after it, and a count takes one of three noun forms. So a content type and a
+collection may declare their own words, in the language the editor runs in (`locale` in the
+admin config):
+
+```ts
+const article = defineContentType("article", {
+  name: "Články",
+  regions: [{ name: "content" }],
+  labels: {
+    newItem: "Nový článek",                                        // "+ Nový článek", and the create dialog's title
+    count: { one: "článek", few: "články", many: "článku", other: "článků" },  // 1 článek, 3 články, 5 článků
+  },
+});
+const lectures = collection("lectures", { entity: "lectures", label: "Přednáška", fields, labels: { newItem: "Nová přednáška", count: { one: "přednáška", few: "přednášky", other: "přednášek" } } });
+```
+
+`count` holds the NOUN per CLDR plural category (no number): `other` is required and a missing
+category uses it; English needs `one` and `other`, Czech `one`, `few`, `many` (fractions) and
+`other` (0 and 5+). Both halves are optional; whatever is missing falls back to neutral catalog
+wording ("+ Nový obsah", "5 záznamů"). Stored in `cms_content_types.labels` (a `t.json()`
+column), converged by `cmsBootstrap` like the rest of the definition, and accepted by
+`createContentType` / `updateContentType`; `normalizeEntryLabels` is the validator all of them
+share, so a misspelled category or a missing `other` fails at app construction rather than
+silently never showing.
+
 ## SEO & sitemap
 
 - Per-page SEO on `cms_pages`: `metaTitle`, `metaDescription`, `canonicalUrl`, `robots`,
