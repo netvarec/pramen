@@ -491,6 +491,11 @@ A few things the contracts decide for you, so a theme does not have to rediscove
   BUILT, so hiding an entry does not hide the account-menu row that replaces it. A
   `transformNav` that throws is logged and ignored rather than taking the admin down.
 
+**A complete theme to read or use:** [`@pramen/cms-theme-gs`](../cms-theme-gs/README.md) fills
+every slot with the Graphic Standard's podoba components, ships its copy in English and Czech
+through `@pramen/cms-editor/i18n`, and exports its nav and dashboard as pieces a project extends
+(`composeNav`, `createHomeScreen`) rather than forks.
+
 **Before reaching for a slot, check whether something cheaper already does the job:**
 
 | You want | Use |

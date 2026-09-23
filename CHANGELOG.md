@@ -1,9 +1,9 @@
 # Changelog
 
-All notable changes to the `@pramen/*` packages are recorded here. The eight packages —
-`@pramen/server`, `@pramen/client`, `@pramen/react`, `@pramen/auth`, `@pramen/cms`,
-`@pramen/cms-astro`, `@pramen/cms-editor`, `@pramen/admin` — publish in lockstep under one
-shared version.
+All notable changes to the `@pramen/*` packages are recorded here. The ten packages
+(`@pramen/server`, `@pramen/client`, `@pramen/react`, `@pramen/auth`, `@pramen/cms`,
+`@pramen/cms-astro`, `@pramen/cms-editor`, `@pramen/admin`, `@pramen/analytics`,
+`@pramen/cms-theme-gs`) publish in lockstep under one shared version.
 
 > **Gap in this file:** entries between 0.0.15 and 0.0.51 were not recorded. The `git log`
 > is the record for that range; this file resumes at 0.0.52 rather than reconstructing it.
@@ -15,6 +15,33 @@ there are no backward-compatibility guarantees yet.
 ## [Unreleased]
 
 ### Added
+
+- **`@pramen/cms-theme-gs`: the Graphic Standard look for the editor, as a package.** The one
+  deployment that ran the editor in GS's clothes kept the whole look inside its own repo: six
+  components, a nav function, a stylesheet and a build script, plus (until the slots, i18n and
+  layout variables below) some seventy string replacements against our source. The next GS
+  project would have copied all of it. The theme is now built on public seams only: a module per
+  slot typed against `@pramen/cms-editor/slots` (`pageHeader` as GS's `BrandPageHeader` with the
+  editor's own action in a `CtaPill`, `home` as the GS dashboard with live counts, `detailHeader`,
+  `mediaDetail` as the asset preview modal, `mediaGrid` as `AssetMasonryGrid`, and `nav`), copy
+  through `@pramen/cms-editor/i18n` in English and Czech, and a `theme.css` the host imports from
+  its own Tailwind entry.
+
+  ```ts
+  await buildEditor({ outdir, designSystem: root, ...gsEditor({ styles: resolve(root, "src/admin/editor.css") }) });
+  ```
+  ```js
+  pramenCms({ admin: { ...gsAdmin, editorAssets: "/admin", locale: "cs" } });
+  ```
+
+  Project rules stay in the project and extend the theme rather than fork it: `composeNav(myStep,
+  gsTransformNav)` for the nav, `createHomeScreen({ title, sections })` for the dashboard (with
+  the stat loaders exported from `@pramen/cms-theme-gs/dashboard-data`), and `gsEditor({ slots })`
+  to point a slot at the project's module. No font files ship (GT America is commercial; the
+  README has the host's `@font-face`) and no token snapshot either: `@podoba/tokens` takes GS's
+  values in podoba#37, and the few rules that exist only until that release are marked
+  `TODO(podoba#37)`. Peer dependencies: `@pramen/cms-editor` (same version), `@podoba/react`
+  0.0.42 or newer, React 19. `example/site` builds a themed editor with `build:admin-gs`.
 
 - **The editor speaks Czech, and any deployment can pick its language (`@pramen/cms-editor`,
   `@pramen/cms-astro`, `@pramen/cms`).** Every word the editor shows (buttons, headings,
@@ -788,6 +815,12 @@ there are no backward-compatibility guarantees yet.
   node, so the router cannot end up mounted where the server does not serve.
 
 ### Fixed
+
+- **`buildEditor({ styles })` failed on a relative path (`@pramen/cms-editor`).** Every other
+  path the function takes is read from the working directory, and so was this one, but Tailwind
+  is spawned with the stylesheet's own directory as its cwd and looked for the relative path a
+  second time from there: "input file does not exist" for a file that was right there. The entry
+  is resolved to an absolute path first now.
 
 - **Lists said "None yet" before they had asked (`@pramen/cms-editor`).** Every list screen
   held its rows as an empty array and read the header from its length, so "the first fetch
