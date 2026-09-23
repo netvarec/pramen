@@ -37,6 +37,11 @@ export default defineConfig({
       // is what used to live in a hand-edited /config.js.
       admin: {
         brand: { name: "Example", suffix: "cms" },
+
+        // The editor's language. English unless the environment says otherwise, so the example
+        // shows what a deployment gets by default; `PRAMEN_ADMIN_LOCALE=cs bun run --cwd example/site dev`
+        // shows the Czech catalog without editing this file.
+        locale: process.env.PRAMEN_ADMIN_LOCALE,
         extraNav: [{ label: "Site", href: "/" }],
 
         // Where the editor's "Preview link" button sends people. Without it the link points

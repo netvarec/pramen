@@ -20,7 +20,7 @@
  * a refresh is served like any other page, with no SPA-fallback rewrite for the host to
  * configure (and to get wrong for its own 404s).
  */
-import { adminBasePath, adminConfigScript, adminEditorAssets, adminHasPanels, adminTitle } from "pramen:cms/admin";
+import { adminBasePath, adminConfigScript, adminEditorAssets, adminHasPanels, adminLang, adminTitle } from "pramen:cms/admin";
 import { adminAssetUrls, adminImportMap, type AdminAssetUrls } from "@pramen/cms-astro";
 
 // The packaged assets, or the host's own build. Resolved once, so the stylesheet, the module
@@ -78,7 +78,7 @@ Astro.response.headers.set("cache-control", "private, no-store");
 ---
 
 <!doctype html>
-<html lang="en">
+<html lang={adminLang}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />

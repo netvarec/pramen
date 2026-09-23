@@ -135,6 +135,24 @@ export interface AdminRuntimeConfig {
    * See "Build it against your own design system" in that package's README.
    */
   editorAssets?: string;
+  /**
+   * The language of the editor's own copy: every button, heading, dialog and count. `"en"`
+   * (the default) or `"cs"`; a region subtag (`"cs-CZ"`) is kept for date and number
+   * formatting. Also the shell's `<html lang>`.
+   *
+   * An unknown language is warned about in the browser console and the editor stays English.
+   * The words for your own content types and collections are yours, declared with them
+   * (`labels` on `defineContentType` / `collection` in @pramen/cms), in this same language.
+   */
+  locale?: string;
+  /**
+   * Replace individual messages of the chosen catalog, by key: `{ "nav.settings": "Account" }`.
+   * A plural message takes its forms: `{ "media.count": { one: "{count} asset", other:
+   * "{count} assets" } }`. For a deployment that wants one word different, not for a new
+   * language. An unknown key, or a value of the wrong shape, is warned about and ignored.
+   * The keys are the ones in `@pramen/cms-editor`'s catalog (`src/i18n/catalog/`).
+   */
+  messages?: Record<string, string | ({ other: string } & { [category in "zero" | "one" | "two" | "few" | "many"]?: string })>;
   /** Extra top-nav links to companion tools the host serves.
    *
    * `target` defaults to `"_blank"`, because a companion tool is normally a separate
@@ -216,6 +234,23 @@ export function adminDocumentTitle(cfg: AdminRuntimeConfig): string {
   if (!name) return "pramen · cms editor";
   const suffix = cfg.brand?.suffix === undefined ? "cms" : cfg.brand.suffix;
   return suffix ? `${name} · ${suffix}` : name;
+}
+
+/**
+ * The shell's `<html lang>`: the configured `locale`, canonicalized, else `"en"`.
+ *
+ * Only the pre-hydration value, like the title: the editor re-stamps the attribute on boot
+ * with the language it actually resolved, which is English again for a locale it ships no
+ * catalog for. A value that is not a language tag at all is not written into the document.
+ */
+export function adminLang(cfg: AdminRuntimeConfig): string {
+  const raw = typeof cfg.locale === "string" ? cfg.locale.trim() : "";
+  if (!raw) return "en";
+  try {
+    return Intl.getCanonicalLocales(raw)[0] ?? "en";
+  } catch {
+    return "en";
+  }
 }
 
 /** Build the runtime config from the integration's options and its backend descriptor. */

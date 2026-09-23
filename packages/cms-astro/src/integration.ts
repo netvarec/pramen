@@ -25,7 +25,7 @@
 
 import type { AstroIntegration } from "astro";
 import { fileURLToPath } from "node:url";
-import { ADMIN_BASE, ADMIN_ROUTE, adminDocumentTitle, adminHasPanels, adminRuntimeConfig, serializeAdminConfig, type AdminOptions } from "./admin.js";
+import { ADMIN_BASE, ADMIN_ROUTE, adminDocumentTitle, adminHasPanels, adminLang, adminRuntimeConfig, serializeAdminConfig, type AdminOptions } from "./admin.js";
 
 /** Where the CMS lives. A named descriptor rather than a bare `baseUrl` string, so a future
  * local/in-process backend can be added without changing the call shape. */
@@ -148,6 +148,7 @@ function adminModuleSource(admin: AdminOptions, backend: CmsBackend): string {
 export const adminBasePath = ${JSON.stringify(ADMIN_BASE)};
 export const adminConfigScript = ${JSON.stringify(serializeAdminConfig(cfg))};
 export const adminTitle = ${JSON.stringify(adminDocumentTitle(cfg))};
+export const adminLang = ${JSON.stringify(adminLang(cfg))};
 export const adminHasPanels = ${JSON.stringify(adminHasPanels(cfg))};
 export const adminEditorAssets = ${JSON.stringify(cfg.editorAssets ?? null)};
 `;
@@ -174,6 +175,8 @@ const ADMIN_TYPES = `declare module "pramen:cms/admin" {
   export const adminConfigScript: string;
   /** Pre-hydration fallback for the shell's <title>. */
   export const adminTitle: string;
+  /** The shell's <html lang>, from the configured \`locale\`. */
+  export const adminLang: string;
   /** Whether this deployment declares panel bundles — gates the shell's import map. */
   export const adminHasPanels: boolean;
   /** Base URL of a host-built editor's assets, or null for the packaged ones. */
