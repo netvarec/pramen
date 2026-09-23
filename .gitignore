@@ -17,3 +17,6 @@ wrangler.jsonc
 
 # Astro generated types (example/site)
 .astro/
+
+# The example site's GS-themed editor build (`bun run --cwd example/site build:admin-gs`)
+example/site/public/admin-gs/

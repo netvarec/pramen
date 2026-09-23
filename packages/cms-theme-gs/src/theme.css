@@ -1,0 +1,135 @@
+/* The Graphic Standard look for @pramen/cms-editor: what the slots' components need beyond
+ * podoba's utilities, and the few base rules GS's own app sets.
+ *
+ * Imported from the HOST's Tailwind entry, never compiled on its own (see the README):
+ *
+ *   @import "@pramen/cms-editor/app.css";
+ *   @import "@podoba/tokens/variables.css";
+ *   @import "@podoba/tailwind";
+ *   @import "@pramen/cms-theme-gs/theme.css";
+ *   @source "../node_modules/@podoba/react/src";
+ *
+ * What is NOT here, and why:
+ *
+ * - Tokens. GS's values are podoba's own from the podoba release after 0.0.42
+ *   (graphic-standard/podoba#37); until that ships a host may layer its own overrides after
+ *   `@podoba/tokens/variables.css`. A snapshot copied in here would be a second source that
+ *   drifts, which is exactly what #37 removes.
+ * - Layout. Full-width content, 24px gutters and 48px under the topbar are the editor's own
+ *   `--pramen-*` defaults (`@pramen/cms-editor/app.css`); the theme's headers read them.
+ * - Fonts. GT America is a commercial face and this package is public, so no font file ships
+ *   and no `@font-face` is declared: the host declares the face from files it is licensed to
+ *   serve (the README has the block). Until it does, the stack below falls back to the system
+ *   sans. */
+
+/* The slots' class strings live in this package, which Tailwind would not otherwise scan: it
+ * ignores `node_modules`, and resolves this path from THIS file, wherever it is installed. */
+@source "./**/*.{ts,tsx}";
+
+:root {
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color-scheme: light;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+/* The face GS sets on its whole app. `--font-sans` is podoba's token and already names GT
+ * America first; the literal stack is for a host whose tokens do not.
+ *
+ * `letter-spacing: normal` because podoba 0.0.42's `--tracking-normal` is tuned for the NC
+ * Fontina it bundles (+0.01em), while GT America is set at GS's tighter default.
+ * TODO(podoba#37): the tracking scale follows the face there; drop this line once it ships. */
+body {
+  font-family: var(--font-sans, "GT America", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif);
+  letter-spacing: normal;
+  scrollbar-gutter: stable;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* The dashboard's typography is GS's inherited one; `Tile` owns its headline metrics. */
+.gs-dashboard {
+  font-family: var(--font-sans);
+  letter-spacing: var(--tracking-normal);
+  line-height: 1.375;
+}
+
+/* The dashboard CTA: one keyboard target whose hit area covers the whole mint pill, as GS's
+ * `CtaPillAction coverParent` does, with the focus ring drawn round the pill rather than the
+ * small button inside it. */
+.gs-create-button::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  cursor: pointer;
+  border-radius: 8px;
+}
+.gs-create-trigger:has(:focus-visible) {
+  outline: 2px solid var(--color-fg);
+  outline-offset: 3px;
+  border-radius: 8px;
+}
+.gs-create-title {
+  margin: 16px 48px 40px;
+  text-align: center;
+  font-size: 30px;
+  line-height: 1.2;
+}
+@media (min-width: 768px) {
+  /* On a desktop the create hub replaces the greeting in place, as GS's does. `BrandPageHeader`
+   * still owns Escape, focus restoration and the phone's focus trap. */
+  .gs-create-header-open > .grid {
+    display: none;
+  }
+  .gs-create-header-open > [role="region"] {
+    margin-top: -8px;
+    min-height: calc(100dvh - 140px);
+  }
+  .gs-create-title {
+    margin-top: 54px;
+    margin-bottom: 54px;
+  }
+}
+
+/* Keep the CTA in the header on narrow tablets; only phones (<640px) dock it to the bottom of
+ * the screen. podoba 0.0.42 docks below 768px. Scoped to the theme's own headers, plus
+ * `.gs-panel-hero`, which a host puts on a `BrandPageHeader` in its own panel to get the same.
+ * TODO(podoba#37): `BrandPageHeader` docks below `sm` itself there; delete this block. */
+@media (min-width: 640px) and (max-width: 767px) {
+  :is(.gs-create-header, .gs-panel-hero, .gs-page-header > div) > .grid {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    column-gap: 20px;
+  }
+  :is(.gs-create-header, .gs-panel-hero, .gs-page-header > div) > .grid > .fixed {
+    position: static;
+    inset: auto;
+    grid-column: 2;
+    grid-row: 1 / -1;
+    height: 100%;
+    padding: 0;
+    z-index: auto;
+  }
+}
+
+/* Room at the bottom of a phone's page for the docked CTA, so the last row can scroll out from
+ * under it. Measured against podoba 0.0.42's dock (a 99px pill plus the safe-area gap).
+ * TODO(podoba#37): replace with `body:has([data-mobile-cta-dock]) { @apply mobile-cta-dock-inset; }`,
+ * which pads by the dock's exact footprint and needs no list of headers. */
+@media (max-width: 639px) {
+  body:has(.gs-page-header button, .gs-panel-hero button, .gs-dashboard) {
+    padding-bottom: calc(100px + env(safe-area-inset-bottom));
+  }
+}

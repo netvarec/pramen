@@ -1,5 +1,9 @@
 {
   "extends": "astro/tsconfigs/strict",
   "include": [".astro/types.d.ts", "**/*"],
-  "exclude": ["dist"]
+  // `public/` holds build output (the GS-themed editor bundle, when built), and `admin-gs/` is
+  // a Bun build script plus editor slot modules with a config of their own: neither is the
+  // site's code, and `astro check` pulling a 1 MB bundle and podoba's source into its program
+  // runs it out of memory.
+  "exclude": ["dist", "public", "admin-gs"]
 }

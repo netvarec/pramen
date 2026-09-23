@@ -1,0 +1,20 @@
+{
+  // `gsEditor` runs in the host's build script (Bun), next to `buildEditor`, and reads the
+  // filesystem; its own config so the slots next door cannot reach for `node:fs` and still
+  // typecheck. Same split as `@pramen/cms-editor`.
+  "compilerOptions": {
+    "target": "es2022",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "lib": ["es2022"],
+    "types": ["bun-types"],
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "verbatimModuleSyntax": true,
+    "noEmit": true
+  },
+  "include": ["src/build.ts"]
+}

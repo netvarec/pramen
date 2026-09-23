@@ -6,7 +6,13 @@
 
 import node from "@astrojs/node";
 import pramenCms from "@pramen/cms-astro";
+import { gsAdmin } from "@pramen/cms-theme-gs/config";
 import { defineConfig } from "astro/config";
+
+// `PRAMEN_ADMIN_THEME=gs` serves the editor built with the Graphic Standard theme
+// (`bun run build:admin-gs`, see `admin-gs/build.ts`) instead of the packaged one: the topbar,
+// the theme's recommended controls, and the assets the theme build wrote to `public/admin-gs`.
+const gsTheme = process.env.PRAMEN_ADMIN_THEME === "gs" ? { ...gsAdmin, editorAssets: "/admin-gs" } : {};
 
 // `test/astro-site.test.ts` builds this site against a stub CMS, so the backend is an env
 // var with the local dev worker as its default.
@@ -36,6 +42,7 @@ export default defineConfig({
       // other configuration; the object form also carries the editor's own settings, which
       // is what used to live in a hand-edited /config.js.
       admin: {
+        ...gsTheme,
         brand: { name: "Example", suffix: "cms" },
 
         // The editor's language. English unless the environment says otherwise, so the example

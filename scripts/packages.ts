@@ -28,6 +28,10 @@ export const PUBLISH_PKGS = [
   // publisher was configured stage-only), which stranded `cms-astro`, `cms-editor` and
   // `admin` on the previous version for as long as the npm-side fix took.
   "packages/analytics",
+  // After `analytics` for the same reason: the newest package, so a first-publish failure (a
+  // trusted publisher not yet configured for it) strands nothing. It needs only `cms-editor`
+  // published first, for the exact peer version the rewrite pins it to.
+  "packages/cms-theme-gs",
 ];
 
 /** Fail loudly if any non-private @pramen/* workspace is missing from PUBLISH_PKGS,

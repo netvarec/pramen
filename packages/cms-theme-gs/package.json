@@ -1,0 +1,50 @@
+{
+  "name": "@pramen/cms-theme-gs",
+  "version": "0.0.74",
+  "description": "The Graphic Standard look for @pramen/cms-editor: slot components, nav hooks and a stylesheet, wired into buildEditor in one call.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/netvarec/pramen.git",
+    "directory": "packages/cms-theme-gs"
+  },
+  "homepage": "https://github.com/netvarec/pramen#readme",
+  "bugs": "https://github.com/netvarec/pramen/issues",
+  "type": "module",
+  "sideEffects": [
+    "*.css"
+  ],
+  "exports": {
+    "./build": "./src/build.ts",
+    "./config": {
+      "types": "./src/config.d.ts",
+      "default": "./src/config.js"
+    },
+    "./nav": "./src/nav.ts",
+    "./home": "./src/home.tsx",
+    "./dashboard-data": "./src/dashboard-data.ts",
+    "./theme.css": "./src/theme.css"
+  },
+  "files": [
+    "src",
+    "!src/**/*.test.*"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "peerDependencies": {
+    "@podoba/react": ">=0.0.42",
+    "@pramen/cms-editor": "workspace:*",
+    "react": "^19.0.0"
+  },
+  "devDependencies": {
+    "@podoba/react": "0.0.42",
+    "@podoba/tailwind": "0.0.42",
+    "@podoba/tokens": "0.0.42",
+    "@pramen/cms-editor": "workspace:*",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  }
+}

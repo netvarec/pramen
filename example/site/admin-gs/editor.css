@@ -1,0 +1,14 @@
+/* The example's editor stylesheet under the GS theme. Lives in the SITE's tree on purpose:
+ * Tailwind resolves every bare import below from this file's directory, so `@podoba/*` here is
+ * the site's 0.0.42, not the one @pramen/cms-editor pins. Order matters: the editor's base
+ * rules, then the site's podoba tokens over the editor's, then podoba's utilities, then the
+ * theme. */
+@import "@pramen/cms-editor/app.css";
+@import "@podoba/tokens/variables.css";
+@import "@podoba/tailwind";
+@import "@pramen/cms-theme-gs/theme.css";
+@source "../node_modules/@podoba/react/src";
+
+/* GT America is licensed per deployment, so neither the theme nor this example ships it; a real
+ * host declares it here from its own files (see the theme's README). Without it the editor
+ * falls back to the system sans in podoba's `--font-sans` stack. */
