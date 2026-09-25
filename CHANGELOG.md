@@ -16,6 +16,36 @@ there are no backward-compatibility guarantees yet.
 
 ### Added
 
+- **Deleting a content type or a block type that nothing uses (`@pramen/cms`,
+  `@pramen/cms-editor`).** A type authored by mistake, or one whose section a site dropped, had
+  no way out of the store: the builders could create and edit but never remove, so the Types
+  screen only ever grew. `deleteContentType({ id })` and `deleteBlockType({ id })` are
+  editor-gated, enforce the caller's delete ACL, and refuse with a 409 rather than cascading:
+  a code-managed type (remove the declaration and let bootstrap release it first), a content
+  type that still has pages *including trash*, and a block type still used by blocks, by a
+  content type's default blocks, or by a region allow-list. The builder shows **Delete type**
+  when `listCmsCapabilities().typeDeletion` says the server has the handlers. Type relations
+  gained `ON DELETE RESTRICT` and an index on block type ids through the ordinary schema
+  migration, so a write that lands between the pre-check and the delete cannot leave content
+  pointing at a type that is gone.
+
+  The reference scan reads the content types and checks them in JS. `json_each` was the
+  obvious way to write it and the wrong one: it is a table-valued function, and SQLite raises
+  `malformed JSON` for the whole statement the moment ONE row will not parse, so a single
+  legacy row holding `''` would have turned every block-type deletion in that deployment into
+  a raw SQL 500. Guarding with `json_valid` does not reach the second `json_each` over
+  `$.allowedTypes`, and a WHERE cannot stop a FROM-clause function from being evaluated.
+
+- **Editor assets are chosen before Vite builds its graph (`@pramen/cms-astro`).** The shell
+  used to pick between the packaged editor and a host-built one at render time, behind
+  conditional `?url` imports. Vite still saw them: in dev it treated the unreferenced CSS
+  import as a module and injected the packaged stylesheet on top of the host's, which is the
+  two-generations-of-podoba problem `editorAssets` exists to end, and a build emitted both
+  assets as orphans. The integration now selects an asset module at `astro:config:setup` and
+  hands it over as `pramen:cms/admin-assets`, so a custom build has no packaged imports at
+  all, and dev serves the six packaged files directly rather than as URL-module stubs.
+  `editorAssets: ""` is warned about and ignored instead of silently landing between the two.
+
 - **`@pramen/cms-theme-gs`: the Graphic Standard look for the editor, as a package.** The one
   deployment that ran the editor in GS's clothes kept the whole look inside its own repo: six
   components, a nav function, a stylesheet and a build script, plus (until the slots, i18n and
