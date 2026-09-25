@@ -16,7 +16,7 @@ import { pramenCms } from "../packages/cms-astro/src/integration";
 type VitePlugin = { name: string; enforce?: string; resolveId: (id: string) => string | null; load: (id: string) => string | null };
 
 /** Run `astro:config:setup` with fakes, and hand back what the integration produced. */
-async function setup(opts: Parameters<typeof pramenCms>[0], types: string[] | Error = ["article", "page"]) {
+async function setup(opts: Parameters<typeof pramenCms>[0], types: string[] | Error = ["article", "page"], command = "build") {
   const logs: string[] = [];
   const injected: { pattern: string; entrypoint: string }[] = [];
   const original = globalThis.fetch;
@@ -29,6 +29,7 @@ async function setup(opts: Parameters<typeof pramenCms>[0], types: string[] | Er
     let vite: { assetsInclude?: string[] } | undefined;
     const integration = pramenCms(opts);
     await integration.hooks["astro:config:setup"]!({
+      command,
       updateConfig: (cfg: { vite?: { plugins?: VitePlugin[]; assetsInclude?: string[] } }) => { plugin = cfg.vite?.plugins?.[0]; vite = cfg.vite; return cfg as never; },
       injectRoute: (route: { pattern: string; entrypoint: string }) => injected.push(route),
       logger: { info: (m: string) => logs.push(`info:${m}`), warn: (m: string) => logs.push(`warn:${m}`) },
@@ -336,25 +337,26 @@ describe("the shell does not resolve assets it will not serve", () => {
   /** The shell's frontmatter, read as text — the contract here is about IMPORT SHAPE. */
   const shell = readFileSync(new URL("../packages/cms-astro/src/PramenAdmin.astro", import.meta.url), "utf8");
 
-  test("the packaged `?url` imports are behind the condition, not static", () => {
-    // Static, they ran for every deployment — including one that set `editorAssets` and
-    // names none of them. An unused `?url` import of a CSS file is not free: in dev Vite
-    // treats it as a CSS module and injects it as a `<style>`, so a host that built the
-    // editor against its own design system got the packaged stylesheet on top of its own,
-    // which is the two-generations-of-podoba problem `editorAssets` exists to end. In a
-    // build both assets are emitted as orphans (~1.3MB) nothing loads.
-    for (const asset of ["editor.js", "editor.css", ...PANEL_GLOBAL_SHIMS.map((s) => s.file)]) {
-      const spec = `@pramen/cms-editor/${asset}?url`;
-      expect(shell, `${asset} must be imported dynamically`).not.toContain(`from "${spec}"`);
-      expect(shell, `${asset} must still be reachable when the packaged editor is served`).toContain(`import("${spec}")`);
+  test("the shell has no packaged imports; the configured module owns the graph", async () => {
+    expect(shell).not.toContain("@pramen/cms-editor");
+    for (const command of ["dev", "build"]) {
+      const { plugin } = await setup({ backend: { url: "https://x.dev" }, admin: { editorAssets: "/custom" } }, [], command);
+      const code = plugin.load(plugin.resolveId("pramen:cms/admin-assets")!)!;
+      expect(code).not.toContain("import");
+      expect(code).toContain('"editor":"/custom/editor.js"');
     }
   });
 
-  test("every packaged asset the shell resolves is one adminAssetUrls names", () => {
-    // The mirror: six URLs go in, six come out. A seventh asset added to the shell without
-    // a slot in `AdminAssetUrls` would be resolved and then silently dropped.
-    const imported = [...shell.matchAll(/import\("@pramen\/cms-editor\/([^"?]+)\?url"\)/g)].map((m) => m[1]);
+  test("production imports all six assets, while dev names raw middleware URLs", async () => {
+    const opts = { backend: { url: "https://x.dev" }, admin: true as const };
+    const { plugin } = await setup(opts);
+    const code = plugin.load(plugin.resolveId("pramen:cms/admin-assets")!)!;
+    const imported = [...code.matchAll(/from "@pramen\/cms-editor\/([^"?]+)\?url"/g)].map((m) => m[1]);
     expect(new Set(imported).size).toBe(Object.keys(adminAssetUrls("/admin", undefined as never)).length);
+    const dev = await setup(opts, [], "dev");
+    const devCode = dev.plugin.load(dev.plugin.resolveId("pramen:cms/admin-assets")!)!;
+    expect(devCode).not.toContain("import");
+    expect(devCode).toContain(`${ADMIN_BASE}/_assets/editor.js`);
   });
 
   test("called with neither a base nor the packaged URLs, it throws rather than emit empty src", () => {

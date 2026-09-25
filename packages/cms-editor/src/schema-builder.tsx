@@ -579,10 +579,12 @@ const NOTICE_ID = "cms-managed-notice";
 /** Empty-string-to-null, for the optional text columns. */
 const orNull = (s: string): string | null => (s.trim() === "" ? null : s.trim());
 
-export function BlockTypeEditor({ api, codeDefinedTypes, slug, onSaved, onBack, backHref, onError }: {
+export function BlockTypeEditor({ api, codeDefinedTypes, typeDeletion, slug, onSaved, onDeleted, onBack, backHref, onError }: {
   api: Api;
   /** See `TypesOverview`. */
   codeDefinedTypes: boolean;
+  typeDeletion: boolean;
+  onDeleted: () => void;
   /** `"new"` creates; anything else loads that block type by slug. */
   slug: string;
   onSaved: (slug: string) => void;
@@ -661,6 +663,20 @@ export function BlockTypeEditor({ api, codeDefinedTypes, slug, onSaved, onBack, 
     }
   };
 
+  const remove = async () => {
+    if (!id || !confirm(t("blockType.deleteConfirm", { name: draft.name }))) return;
+    setBusy(true);
+    try {
+      await api.deleteBlockType(id);
+      setBaseline(JSON.stringify(draft));
+      onDeleted();
+    } catch (e) {
+      onError(String((e as Error).message ?? e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (missing) return <div className={WRAP}><p className="pt-8 text-fg-subtle">{t("blockType.unknown", { slug })}</p></div>;
   if (loading) return <div className={WRAP}><p className="pt-8 text-fg-subtle">{t("common.loading")}</p></div>;
 
@@ -717,10 +733,11 @@ export function BlockTypeEditor({ api, codeDefinedTypes, slug, onSaved, onBack, 
         </div>
 
         {locked ? null : (
-          <div className="mt-2">
+          <div className="mt-2 flex gap-2">
             <Button onPress={save} isDisabled={busy || draft.name.trim() === "" || draft.slug.trim() === ""}>
               {busy ? t("common.saving") : isNew ? t("common.create") : t("common.save")}
             </Button>
+            {!isNew && typeDeletion && <Button variant="ghost" onPress={remove} isDisabled={busy}>{t("schema.deleteType")}</Button>}
           </div>
         )}
       </ReadOnlyFieldset>
@@ -730,10 +747,12 @@ export function BlockTypeEditor({ api, codeDefinedTypes, slug, onSaved, onBack, 
 
 // --- content-type editor --------------------------------------------------------------
 
-export function ContentTypeEditor({ api, codeDefinedTypes, slug, onSaved, onBack, backHref, onError }: {
+export function ContentTypeEditor({ api, codeDefinedTypes, typeDeletion, slug, onSaved, onDeleted, onBack, backHref, onError }: {
   api: Api;
   /** See `TypesOverview`. */
   codeDefinedTypes: boolean;
+  typeDeletion: boolean;
+  onDeleted: () => void;
   slug: string;
   onSaved: (slug: string) => void;
   onBack: () => void;
@@ -822,6 +841,20 @@ export function ContentTypeEditor({ api, codeDefinedTypes, slug, onSaved, onBack
     }
   };
 
+  const remove = async () => {
+    if (!id || !confirm(t("contentType.deleteConfirm", { name: draft.name }))) return;
+    setBusy(true);
+    try {
+      await api.deleteContentType(id);
+      setBaseline(JSON.stringify(draft));
+      onDeleted();
+    } catch (e) {
+      onError(String((e as Error).message ?? e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (missing) return <div className={WRAP}><p className="pt-8 text-fg-subtle">{t("contentType.unknown", { slug })}</p></div>;
   if (loading) return <div className={WRAP}><p className="pt-8 text-fg-subtle">{t("common.loading")}</p></div>;
 
@@ -898,10 +931,11 @@ export function ContentTypeEditor({ api, codeDefinedTypes, slug, onSaved, onBack
         </div>
 
         {locked ? null : (
-          <div>
+          <div className="flex gap-2">
             <Button onPress={save} isDisabled={busy || draft.name.trim() === "" || draft.slug.trim() === "" || regions.length === 0}>
               {busy ? t("common.saving") : isNew ? t("common.create") : t("common.save")}
             </Button>
+            {!isNew && typeDeletion && <Button variant="ghost" onPress={remove} isDisabled={busy}>{t("schema.deleteType")}</Button>}
             {regions.length === 0 ? <p className="mt-2 text-caption text-danger">{t("contentType.needsRegion")}</p> : null}
           </div>
         )}

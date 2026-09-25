@@ -241,6 +241,8 @@ export interface CmsCapabilities {
    * there means the builder offers a save the server accepts and the next cold start
    * reverts, i.e. GitHub #48 in the deployment that upgraded the editor to fix it. */
   codeDefinedTypes: boolean;
+  /** Unused, editor-authored types can be permanently deleted. */
+  typeDeletion: boolean;
   /** Whether THIS caller may author, i.e. holds one of the deployment's `editorRoles`.
    *
    * Per-caller, unlike the rest of this probe. The read handlers are open to
@@ -294,6 +296,7 @@ export const DEFAULT_CAPABILITIES: CmsCapabilities = {
   pagesByType: false,
   siteFurniture: false,
   codeDefinedTypes: false,
+  typeDeletion: false,
   mediaTerms: false,
   mediaDownload: false,
   // Fails OPEN, unlike its neighbours. An older server sends no `canEdit`, and hiding

@@ -1,79 +1,11 @@
 ---
-/**
- * The CMS editor's shell — injected at `/__admin/[...path]` by
- * `pramenCms({ admin: … })`. See `admin.ts` for why this is a route and not an index.html.
- *
- * Everything the SPA needs to boot, and nothing it could get wrong:
- *
- *  - The two assets are imported with `?url`, so the SITE's bundler emits, fingerprints and
- *    serves them. There is no root-absolute path to break under a prefix and nothing for a
- *    host to copy into the right directory. A deployment that built its own editor
- *    (`admin: { editorAssets }`) points at that directory instead, and owns its cache-busting;
- *    the imports below stay regardless, because a conditional `?url` import is not something
- *    Vite can resolve statically — and all six URLs move together either way.
- *  - The mount node carries the prefix this route was injected at. Same constant, so the
- *    router can never be mounted somewhere the server does not serve.
- *  - The runtime config is an inline script written from typed integration options, ahead
- *    of the module script that reads it.
- *
- * A catch-all pattern, so `/__admin/pages/:id` is a real server route: a deep link or
- * a refresh is served like any other page, with no SPA-fallback rewrite for the host to
- * configure (and to get wrong for its own 404s).
- */
-import { adminBasePath, adminConfigScript, adminEditorAssets, adminHasPanels, adminLang, adminTitle } from "pramen:cms/admin";
-import { adminAssetUrls, adminImportMap, type AdminAssetUrls } from "@pramen/cms-astro";
+// One shell for packaged and host-built editors. The integration selects the asset
+// module before Vite builds its graph, so unused packaged files never enter it.
+import { adminBasePath, adminConfigScript, adminHasPanels, adminLang, adminTitle } from "pramen:cms/admin";
+import { assets } from "pramen:cms/admin-assets";
+import { adminImportMap } from "@pramen/cms-astro";
 
-// The packaged assets, or the host's own build. Resolved once, so the stylesheet, the module
-// script and the import map cannot end up naming different builds.
-//
-// The six `?url` imports are DYNAMIC and behind the condition, which is not a style choice.
-// As static imports they ran for every deployment, including one that had set `editorAssets`
-// and therefore names none of them — and an unused `?url` import of a CSS file is not free:
-//
-//  - in dev, Vite treats it as a CSS module and INJECTS it as a `<style>` tag, so the admin
-//    loaded the packaged stylesheet on top of the host's. For a host that built the editor
-//    against its own design system that is precisely the two-generations-of-podoba problem
-//    `editorAssets` exists to end, reappearing through an import nothing references;
-//  - in a build, both assets are still emitted into the client bundle (~1.3MB) as orphans
-//    nothing ever loads.
-//
-// `await import()` in Astro frontmatter runs on the server at render time, so the packaged
-// URLs are resolved only when they are the ones being served. `Promise.all` because the
-// six resolve independently and the page cannot render until all of them are in.
-const packaged: AdminAssetUrls | undefined = adminEditorAssets
-  ? undefined
-  : await (async () => {
-      const [editor, css, react, reactDom, jsxRuntime, jsxDevRuntime] = await Promise.all([
-        import("@pramen/cms-editor/editor.js?url"),
-        import("@pramen/cms-editor/editor.css?url"),
-        // The four shims a PANEL bundle's bare `react` / `react-dom` / JSX-runtime imports
-        // resolve to. Assets like the editor's own, for the same reason and by the same
-        // mechanism — so the site's bundler emits and fingerprints them and the import map
-        // below can name them.
-        import("@pramen/cms-editor/panel-react.js?url"),
-        import("@pramen/cms-editor/panel-react-dom.js?url"),
-        import("@pramen/cms-editor/panel-jsx-runtime.js?url"),
-        import("@pramen/cms-editor/panel-jsx-dev-runtime.js?url"),
-      ]);
-      return {
-        editor: editor.default,
-        css: css.default,
-        react: react.default,
-        reactDom: reactDom.default,
-        jsxRuntime: jsxRuntime.default,
-        jsxDevRuntime: jsxDevRuntime.default,
-      };
-    })();
-
-const assets = adminAssetUrls(adminEditorAssets ?? undefined, packaged);
-
-// The editor is a client-side app against a live API — there is nothing to prerender, and
-// prerendering would bake one deployment's config into a static file.
 export const prerender = false;
-
-// Never store this in a shared cache. Without an explicit directive, caches fall back to
-// heuristic freshness (Cloudflare's Workers Cache keeps a header-less 200 for hours), and
-// this document carries the deployment's runtime config inline.
 Astro.response.headers.set("cache-control", "private, no-store");
 ---
 
@@ -83,15 +15,8 @@ Astro.response.headers.set("cache-control", "private, no-store");
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="robots" content="noindex, nofollow" />
-    {/* The pre-hydration fallback only. The bundle re-applies the configured wordmark on
-        boot, so this deliberately does not try to reproduce that string here — one place
-        builds it, and it is the one that owns the brand rules. */}
     <title>{adminTitle}</title>
     <link rel="stylesheet" href={assets.css} />
-    {/* Ahead of every module script, because that is the only place an import map may go —
-        it cannot be added once module loading has begun, so this is the shell's job and not
-        the bundle's. Only when panels are configured: with none, nothing on this page
-        imports a bare specifier and there is no reason to rewrite what `react` means. */}
     {adminHasPanels && (
       <script type="importmap" is:inline set:html={adminImportMap(assets)} />
     )}

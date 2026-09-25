@@ -17,6 +17,10 @@ export const en = {
   "schema.slug": "Slug",
   /** After "Slug" on an existing type, whose slug cannot change. */
   "schema.slugFixed": "(fixed)",
+  /** The builders' delete action, shown only when the server reports `typeDeletion` and the
+   * type is not code-managed. Named "type" rather than the kind, because one string serves
+   * both builders and the screen already says which one you are on. */
+  "schema.deleteType": "Delete type",
 
   // --- the types overview ------------------------------------------------------------------
   /** The screen's title is two lines: this dimmed lead, then `schema.titleMain`. */
@@ -51,6 +55,9 @@ export const en = {
   // --- block-type builder ------------------------------------------------------------------
   "blockType.new": "New block type",
   "blockType.unknown": "Unknown block type: {slug}",
+  /** `confirm()` before deleting. States the refusal up front: the server rejects a type
+   * that is still in use, so the reader learns that before answering rather than after. */
+  "blockType.deleteConfirm": "Permanently delete block type “{name}”? Types in use cannot be deleted.",
   /** The accessible name of the builder's form. */
   "blockType.formLabel": "Block type",
   "blockType.slugHelpNew": "The key a front end maps to a component. Lowercase letters, digits, hyphens or underscores.",
@@ -66,6 +73,9 @@ export const en = {
   // --- content-type builder ----------------------------------------------------------------
   "contentType.new": "New content type",
   "contentType.unknown": "Unknown content type: {slug}",
+  /** As `blockType.deleteConfirm`, and it names TRASH explicitly: a type whose only pages
+   * are deleted ones still refuses, which reads as a bug unless the prompt says so. */
+  "contentType.deleteConfirm": "Permanently delete content type “{name}”? Types with pages, including trash, cannot be deleted.",
   "contentType.formLabel": "Content type",
   /** The label of the one region a new content type starts with. Stored with the type. */
   "contentType.defaultRegionLabel": "Content",
@@ -159,6 +169,7 @@ export const cs: Translation<typeof en> = {
   "schema.name": "Název",
   "schema.slug": "Slug",
   "schema.slugFixed": "(neměnný)",
+  "schema.deleteType": "Smazat typ",
 
   "schema.titleLead": "Struktura obsahu",
   "schema.titleMain": "tohoto webu",
@@ -181,6 +192,7 @@ export const cs: Translation<typeof en> = {
 
   "blockType.new": "Nový typ bloku",
   "blockType.unknown": "Neznámý typ bloku: {slug}",
+  "blockType.deleteConfirm": "Opravdu trvale smazat typ bloku „{name}“? Typy, které se používají, smazat nelze.",
   "blockType.formLabel": "Typ bloku",
   "blockType.slugHelpNew": "Klíč, podle kterého web přiřadí komponentu. Malá písmena, číslice, pomlčky nebo podtržítka.",
   "blockType.slugHelpFixed": "Slug typu bloku je jeho klíč v registru: přejmenováním by se odpojily všechny bloky tohoto typu.",
@@ -194,6 +206,7 @@ export const cs: Translation<typeof en> = {
 
   "contentType.new": "Nový typ obsahu",
   "contentType.unknown": "Neznámý typ obsahu: {slug}",
+  "contentType.deleteConfirm": "Opravdu trvale smazat typ obsahu „{name}“? Typy, které mají stránky (včetně koše), smazat nelze.",
   "contentType.formLabel": "Typ obsahu",
   "contentType.defaultRegionLabel": "Obsah",
   "contentType.slugHelpNew": "Část adresy URL: malá písmena, číslice a jednotlivé pomlčky.",

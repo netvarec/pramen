@@ -19,6 +19,8 @@ export default createPage()
       <ContentTypeEditor
         api={api}
         codeDefinedTypes={cms.codeDefinedTypes}
+        typeDeletion={cms.typeDeletion}
+        onDeleted={() => { refreshContentTypes(); navigate("schema"); }}
         key={params.slug}
         slug={params.slug}
         onSaved={(slug) => {
