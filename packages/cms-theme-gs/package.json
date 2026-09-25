@@ -1,6 +1,6 @@
 {
   "name": "@pramen/cms-theme-gs",
-  "version": "0.0.74",
+  "version": "0.0.75",
   "description": "The Graphic Standard look for @pramen/cms-editor: slot components, nav hooks and a stylesheet, wired into buildEditor in one call.",
   "license": "MIT",
   "repository": {
