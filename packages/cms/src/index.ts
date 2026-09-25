@@ -2502,6 +2502,38 @@ function assertHandlerName(v: unknown, what: string): string {
   return str;
 }
 
+/** Whatever a JSON text column holds, or undefined when it is absent, empty or unreadable.
+ *
+ * An unreadable value is treated as ABSENT rather than raised, which is the right default for
+ * the integrity scans below: their question is "does anything still point at this type", and a
+ * row nobody can parse declares no references. Deletion is still guarded by the dependent-row
+ * check and the foreign key. */
+function readJsonColumn(value: unknown): unknown {
+  const text = value === null || value === undefined ? "" : String(value);
+  if (text.trim() === "") return undefined;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Whether one content type's default blocks or region allow-lists name this block type.
+ *
+ * Every level is shape-checked rather than assumed: these columns are `t.json()`, so the ORM
+ * writes them well-formed, but this scan meets whatever is in the table — including rows
+ * written before the column existed in this shape. */
+function referencesBlockType(type: Record<string, unknown>, slug: string): boolean {
+  const defaults = readJsonColumn(type.defaultBlocks);
+  if (Array.isArray(defaults) && defaults.some((block) => Object(block) === block && (block as Record<string, unknown>).blockTypeSlug === slug)) return true;
+  const regions = readJsonColumn(type.regions);
+  if (!Array.isArray(regions)) return false;
+  return regions.some((region) => {
+    const allowed = Object(region) === region ? (region as Record<string, unknown>).allowedTypes : undefined;
+    return Array.isArray(allowed) && allowed.includes(slug);
+  });
+}
+
 async function deleteCmsType(db: CmsDb, kind: "content" | "block", id: string): Promise<{ ok: true }> {
   const table = kind === "content" ? "cms_content_types" : "cms_block_types";
   const dependent = kind === "content" ? "cms_pages" : "cms_blocks";
@@ -2515,19 +2547,40 @@ async function deleteCmsType(db: CmsDb, kind: "content" | "block", id: string): 
   // Only existence crosses this boundary; the actual deletion remains ACL-checked.
   if ((await db.exec(`SELECT 1 FROM ${dependent} WHERE typeId = ? LIMIT 1`, id)).length) throw new Conflict(inUse);
   if (kind === "block") {
-    const references = await db.exec(
-      `SELECT 1 FROM cms_content_types AS ct WHERE
-        EXISTS (SELECT 1 FROM json_each(ct.defaultBlocks) AS b WHERE json_extract(b.value, '$.blockTypeSlug') = ?)
-        OR EXISTS (SELECT 1 FROM json_each(ct.regions) AS r, json_each(r.value, '$.allowedTypes') AS a WHERE a.value = ?)
-        LIMIT 1`,
-      String(rows[0].slug), String(rows[0].slug),
-    );
-    if (references.length) throw new Conflict("block type is used by a content type. Remove it from default blocks and region allow-lists first.");
+    // The reference scan runs in JS, not in `json_each`/`json_extract`.
+    //
+    // Those are table-valued functions, and SQLite raises `malformed JSON` for the WHOLE
+    // statement the moment ONE row's column will not parse. An empty string is enough, and
+    // `''` is exactly what a hand-written row, an older column default or a D1 import leaves
+    // behind. This scan reads every content type, so a single such row anywhere in the table
+    // would turn EVERY block-type deletion in that deployment into a raw SQL 500 rather than
+    // a conflict or a success, with no way to tell from the message what was wrong. Guarding
+    // the outer scan with `json_valid` is not enough either: the `regions` arm expands a
+    // SECOND `json_each` over `$.allowedTypes`, which throws again on a region whose
+    // `allowedTypes` is not an array, and a `WHERE` cannot prevent it because the function is
+    // evaluated in the FROM clause.
+    //
+    // `cms_content_types` holds a handful of rows by construction (a deployment's kinds of
+    // page), so reading them whole costs nothing worth defending, and an unreadable row reads
+    // as "declares no references" instead of taking the operation down with it. It also keeps
+    // the DO's SQLite off a JSON extension this repo has otherwise been careful not to lean
+    // on (see the media-projection migration, which falls back to the ORM for the same
+    // reason).
+    const slug = String(rows[0].slug);
+    const types = await db.exec("SELECT defaultBlocks, regions FROM cms_content_types");
+    if (types.some((type) => referencesBlockType(type, slug))) {
+      throw new Conflict("block type is used by a content type. Remove it from default blocks and region allow-lists first.");
+    }
   }
   try {
     if (!await db.delete(table, id)) throw notFound(`${kind} type`);
   } catch (e) {
-    // A concurrent D1 insert can land after the pre-check. The FK is the final guard.
+    // A concurrent D1 insert can land after the pre-check, and the FK is what catches it —
+    // on a store where the FK actually landed. Adding a constraint over orphaned data is
+    // SKIPPED and reported rather than applied (the migration contract), so an upgraded store
+    // that already held a block pointing at a removed type has no FK on `cms_blocks`, and on
+    // D1 (`transaction(fn) = fn()`, no interactive transaction) the pre-check/delete window is
+    // then genuinely unguarded. Best-effort by construction; a fresh store gets the FK.
     if (/FOREIGN KEY constraint failed/i.test(String(e))) throw new Conflict(inUse);
     throw e;
   }

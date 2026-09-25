@@ -1,6 +1,37 @@
 ---
-// One shell for packaged and host-built editors. The integration selects the asset
-// module before Vite builds its graph, so unused packaged files never enter it.
+/**
+ * The CMS editor's shell, injected at `/__admin/[...path]` by `pramenCms({ admin: … })`.
+ * See `admin.ts` for why this is a route and not an index.html.
+ *
+ * ONE shell for packaged and host-built editors. Which assets it names is decided by the
+ * INTEGRATION, at `astro:config:setup`, and handed over as `pramen:cms/admin-assets` — so a
+ * deployment that built its own editor never has the packaged files in Vite's graph at all.
+ * Selecting them here instead was the earlier design and leaked both ways: in dev Vite treats
+ * an unreferenced `?url` CSS import as a module and injects it, putting the packaged
+ * stylesheet on top of the host's, and in a build both assets are emitted as ~1.3MB of
+ * orphans. See `assetModuleSource` in `integration.ts`.
+ *
+ * The rest is the things this file is the only place to get right:
+ *
+ *  - The mount node carries the prefix this route was injected at. Same constant as the
+ *    injected pattern, so the router cannot be mounted somewhere the server does not serve.
+ *  - The import map goes AHEAD of every module script, because that is the only place an
+ *    import map may go: it cannot be added once module loading has begun, which is why this
+ *    is the shell's job and not the bundle's. Only when panels are configured, since with
+ *    none nothing on the page imports a bare specifier.
+ *  - `prerender = false`: the editor is a client app against a live API, and prerendering
+ *    would bake one deployment's inline config into a static file.
+ *  - `cache-control: private, no-store`: without an explicit directive caches fall back to
+ *    heuristic freshness (Cloudflare's Workers Cache keeps a header-less 200 for hours), and
+ *    this document carries the deployment's runtime config inline.
+ *  - `lang` comes from the configured locale, so a screen reader does not read Czech copy in
+ *    an English voice. Pinned by a test, because this file has been replaced wholesale once
+ *    and the attribute went with it.
+ *
+ * A catch-all pattern, so `/__admin/pages/:id` is a real server route: a deep link or a
+ * refresh is served like any other page, with no SPA-fallback rewrite for the host to
+ * configure (and to get wrong for its own 404s).
+ */
 import { adminBasePath, adminConfigScript, adminHasPanels, adminLang, adminTitle } from "pramen:cms/admin";
 import { assets } from "pramen:cms/admin-assets";
 import { adminImportMap } from "@pramen/cms-astro";

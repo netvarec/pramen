@@ -25,7 +25,7 @@
 
 import type { AstroIntegration } from "astro";
 import { fileURLToPath } from "node:url";
-import { createReadStream } from "node:fs";
+import { createReadStream, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { adminAssetUrls } from "./admin.js";
 import { ADMIN_BASE, ADMIN_ROUTE, adminDocumentTitle, adminHasPanels, adminLang, adminRuntimeConfig, serializeAdminConfig, type AdminOptions } from "./admin.js";
@@ -245,7 +245,18 @@ export function pramenCms(opts: PramenCmsOptions): AstroIntegration {
         // Only when asked. A site that just reads content never installs @pramen/cms-editor,
         // and an injected route would be a build error rather than an unused page.
         const adminCode = opts.admin ? adminModuleSource(opts.admin, opts.backend) : undefined;
-        const customAssets = opts.admin && opts.admin !== true ? opts.admin.editorAssets : undefined;
+        // `editorAssets: ""` is normalised to "not set" HERE, once, because three derivations
+        // below read it and an empty string splits them: `!customAssets` reads it as absent
+        // (so dev serves the packaged files) while `customAssets ?? …` reads it as present
+        // (`??` does not catch ""), which left the packaged `?url` imports in the graph with
+        // the `assetsInclude` globs switched off — precisely the combination those globs
+        // exist to prevent. Declaring a blank base is a mistake either way, so it is said out
+        // loud rather than quietly treated as one of the two.
+        const declaredAssets = opts.admin && opts.admin !== true ? opts.admin.editorAssets : undefined;
+        if (declaredAssets !== undefined && declaredAssets.trim() === "") {
+          logger.warn("`admin.editorAssets` is empty — ignoring it and serving the packaged editor. Give it the base URL your build emits, or leave it out.");
+        }
+        const customAssets = declaredAssets?.trim() ? declaredAssets : undefined;
         const servePackaged = !!opts.admin && !customAssets && command === "dev";
         const assetCode = adminCode ? assetModuleSource(customAssets ?? (servePackaged ? DEV_ASSET_BASE : undefined)) : undefined;
         updateConfig({
@@ -287,10 +298,24 @@ export function pramenCms(opts: PramenCmsOptions): AstroIntegration {
                     if (!file || (req.method !== "GET" && req.method !== "HEAD")) return next();
                     res.setHeader("Content-Type", file.endsWith(".css") ? "text/css" : "text/javascript");
                     res.setHeader("Cache-Control", "no-cache");
+                    // HEAD is answered from a stat, not from an opened-then-destroyed stream.
+                    // Opening one meant the open could fail AFTER `res.end()` had finished the
+                    // response — `dist` cleaned while dev is running is enough — and the error
+                    // handler then called `next(err)` on an ended response, which reports
+                    // "Cannot set headers after they are sent" instead of the real problem.
+                    // The stat also gives the length HEAD is supposed to carry.
+                    if (req.method === "HEAD") {
+                      try {
+                        res.setHeader("Content-Length", statSync(file).size);
+                      } catch {
+                        res.statusCode = 404;
+                      }
+                      res.end();
+                      return;
+                    }
                     const stream = createReadStream(file);
                     stream.on("error", next);
-                    if (req.method === "HEAD") { stream.destroy(); res.end(); }
-                    else stream.pipe(res);
+                    stream.pipe(res);
                   });
                 },
               },

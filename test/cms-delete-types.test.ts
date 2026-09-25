@@ -75,6 +75,28 @@ describe("type deletion", () => {
     expect(await handlers.deleteBlockType.run(ctx, { id: block.id })).toEqual({ ok: true });
   });
 
+  // The scan reads EVERY content type, so one unreadable row used to decide the fate of every
+  // block-type deletion in the deployment: `json_each` raises `malformed JSON` for the whole
+  // statement, and the caller got a raw SQL 500 where the answer was "nothing references this".
+  // `''` is the value that does it, and it is what a hand-written row or a D1 import leaves.
+  test("a content type with an unreadable defaultBlocks or regions does not break the scan", async () => {
+    const { db, driver, ctx } = await setup();
+    const block = await db.insert("cms_block_types", { name: "Hero", slug: "hero" });
+    const broken = await db.insert("cms_content_types", { name: "Legacy", slug: "legacy" });
+    // Written past the ORM on purpose: the `t.json()` codec is what stops this shape arriving
+    // through `insert`, and the point is a row that predates it.
+    for (const bad of ["", "not json", '"body"']) {
+      await driver.exec("UPDATE cms_content_types SET defaultBlocks = ?, regions = ? WHERE id = ?", [bad, bad, broken.id]);
+      expect(await handlers.deleteBlockType.run(ctx, { id: block.id })).toEqual({ ok: true });
+      await db.insert("cms_block_types", { id: block.id, name: "Hero", slug: "hero" });
+    }
+    // A readable row beside the broken one is still honoured, so the tolerance did not turn
+    // the check off.
+    const used = await db.insert("cms_content_types", { name: "Page", slug: "page", regions: [{ name: "body", allowedTypes: ["hero"] }] });
+    expect(used.id).toBeTruthy();
+    await expect(handlers.deleteBlockType.run(ctx, { id: block.id })).rejects.toThrow(/allow-lists/);
+  });
+
   test("the final delete enforces the caller's delete ACL", async () => {
     const { db, driver } = await setup();
     const row = await db.insert("cms_content_types", { name: "Keep", slug: "keep" });
