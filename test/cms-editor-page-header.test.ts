@@ -57,12 +57,19 @@ describe("pageHeader config", () => {
   // `resolveLayout`'s rule, for `resolveLayout`'s reason: this config is hand-edited and
   // templated from env vars, and there is no error boundary above module load.
   test("a malformed config falls back instead of throwing", () => {
-    const junk: unknown[] = [true, 0, 123, "flat", [], ["flat"], () => "flat"];
+    // `as never` throughout: the parameter types say what the host was ASKED for, and every
+    // value here is a host that wrote something else. A cast is the honest way to say that.
+    const junk = [true, 0, 123, "flat", [], ["flat"], () => "flat"] as never[];
     for (const v of junk) {
       expect(() => resolvePageHeader(v)).not.toThrow();
       expect(resolvePageHeader(v)).toEqual(DEFAULT_PAGE_HEADER_STYLE);
     }
-    for (const v of [true, 7, "", "  ", "Flat", "panel", {}, []]) {
+    // An object whose own `toString` throws is the shape no check can answer without running
+    // it, and module load is where a throw costs the whole page rather than the header.
+    const hostile = { variant: { toString() { throw new Error("boom"); } } } as never;
+    expect(() => resolvePageHeader(hostile)).not.toThrow();
+    expect(resolvePageHeader(hostile)).toEqual(DEFAULT_PAGE_HEADER_STYLE);
+    for (const v of [true, 7, "", "  ", "Flat", "panel", {}, []] as never[]) {
       expect(resolvePageHeader({ variant: v }).variant).toBe(DEFAULT_VARIANT);
     }
     // One bad field does not take the others down with it.
@@ -78,7 +85,7 @@ describe("pageHeader config", () => {
     expect(resolvePageHeader({ titleFont: '"GT America", sans-serif' }).titleFont).toBe('"GT America", sans-serif');
     // A host that meant to write a whole rule gets a warning, not the design system's font
     // silently back.
-    for (const v of ["Inter; color: red", "Inter}", "<script>", "", 7, null, undefined]) {
+    for (const v of ["Inter; color: red", "Inter}", "<script>", "", 7, true, null, undefined] as never[]) {
       expect(resolvePageHeader({ titleFont: v }).titleFont).toBeUndefined();
     }
   });
@@ -116,7 +123,7 @@ describe("accent — colour the editor must reason about, not pass through", () 
     ];
     for (const v of unmeasurable) expect(parseColor(v)).toBeUndefined();
     for (const v of unmeasurable) expect(resolvePageHeader({ accent: v }).vars).toEqual({});
-    expect(resolvePageHeader({ accent: 123 }).vars).toEqual({});
+    expect(resolvePageHeader({ accent: 123 as never }).vars).toEqual({});
   });
 
   test("the label on the accent is the ink that actually reads on it", () => {

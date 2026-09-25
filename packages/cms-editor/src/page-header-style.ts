@@ -36,17 +36,22 @@ export const PAGE_HEADER_VARIANTS: readonly PageHeaderVariant[] = ["cover", "fla
  * already has. */
 export const DEFAULT_VARIANT: PageHeaderVariant = "cover";
 
-/** What the host may set under `window.PRAMEN_CMS_EDITOR.pageHeader`. Every field is
- * `unknown` because this config is hand-edited and templated from env vars — the types are
- * what `resolvePageHeader` proves, not what it may assume. */
+/**
+ * What the host may set under `window.PRAMEN_CMS_EDITOR.pageHeader`.
+ *
+ * The types here are what the host was ASKED for, not what arrived. This config is
+ * hand-edited and often templated from an env var, so every field below is re-established at
+ * runtime by the resolver: a declared `string` that is not one, or a `variant` outside the
+ * closed set, is warned about and dropped rather than trusted.
+ */
 export interface PageHeaderConfig {
   /** `"cover"` (default) is the seeded artwork; `"flat"` keeps the panel without it;
    * `"bare"` drops the panel too, leaving the title and action on the page. */
-  variant?: unknown;
+  variant?: PageHeaderVariant;
   /** The colour the primary action wears, as a hex or `rgb()` literal. */
-  accent?: unknown;
+  accent?: string;
   /** The family for the `<h1>` — a CSS `font-family` list. */
-  titleFont?: unknown;
+  titleFont?: string;
 }
 
 /** A resolved header style: what `page-header.tsx` renders from. */
@@ -201,31 +206,50 @@ export function accentVars(accent: Rgb) {
   };
 }
 
-// --- resolution --------------------------------------------------------------------------
+// --- re-establishing the declared types ---------------------------------------------------
+//
+// Everything below treats `PageHeaderConfig` as a CLAIM. The object arrives from an inline
+// script the host hand-wrote, so its declared types are what was asked for and not what is
+// there, and each field is checked against the thing it is for: a variant against the closed
+// set, an accent against a colour grammar, a family against a font-family grammar.
+//
+// None of those checks is a `typeof`. A closed-set `===` and a regex answer the question the
+// field actually asks, and they answer it for a number or an object too, which is what makes
+// the tag irrelevant.
 
-/** A config value as it should appear in a warning. `JSON.stringify` returns UNDEFINED for a
+/** A value this module warns about: the config object, or one of its declared fields. */
+type Configured = PageHeaderConfig | string | null | undefined;
+
+/** One value as it should appear in a warning. `JSON.stringify` returns UNDEFINED for a
  * function or a symbol, which would print the word "undefined" for a value the host can see is
  * not — so those fall back to their own description. */
-function show(v: unknown): string {
-  return JSON.stringify(v) ?? String(v);
+function show(value: Configured): string {
+  return JSON.stringify(value) ?? String(value);
 }
 
-/** Coerce one config value to a trimmed string, or undefined for anything else — `brand.ts`'s
- * rule, for `brand.ts`'s reason: this module is evaluated at module load in the entry
- * bundle's import graph, so a throw here is a blank page with a console error, not a header
- * that looks wrong. */
-function str(v: unknown): string | undefined {
-  if (typeof v !== "string") return undefined;
-  const trimmed = v.trim();
+/**
+ * The declared string, if it really is one: trimmed, and empty read as absent.
+ *
+ * `value === String(value)` rather than a tag check. A string is exactly the value that
+ * survives being turned into one, while a number, a boolean, an array or an object does not —
+ * and that distinction is the point here, because `titleFont: true` (a plausible slip next to
+ * `hidePages: true`) has to be refused rather than rendered as a family named "true".
+ *
+ * Trimming, because a value interpolated from an env var routinely arrives with whitespace
+ * around it. That is the same tolerance `resolveBrand` and `resolveLayout` extend.
+ */
+function text(value: string): string | undefined {
+  if (value !== String(value)) return undefined;
+  const trimmed = value.trim();
   return trimmed === "" ? undefined : trimmed;
 }
 
-/** A `font-family` value that cannot escape the declaration it lands in. React writes style
- * objects through the CSSOM, which already drops a value containing `;`, so this is about
- * FAILING LOUDLY rather than about injection: a family list with a semicolon or a brace in it
- * is a host that meant to write a whole rule, and silently rendering the design system's font
- * is how that goes unnoticed. */
-const FONT_UNSAFE = /[;{}<>\\]/;
+/** Whether a value can be read as a config object. `Object(v) === v` holds for objects and for
+ * nothing else, so a primitive is turned away without asking what kind it is; an array is
+ * turned away separately, because it IS an object and is never what a host meant. */
+function isConfigObject(value: Configured): boolean {
+  return Object(value) === value && !Array.isArray(value);
+}
 
 /**
  * Resolve the configured header style, falling back to the shipped default.
@@ -234,30 +258,41 @@ const FONT_UNSAFE = /[;{}<>\\]/;
  * config is hand-edited and often templated, and the failure it guards against is a
  * deployment that asked for its own colours, got the framework's, and only found out when
  * somebody who knew what to expect happened to look.
+ *
+ * Nothing here throws, and the try/catch is what makes that a guarantee rather than a hope:
+ * this runs at module load in the entry bundle's import graph with no error boundary above it,
+ * so a throw is a blank page with a console error instead of a header that looks wrong. An
+ * object with a hostile `toString` is the one shape the checks above cannot answer without
+ * running it.
  */
-export function resolvePageHeader(cfg: unknown): PageHeaderStyle {
+export function resolvePageHeader(cfg?: PageHeaderConfig | null): PageHeaderStyle {
   if (cfg === undefined || cfg === null) return DEFAULT_PAGE_HEADER_STYLE;
-  if (typeof cfg !== "object" || Array.isArray(cfg)) {
-    console.warn(`pramen/cms-editor: ignoring unusable \`pageHeader\` ${show(cfg)} — expected an object like \`{ variant: "flat", accent: "#73e2b2" }\`.`);
+  try {
+    if (!isConfigObject(cfg)) {
+      console.warn(`pramen/cms-editor: ignoring unusable \`pageHeader\` ${show(cfg)} — expected an object like \`{ variant: "flat", accent: "#73e2b2" }\`.`);
+      return DEFAULT_PAGE_HEADER_STYLE;
+    }
+    return { variant: resolveVariant(cfg.variant), vars: resolveAccent(cfg.accent), titleFont: resolveTitleFont(cfg.titleFont) };
+  } catch (cause) {
+    console.warn("pramen/cms-editor: `pageHeader` could not be read — using the default header.", cause);
     return DEFAULT_PAGE_HEADER_STYLE;
   }
-  const { variant, accent, titleFont } = cfg as PageHeaderConfig;
-  return { variant: resolveVariant(variant), vars: resolveAccent(accent), titleFont: resolveTitleFont(titleFont) };
 }
 
-function resolveVariant(value: unknown): PageHeaderVariant {
+function resolveVariant(value?: PageHeaderVariant): PageHeaderVariant {
   if (value === undefined || value === null) return DEFAULT_VARIANT;
-  const named = str(value) ?? "";
-  if ((PAGE_HEADER_VARIANTS as readonly string[]).includes(named)) return named as PageHeaderVariant;
+  const named = text(value);
+  const declared = PAGE_HEADER_VARIANTS.find((variant) => variant === named);
+  if (declared !== undefined) return declared;
   console.warn(
     `pramen/cms-editor: ignoring unusable \`pageHeader.variant\` ${show(value)} — using "${DEFAULT_VARIANT}". Expected one of ${PAGE_HEADER_VARIANTS.map((v) => JSON.stringify(v)).join(", ")}.`,
   );
   return DEFAULT_VARIANT;
 }
 
-function resolveAccent(value: unknown): Record<string, string> {
+function resolveAccent(value?: string): Record<string, string> {
   if (value === undefined || value === null) return {};
-  const named = str(value);
+  const named = text(value);
   const parsed = named === undefined ? undefined : parseColor(named);
   if (parsed === undefined) {
     console.warn(
@@ -268,16 +303,28 @@ function resolveAccent(value: unknown): Record<string, string> {
   const { ratio } = onAccent(parsed);
   if (ratio < AA_NORMAL) {
     console.warn(
-      `pramen/cms-editor: \`pageHeader.accent\` ${JSON.stringify(named)} carries no legible label — the best of ${ON_ACCENT_CANDIDATES.join(" / ")} on it is ${ratio.toFixed(2)}:1, under WCAG AA's ${AA_NORMAL}:1 for the button's 13px text. Using it anyway; pick a mid-toned accent to fix it.`,
+      `pramen/cms-editor: \`pageHeader.accent\` ${show(named)} carries no legible label — the best of ${ON_ACCENT_CANDIDATES.join(" / ")} on it is ${ratio.toFixed(2)}:1, under WCAG AA's ${AA_NORMAL}:1 for the button's 13px text. Using it anyway; pick a mid-toned accent to fix it.`,
     );
   }
   return accentVars(parsed);
 }
 
-function resolveTitleFont(value: unknown): string | undefined {
+/**
+ * A CSS `font-family` list: quoted names or bare identifiers, comma-separated.
+ *
+ * An ALLOWLIST, not a ban on the characters that would break out of the declaration. React
+ * writes style objects through the CSSOM, which already drops a value containing `;`, so the
+ * point here is failing LOUDLY: a family list with a semicolon or a brace in it is a host that
+ * meant to write a whole rule, and silently rendering the design system's font is how that
+ * goes unnoticed. Matching what a family list actually looks like says that in one place,
+ * rather than enumerating the ways it can be wrong.
+ */
+const FONT_FAMILY_LIST = /^(?:"[^"]+"|'[^']+'|[A-Za-z][\w -]*)(?:\s*,\s*(?:"[^"]+"|'[^']+'|[A-Za-z][\w -]*))*$/;
+
+function resolveTitleFont(value?: string): string | undefined {
   if (value === undefined || value === null) return undefined;
-  const named = str(value);
-  if (named === undefined || FONT_UNSAFE.test(named)) {
+  const named = text(value);
+  if (named === undefined || !FONT_FAMILY_LIST.test(named)) {
     console.warn(`pramen/cms-editor: ignoring unusable \`pageHeader.titleFont\` ${show(value)} — expected a font-family list like "Inter, system-ui, sans-serif".`);
     return undefined;
   }
@@ -287,12 +334,12 @@ function resolveTitleFont(value: unknown): string | undefined {
 /** The global the host's shell writes. Declared structurally rather than reaching for
  * `Window`, so this module needs no DOM lib — and so a test can hand it a plain object. */
 export interface PageHeaderHost {
-  PRAMEN_CMS_EDITOR?: { pageHeader?: unknown };
+  PRAMEN_CMS_EDITOR?: { pageHeader?: PageHeaderConfig };
 }
 
 /** Pull the config off a host global, tolerating its absence (SSR, tests, a shell that
  * declared nothing). Exported so the READ is testable, not just the resolution. */
-export function readPageHeaderConfig(host: PageHeaderHost | undefined): unknown {
+export function readPageHeaderConfig(host: PageHeaderHost | undefined): PageHeaderConfig | undefined {
   return host?.PRAMEN_CMS_EDITOR?.pageHeader;
 }
 
