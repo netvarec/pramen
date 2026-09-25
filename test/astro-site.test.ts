@@ -325,6 +325,14 @@ describe("example site: the admin route", () => {
     expect(shell).toContain("<title>Example · cms</title>");
   });
 
+  // The shell was rewritten when the asset-selection design changed, and `lang` is one
+  // attribute in a file that got replaced wholesale — exactly the thing a merge drops without
+  // failing anything. A page whose language the browser has to guess is a screen reader
+  // reading Czech copy in an English voice, so it is asserted here rather than trusted.
+  test("the shell declares the editor's language", () => {
+    expect(shell).toContain('<html lang="en"');
+  });
+
   test("the shell is never stored by a shared cache", () => {
     expect(shellHeaders?.get("cache-control")).toBe("private, no-store");
   });
