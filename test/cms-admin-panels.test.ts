@@ -1,13 +1,13 @@
-// @pramen/cms — custom admin PANELS: a project's own React screen inside the editor's chrome.
+// @pramen/cms custom admin PANELS: a project's own React screen inside the editor's chrome.
 //
 // The contract worth holding here is that a panel is a REGISTRY entry first and a bundle
-// second. Everything a nav entry is made of — the slug, the label, the icon, the position
-// and, above all, who may open it — is a server fact declared with `adminPanel()`, exactly
+// second. Everything a nav entry is made of (the slug, the label, the icon, the position
+// and, above all, who may open it) is a server fact declared with `adminPanel()`, exactly
 // as it is for a Block Kit page. The browser bundle supplies the component and nothing else.
 //
 // That is what makes role filtering mean something. If a panel were registered only in the
 // browser, "who may see this screen" would be a decision made by code the caller's own
-// browser downloaded — which is not a decision at all. So the tests below are mostly about
+// browser downloaded, which is not a decision at all. So the tests below are mostly about
 // the two kinds being indistinguishable at the gate.
 
 import { describe, expect, test } from "bun:test";
@@ -47,7 +47,7 @@ describe("declaring a panel", () => {
     expect(isAdminPanel(blocks("dispatch"))).toBe(false);
   });
 
-  test("a panel carries no render — and is not mistaken for a page that forgot one", () => {
+  test("a panel carries no render, and is not mistaken for a page that forgot one", () => {
     // The check `validateAdminPages` makes for a Block Kit page is exactly "no render
     // function", so a panel has to be told apart by its discriminant rather than by the
     // absence of the thing being checked for.
@@ -55,12 +55,12 @@ describe("declaring a panel", () => {
     expect(() => validateAdminPages([{ slug: "broken", label: "Broken" } as never])).toThrow(/no render function/);
   });
 
-  test("a panel's slug is held to the same routing rule — it is served at /apps/:slug", () => {
+  test("a panel's slug is held to the same routing rule, since it is served at /apps/:slug", () => {
     expect(() => validateAdminPages([adminPanel("My Panel", { label: "x" })])).toThrow(/URL segment/);
     expect(() => validateAdminPages([adminPanel("cur", { label: "  " })])).toThrow(/empty label/);
   });
 
-  test("a panel and a page cannot share a slug — one route, one registry", () => {
+  test("a panel and a page cannot share a slug: one route, one registry", () => {
     // They share `/apps/:slug`, so a collision is a collision whatever the kinds; which one
     // would win is decided by Map insertion order, and that is not a thing to leave to
     // chance in a deployment where one of the two is role-gated and the other is not.
@@ -110,7 +110,7 @@ describe("who sees a panel", () => {
     expect(Object.keys(h.listAdminPages.run(ctxAs("admin"))[0]!).sort()).toEqual(["icon", "kind", "label", "navOrder", "slug"]);
   });
 
-  test("`editorRoles` is the default gate for a panel too — one deployment, one answer", () => {
+  test("`editorRoles` is the default gate for a panel too: one deployment, one answer", () => {
     const h = createAdminPageHandlers([adminPanel("curation", { label: "Curation" })], { editorRoles: ["author"] }) as Handlers;
     expect(h.listAdminPages.run(ctxAs("author")).map((p) => p.slug)).toEqual(["curation"]);
     expect(h.listAdminPages.run(ctxAs("editor"))).toEqual([]);
@@ -128,7 +128,7 @@ describe("interacting with a panel", () => {
 
   test("a panel the caller MAY open says plainly that it has no server render", async () => {
     // Not folded into 'unknown admin page'. This caller passed the gate, so there is nothing
-    // to hide from them — and hiding it would send whoever wired the call hunting for a
+    // to hide from them, and hiding it would send whoever wired the call hunting for a
     // registration mistake that is not there.
     const h = H(adminPanel("curation", { label: "Curation" }));
     await expect(h.adminPageInteract.run(ctxAs("editor"), { page: "curation", type: "page_load" })).rejects.toThrow(/is a panel/);

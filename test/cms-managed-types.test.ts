@@ -1,11 +1,11 @@
-// @pramen/cms — a code-defined block/content type is READ-ONLY over RPC (GitHub #48).
+// @pramen/cms: a code-defined block/content type is READ-ONLY over RPC (GitHub #48).
 //
 // `cmsBootstrap` reconciles the rows it declares on every boot, and #46 pointed a product
 // surface at the same rows. So an editor opened a code-declared type, added a field, got a
-// 200 — and lost it at the next cold start when `upsertBySlug` patched `fieldsSchema` back
+// 200, and lost it at the next cold start when `upsertBySlug` patched `fieldsSchema` back
 // to the literal in `app.ts`, orphaning any block content authored against it.
 //
-// The editor renders a `managed` row read-only; this is the other half — the curl, the stale
+// The editor renders a `managed` row read-only; this is the other half: the curl, the stale
 // tab, and any client that has not been updated. A 409 rather than a 403: the row exists and
 // the edit is well-formed, the conflict is with a definition this request cannot reach.
 
@@ -38,7 +38,7 @@ function stubCtx(rows: Row[]) {
 
 const h = (name: string) => (createCmsHandlers() as unknown as Record<string, Mutation>)[name]!;
 
-describe("updateBlockType / updateContentType — code-defined rows", () => {
+describe("updateBlockType / updateContentType over code-defined rows", () => {
   test("a code-defined block type refuses the write and says where the definition lives", async () => {
     const { ctx, updates } = stubCtx([{ id: "b1", slug: "hero", managedBy: "cms", fieldsSchema: [] }]);
     await expect(h("updateBlockType").run(ctx, { id: "b1", name: "Hero (edited)" })).rejects.toThrow(/defineBlockType/);
@@ -57,7 +57,7 @@ describe("updateBlockType / updateContentType — code-defined rows", () => {
   });
 
   // The guard gates ONLY code-defined rows. An editor-authored type is the ordinary case and
-  // has to keep working exactly as it did — this is the regression that would make the fix
+  // has to keep working exactly as it did: this is the regression that would make the fix
   // worse than the bug.
   test("an editor-authored type still saves", async () => {
     const { ctx, updates } = stubCtx([{ id: "b2", slug: "quote", managedBy: null, fieldsSchema: [] }]);
@@ -66,7 +66,7 @@ describe("updateBlockType / updateContentType — code-defined rows", () => {
   });
 
   // The guard reads `managedBy` off a COLUMN-PROJECTED read. Written as "absent means
-  // editable" it disarmed itself for any deployment with a `fields`-restricted read policy —
+  // editable" it disarmed itself for any deployment with a `fields`-restricted read policy:
   // the save then landed and was reverted at the next cold start, i.e. #48 reproduced in the
   // deployment that installed the fix. The handler asks for the column explicitly (an
   // unreadable one is a 403 before this runs); if it ever stops asking, this fails loudly

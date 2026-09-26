@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// pramen CLI — ships as the `pramen` bin of @pramen/server (see package.json `bin`).
+// pramen CLI: ships as the `pramen` bin of @pramen/server (see package.json `bin`).
 // In-repo it's invoked via `bun run pramen <command>` (scripts/cli.ts is a thin
 // wrapper around this module); published consumers get it as `pramen <command>`.
 //
@@ -15,7 +15,7 @@
 //   pramen token <sub> [roles...] [--tenant a,b]                mint a dev JWT
 //
 // The bin uses a `bun` shebang: the `schema *` commands import your app module (a .ts
-// file), and the built package's dist/ uses extensionless ESM imports — both of which
+// file), and the built package's dist/ uses extensionless ESM imports, both of which
 // bun resolves out of the box. Under plain Node the extensionless imports don't resolve
 // (a property of the whole @pramen/server dist, not just this file), so run via bun.
 
@@ -82,7 +82,7 @@ async function loadApp(): Promise<LoadedApp> {
   return fail(`no app found (looked for ${candidates.join(", ")}); pass --app <path>`);
 }
 
-const HELP = `pramen — reactive backend on Cloudflare
+const HELP = `pramen: reactive backend on Cloudflare
 
 Usage: pramen <command>
 
@@ -126,7 +126,7 @@ async function schemaCmd(sub: string | undefined): Promise<void> {
     const { schema } = await loadApp();
     const next = schemaFingerprint(schema);
     if (!existsSync(snapshotPath)) {
-      console.log("no snapshot — run `pramen schema snapshot` to set a baseline.");
+      console.log("no snapshot. Run `pramen schema snapshot` to set a baseline.");
       return;
     }
     // `fingerprint` was called `shape` before; keep reading an existing snapshot so an
@@ -162,9 +162,9 @@ async function schemaCmd(sub: string | undefined): Promise<void> {
       );
     if (changes.some((c) => !c.appliesOnBoot))
       console.log(
-        "• [NOT applied on boot] a partition move — the entity's data lives in a different Durable Object,\n" +
+        "• [NOT applied on boot] a partition move: the entity's data lives in a different Durable Object,\n" +
           "  which needs a manual cross-DO data migration. The boot migrator won't move it; apply it yourself.\n" +
-          "  (Modifier/constraint changes on an existing column ARE applied on boot now — a tightening one\n" +
+          "  (Modifier/constraint changes on an existing column ARE applied on boot now; a tightening one\n" +
           "  like adding NOT NULL/UNIQUE is gated by PRAMEN_ALLOW_DESTRUCTIVE and skipped if it can't apply.)",
       );
     return;
@@ -175,7 +175,7 @@ async function schemaCmd(sub: string | undefined): Promise<void> {
     const tenant = flag("tenant") ?? "main";
     const token = flag("token") ?? (await sign({ sub: "cli", roles: ["admin"] }));
     // Each partition is a distinct Durable Object class, migrated and hashed
-    // independently — so compare them one at a time, fetching each partition's applied
+    // independently, so compare them one at a time, fetching each partition's applied
     // schema from its DO. A single-(default-)partition app loops exactly once and reads
     // identically to before. The default partition is addressed with no partition param.
     const partitions = partitionsOf(schema);
@@ -193,14 +193,14 @@ async function schemaCmd(sub: string | undefined): Promise<void> {
       };
       if (!res.ok || !body.ok || !body.result) fail(`status failed (partition ${partition}): ${body.error ?? res.status}`);
       const live = body.result!;
-      // The DO hashes only its partition's entities — mirror that here so the compared
+      // The DO hashes only its partition's entities, so mirror that here so the compared
       // hashes line up (for a single partition this equals the whole-schema hash).
       const subset = partitionSchema(schema, partition);
       const current = schemaHash(subset);
       const upToDate = live.hash === current;
       console.log(`live:    ${live.hash ?? "(none)"}`);
       console.log(`current: ${current}`);
-      console.log(upToDate ? "✓ up to date" : "⚠ BEHIND — migrates on the tenant's next boot");
+      console.log(upToDate ? "✓ up to date" : "⚠ BEHIND: migrates on the tenant's next boot");
       const want = schemaFingerprint(subset);
       for (const table of Object.keys(want)) {
         const liveCols = new Set(live.tables[table] ?? []);
@@ -222,7 +222,7 @@ interface MigrationTarget {
 }
 
 /** GET the applied-migration ledger for one (tenant, partition). Exits non-zero rather
- * than reporting a partial fleet — "not answered" must never read as "not applied". */
+ * than reporting a partial fleet: "not answered" must never read as "not applied". */
 async function fetchApplied(
   url: string,
   token: string,
@@ -231,7 +231,7 @@ async function fetchApplied(
 ): Promise<{ id: string; appliedAt: string }[]> {
   const qs = target.partition === DEFAULT_PARTITION ? "" : `&partition=${encodeURIComponent(target.partition)}`;
   const headers = new Headers({ authorization: `Bearer ${token}` });
-  // The ledger lives in the Worker's shared D1 on that store — there is no DO to ask, and
+  // The ledger lives in the Worker's shared D1 on that store: there is no DO to ask, and
   // without this header the request routes to a DO binding a D1-only deploy doesn't have.
   if (store === "d1") headers.set("x-pramen-store", "d1");
   const res = await fetch(`${url}/admin/migrations?tenant=${encodeURIComponent(target.tenant)}${qs}`, {
@@ -266,7 +266,7 @@ async function migrationsCmd(sub: string | undefined): Promise<void> {
     const store = flag("store");
     if (store !== undefined && store !== "d1" && store !== "do") fail(`migrations status: --store must be "do" or "d1"`);
 
-    // --all-tenants asks the registry which (tenant, partition) DOs actually exist — the
+    // --all-tenants asks the registry which (tenant, partition) DOs actually exist: the
     // only way to answer "is it safe to prune this id?", since a tenant nobody has touched
     // since the migration shipped is still unmigrated and no local artifact knows that.
     let targets: MigrationTarget[];
@@ -281,7 +281,7 @@ async function migrationsCmd(sub: string | undefined): Promise<void> {
       const tenant = flag("tenant") ?? "main";
       // Union the schema's partitions with the ones the migrations themselves declare.
       // partitionsOf() only returns partitions an ENTITY lives in, so an app whose every
-      // entity is partitioned would drop the default partition from the report — and a
+      // entity is partitioned would drop the default partition from the report, and a
       // default-partition migration would silently never be listed, in the one command
       // whose answer gates deleting it.
       const declaredIn = declared.map((m) => m.partition ?? DEFAULT_PARTITION);
@@ -302,7 +302,7 @@ async function migrationsCmd(sub: string | undefined): Promise<void> {
           pending++;
         }
       }
-      // A ledger row with no declaration left in the codebase — the pruning question in
+      // A ledger row with no declaration left in the codebase: the pruning question in
       // reverse. Harmless (it stays applied), but it means this deploy no longer describes
       // what ran, so a fresh tenant and this one are NOT converging on the same history.
       const declaredIds = new Set(forHere.map((m) => m.id));
@@ -310,7 +310,7 @@ async function migrationsCmd(sub: string | undefined): Promise<void> {
       console.log(`  ${forHere.length - pending} applied, ${pending} pending`);
     }
     console.log(
-      "\nA migration is only safe to DELETE once EVERY live tenant reports it applied — the same trap as\n" +
+      "\nA migration is only safe to DELETE once EVERY live tenant reports it applied. The same trap as\n" +
         "`renamedFrom`: migration is lazy and per-DO, so a tenant nobody has touched is still unmigrated\n" +
         "and would silently skip the id if it were gone. Check with --all-tenants.",
     );
@@ -348,7 +348,7 @@ function initCmd(args: string[]): void {
   console.log("  2. Generate config: bunx oblaka oblaka.ts    (writes wrangler.jsonc)");
   console.log("  3. Run locally:     bunx wrangler dev         (serves http://localhost:8787)");
   console.log("");
-  console.log("First request: POST http://localhost:8787/rpc/listNotes returns [] (not 403) —");
+  console.log("First request: POST http://localhost:8787/rpc/listNotes returns [] (not 403),");
   console.log("the scaffold's ACL grants the anonymous role read+create on `notes`. Tighten it");
   console.log("in app.ts before shipping (see the comments there).");
 }
@@ -368,7 +368,7 @@ const handlers = {
   ),
 };
 
-// ACL — deny-by-default; roles only GRANT. A caller with no verified token is the
+// ACL: deny-by-default; roles only GRANT. A caller with no verified token is the
 // \`anonymous\` role, so this grants the scaffold's handlers on the first request (no
 // token needed). TIGHTEN THIS before shipping: gate writes behind an authenticated
 // role and scope reads with \`$identity(...)\` (see @pramen/auth and the pramen docs).
@@ -394,7 +394,7 @@ export const PramenDO = pramen.PramenDO; // wrangler binds this by class_name
 
 const OBLAKA_TEMPLATE = `import { define, DurableObject, KVNamespace, R2Bucket, Worker } from "oblaka-iac";
 
-const PROJECT = "my-pramen-app"; // unique per project — namespaces all CF resources
+const PROJECT = "my-pramen-app"; // unique per project; namespaces all CF resources
 
 export default define(({ env }) => {
   const vars =

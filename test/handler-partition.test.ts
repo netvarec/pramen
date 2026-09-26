@@ -23,9 +23,9 @@ describe("handler partition opt", () => {
 
 describe("partition → DO name (partitionDoName)", () => {
   // The Worker's partitionStubFor names the DO via partitionDoName(tenant, partition).
-  // The default partition MUST yield the bare tenant — byte-for-byte the pre-partition
-  // idFromName(tenant) — or existing single-partition DOs/data are orphaned.
-  test("default partition (and absent opt) ⇒ bare tenant name — backward-compat", () => {
+  // The default partition MUST yield the bare tenant, byte-for-byte the pre-partition
+  // idFromName(tenant), or existing single-partition DOs/data are orphaned.
+  test("default partition (and absent opt) ⇒ bare tenant name, for backward-compat", () => {
     const partition = query(() => 1).partition ?? DEFAULT_PARTITION;
     expect(partitionDoName("acme", partition)).toBe("acme");
     expect(partitionDoName("acme", DEFAULT_PARTITION)).toBe("acme");

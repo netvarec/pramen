@@ -19,7 +19,7 @@ role("author", [
 ```
 
 ACL `where` rules accept the same operators and `AND`/`OR` as queries, and
-`$identity` markers can appear anywhere — including inside `in`. If a marker can't
+`$identity` markers can appear anywhere, including inside `in`. If a marker can't
 be resolved (a missing claim), the rule safely matches nothing.
 
 ```ts
@@ -41,7 +41,7 @@ policy("reader:read", "notes", "read", { fields: ["id", "title", "ownerId", "cre
 Field visibility can depend on the **row's data**, not just the (entity, action).
 Use the declarative `conditionalFields` (a row predicate, statically analyzable) or
 the `fieldsFn` escape hatch for arbitrary logic. Conditional grants are **additive**
-— they only ever add fields to the base.
+and they only ever add fields to the base.
 
 ```ts
 // teammate reads every note, but sees `body` only on the notes they own
@@ -60,13 +60,13 @@ The same rules enforce **writes** per row: insert evaluates the candidate values
 update the post-merge row. So a teammate may edit `body` on their own note but not
 on another's, even though both are writable for `title`.
 
-> A conditionally-visible column can't be aggregated or used in `orderBy` — that
+> A conditionally-visible column can't be aggregated or used in `orderBy`, since that
 > would leak its value (or relative ordering) across rows. Such requests are denied.
 
 ## Write rules: `set` and `validate`
 
 A write policy may force server-controlled columns with `set` (overriding client
-input — so values like the owner can't be forged) and `validate` the final values:
+input, so values like the owner can't be forged) and `validate` the final values:
 
 ```ts
 policy("author:create", "notes", "create", {
@@ -108,16 +108,16 @@ policy("member:read", "notes", "read", resolve(({ identity, db }) => {
 
 ## Authorizing handlers
 
-The policies above gate **`ctx.db`** — they decide which rows/fields a role can
+The policies above gate **`ctx.db`**: they decide which rows/fields a role can
 read/write. They do **not** gate a handler that reaches `ctx.kv` / `ctx.env` /
 `ctx.mail` / `ctx.tasks` / `ctx.queue` directly: those bypass the row-ACL, so an
 un-gated such handler is callable by **anyone** (including anonymous) on an open tenant.
 
-Gate the *call* with the `auth` option — enforced **before** the handler runs (and
+Gate the *call* with the `auth` option, enforced **before** the handler runs (and
 before input parsing); it throws `403` on failure:
 
 ```ts
-// Only an admin can call this — even though it never touches ctx.db.
+// Only an admin can call this, even though it never touches ctx.db.
 adminStats: query(async (ctx) => ctx.kv.get("stats", "json"), { auth: ["admin"] }),
 
 // Any authenticated caller:

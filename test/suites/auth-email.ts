@@ -7,7 +7,7 @@
 
 import { assert, http, token } from "../lib";
 
-/** Drain the outbox so the emails (and their dev token-stashes in KV) are sent — the
+/** Drain the outbox so the emails (and their dev token-stashes in KV) are sent: the
  * sends run from tasks AFTER the request mutation commits. */
 async function drain(base: string, admin: string): Promise<void> {
   await fetch(`${base}/admin/tasks/drain`, {
@@ -70,7 +70,7 @@ export async function runAuthEmail(base: string): Promise<void> {
   assert(req2.body.ok, "auth-email: can request verification again after changeEmail cleared the flag");
   await drain(base, admin);
   const staleToken = (await call("__verifyInbox", { email: "still-old@example.com" }, admin)).body.result?.token as string;
-  // change the email again — the stale token was minted for the previous address
+  // change the email again; the stale token was minted for the previous address
   await call("changeEmail", { email: newEmail }, userToken);
   const staleVerify = await call("verifyEmail", { token: staleToken });
   assert(staleVerify.status === 401, "auth-email: a verify token for a since-changed address is rejected (401)");

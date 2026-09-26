@@ -1,5 +1,5 @@
 // File storage end-to-end: the full R2-backed flow over the real Worker route in
-// miniflare — request a signed upload url, PUT bytes, attach the FileRef to a note,
+// miniflare: request a signed upload url, PUT bytes, attach the FileRef to a note,
 // then mint + follow a signed download url. Also covers ACL (you can only sign a
 // download for a note you can read), the fileRef codec (object round-trips through
 // the DB), and token hardening (missing/tampered tokens rejected).
@@ -113,7 +113,7 @@ export async function runFiles(base: string): Promise<void> {
   // --- hardening: missing + tampered tokens are rejected ---
   const noToken = await get("/files/download");
   assert(noToken.status === 401, "files: download without a token is 401");
-  // Append junk to the signed token — any change invalidates the HMAC.
+  // Append junk to the signed token; any change invalidates the HMAC.
   const badSig = await get(dl.body.result.url + "xectn");
   assert(badSig.status === 403, "files: a tampered token is 403");
 }

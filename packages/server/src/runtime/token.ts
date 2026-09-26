@@ -5,7 +5,7 @@
 // file urls were the first user (`runtime/storage.ts`); page preview links are the second
 // (`@pramen/cms`). Both mint in a handler and redeem in the Worker, unauthenticated.
 //
-// Pure WebCrypto — synchronous in the sense that matters (no stream I/O), so it is safe to
+// Pure WebCrypto, synchronous in the sense that matters (no stream I/O), so it is safe to
 // call from inside the DO's storage.transaction().
 //
 // A token is `<b64url(json)>.<b64url(sig)>`. It is deliberately NOT a JWT: no alg field to
@@ -49,7 +49,7 @@ export async function signToken<T extends ExpiringToken>(payload: T, secret: str
 }
 
 /** Verify a token's signature and expiry; returns the payload, or `null` for anything
- * malformed, forged, or expired. The caller decides what the payload authorizes — this
+ * malformed, forged, or expired. The caller decides what the payload authorizes; this
  * only attests that we minted it and that it is still in date. */
 export async function verifyToken<T extends ExpiringToken>(raw: string, secret: string): Promise<T | null> {
   const dot = raw.indexOf(".");
@@ -84,7 +84,7 @@ export function isUsableSecret(secret: unknown): secret is string {
 }
 
 /** Resolve a signing secret from env by preference order, skipping any that is absent or
- * too weak. Returns `undefined` when nothing usable is configured — callers fail closed. */
+ * too weak. Returns `undefined` when nothing usable is configured, so callers fail closed. */
 export function resolveSecret(env: Readonly<Record<string, unknown>>, names: readonly string[]): string | undefined {
   for (const name of names) {
     const v = env[name];

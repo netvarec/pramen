@@ -1,5 +1,5 @@
 // app.bootstrap / @pramen/cms code-defined types. `cmsBootstrap` upserts block + content
-// types by slug into a freshly-migrated store — insert when missing, update on drift, no-op
+// types by slug into a freshly-migrated store: insert when missing, update on drift, no-op
 // when identical. This is what lets a repo declare its content types in code and have a
 // fresh / reprovisioned database converge to them on boot (no manual createContentType).
 //
@@ -19,7 +19,7 @@ import type { Driver } from "../packages/server/src/runtime/driver";
 
 const schema = defineSchema({ ...cmsSchema });
 
-// A SYSTEM-scoped Db (ACL bypassed) — the same context the boot paths build for bootstrap.
+// A SYSTEM-scoped Db (ACL bypassed), the same context the boot paths build for bootstrap.
 function sysDb(driver: Driver): any {
   return new Db(driver, { acl: compileAcl([]), identity: { roles: ["admin"] }, system: true, schema }, schema);
 }
@@ -40,7 +40,7 @@ const article = defineContentType("article", {
   regions: [{ name: "content", allowedTypes: ["rich_text", "image"] }],
 });
 
-describe("cmsBootstrap — code-defined content/block type reconcile", () => {
+describe("cmsBootstrap: code-defined content/block type reconcile", () => {
   test("inserts missing block + content types on a fresh store", async () => {
     const driver = await freshStore();
     await cmsBootstrap({ blockTypes: [richText, image], contentTypes: [article] })(ctx(driver));
@@ -80,7 +80,7 @@ describe("cmsBootstrap — code-defined content/block type reconcile", () => {
     expect(() => cmsBootstrap({ contentTypes: [bad] })).toThrow(/needs `other`/);
   });
 
-  test("is idempotent — re-running does not duplicate", async () => {
+  test("is idempotent, so re-running does not duplicate", async () => {
     const driver = await freshStore();
     const boot = cmsBootstrap({ blockTypes: [richText, image], contentTypes: [article] });
     await boot(ctx(driver));
@@ -92,7 +92,7 @@ describe("cmsBootstrap — code-defined content/block type reconcile", () => {
     expect(((await db.find({ from: "cms_content_types" })) as any[]).length).toBe(1);
   });
 
-  test("updates a drifted definition in place — same row, no duplicate", async () => {
+  test("updates a drifted definition in place: same row, no duplicate", async () => {
     const driver = await freshStore();
     await cmsBootstrap({ contentTypes: [article] })(ctx(driver));
     const before = ((await sysDb(driver).find({ from: "cms_content_types", where: { slug: "article" }, limit: 1 })) as any[])[0];
@@ -122,11 +122,11 @@ describe("cmsBootstrap — code-defined content/block type reconcile", () => {
   });
 });
 
-// GitHub #48 — bootstrap converges these rows on every boot, and the editor authors the same
+// GitHub #48: bootstrap converges these rows on every boot, and the editor authors the same
 // rows. Without a marker the two are indistinguishable, so an editor's save returned 200 and
-// was reverted at the next cold start. `managedBy` is what makes them different things — an
+// was reverted at the next cold start. `managedBy` is what makes them different things: an
 // OWNER id rather than a flag, so two reconcilers in one `app.bootstrap` compose.
-describe("cmsBootstrap — code-defined types carry an owner", () => {
+describe("cmsBootstrap: code-defined types carry an owner", () => {
   test("declared types are stamped with the owner; a hand-created one is not", async () => {
     const driver = await freshStore();
     const db = sysDb(driver);
@@ -162,7 +162,7 @@ describe("cmsBootstrap — code-defined types carry an owner", () => {
     await cmsBootstrap({ contentTypes: [article] })(ctx(driver)); // no `blockTypes` key at all
     expect(await owned()).toBe("cms");
 
-    // `blockTypes: []` is a DECLARATION of none — which is also the in-band way to hand every
+    // `blockTypes: []` is a DECLARATION of none, which is also the in-band way to hand every
     // code-defined type back to the editor when the reconciler itself is being removed.
     await cmsBootstrap({ blockTypes: [], contentTypes: [article] })(ctx(driver));
     expect(await owned()).toBe(null);
@@ -184,7 +184,7 @@ describe("cmsBootstrap — code-defined types carry an owner", () => {
   });
 
   // The mirror image of #48: the reconciler silently overwrote an editor-authored row of the
-  // same slug — name and schema replaced, then LOCKED, so the editor could not put back what
+  // same slug: name and schema replaced, then LOCKED, so the editor could not put back what
   // it had just lost. `createBlockType` refuses this collision at the RPC edge.
   test("an editor-authored row of the same slug is left alone, not adopted", async () => {
     const driver = await freshStore();
@@ -215,13 +215,13 @@ describe("cmsBootstrap — code-defined types carry an owner", () => {
 
 // The editor validates an authored field schema (`normalizeFieldSchema`). A code-declared type
 // went straight into the store unchecked, so a bad one could store a schema the builder would
-// then REFUSE to save — the only surface reporting the problem being the one that cannot fix
+// then REFUSE to save, the only surface reporting the problem being the one that cannot fix
 // it, and the row is then locked, so it cannot be repaired through the product at all.
 //
 // The check lives on `cmsBootstrap`, not on `defineBlockType`: those helpers are OPTIONAL, and
 // `BlockTypeDef` is a structural interface, so an object literal or a `.map` reaches the store
 // without going near them. Guarding the helper guards the convenient path and leaves the sink.
-describe("cmsBootstrap — validates the definitions it will write", () => {
+describe("cmsBootstrap: validates the definitions it will write", () => {
   test("a select with no options is refused", () => {
     expect(() => cmsBootstrap({ blockTypes: [defineBlockType("card", [{ name: "variant", type: "select" }] as const)] }))
       .toThrow(/needs either `options` or an `optionsFrom` handler/);
@@ -246,7 +246,7 @@ describe("cmsBootstrap — validates the definitions it will write", () => {
       .toThrow(/content type slug must be a key/);
   });
 
-  // A plain object literal — no helper anywhere. This is the path the check exists for.
+  // A plain object literal, with no helper anywhere. This is the path the check exists for.
   test("an object literal that never touched define* is validated too", () => {
     expect(() => cmsBootstrap({ blockTypes: [{ slug: "Bad Slug", name: "x", fieldsSchema: [] }] }))
       .toThrow(/block type slug must be a key/);
@@ -273,11 +273,11 @@ describe("cmsBootstrap — validates the definitions it will write", () => {
     expect(msg).toContain("post");
   });
 
-  test("what it writes is CANONICALIZED — the row matches what the editor would have saved", async () => {
+  test("what it writes is CANONICALIZED, so the row matches what the editor would have saved", async () => {
     const driver = await freshStore();
     await cmsBootstrap({ contentTypes: [defineContentType("post", { regions: [{ name: "content" }] })] })(ctx(driver));
     const row = ((await sysDb(driver).find({ from: "cms_content_types", where: { slug: "post" }, limit: 1 })) as any[])[0];
-    // `allowedTypes` omitted means "any" — stored as an explicit null, exactly as
+    // `allowedTypes` omitted means "any", stored as an explicit null, exactly as
     // `createContentType` would have written it, so it does not read as drift.
     expect(row.regions).toEqual([{ name: "content", allowedTypes: null }]);
     expect(row.fieldsSchema).toEqual([]);

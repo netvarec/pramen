@@ -1,13 +1,13 @@
 #!/usr/bin/env bun
 // Publish @pramen/* to npm, skipping any package whose current version is already
-// on the registry. Idempotent — safe to re-run after a partial failure, and lets
+// on the registry. Idempotent, so it is safe to re-run after a partial failure, and lets
 // a newly-added package join the set without forcing a version bump of the rest.
 // In CI this runs under OIDC trusted publishing (no token); see release.yml.
 //
 // Dependency order: a package is published after anything it depends on
 // (auth -> server; react -> client).
 //
-// IMPORTANT: `npm publish` does NOT understand the `workspace:*` protocol — that's a
+// IMPORTANT: `npm publish` does NOT understand the `workspace:*` protocol; that's a
 // bun/pnpm/yarn feature. Plain `npm` ships the manifest verbatim, so a `workspace:*`
 // dep would land on the registry literally and make the package uninstallable (this
 // shipped broken in 0.0.1–0.0.6 for @pramen/react and @pramen/auth). We rewrite every

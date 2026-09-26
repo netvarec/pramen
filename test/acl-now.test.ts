@@ -1,4 +1,4 @@
-// Unit tests for the $now() policy marker — a time-boxed row grant, driven directly
+// Unit tests for the $now() policy marker: a time-boxed row grant, driven directly
 // over a bun:sqlite Driver (no server).
 //
 // The motivating case is scheduled publication: `{ publishedAt: { isNull: false } }`
@@ -42,7 +42,7 @@ describe("$now() in a policy where", () => {
     expect(titles(await db.find({ from: "lectures", where: {} }))).toEqual(["past"]);
   });
 
-  test("a scheduled (future) row stays hidden — the isNull:false gap", async () => {
+  test("a scheduled (future) row stays hidden: the isNull:false gap", async () => {
     const db = await seed(timeBoxed);
     const rows = (await db.find({ from: "lectures", where: {} })) as { title: string }[];
     expect(rows.map((r) => r.title)).not.toContain("future");
@@ -62,7 +62,7 @@ describe("$now() in a policy where", () => {
 
   // Regression guard: NowMarker is an object whose only key is a symbol, so
   // Object.entries() on it is empty. Read as an operator map rather than a value it
-  // would compile to NO predicate at all — every row public, silently.
+  // would compile to NO predicate at all: every row public, silently.
   test("a bare-value $now() is an equality, not an empty operator map", async () => {
     const roles = [role("anonymous", [policy("exact", "lectures", "read", { where: { publishedAt: $now() } })])];
     const db = await seed(roles);

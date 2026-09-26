@@ -8,7 +8,7 @@
 //   supported (requested 600000).
 //
 // Every signup and login 500'd on a real Cloudflare deployment. It survived the whole
-// test suite because Bun — which runs these tests, and which lopata runs workers on —
+// test suite because Bun (which runs these tests, and which lopata runs workers on)
 // has no such cap. That is the trap: the runtime we TEST on is more permissive than
 // the runtime we DEPLOY to, so a green suite proved nothing here.
 //
@@ -62,7 +62,7 @@ describe("PBKDF2 iterations stay within workerd's cap", () => {
 
   // A row written at 600k (by pramen <= 0.0.43, or by a Bun/Node deployment sharing a
   // database with a Worker) is unverifiable on Workers. Bun happily computes it, so
-  // this asserts the diagnosis rather than the throw — on workerd the same call raises
+  // this asserts the diagnosis rather than the throw: on workerd the same call raises
   // NotSupportedError and deriveBits() rewrites it into an actionable message.
   test("an over-cap stored hash is still parsed, and is what the error path targets", async () => {
     const salt = new Uint8Array(16).fill(3);

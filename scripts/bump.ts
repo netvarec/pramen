@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// Bump all @pramen/* package versions in lockstep, commit, and tag — then
+// Bump all @pramen/* package versions in lockstep, commit, and tag. Then
 // `git push --follow-tags` triggers the release workflow.
 //
 //   bun run bump patch          0.0.1 -> 0.0.2
@@ -23,7 +23,7 @@ if (!spec) {
   process.exit(1);
 }
 
-// Refuse to bump if a publishable package is missing from the shared list — a
+// Refuse to bump if a publishable package is missing from the shared list: a
 // half-bumped set (some packages left at the old version) publishes inconsistently.
 await assertNoPackageDrift();
 
@@ -53,10 +53,10 @@ if (dryRun) {
   process.exit(0);
 }
 
-// Refuse to bump on a dirty tree — the version bump should be its own commit.
+// Refuse to bump on a dirty tree, since the version bump should be its own commit.
 const dirty = (await $`git status --porcelain`.quiet()).stdout.toString().trim();
 if (dirty) {
-  console.error("working tree is not clean — commit or stash first, then bump.");
+  console.error("working tree is not clean. Commit or stash first, then bump.");
   process.exit(1);
 }
 
@@ -64,7 +64,7 @@ const files: string[] = [];
 for (const dir of PKGS) {
   const path = `${dir}/package.json`;
   const text = await Bun.file(path).text();
-  // Replace only the top-level version literal — no JSON reformatting churn.
+  // Replace only the top-level version literal, with no JSON reformatting churn.
   await Bun.write(path, text.replace(/("version":\s*)"[^"]+"/, `$1"${next}"`));
   files.push(path);
 }

@@ -1,9 +1,9 @@
-// OIDC login — authorization code + PKCE, exchanged for a PRAMEN session.
+// OIDC login: authorization code + PKCE, exchanged for a PRAMEN session.
 //
 // pramen's core stays verify-only (BYO-IdP): `JwksStrategy` already verifies an RS256 token
 // against a remote JWKS, so a deployment whose frontend already holds an IdP token needs
-// nothing from this file. What was missing is the FLOW — the redirect dance that turns a
-// browser with no token into a session — and the claim mapping that makes an IdP's idea of
+// nothing from this file. What was missing is the FLOW: the redirect dance that turns a
+// browser with no token into a session, and the claim mapping that makes an IdP's idea of
 // a user into pramen's.
 //
 // WHY IT MINTS A PRAMEN TOKEN rather than passing the IdP's through. The rest of the system
@@ -18,17 +18,17 @@
 //   - Auth0/Okta put them in a NAMESPACED claim (`https://example.com/roles`),
 //   - Google Workspace has none in the token at all.
 // So roles resolve in this order: `mapRoles(claims)` if you supply one (the IdP is
-// authoritative), else the roles stored on the user's row (pramen is authoritative — the
+// authoritative), else the roles stored on the user's row (pramen is authoritative, the
 // only workable answer for Google), else `defaultRoles` for a first login.
 
 import { isSystemRole, JwksStrategy, Kv, mutation } from "@pramen/server";
 import type { EnvBag, HandlerContext, HandlerMap, JsonObject, Row } from "@pramen/server";
 import type { PublicRoute, RouteContext } from "@pramen/server/worker";
-// The package's OWN HS256 signer — `@pramen/server`'s `signToken` mints the opaque
+// The package's OWN HS256 signer. `@pramen/server`'s `signToken` mints the opaque
 // file/preview token, which the request verifier does not accept as a session.
 import { signToken } from "./index.js";
 
-/** An OpenID Provider's discovery document — the fields this flow uses. */
+/** An OpenID Provider's discovery document: the fields this flow uses. */
 interface Discovery {
   issuer: string;
   authorization_endpoint: string;
@@ -41,13 +41,13 @@ export interface OidcOptions {
    * the endpoints and the JWKS location are never hand-copied. */
   issuer: string;
   clientId: string;
-  /** Confidential clients only. Omit for a public client — the exchange then relies on
+  /** Confidential clients only. Omit for a public client: the exchange then relies on
    * PKCE alone, which is the correct configuration for a SPA. */
   clientSecret?: string;
   /** Must match the redirect URI registered with the provider, exactly. */
   redirectUri: string;
   /** Where to send the browser after a successful login. The session token arrives in the
-   * URL FRAGMENT (`#token=…`), which — unlike a query parameter — is never sent to a
+   * URL FRAGMENT (`#token=…`), which (unlike a query parameter) is never sent to a
    * server, kept in server logs, or included in a `Referer` header. */
   successRedirect: string;
   /** Default `["openid", "email", "profile"]`. */
@@ -71,7 +71,7 @@ export interface OidcOptions {
    *
    * `"email"` (default) matches how the rest of `@pramen/auth` keys users, so an OIDC login
    * lands on the SAME row as a magic-link or password login for that address. It is only
-   * honored when the provider asserts `email_verified` — an IdP that lets a user set an
+   * honored when the provider asserts `email_verified`: an IdP that lets a user set an
    * unverified address would otherwise be an account-takeover path into any existing
    * email-keyed account.
    *
@@ -115,7 +115,7 @@ function discover(issuer: string): Promise<Discovery> {
         if (typeof doc[field] !== "string") throw new Error(`@pramen/auth: OIDC discovery document from ${base} has no ${field}`);
       }
       // The document's own `issuer` is what ID tokens will carry, and it is what we verify
-      // against — a provider whose discovery URL and issuer differ (a tenant alias, say) is
+      // against: a provider whose discovery URL and issuer differ (a tenant alias, say) is
       // legitimate; a document claiming a DIFFERENT issuer than it was fetched from is not.
       return doc as Discovery;
     })();
@@ -135,7 +135,7 @@ interface PendingLogin {
    *
    * Without it, `state` is just a random string an attacker can obtain by starting a login
    * of their own: they then trick the victim's browser into loading the callback with their
-   * code+state, and the victim is silently signed in AS THE ATTACKER — everything the victim
+   * code+state, and the victim is silently signed in AS THE ATTACKER, so everything the victim
    * subsequently writes lands in the attacker's account. Requiring the cookie means the
    * callback only completes in the browser the flow began in. */
   binderHash: string;
@@ -158,7 +158,7 @@ function readCookie(request: Request, name: string): string | null {
 
 /** `SameSite=Lax` is what makes this work at all: the callback is a TOP-LEVEL GET navigation
  * from the provider's origin, which Lax allows, while a cross-site POST or subresource would
- * not carry it. `Secure` is set whenever the request is https — omitted on plain-http local
+ * not carry it. `Secure` is set whenever the request is https, and omitted on plain-http local
  * dev, where the browser would otherwise drop the cookie entirely. */
 const binderCookie = (url: URL, path: string, value: string, maxAge: number): string =>
   `${BINDER_COOKIE}=${encodeURIComponent(value)}; Path=${path}; Max-Age=${maxAge}; HttpOnly; SameSite=Lax${url.protocol === "https:" ? "; Secure" : ""}`;
@@ -176,12 +176,12 @@ const html = (status: number, message: string): Response =>
   );
 
 /** OAuth error codes are a constrained vocabulary (RFC 6749 §4.1.2.1). Anything outside it
- * is not a provider error worth echoing — it is someone probing this endpoint. */
+ * is not a provider error worth echoing: it is someone probing this endpoint. */
 const safeErrorCode = (raw: string): string => (/^[a-z_]{1,64}$/.test(raw) ? raw : "unspecified");
 
 /**
  * OIDC login for a pramen app. Spread the routes into `app.routes` (they are PRE-AUTH by
- * design — a caller arriving here has no session yet):
+ * design, since a caller arriving here has no session yet):
  *
  *   const oidc = createOidcAuth({ issuer, clientId, clientSecret, redirectUri, successRedirect });
  *   export const app = { schema, handlers, acl, routes: [...oidc.routes] };
@@ -259,8 +259,8 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
       const code = url.searchParams.get("code");
       if (!state || !code) return html(400, "Sign-in link is incomplete. Start again.");
 
-      // SINGLE USE: read and delete before anything else, so a replayed callback — or two
-      // tabs racing the same code — cannot both proceed.
+      // SINGLE USE: read and delete before anything else, so a replayed callback, or two
+      // tabs racing the same code, cannot both proceed.
       const pending = (await kv.get(`oidc:${state}`, "json")) as PendingLogin | null;
       await kv.delete(`oidc:${state}`);
       if (!pending) return html(400, "Sign-in expired or was already used. Start again.");
@@ -293,7 +293,7 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
         return html(502, "Sign-in could not be completed. Try again.");
       }
 
-      // Signature, issuer, audience and expiry — then the nonce, which is what binds this
+      // Signature, issuer, audience and expiry, then the nonce, which is what binds this
       // ID token to the authorization request WE started. Without it a token minted for a
       // different session of the same client would be accepted here.
       const claims = await idTokenVerifier(doc.jwks_uri, doc.issuer).verify(tokens.id_token);
@@ -329,13 +329,13 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
       });
       const upserted = (await res.json().catch(() => ({}))) as { ok?: boolean; result?: { roles?: string[]; active?: boolean } };
       if (upserted.ok !== true || !upserted.result) return html(500, "Sign-in could not be completed.");
-      // A deactivated account must not be revived by logging in through the IdP — the
+      // A deactivated account must not be revived by logging in through the IdP: the
       // provider knows nothing about pramen's `active` flag.
       if (upserted.result.active === false) return html(403, "This account is deactivated.");
 
       const secret = (env as EnvBag).AUTH_SECRET;
       if (typeof secret !== "string" || secret.length === 0) {
-        console.error("pramen/auth: OIDC callback cannot mint a session — AUTH_SECRET is not configured");
+        console.error("pramen/auth: OIDC callback cannot mint a session, because AUTH_SECRET is not configured");
         return html(500, "Sign-in could not be completed.");
       }
       const token = await signToken({ sub: username, roles: upserted.result.roles ?? [] }, secret, { ttlSeconds: sessionTtl });
@@ -359,8 +359,8 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
   return { routes: [start, callback] };
 }
 
-/** The name of the privileged handler the callback route calls. A route has no `ctx.db` — it
- * runs in the Worker, before any tenant DO — so the write goes through `callPrivileged`,
+/** The name of the privileged handler the callback route calls. A route has no `ctx.db`: it
+ * runs in the Worker, before any tenant DO, so the write goes through `callPrivileged`,
  * exactly as the CMS's preview route does. */
 export const OIDC_UPSERT_HANDLER = "__oidcUpsertUser";
 
@@ -378,7 +378,7 @@ export const OIDC_SYSTEM_ROLE = "__oidc_system";
  *   handlers: { ...authHandlers, ...oidcHandlers }
  *
  * `__oidcUpsertUser` is SYSTEM-only: the callback reaches it through `callPrivileged`
- * presenting {@link OIDC_SYSTEM_ROLE}, which no token issued to a user can carry — so it
+ * presenting {@link OIDC_SYSTEM_ROLE}, which no token issued to a user can carry, so it
  * cannot be called over `/rpc` by anyone, admins included. */
 export const oidcHandlers: HandlerMap = {
   [OIDC_UPSERT_HANDLER]: mutation(
@@ -386,7 +386,7 @@ export const oidcHandlers: HandlerMap = {
       const rows = (await ctx.db.exec(`SELECT username, roles, active FROM ${quoteIdent(input.table)} WHERE username = ? LIMIT 1`, input.username)) as Row[];
       const existing = rows[0];
       if (!existing) {
-        // First login. `passwordHash` is empty — the column is NOT NULL in `authSchema` and
+        // First login. `passwordHash` is empty: the column is NOT NULL in `authSchema` and
         // an empty hash never verifies, which is exactly how a magic-link user is created.
         const roles = input.roles ?? input.defaultRoles;
         await ctx.db.exec(
@@ -403,7 +403,7 @@ export const oidcHandlers: HandlerMap = {
         );
         return { roles, active: true };
       }
-      // Returning user. Roles the IdP asserts overwrite the stored ones — that is what
+      // Returning user. Roles the IdP asserts overwrite the stored ones: that is what
       // "the IdP is authoritative" means, including a role being REMOVED there. With no
       // `mapRoles`, the stored roles stand and pramen owns them.
       const stored = parseRoles(existing.roles);
@@ -415,19 +415,19 @@ export const oidcHandlers: HandlerMap = {
       return { roles, active };
     },
     // Gated on a role NO issued token can carry, because `callPrivileged` does not bypass
-    // this check — it sends an ordinary identity (`{ roles: [...] }`) through the same
+    // this check: it sends an ordinary identity (`{ roles: [...] }`) through the same
     // `dispatch` gate as any other caller. An empty allow-list, which this used to be, is
     // satisfied by nobody INCLUDING the callback, so every OIDC sign-in 403'd at the upsert
     // and reported "Sign-in could not be completed." `createPramen` now rejects that
     // spelling at boot rather than letting it fail silently at runtime.
     //
-    // `["admin"]` would work — that is `callPrivileged`'s default identity — and is wrong:
+    // `["admin"]` would work (that is `callPrivileged`'s default identity) and is wrong:
     // this handler WRITES ROLES, so any admin could hand themselves a role set over /rpc.
     { auth: [OIDC_SYSTEM_ROLE] },
   ),
 };
 
-/** The table name comes from the app's own options, never from a request — but it is
+/** The table name comes from the app's own options, never from a request, but it is
  * interpolated into SQL, so it is quoted and constrained rather than trusted by convention. */
 function quoteIdent(table: string): string {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(table)) throw new Error(`@pramen/auth: invalid table name ${JSON.stringify(table)}`);

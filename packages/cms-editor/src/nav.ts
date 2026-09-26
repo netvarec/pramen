@@ -2,13 +2,13 @@
 //
 // It used to be a fixed sequence written out in JSX: Pages, collections, Media, Users,
 // Settings, then `extraNav`. That order was the whole reason a project-specific section
-// could not be part of the admin — `extraNav` renders dead LAST and (by default, and for
+// could not be part of the admin: `extraNav` renders dead LAST and (by default, and for
 // good reason) opens a new tab, so anything not backed by a `collection()` was structurally
 // the final item and structurally a different app.
 //
 // So the nav is built as a list of entries carrying an ORDER, and sorted. `NAV_ORDER` gives
 // the built-ins positions spaced 100 apart, a collection declares `navOrder` server-side,
-// and a host `extraNav` link may declare one too — which is what lets a section sit between
+// and a host `extraNav` link may declare one too, which is what lets a section sit between
 // Pages and Media instead of after Settings.
 //
 // Split out of `_layout.tsx` so the ordering rule is testable without a DOM: the layout
@@ -33,7 +33,7 @@ export interface ExtraNavLink {
   label: string;
   href: string;
   target?: "_blank" | "_self";
-  /** Where it sits — see {@link NAV_ORDER}. Defaults to `NAV_ORDER.extra` (last), which is
+  /** Where it sits. See {@link NAV_ORDER}. Defaults to `NAV_ORDER.extra` (last), which is
    * where every `extraNav` link rendered before this existed. */
   order?: number;
 }
@@ -62,7 +62,7 @@ export type NavGlyph =
  *
  * Two cases because a collection and a Block Kit page may declare their OWN icon
  * server-side, and that is an arbitrary string (an emoji, in practice). It used to be
- * prepended to the label — which read as part of the words, wrapped with them, and could
+ * prepended to the label, which read as part of the words, wrapped with them, and could
  * not be aligned with anything. In a sidebar the icon is a column, so a declared emoji goes
  * in that column and the built-in glyph is the fallback. */
 export type NavIcon = { kind: "glyph"; name: NavGlyph } | { kind: "emoji"; char: string };
@@ -76,7 +76,7 @@ function iconFor(declared: string | undefined, fallback: NavGlyph): NavIcon {
 /** One entry in the primary nav.
  *
  * `kind` is what the layout switches on to render it; everything else here is the data it
- * needs. Keeping the ROUTE out of this module is deliberate — `page`/`params` name a
+ * needs. Keeping the ROUTE out of this module is deliberate: `page`/`params` name a
  * buzola page, and the layout is where navigation (and the unsaved-changes guard it runs
  * through) belongs. */
 export type NavEntry =
@@ -87,7 +87,7 @@ export type NavEntry =
  * this a pure function of the session's facts. */
 export interface NavInput {
   collections: CollectionMeta[];
-  /** Block Kit pages this caller may open — already role-filtered by the server. */
+  /** Block Kit pages this caller may open, already role-filtered by the server. */
   adminPages: AdminPageMeta[];
   contentTypes: ContentType[] | null;
   cms: CmsCapabilities;
@@ -141,8 +141,8 @@ export function buildNav(input: NavInput): NavEntry[] {
 
   if (cms.siteFurniture) {
     entries.push({ kind: "route", key: "menus", order: NAV_ORDER.menus, icon: { kind: "glyph", name: "menus" }, label: t("nav.menus"), page: "menus" });
-    // Taxonomies classify PAGES — `cms_page_terms` links a term to a page and to nothing
-    // else — so a collections-only deployment has nothing to classify and the section would
+    // Taxonomies classify PAGES: `cms_page_terms` links a term to a page and to nothing
+    // else, so a collections-only deployment has nothing to classify and the section would
     // be a vocabulary editor with no subject.
     if (!hidePages) entries.push({ kind: "route", key: "taxonomies", order: NAV_ORDER.taxonomies, icon: { kind: "glyph", name: "taxonomies" }, label: t("nav.taxonomies"), page: "taxonomies" });
     entries.push({ kind: "route", key: "widgets", order: NAV_ORDER.widgets, icon: { kind: "glyph", name: "widgets" }, label: t("nav.widgets"), page: "widgets" });
@@ -150,14 +150,14 @@ export function buildNav(input: NavInput): NavEntry[] {
   }
 
   // A project's own screens, INSIDE the chrome and at a position they choose. This is the
-  // whole difference from `extraNav`, which renders after Settings and opens a new tab — so
+  // whole difference from `extraNav`, which renders after Settings and opens a new tab, so
   // the odd 10% of a client site was a separate deployment that looked nothing like the
   // admin it hung off.
   for (const p of adminPages) {
     entries.push({ kind: "route", key: `app:${p.slug}`, order: p.navOrder ?? NAV_ORDER.adminPages, icon: iconFor(p.icon, "app"), label: p.label, page: "admin-page", params: { slug: p.slug } });
   }
 
-  // Authoring the SCHEMA, not content — so it is gated on `canEdit` (every handler behind
+  // Authoring the SCHEMA, not content, so it is gated on `canEdit` (every handler behind
   // it is editor-only) and hidden where there is no block/page builder to define types for.
   if (!hidePages && cms.canEdit) {
     entries.push({ kind: "route", key: "types", order: NAV_ORDER.types, icon: { kind: "glyph", name: "types" }, label: t("nav.types"), page: "schema" });
@@ -169,7 +169,7 @@ export function buildNav(input: NavInput): NavEntry[] {
   for (const link of extraNav) {
     // Keyed on href AND label: two entries may legitimately point at the same href and
     // differ only in label or target, and keyed on href alone React reconciles them
-    // together — the rendered label can end up on the other one's anchor.
+    // together, and the rendered label can end up on the other one's anchor.
     entries.push({ kind: "link", key: `extra:${link.href}|${link.label}`, order: link.order ?? NAV_ORDER.extra, icon: { kind: "glyph", name: "link" }, link });
   }
 
@@ -178,15 +178,15 @@ export function buildNav(input: NavInput): NavEntry[] {
 
 // --- sections ---------------------------------------------------------------------------
 //
-// Twelve items in one flat list is the thing that stopped being legible — it overran the
+// Twelve items in one flat list is the thing that stopped being legible: it overran the
 // topbar, and a sidebar alone only turns a crowded row into a long column. So the nav is
 // GROUPED. Grouping rather than hiding: everything a session may reach stays one click away
 // (a submenu costs a click and hides the thing being looked for), and the headings answer
 // "where would I look for this" instead of making the reader scan twelve equal rows.
 //
 // A section is a BAND OF `order`, not a hand-written list of keys. That keeps the one
-// contract this module has — position is a number a host sets (`navOrder` on a collection
-// or an admin page, `order` on an `extraNav` link) — the single thing that decides where an
+// contract this module has (position is a number a host sets: `navOrder` on a collection
+// or an admin page, `order` on an `extraNav` link) the single thing that decides where an
 // entry appears. A host placing a section at 250 lands in Content, at 450 in Site, exactly
 // as the number reads. Enumerating keys instead would have made a host-placed entry land
 // visually inside a group it was not a member of.
@@ -206,9 +206,9 @@ export interface NavSection {
  * rather than a literal so the two cannot drift: a built-in moving to a new position moves
  * with its band. */
 const BANDS: readonly { id: NavSectionId; label: TextKey; upTo: number }[] = [
-  // Pages / content types, collections, media — the things an editor came here to write.
+  // Pages / content types, collections, media: the things an editor came here to write.
   { id: "content", label: "nav.section.content", upTo: NAV_ORDER.menus },
-  // Menus, taxonomies, widget areas, redirects — site-level furniture, not page content.
+  // Menus, taxonomies, widget areas, redirects: site-level furniture, not page content.
   { id: "site", label: "nav.section.site", upTo: NAV_ORDER.adminPages },
   // A project's own Block Kit screens. Their own band rather than a tail of "System",
   // because they are the project's, and the whole point of `adminPage()` is that they are
@@ -221,8 +221,8 @@ const BANDS: readonly { id: NavSectionId; label: TextKey; upTo: number }[] = [
 /** Every section id, in rail order. Derived from `BANDS` rather than written out again, so
  * a new group cannot exist in the layout's eyes but not in the reader's stored folds (or the
  * reverse). It is what makes a persisted fold PARSEABLE: a value read back out of
- * localStorage is checked against this, so a stale id from an older version — or anything a
- * hand-edit put there — is dropped rather than carried into state as "some string". */
+ * localStorage is checked against this, so a stale id from an older version, or anything a
+ * hand-edit put there, is dropped rather than carried into state as "some string". */
 export const NAV_SECTION_IDS: readonly NavSectionId[] = BANDS.map((b) => b.id);
 
 /**
@@ -247,8 +247,8 @@ export function navSections(entries: NavEntry[]): NavSection[] {
 /**
  * Should the sections be LABELLED?
  *
- * A single heading over the whole nav names nothing — it is a caption on a list with no
- * sibling to distinguish it from — and a collections-only deployment (`hidePages`, no site
+ * A single heading over the whole nav names nothing: it is a caption on a list with no
+ * sibling to distinguish it from, and a collections-only deployment (`hidePages`, no site
  * furniture) genuinely is one group. So the headings appear once there are at least two,
  * and the small deployment keeps a plain list.
  */
@@ -270,13 +270,13 @@ export interface TopbarNav {
  * The FIRST section is flat and every later one is a dropdown. That is the whole rule, and
  * it falls out of what the bands already mean: `navSections` orders them Content · Site ·
  * Apps · System, so the flat half is the destinations an editor came here to write and the
- * folded half is the furniture and the administration — the same reason the sidebar ships
+ * folded half is the furniture and the administration, the same reason the sidebar ships
  * with Site and System foldable and Content not.
  *
  * It exists because a row is the one shape this nav does NOT fit: twelve destinations at
  * 1280px is a dense unlabelled ribbon over a horizontal scroller, which is the nav the
  * sidebar was built to replace. A dropdown costs a click on the way IN, which is exactly the
- * cost the sidebar's collapsible groups were designed to avoid — but a row has no column to
+ * cost the sidebar's collapsible groups were designed to avoid, but a row has no column to
  * spend instead, so the choice is between paying it and hiding items behind a scroll nobody
  * discovers. Three or four triggers beside the tabs is also the shape the Graphic Standard
  * bar already has (its app switcher is a dropdown in the same nav), so it stays one design.
@@ -296,14 +296,14 @@ export function topbarNav(sections: NavSection[]): TopbarNav {
  * A named function for `choice && wide`, because conflating those two is what broke it. The
  * choice is per-browser and persisted; narrowing is expressed entirely in `md:`-scoped
  * classes, so it only exists at desktop widths. A rail narrowed on a laptop therefore came
- * back "narrowed" on a phone, where every one of those classes is inert — the rows kept their
+ * back "narrowed" on a phone, where every one of those classes is inert: the rows kept their
  * labels and their full width, while the JS gated on the stored choice removed all four group
  * headings, and the hairline that stands in for a heading at 56px is `md:`-only too. One
  * undifferentiated column of a dozen rows, and the toggle that would undo it is
  * `hidden md:inline-flex`: no way back from that viewport.
  *
- * So JS has to agree with the breakpoint rather than ignore it, and everything conditional —
- * headings, folding, the hairline — reads this instead of the stored value.
+ * So JS has to agree with the breakpoint rather than ignore it, and everything conditional
+ * (headings, folding, the hairline) reads this instead of the stored value.
  */
 export function railIsNarrow(choice: boolean, wideViewport: boolean): boolean {
   return choice && wideViewport;

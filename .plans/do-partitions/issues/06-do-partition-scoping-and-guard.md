@@ -5,7 +5,7 @@
 
 The partition-DO must learn its partition, migrate only its tables, register itself
 per-partition, and **reject any handler that touches a table outside its partition**
-(the runtime half of the boundary — no cross-DO data access).
+(the runtime half of the boundary, with no cross-DO data access).
 
 ## Implementation
 
@@ -26,9 +26,9 @@ per-partition, and **reject any handler that touches a table outside its partiti
   Issue 11 owns the key format/enumeration; this issue just calls it once the partition
   is known.
 - `broadcast` already only sees this DO's tables, so reactivity is naturally
-  partition-local — no change needed beyond the guard below.
+  partition-local, so no change is needed beyond the guard below.
 
-### `db.ts` — table-access guard
+### `db.ts`: table-access guard
 - In `Db` (find/insert/update/delete/count/aggregate entry points), reject access to a
   table whose `partitionOf(schema, table)` ≠ the DO's partition with a clear
   `BadRequest`: `table '<t>' is in partition '<pT>', not this partition '<pSelf>'`.

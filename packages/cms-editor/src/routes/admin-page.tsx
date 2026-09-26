@@ -8,7 +8,7 @@
 // ONE route for two kinds. A Block Kit page (`adminPage()`) is described as JSON by the
 // server and rendered here; a panel (`adminPanel()`) is a React component the deployment's
 // own bundle registered. They share this route because they share everything a URL and a nav
-// entry are made of — the slug space, the role filter, the "Apps" band, the breadcrumb — and
+// entry are made of (the slug space, the role filter, the "Apps" band, the breadcrumb) and
 // differ only in where the rendering happens. Splitting them would have meant a second
 // route, a second nav band and a slug that could mean two things.
 
@@ -34,7 +34,7 @@ export default createPage()
     const def = adminPages.find((p) => p.slug === params.slug);
 
     // `listAdminPages` is role-FILTERED server-side, so an absent slug means either "still
-    // loading" or "not yours / not registered" — and the two are told apart by whether the
+    // loading" or "not yours / not registered", and the two are told apart by whether the
     // list has arrived at all, exactly as the collection route does it.
     if (!def) {
       return (
@@ -53,8 +53,8 @@ export default createPage()
 /**
  * A panel: the component the deployment's own bundle registered for this slug.
  *
- * The registry is external state that changes without React knowing — bundles are imported
- * from `main.tsx` and register whenever they land — so it is read through
+ * The registry is external state that changes without React knowing: bundles are imported
+ * from `main.tsx` and register whenever they land, so it is read through
  * `useSyncExternalStore` rather than an effect. That is what makes a deep link to a panel
  * work: the route can mount before the bundle has finished loading, and re-renders when it
  * has, instead of deciding once and being wrong forever.
@@ -65,7 +65,7 @@ function PanelRoute({ slug }: { slug: string }) {
   const { t } = useI18n();
   const basePath = useRouter().basePath;
   const version = useSyncExternalStore(subscribePanels, panelsVersion, panelsVersion);
-  // `version` is the snapshot, not the value — a stable number is what a store hook needs,
+  // `version` is the snapshot, not the value: a stable number is what a store hook needs,
   // and the lookup is what the render actually wants. Depending on it is the point.
   const panel = useMemo(() => getPanel(slug), [slug, version]);
 
@@ -73,15 +73,15 @@ function PanelRoute({ slug }: { slug: string }) {
     // Three different situations, and only the first is a spinner.
     //
     // A REFUSAL comes first because it is the one the generic message would actively mislead
-    // about: the bundle is listed, it loaded, it ran, and it called `registerPanel` — telling
+    // about: the bundle is listed, it loaded, it ran, and it called `registerPanel`, so telling
     // the reader to go and check those four things sends them past the actual answer. The
     // registry already holds a sentence naming the slug and the fix (a contract built against
     // a different editor, a `render` that is not a component), so it is shown verbatim.
     //
     // Otherwise: the server listed this panel (it is in `adminPages`, so the caller may open
     // it), which means the bundle either has not landed yet or landed and never registered
-    // this slug. The last is a deployment mistake — a missing `panels` entry, a bundle built
-    // without the `registerPanel` call, a slug typo between `app.ts` and the bundle — and it
+    // this slug. The last is a deployment mistake: a missing `panels` entry, a bundle built
+    // without the `registerPanel` call, a slug typo between `app.ts` and the bundle, and it
     // is one nobody can diagnose from a spinner.
     //
     // Read during render, not through a second store: a refusal calls the same `notify` a
@@ -104,7 +104,7 @@ function PanelRoute({ slug }: { slug: string }) {
   //
   // Wrapped, because this is someone else's component in our tree: React unmounts the whole
   // root on an uncaught render error, so without the boundary one bad panel does not break a
-  // screen, it blanks the admin — no sidebar, and no way off the route that is failing.
+  // screen, it blanks the admin: no sidebar, and no way off the route that is failing.
   return (
     <PanelBoundary key={slug} slug={slug}>
       <panel.render {...props} />

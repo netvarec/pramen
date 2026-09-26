@@ -1,5 +1,5 @@
 // Rich-text helpers for the editor. Local mirrors of the @pramen/cms functions, kept here
-// because the editor is a self-contained browser app with no server-package dependency —
+// because the editor is a self-contained browser app with no server-package dependency:
 // it speaks to the CMS purely over HTTP (see types.ts).
 
 import type { RichTextDoc, RichTextNode } from "./types";
@@ -12,7 +12,7 @@ export function isRichTextDoc(v: unknown): v is RichTextDoc {
 /** The block-level node types that end a line when flattening to plain text. */
 const BLOCK_TYPES = new Set(["paragraph", "heading", "listItem", "taskItem", "blockquote", "codeBlock", "horizontalRule"]);
 
-/** Flatten a rich-text document to plain text — for list cells and collapsed-block
+/** Flatten a rich-text document to plain text, for list cells and collapsed-block
  * previews, which want the words without the structure. Mirrors `richTextToPlainText`
  * in @pramen/cms. */
 export function richTextToPlainText(value: RichTextDoc | null | undefined): string {

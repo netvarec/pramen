@@ -1,7 +1,7 @@
 // Unit test for the schema diff that powers `pramen schema diff`. The diff REPORTS
 // changes; the boot migrator only applies additive ones (and destructive ones under
 // PRAMEN_ALLOW_DESTRUCTIVE). Each change carries `destructive` (rebuilds/may lose data)
-// and `appliesOnBoot` (whether boot migration enacts it at all — false for modifier
+// and `appliesOnBoot` (whether boot migration enacts it at all: false for modifier
 // changes on an existing column and for partition moves).
 
 import { describe, expect, test } from "bun:test";
@@ -74,7 +74,7 @@ describe("diffSchemaFingerprint", () => {
       kind: "change-column",
       table: "notes",
       column: "code",
-      // adds NOT NULL + UNIQUE — gated / may skip on conflicting data
+      // adds NOT NULL + UNIQUE: gated / may skip on conflicting data
       destructive: true,
       // migrate() now reconciles modifier changes on boot
       appliesOnBoot: true,
@@ -94,7 +94,7 @@ describe("diffSchemaFingerprint", () => {
       kind: "change-column",
       table: "notes",
       column: "status",
-      destructive: false, // a DEFAULT add backfills — no data loss
+      destructive: false, // a DEFAULT add backfills, so no data loss
       appliesOnBoot: true,
     });
     expect(changes[0]!.detail).toContain("default");

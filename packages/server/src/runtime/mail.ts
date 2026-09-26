@@ -1,4 +1,4 @@
-// ctx.mail — transactional-ish email facade, the same shape as ctx.files: an adapter
+// ctx.mail: a transactional-ish email facade, the same shape as ctx.files, an adapter
 // seam (CloudflareEmailAdapter / KvMailAdapter / MemoryMailAdapter) behind a thin
 // `Mail` facade, chosen from the environment. Handlers send mail without touching the
 // `send_email` binding directly:
@@ -10,8 +10,8 @@
 // Mailgun is the way out of that: an HTTP API, a domain verified once with Mailgun
 // rather than owned by the account, at the cost of a key. Configure it and it wins.
 //
-// With neither configured (local/dev), mail is captured instead of sent — to KV (so an
-// e2e/dashboard can read the "inbox") or in-memory — so handlers work unchanged
+// With neither configured (local/dev), mail is captured instead of sent, to KV (so an
+// e2e/dashboard can read the "inbox") or in-memory, so handlers work unchanged
 // off-platform.
 
 import type { Kv } from "./kv";
@@ -24,7 +24,7 @@ export interface MailAddress {
 
 export interface MailMessage {
   to: string | string[];
-  /** Sender. Optional — defaults to MAIL_FROM (a verified address). */
+  /** Sender. Optional, and defaults to MAIL_FROM (a verified address). */
   from?: MailAddress;
   subject: string;
   text?: string;
@@ -54,7 +54,7 @@ export class Mail {
       throw new Error("ctx.mail.send: `subject` is required");
     }
     const from = message.from ?? this.defaultFrom;
-    if (!from) throw new Error("ctx.mail.send: no sender — set the MAIL_FROM var or pass `from`");
+    if (!from) throw new Error("ctx.mail.send: no sender. Set the MAIL_FROM var or pass `from`");
     await this.adapter.send({ ...message, from });
   }
 }
@@ -71,7 +71,7 @@ export interface SendEmailBinding {
   }): Promise<void>;
 }
 
-/** Cloudflare Email Sending — sends via the `send_email` binding (no API keys). The
+/** Cloudflare Email Sending, which sends via the `send_email` binding (no API keys). The
  * `from` domain must be onboarded (`wrangler email sending enable yourdomain.com`). */
 export class CloudflareEmailAdapter implements MailAdapter {
   constructor(private readonly binding: SendEmailBinding) {}
@@ -87,7 +87,7 @@ export class CloudflareEmailAdapter implements MailAdapter {
   }
 }
 
-/** Mailgun — an HTTP transport, for when Cloudflare Email Sending cannot be used.
+/** Mailgun: an HTTP transport, for when Cloudflare Email Sending cannot be used.
  *
  * Worth the key for one reason: Cloudflare will only send from a domain that is a zone in
  * the same account. Mailgun asks the domain be verified once with Mailgun instead, so the
@@ -130,7 +130,7 @@ export class MailgunAdapter implements MailAdapter {
     });
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
-      throw new Error(`mailgun: send failed (${res.status})${detail ? ` — ${detail.slice(0, 300)}` : ""}`);
+      throw new Error(`mailgun: send failed (${res.status})${detail ? `: ${detail.slice(0, 300)}` : ""}`);
     }
   }
 }
@@ -156,12 +156,12 @@ export class MemoryMailAdapter implements MailAdapter {
 
 /** Fail-closed transport: no real sender and no explicit dev-capture opt-in, so a
  * `send` THROWS rather than silently capturing. Prevents a misconfigured production
- * (no MAIL_FROM) from writing security emails — magic-link tokens, resets — into KV
+ * (no MAIL_FROM) from writing security emails (magic-link tokens, resets) into KV
  * instead of delivering them. Mirrors how files fail closed without FILES_SECRET. */
 export class UnconfiguredMailAdapter implements MailAdapter {
   async send(): Promise<void> {
     throw new Error(
-      "ctx.mail: no transport configured — set MAIL_FROM with either the EMAIL binding " +
+      "ctx.mail: no transport configured. Set MAIL_FROM with either the EMAIL binding " +
         "or MAILGUN_API_KEY + MAILGUN_DOMAIN to send, or MAIL_CAPTURE=true to capture in dev.",
     );
   }
@@ -171,13 +171,13 @@ export class UnconfiguredMailAdapter implements MailAdapter {
  *  - `MAILGUN_API_KEY` + `MAILGUN_DOMAIN` + `MAIL_FROM` → Mailgun (real send).
  *  - else `EMAIL` binding + `MAIL_FROM` → Cloudflare Email Sending (real send).
  *  - else `MAIL_CAPTURE=true` → capture (KV inbox if a Kv is given, else in-memory) with
- *    a synthetic dev sender — an EXPLICIT dev opt-in, never the production default.
+ *    a synthetic dev sender, an EXPLICIT dev opt-in, never the production default.
  *  - else → fail closed: a `send` throws (so a missing-MAIL_FROM prod doesn't silently
  *    stash security emails in KV).
  *
  * Mailgun outranks the binding on purpose. The binding tends to be present because the
  * infrastructure declares it, whereas an API key is only ever there because somebody put
- * it there — so when both exist, the key is the newer decision. */
+ * it there, so when both exist, the key is the newer decision. */
 export function createMail(env: EnvBag, kv?: Kv): Mail {
   const binding = env.EMAIL as SendEmailBinding | undefined;
   const fromAddr = typeof env.MAIL_FROM === "string" && env.MAIL_FROM ? env.MAIL_FROM : undefined;

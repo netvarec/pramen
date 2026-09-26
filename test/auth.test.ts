@@ -1,6 +1,6 @@
 // Unit test for the JWT verify strategies. HmacStrategy (HS256) is also exercised
-// end-to-end by every e2e suite via env.AUTH_SECRET; here we cover RS256/JWKS —
-// key fetch, caching, kid selection, rotation, and rejection — with a mocked JWKS
+// end-to-end by every e2e suite via env.AUTH_SECRET; here we cover RS256/JWKS:
+// key fetch, caching, kid selection, rotation, and rejection, with a mocked JWKS
 // endpoint, so no live identity provider is needed.
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -49,9 +49,9 @@ describe("HmacStrategy (HS256)", () => {
 });
 
 // Opt-in claim validation (requireExp / audience / issuer) threaded through verifyJwt.
-// HS256 exercised directly — no server. Sign with full control over claims (the shared
+// HS256 exercised directly, with no server. Sign with full control over claims (the shared
 // `sign()` always injects an exp, which the requireExp case must NOT have).
-describe("HmacStrategy — opt-in claim validation", () => {
+describe("HmacStrategy: opt-in claim validation", () => {
   const now = () => Math.floor(Date.now() / 1000);
 
   async function signHs(payload: Row): Promise<string> {

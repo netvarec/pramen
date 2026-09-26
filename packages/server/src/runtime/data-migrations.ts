@@ -1,8 +1,8 @@
-// Data migrations — the imperative, recorded half of schema evolution.
+// Data migrations: the imperative, recorded half of schema evolution.
 //
 // `migrate()` (runtime/migrate.ts) is declarative: it diffs the live table shape against
 // the declared schema and enacts the structural delta. A diff between two SHAPES can only
-// ever express structure, never TRANSFORMATION — it cannot split `name` into
+// ever express structure, never TRANSFORMATION: it cannot split `name` into
 // `firstName`/`lastName`, backfill the nullable column `ADD COLUMN` just created (SQLite
 // can't add NOT NULL to a populated table, so every new column starts as a hole), rewrite
 // `priceHalers` → `priceCzk`, or normalize a `t.json()` blob whose shape changed.
@@ -15,28 +15,28 @@
 // its errors).
 //
 // Fail closed. A throwing migration records no ledger row, does not let the boot complete,
-// and propagates — the tenant's request fails and the migration is retried on the next
+// and propagates: the tenant's request fails and the migration is retried on the next
 // fetch. This mirrors migrate()'s "withhold the schema hash on a skip" invariant: the store
 // is never marked as having reached a state it did not reach.
 //
-// CLAIM FIRST, UNDER A LEASE. The ledger row is taken BEFORE the work — one atomic upsert
-// that inserts a pending row, or steals one whose lease has expired, or does nothing — and
+// CLAIM FIRST, UNDER A LEASE. The ledger row is taken BEFORE the work: one atomic upsert
+// that inserts a pending row, or steals one whose lease has expired, or does nothing, and
 // the migration runs only if that statement won the row. On the DO this is merely bookkeeping
 // order inside one transaction. On D1 it is what makes the once-only contract hold at all:
 // there is no single writer and no interactive transaction, the boot memo is per-isolate, so two
 // cold isolates racing a `SET n = n * 2` backfill would each read an empty ledger, each run
 // it, and quadruple the data. The conflicting upsert is the lock.
 //
-// The row therefore has two states, distinguished by `leaseUntil`: IN FLIGHT (non-NULL — a
+// The row therefore has two states, distinguished by `leaseUntil`: IN FLIGHT (non-NULL, a
 // runner holds it until that instant) and APPLIED (NULL). Only an applied row counts as
 // applied, so an in-flight migration reads as pending everywhere, including the admin ledger.
 //
-// A runner that finds a LIVE lease does not skip — skipping would let it serve traffic
+// A runner that finds a LIVE lease does not skip, since skipping would let it serve traffic
 // against half-migrated data, and would strand the migration entirely if the holder then
 // failed. It waits for the holder, up to WAIT_BUDGET_MS, and then either proceeds (the holder
 // committed), takes the row (the holder released it), or fails closed. A holder that dies
-// without releasing — an isolate evicted mid-backfill, which no compensating DELETE can
-// cover — is recovered by the lease simply expiring.
+// without releasing (an isolate evicted mid-backfill, which no compensating DELETE can
+// cover) is recovered by the lease simply expiring.
 //
 // Written against the `Driver`/`Dialect` seam only (no `cloudflare:workers`), so the same
 // runner drives the DO boot path and the D1/Worker path.
@@ -56,13 +56,13 @@ export interface AppliedMigration {
   appliedAt: string;
 }
 
-/** Create the ledger if absent. Idempotent — run on every boot before the runner and from
+/** Create the ledger if absent. Idempotent, run on every boot before the runner and from
  * the /__migrations endpoint (a DO that has never applied one still answers). Internal
  * table (`_pramen_` prefix), so `isInternalTable()` keeps the migrator's hands off it.
  *
  * `partition` is a reserved-ish word in some engines, so every identifier goes through
  * `dialect.id(...)` (the single `quoteIdent` source of truth) rather than being interpolated
- * bare — here and in every query below. */
+ * bare, here and in every query below. */
 export async function ensureMigrationsTable(driver: Driver): Promise<void> {
   const d = driver.dialect;
   const t = d.id(MIGRATIONS_TABLE);
@@ -75,7 +75,7 @@ export async function ensureMigrationsTable(driver: Driver): Promise<void> {
   // `leaseUntil` was added after the table's first shape. Probe for it with a zero-row SELECT
   // rather than PRAGMA table_info: the PRAGMA is what workerd's DO SQLite authorizer starts
   // rejecting (SQLITE_AUTH) once the alarm API has run in the object, and this runs on every
-  // boot. Adding a nullable column is a plain ALTER — no rebuild, and existing rows read as
+  // boot. Adding a nullable column is a plain ALTER: no rebuild, and existing rows read as
   // applied, which is what they are.
   const hasLease = await driver
     .exec(`SELECT ${d.id("leaseUntil")} FROM ${t} LIMIT 0`, [])
@@ -84,12 +84,12 @@ export async function ensureMigrationsTable(driver: Driver): Promise<void> {
   if (!hasLease) await driver.exec(`ALTER TABLE ${t} ADD COLUMN ${d.id("leaseUntil")} INTEGER`, []);
 }
 
-/** Ledger rows for one partition — or every partition when `partition` is omitted (the D1
+/** Ledger rows for one partition, or every partition when `partition` is omitted (the D1
  * store, which holds one shared ledger for all of them). Oldest first. */
 export async function appliedMigrations(driver: Driver, partition?: string): Promise<AppliedMigration[]> {
   const d = driver.dialect;
   // `leaseUntil IS NULL` is the definition of applied: a row a runner is still holding is
-  // in flight, and must read as PENDING everywhere — the admin ledger and the CLI included.
+  // in flight, and must read as PENDING everywhere, the admin ledger and the CLI included.
   const scope = partition === undefined ? "" : ` AND ${d.id("partition")} = ${d.placeholder(1)}`;
   const where = ` WHERE ${d.id("leaseUntil")} IS NULL${scope}`;
   const rows = await driver.exec(
@@ -137,19 +137,19 @@ export const DEFAULT_LEASE: LeaseOpts = { ttlMs: 60_000, waitMs: 5_000, pollMs: 
 
 export interface RunMigrationsOpts {
   /** The partition to run: only its migrations are selected, and each ledger row is keyed
-   * by it. OMIT it on the D1 store — see `runDataMigrations` for why that store runs every
+   * by it. OMIT it on the D1 store; see `runDataMigrations` for why that store runs every
    * declared migration regardless of partition. */
   partition?: string;
   /** Build the privileged context for one migration. Called per migration with the
    * partition its ledger row will be keyed under, so a caller can scope `db` accordingly. */
   makeContext: (partition: string) => MigrationContext;
-  /** Override the lease timings (see `LeaseOpts`) — for tests, and for a deployment whose
+  /** Override the lease timings (see `LeaseOpts`), for tests, and for a deployment whose
    * backfills legitimately run long. Absent ⇒ `DEFAULT_LEASE`. */
   lease?: Partial<LeaseOpts>;
 }
 
 /** Run every pending migration, in DECLARATION order, each inside its own
- * `driver.transaction()`, CLAIMING its ledger row before it runs the work — so "the work
+ * `driver.transaction()`, CLAIMING its ledger row before it runs the work, so "the work
  * happened" and "the work is recorded" cannot come apart on a substrate with real
  * transactions (the DO), and cannot double-run on one without (D1). A migration whose claim
  * loses the race (another isolate holds it, or a previous boot applied it) is skipped.
@@ -157,14 +157,14 @@ export interface RunMigrationsOpts {
  * D1 CAVEAT: `D1Driver.transaction(fn)` is `fn()` (D1 has no interactive transactions), so
  * there the claim and the work do NOT commit together. A throw therefore RELEASES the claim
  * explicitly (a compensating DELETE, issued inside the transaction so the DO simply rolls it
- * back with everything else) — otherwise a failed migration would stay marked as applied,
+ * back with everything else) because otherwise a failed migration would stay marked as applied,
  * which is the one outcome the fail-closed contract exists to prevent. A holder that dies
  * without reaching that DELETE is covered by the lease expiring instead. Prefer SQL that
  * tolerates a re-run (`WHERE col IS NULL`) when the D1 store is in play: a mid-flight failure
  * leaves the partial writes behind.
  *
  * Fails CLOSED: the first throw aborts the run, so migrations declared after it do not run
- * either (order is a contract — a later one may depend on an earlier one's output). */
+ * either (order is a contract: a later one may depend on an earlier one's output). */
 export async function runDataMigrations(
   driver: Driver,
   migrations: readonly DataMigration[],
@@ -182,7 +182,7 @@ export async function runDataMigrations(
   for (const m of pending) {
     const partition = m.partition ?? DEFAULT_PARTITION;
     // The cheap pre-check: skip without opening a transaction for what a previous boot
-    // already applied (the common case — every boot after the first). `claim` is what
+    // already applied (the common case, every boot after the first). `claim` is what
     // actually decides; this only keeps the steady state free of no-op transactions.
     if (done.has(ledgerKey(m.id, partition))) {
       skipped.push(m.id);
@@ -192,7 +192,7 @@ export async function runDataMigrations(
     try {
       await driver.transaction(async () => {
         // Take the row, waiting out any live lease. "applied" means another runner finished
-        // it while we waited — nothing left to do, and we now know the data IS migrated.
+        // it while we waited: nothing left to do, and we now know the data IS migrated.
         if ((await acquire(driver, m.id, partition, lease)) === "applied") return;
         ran = true;
         try {
@@ -222,7 +222,7 @@ export async function runDataMigrations(
   return { applied, skipped };
 }
 
-/** The ledger is keyed by (id, partition) — the same reason the schema hash is
+/** The ledger is keyed by (id, partition), the same reason the schema hash is
  * `schema_hash:<partition>`: partitions are independent DOs and must not thrash each
  * other's state. NUL-joined, so no (id, partition) pair can collide with another. */
 const ledgerKey = (id: string, partition: string): string => `${id}\u0000${partition}`;
@@ -232,7 +232,7 @@ type ClaimOutcome = "claimed" | "applied" | "held";
 
 /** ONE atomic statement that does all three things a claim must: insert the row when the
  * migration is pending, STEAL it when a previous holder's lease has expired (that holder is
- * presumed dead — an isolate evicted mid-backfill releases nothing), and do nothing when the
+ * presumed dead: an isolate evicted mid-backfill releases nothing), and do nothing when the
  * row is applied or a live lease holds it. `RETURNING` fires only when a row was actually
  * written, so it reports which happened. The upsert's `WHERE` is what confines the steal to
  * an expired lease: without it this would be a plain overwrite and two live runners would
@@ -251,23 +251,23 @@ async function tryClaim(driver: Driver, id: string, partition: string, now: numb
     params.map((v) => d.encode(v)),
   );
   if (rows.length > 0) return "claimed";
-  // Nothing written — so the row exists and we did not qualify. Which of the two is it?
+  // Nothing written, so the row exists and we did not qualify. Which of the two is it?
   const [row] = await driver.exec(
     `SELECT ${d.id("leaseUntil")} FROM ${t} WHERE ${d.id("id")} = ${d.placeholder(1)} AND ${d.id("partition")} = ${d.placeholder(2)}`,
     [id, partition].map((v) => d.encode(v)),
   );
-  // Gone between the two statements (a holder released it) — contended, not applied.
+  // Gone between the two statements (a holder released it): contended, not applied.
   if (!row) return "held";
   return row.leaseUntil == null ? "applied" : "held";
 }
 
 /** Take the row, waiting out a live lease. Returns "applied" when someone else finished it
- * while we waited — in which case the caller must NOT run the migration, but CAN proceed
+ * while we waited, in which case the caller must NOT run the migration, but CAN proceed
  * knowing the data is migrated. That distinction is the point: skipping a live lease outright
  * (the previous behavior) let a runner serve traffic against half-migrated data, and stranded
  * the migration on that isolate entirely if the holder then failed.
  *
- * On the DO this never waits — one Durable Object is a single writer and the migration runs
+ * On the DO this never waits: one Durable Object is a single writer and the migration runs
  * inside `blockConcurrencyWhile`, so a second concurrent first-fetch is queued by the platform
  * rather than contending here. The wait exists for D1, where nothing serializes isolates. */
 async function acquire(driver: Driver, id: string, partition: string, lease: LeaseOpts): Promise<"claimed" | "applied"> {
@@ -299,7 +299,7 @@ async function complete(driver: Driver, id: string, partition: string): Promise<
 /** Give the claim back after a failed `up()`, so the next runner retries immediately instead
  * of waiting out the lease. Only observable where `transaction()` does not roll back (D1); on
  * the DO the enclosing transaction discards this along with the claim itself. Guarded on
- * `leaseUntil IS NOT NULL` so it can only ever delete an IN-FLIGHT row — never an applied one,
+ * `leaseUntil IS NOT NULL` so it can only ever delete an IN-FLIGHT row, never an applied one,
  * whatever else has happened to the ledger in between. */
 async function release(driver: Driver, id: string, partition: string): Promise<void> {
   const d = driver.dialect;
@@ -310,14 +310,14 @@ async function release(driver: Driver, id: string, partition: string): Promise<v
   );
 }
 
-/** Static validation, called from `createPramen` next to `validateTriggerTasks` — these are
+/** Static validation, called from `createPramen` next to `validateTriggerTasks`. These are
  * declaration bugs, and the only honest time to surface them is before a single tenant has
  * booted. Throws on the first violation:
  *
  *  - an empty id (the ledger key would be meaningless);
- *  - a duplicate id — ids are GLOBALLY unique across the array, not per partition, so a
+ *  - a duplicate id: ids are GLOBALLY unique across the array, not per partition, so a
  *    copy-pasted id can never quietly mark a different migration as already applied;
- *  - a declared `partition` no entity lives in — the migration would be dead code on the
+ *  - a declared `partition` no entity lives in: the migration would be dead code on the
  *    DO path (no DO serves that partition) while still running on D1. */
 export function validateMigrations(schema: SchemaDef, migrations: readonly DataMigration[] | undefined): void {
   if (!migrations?.length) return;
@@ -329,7 +329,7 @@ export function validateMigrations(schema: SchemaDef, migrations: readonly DataM
     if (seen.has(m.id)) {
       throw new Error(
         `app.migrations: duplicate id ${JSON.stringify(m.id)}. Ids are the ledger key and must be globally ` +
-          `unique — a reused id makes one of the two silently a no-op.`,
+          `unique: a reused id makes one of the two silently a no-op.`,
       );
     }
     seen.add(m.id);

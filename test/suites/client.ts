@@ -23,7 +23,7 @@ export async function runClient(base: string): Promise<void> {
   const created = await client.call("createNote", { title: "via-client", body: "x" });
   assert((created as { title?: string }).title === "via-client", "client.call() creates a note (typed RPC over HTTP)");
 
-  // live subscription over WebSocket (auth via query string — the browser path)
+  // live subscription over WebSocket (auth via query string, the browser path)
   let latest: Array<{ title?: string }> = [];
   let pushes = 0;
   const stop = client.subscribe("listNotes", undefined, {

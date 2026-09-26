@@ -1,16 +1,16 @@
-// Transactional outbox — the substrate-agnostic core of deferred side-effects
+// Transactional outbox: the substrate-agnostic core of deferred side-effects
 // ("tasks"), e.g. sending a notification email off the write path.
 //
 // A handler calls `ctx.tasks.enqueue({ kind, payload })`, which INSERTs a row into
 // `_pramen_outbox` through the SAME Driver (and, for a mutation, the SAME transaction)
-// as the data write — so the task and the data commit or roll back together (no
+// as the data write, so the task and the data commit or roll back together (no
 // dual-write window). A drainer later runs the app's task handler for that `kind`,
 // with retry/backoff and a dead-letter terminal state.
 //
 // Everything here is written against the `Driver`/`Dialect` seam, so it runs
 // identically on the DO's in-process SQLite AND on D1 (the Worker path). What differs
 // is only the WAKE-UP: the DO self-drains via an alarm scheduled at the next due time;
-// the D1/Worker path drains via a Cron Trigger or POST /admin/tasks/drain — same
+// the D1/Worker path drains via a Cron Trigger or POST /admin/tasks/drain, using the same
 // drainOutbox(), both paths.
 //
 // Delivery is at-least-once. The drain CLAIMS a batch atomically (status
@@ -37,7 +37,7 @@ function backoffMs(attempts: number): number {
 
 const enc = (driver: Driver, params: CellValue[]): CellValue[] => params.map((p) => driver.dialect.encode(p));
 
-/** Create the outbox table if absent. Idempotent — run on DO boot (and lazily on the
+/** Create the outbox table if absent. Idempotent, run on DO boot (and lazily on the
  * D1 path). Internal table (`_pramen_` prefix), never part of the user schema. */
 export async function ensureOutbox(driver: Driver): Promise<void> {
   const t = driver.dialect.id(OUTBOX_TABLE);
@@ -82,7 +82,7 @@ export async function enqueueTask(driver: Driver, now: number, opts: EnqueueOpts
   );
 }
 
-/** Idempotency metadata handed to a task handler. `id` is stable across retries — a
+/** Idempotency metadata handed to a task handler. `id` is stable across retries, so a
  * handler can record it and skip a duplicate delivery (at-least-once). */
 export interface TaskMeta {
   id: string;
@@ -100,7 +100,7 @@ export interface DrainResult {
   failed: number;
   /** Tasks still pending+due after this pass (a caller may loop to clear a backlog). */
   remaining: number;
-  /** Epoch-ms of the earliest not-yet-run task (due or backed-off), or null if none —
+  /** Epoch-ms of the earliest not-yet-run task (due or backed-off), or null if none.
    * the DO schedules its next alarm here so a backed-off retry can't stall. */
   nextRunAt: number | null;
 }
@@ -143,7 +143,7 @@ export async function drainOutbox(driver: Driver, tasks: TaskMap, now: number, l
     const attempts = Number(row.attempts) + 1;
     const handler = tasks[kind];
     // Re-stamp claimedAt to WALL-CLOCK time immediately before running this row, so its
-    // stale clock starts when its own processing starts — not when the whole batch was
+    // stale clock starts when its own processing starts, not when the whole batch was
     // claimed. Otherwise a batch (up to `limit` rows) processed SEQUENTIALLY whose total
     // time exceeds STALE_MS would leave the not-yet-run tail reclaimable by a concurrent
     // drainer under the batch-shared claimedAt, running it twice. We use Date.now() (not
@@ -175,12 +175,12 @@ export async function drainOutbox(driver: Driver, tasks: TaskMap, now: number, l
   // remaining = pending AND due now. nextRunAt = the earliest moment the DO must wake to
   // make progress, so it can re-arm its alarm exactly there. That is the min of:
   //   (a) MIN(runAt) over pending rows (a due-now or backed-off retry), and
-  //   (b) MIN(claimedAt) + STALE_MS over 'processing' rows — a claim stranded by a
+  //   (b) MIN(claimedAt) + STALE_MS over 'processing' rows: a claim stranded by a
   //       crashed drainer becomes reclaimable at claimedAt + STALE_MS. Without folding
   //       this in, a mid-drain crash would leave a row 'processing' with no pending row
   //       to re-arm the alarm, and on a quiet tenant the task would stall forever (the
   //       alarm is the only DO-path drain trigger). Any processing rows here belong to a
-  //       *different* (concurrent or crashed) drainer — our own batch is never left
+  //       *different* (concurrent or crashed) drainer; our own batch is never left
   //       processing after this loop.
   const stats = await driver.exec(
     `SELECT ` +

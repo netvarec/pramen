@@ -1,6 +1,6 @@
 # @pramen/cms-editor
 
-A **visual block/page editor** for [`@pramen/cms`](../cms) — a React SPA that talks to the
+A **visual block/page editor** for [`@pramen/cms`](../cms): a React SPA that talks to the
 CMS handlers over HTTP, served by your own site (see [Deploy it](#deploy-it)). It mutates through the *semantic* handlers
 (`addBlock`/`updateBlock`/`reorderRegion`/`publishPage`/…), so field validation, region
 allow-lists, and the review/publish gates are all enforced server-side.
@@ -10,20 +10,20 @@ allow-lists, and the review/publish gates are all enforced server-side.
 - **Page list** + create (pick a content type).
 - **Region canvas:** each region (from the content type) lists its blocks; a palette adds
   blocks, filtered by the region's `allowedTypes`. Reorder (↑/↓) and remove.
-- **Schema-driven field forms:** one input per `FieldDefinition` type —
+- **Schema-driven field forms:** one input per `FieldDefinition` type,
   text/textarea/richtext/url/number/boolean/**select**/**media** (with an upload+pick media
   picker)/**repeater**/**group** (recursively composed). Draft blocks may be incomplete;
   required fields are enforced at publish, not while editing.
 - **Inspector tabs:** Settings, **SEO** (meta/canonical/robots/OG), **Workflow**
   (submit → review → approve/reject/publish, role-gated), **i18n** (translations), **Audit** trail.
 - **Types** (`/schema`): authors the block types and content types everything above is built
-  from — the inverse of the field form, editing a `FieldDefinition[]` and a content type's
+  from: the inverse of the field form, editing a `FieldDefinition[]` and a content type's
   regions/page fields/default blocks. A type declared in code (`defineBlockType` /
   `defineContentType`, reconciled by `cmsBootstrap`) is marked `code` and shown **read-only**:
   the server owns that row and would revert an edit at the next boot.
 - **Collections** (your own pramen entities, edited with the same field DSL), **site
   furniture** (menus, redirects, taxonomies, widget areas) and **custom admin pages** (Block
-  Kit) — each discovered at runtime, so there is one generic editor and no per-project code.
+  Kit), each discovered at runtime, so there is one generic editor and no per-project code.
 - **Media library**, plus **Users** (admin-only: invite via magic link, roles, activate/delete)
   and **Settings** (self-service email/password) tabs.
 - **Real URL routing** ([`@buzola/router`](https://www.npmjs.com/package/@buzola/router), file-based
@@ -45,7 +45,7 @@ silently the moment it 404'd.
 
 ## Deploy it
 
-A **host serves it**, from a shell it renders. For an Astro site that is one line — see
+A **host serves it**, from a shell it renders. For an Astro site that is one line. See
 [`@pramen/cms-astro`](../cms-astro):
 
 ```js
@@ -72,14 +72,14 @@ Everything the bundle needs at boot comes from that shell, and nothing else:
 | Wordmark, sign-in URL, nav | the rest of `window.PRAMEN_CMS_EDITOR` | `src/brand.ts`, `src/app-context.tsx` |
 
 The mount prefix is the constant the route was injected at, stamped onto the node by the
-same code that injected it — so the router cannot be mounted somewhere the server does not
+same code that injected it, so the router cannot be mounted somewhere the server does not
 serve. Navigation is scoped to it, so a co-hosted editor intercepts only its own URLs
 (`_404.tsx`'s catch-all matches every same-origin path, which un-scoped would mean a click
 on the host's own `/blog` rendering the editor's "Nothing lives here").
 
 **To write your own shell** (a Worker route, another framework), render: the stylesheet, a
 `<div id="app" data-base-path="…">`, an inline script setting `window.PRAMEN_CMS_EDITOR`,
-and `<script type="module" src="…editor.js">` — in that order. If the deployment has panels,
+and `<script type="module" src="…editor.js">`, in that order. If the deployment has panels,
 add a `<script type="importmap">` ahead of every module script mapping `react`, `react-dom`,
 `react/jsx-runtime` and `react/jsx-dev-runtime` at `dist/panel-*.js`. The dev preview in
 `scripts/build.ts` is the smallest complete example.
@@ -87,28 +87,28 @@ add a `<script type="importmap">` ahead of every module script mapping `react`, 
 ## Configure it
 
 The editor's own options travel in `window.PRAMEN_CMS_EDITOR`, which the integration writes
-from typed options (`admin: { … }`) — there is no file to edit:
+from typed options (`admin: { … }`), so there is no file to edit:
 
 ```js
 admin: {
-  brand: { name: "Acme", suffix: "cms" },            // the wordmark — see below
-  // signInUrl: "/signin/",                          // ONLY once that page exists — see the warning
+  brand: { name: "Acme", suffix: "cms" },            // the wordmark; see below
+  // signInUrl: "/signin/",                          // ONLY once that page exists; see the warning
   // hidePages: true,                                // collections-only deployments
-  // layout: "topbar",                               // horizontal nav instead of the sidebar — see below
+  // layout: "topbar",                               // horizontal nav instead of the sidebar; see below
   // locale: "cs",                                   // the editor's language, "en" (default) or "cs"; see below
-  // pageHeader: { variant: "flat", accent: "#73e2b2" },  // dress the screen header — see below
+  // pageHeader: { variant: "flat", accent: "#73e2b2" },  // dress the screen header; see below
   // extraNav: [{ label: "Curation", href: "/curate", target: "_self" }],
-  // panels: ["/admin/curation.js"],                 // your own React screens — see below
+  // panels: ["/admin/curation.js"],                 // your own React screens; see below
 }
 ```
 
-### `layout` — which chrome the nav wears
+### `layout`, which chrome the nav wears
 
 Two shapes for the same nav, and the same screens under either.
 
-- **`"sidebar"`** (default) — a left rail: an icon and a label per row, collapsible group
+- **`"sidebar"`** (default): a left rail with an icon and a label per row, collapsible group
   headings, a toggle that narrows it to icons. What a dozen-plus destinations needs.
-- **`"topbar"`** — the **Graphic Standard** bar (podoba's `Topbar`): brand left, tabs right,
+- **`"topbar"`**: the **Graphic Standard** bar (podoba's `Topbar`), brand left, tabs right,
   the account avatar at the end, a hairline under it. For an editor embedded in a product
   that already wears that bar, or a nav that fits a row.
 
@@ -116,15 +116,15 @@ The bar does not revive the horizontal scroller the rail replaced: the **first**
 renders as flat tabs and each later group folds into a dropdown
 (`Pages · Lectures · Media · Site ⌄ · Apps ⌄ · System ⌄` + the avatar). Below `md` the whole
 nav moves into a dialog behind a hamburger. The breadcrumb keeps only its detail half, beside
-the wordmark — the lit tab already names the section.
+the wordmark, since the lit tab already names the section.
 
-`chrome.ts` owns the choice (`CHROME_LAYOUT`) and the two numbers that follow from it — the
-chrome's height and the air under it — as CSS custom properties, because every sticky header
+`chrome.ts` owns the choice (`CHROME_LAYOUT`) and the two numbers that follow from it (the
+chrome's height and the air under it) as CSS custom properties, because every sticky header
 in the editor (`page-header.tsx`, the page editor's toolbar and inspector) is positioned
 against them. `chrome-sidebar.tsx` and `chrome-topbar.tsx` are the two components;
 `routes/_layout.tsx` derives the nav and hands either one the same `ChromeProps`.
 
-### `pageHeader` — dressing the screen header
+### `pageHeader`: dressing the screen header
 
 The sticky panel with the `<h1>` and the primary action, on the editor's own screens. Three
 tokens, no DOM:
@@ -137,20 +137,20 @@ pageHeader: {
 }
 ```
 
-- **`variant`** — `"cover"` is the seeded Truchet artwork every screen gets by default;
+- **`variant`**: `"cover"` is the seeded Truchet artwork every screen gets by default;
   `"flat"` keeps the panel and drops the art; `"bare"` drops the panel too, so the title and
   action sit on the page the way a Graphic Standard section header does. The header still
   sticks and still condenses on scroll in all three.
-- **`accent`** — re-points `--color-brand-primary` **inside the header only**, so the primary
+- **`accent`**: re-points `--color-brand-primary` **inside the header only**, so the primary
   action wears it and nothing else in the app moves. It must be an **opaque hex or `rgb()`
-  literal** — not `var()`, `oklch()` or a colour with alpha — because the editor parses it to
+  literal**, not `var()`, `oklch()` or a colour with alpha, because the editor parses it to
   derive two things the host therefore cannot get wrong: the label colour on it (the better of
   podoba's ink and paper by WCAG contrast) and the hover shade (a dark accent lightens, a
   light one darkens). An accent no label reads on is still applied, with a console warning
   naming the ratio.
-- **`titleFont`** — a `font-family` list for the `<h1>`. The counts, labels and controls around
+- **`titleFont`**: a `font-family` list for the `<h1>`. The counts, labels and controls around
   it are the editor's chrome and stay in the design system's type. The editor loads no fonts of
-  its own beyond podoba's, so the family has to be one the browser already has — your shell
+  its own beyond podoba's, so the family has to be one the browser already has. Your shell
   loads it.
 
 Anything unusable is warned about and falls back to the shipped default; nothing here throws.
@@ -158,7 +158,7 @@ Anything unusable is warned about and falls back to the shipped default; nothing
 
 **This replaces reaching into the editor's DOM from a stylesheet.** A selector like
 `div.sticky[class*="max-w-[1200px]"] > div.relative.isolate … > div.relative.grid > :not(h1)`
-pins itself to private structure that a release can change with no error anywhere — and it
+pins itself to private structure that a release can change with no error anywhere, and it
 cannot tell Media from a content type, or the panel from the button inside it, which is how a
 rule meant for "the header's action" turns `+ Upload` into "New + Upload" and puts white text
 on a mint fill at 1.58:1. If these tokens do not cover your case, open an issue rather than a
@@ -195,16 +195,16 @@ admin: {
 - Text that comes from your app (type and field names, Block Kit pages, server error messages,
   `extraNav` and `accountMenu` labels) is shown as you wrote it.
 
-## Panels — your own React screen inside the chrome
+## Panels: your own React screen inside the chrome
 
 A **panel** is a component you build and this editor renders, at `/apps/<slug>`, inside the
 same sidebar, header and theme as everything else. It is for the screen Block Kit
-(`adminPage()`) cannot describe — one that needs local interaction: a control that responds
+(`adminPage()`) cannot describe: one that needs local interaction, such as a control that responds
 as you type, a row that expands, a dialog, a redirect.
 
 The entry is declared **server-side** with `adminPanel()` in `app.ts` (label, icon,
 `navOrder`, `roles`), so the nav position and the role filter are the same server facts they
-are for a Block Kit page — a panel you may not open is absent from the listing. This bundle
+are for a Block Kit page: a panel you may not open is absent from the listing. This bundle
 supplies only the component:
 
 ```tsx
@@ -220,13 +220,13 @@ globalThis.PRAMEN_CMS_EDITOR_RUNTIME.registerPanel({
 ```
 
 `contract` is required and is a literal you write. Your bundle is compiled against your React
-and linked against the editor's, and nothing in the loading path notices if those disagree —
+and linked against the editor's, and nothing in the loading path notices if those disagree,
 so the editor asks which contract you built against and **refuses a mismatch**, naming the
 slug and the fix on the panel's own route. It is not readable off the runtime on purpose:
 that would be this editor checking its own number. `PANEL_RUNTIME_CONTRACT` in `src/panels.ts`
 is the current value and the list of what bumps it.
 
-Build it with **react, react-dom and both JSX runtimes external** — that is the whole
+Build it with **react, react-dom and both JSX runtimes external**. That is the whole
 contract:
 
 ```
@@ -239,12 +239,12 @@ import map points those specifiers at `dist/panel-*.js`, which read it back out.
 React in one page share no hook dispatcher, so a bundled one throws on the panel's first hook.
 
 A panel is handed `api` (`call`/`resolve`, as the signed-in user), `basePath` (the mount
-prefix, so your links stay inside it), `theme`, and `setError` (the chrome's error banner) —
+prefix, so your links stay inside it), `theme`, and `setError` (the chrome's error banner),
 and nothing else. The full guide, including how the URLs are declared, is in
 `docs/cms.md`.
 
 `extraNav` links open in a **new tab** by default, because the editor's catch-all route
-matches every same-origin path — a same-tab click would land on the editor's own 404 instead
+matches every same-origin path: a same-tab click would land on the editor's own 404 instead
 of your tool. Add `target: "_self"` to ask for a same-tab navigation; it is honoured only
 where the router provably will not claim the url:
 
@@ -254,8 +254,8 @@ where the router provably will not claim the url:
 | Same origin, outside the mount (`/curate`) | same tab | new tab |
 | Same origin, inside the mount | new tab | new tab |
 
-Anything else — a relative href that resolves back inside the mount, a `javascript:` url, an
-unparseable one — degrades to a new tab rather than stranding the editor on its 404. A
+Anything else (a relative href that resolves back inside the mount, a `javascript:` url, an
+unparseable one) degrades to a new tab rather than stranding the editor on its 404. A
 same-tab link runs the unsaved-changes guard first, so it cannot silently discard an edit in
 progress.
 
@@ -268,21 +268,21 @@ progress.
 **Each screen's header is a cover panel with generated artwork** (`src/cover.tsx`), derived
 from the screen's name: a hash seeds a PRNG that lays out a Truchet arc field under a colour
 wash drawn from a closed list of podoba accents. It exists because six list screens whose only
-difference is a word at the top read as one screen you keep landing on — and being derived
+difference is a word at the top read as one screen you keep landing on, and being derived
 means a new collection gets its own cover with nothing to author or upload. Seeded on the
 title's stable half, so adding a file does not redraw the picture.
 
 **Icons are [Phosphor](https://phosphoricons.com), regular weight**, in one place
 (`src/icons.tsx`) and aliased to names that say what they mean in this app rather than what
-they depict — so the family is a decision recorded in one file, and no call site names a
+they depict, so the family is a decision recorded in one file, and no call site names a
 vendor. A collection or a Block Kit page can still supply its own (`icon: "🎓"`), which goes
 into the rail's icon column verbatim; resolving such a string against Phosphor *by name* is
 deliberately not offered, because a by-name lookup needs the whole 3000-icon registry in the
 bundle to let a deployment name one glyph it can already pass directly.
 
 **Set `brand` when you deploy this for a client.** The editor ships as a package an agency
-installs on someone else's behalf, so the default wordmark — `pramen · cms editor`, at the head of the
-sidebar, on the Setup screen and in the browser tab — puts the framework's name where the
+installs on someone else's behalf, so the default wordmark (`pramen · cms editor`, at the head of the
+sidebar, on the Setup screen and in the browser tab) puts the framework's name where the
 client's belongs. `name` replaces it; `suffix: null` drops the `· cms` half entirely. A
 configured brand replaces the whole string, including the word "editor", so nothing English
 is appended to a client's name. Configure nothing and every surface renders exactly as it
@@ -306,14 +306,14 @@ Routes are file-based: `src/routes/*` is scanned by the Bun plugin at build time
 
 The published `dist/editor.js` and `dist/editor.css` are self-contained: podoba's components
 are compiled into the bundle and its tokens and web font into the stylesheet, at the versions
-this package pins. That is what makes the drop-in mount work with no build config — and it
+this package pins. That is what makes the drop-in mount work with no build config, and it
 means a site whose own design system is podoba gets **our** generation of it, not its own.
 No runtime option reaches inside a compiled bundle to change that.
 
 So the same build is also an API:
 
 ```ts
-// build-admin.ts — run with bun
+// build-admin.ts, run with bun
 import { buildEditor } from "@pramen/cms-editor/build";
 
 await buildEditor({
@@ -343,13 +343,13 @@ Then point the mount at what you built, with the directory those six files are s
 pramenCms({ admin: { editorAssets: "/admin" } })
 ```
 
-All six move together — `editor.js`, `editor.css` and the four `panel-*.js` shims — because a
+All six move together (`editor.js`, `editor.css` and the four `panel-*.js` shims) because a
 shim re-exports the names of the React *that* bundle linked. Since this build never sees those
 paths it cannot fingerprint them either, so cache-busting is yours: emit under a content-hashed
 directory, or serve them with a short max-age.
 
 **`designSystem` and `styles` are one decision, not two.** Setting only the first links your
-podoba into the bundle while the stylesheet stays compiled against ours — the editor comes up
+podoba into the bundle while the stylesheet stays compiled against ours: the editor comes up
 and the colours are subtly not yours. The build warns when it sees that combination.
 
 ### Slots: your components in place of ours
@@ -517,7 +517,7 @@ written against our internals, which the next release voids with no error anywhe
 
 Verified end-to-end against a live example server (connect → create/open a page → add blocks
 in regions → edit fields → save → publish; confirmed the round-trip through the content API).
-Not yet browser-QA'd against a real production project — that's the integration phase. Rough
+Not yet browser-QA'd against a real production project; that's the integration phase. Rough
 edges: no HTML5 drag-and-drop yet (reorder is ↑/↓ buttons), no rendered live-preview pane (the
 canvas is structural; a rendered preview needs the project's block components), and title/slug
 editing needs a future `updatePage` handler.

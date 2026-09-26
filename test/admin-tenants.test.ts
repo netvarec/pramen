@@ -3,7 +3,7 @@
 // Regression test for a shape mismatch inside our own packages: the server returns
 // `DoRef[]` (`{tenant, partition}`), the admin typed the call `string[]` and rendered
 // each entry directly as a `<SelectItem>` child. React throws on an object child, so
-// the dashboard rendered completely blank for any deployment that had a tenant — i.e.
+// the dashboard rendered completely blank for any deployment that had a tenant, i.e.
 // all of them. It shipped in 0.0.41 through 0.0.44 because nothing checked that the two
 // sides of this call agreed.
 //
@@ -48,7 +48,7 @@ describe("tenantNames parses what GET /tenants returns", () => {
     expect(tenantNames(["main", "acme", "main"])).toEqual(["acme", "main"]);
   });
 
-  test("never throws on junk — a broken list must not blank the dashboard", () => {
+  test("never throws on junk: a broken list must not blank the dashboard", () => {
     expect(tenantNames([])).toEqual([]);
     expect(tenantNames(null)).toEqual([]);
     expect(tenantNames(undefined)).toEqual([]);

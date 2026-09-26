@@ -1,4 +1,4 @@
-// Kv — a thin, prefixed wrapper over the project's Workers KV namespace, handed
+// Kv: a thin, prefixed wrapper over the project's Workers KV namespace, handed
 // to handlers as ctx.kv.
 //
 // Two levels of namespacing keep things isolated:
@@ -7,7 +7,7 @@
 //  - Within the namespace: keys are prefixed (`app:` for handler data) so they
 //    never collide with pramen-internal keys (the tenant registry uses `tenant:`).
 //
-// ctx.kv is GLOBAL across all tenants of the project — use it for config, feature
+// ctx.kv is GLOBAL across all tenants of the project, so use it for config, feature
 // flags, and caches, NOT per-tenant data (that's ctx.db). KV is eventually
 // consistent and is NOT part of a mutation's transaction.
 
@@ -51,20 +51,20 @@ export class Kv {
 // The core is stateless verify-only: roles/active are baked into a token at login and
 // there is no per-request DB lookup. To revoke a token BEFORE its `exp` (deactivate /
 // delete / compromise), we keep a tiny KV denylist keyed by username (= the JWT `sub`).
-// The Worker checks it right after resolving identity — a denied `sub` fails closed
+// The Worker checks it right after resolving identity: a denied `sub` fails closed
 // (401), never silently downgrades to anonymous.
 //
 // The entry carries an `expirationTtl` equal to the session TTL, so it self-expires
 // exactly when the last token that could have been outstanding at revocation time does:
 // the list can only ever hold recently-revoked users and never grows unbounded. The key
-// is username-scoped (not per-token), so it blocks EVERY token for that user — including
-// a fresh login — which is why reactivation must lift it (see `allowSession`).
+// is username-scoped (not per-token), so it blocks EVERY token for that user, including
+// a fresh login, which is why reactivation must lift it (see `allowSession`).
 
 /** App-relative key (the `Kv` facade adds its own `app:` prefix). Writer (auth) and
  * reader (Worker) both route through these helpers so the namespacing always agrees. */
 const denyKey = (username: string): string => `authDenied:${username}`;
 
-/** Cloudflare KV rejects an `expirationTtl` below 60s — clamp so a short session TTL
+/** Cloudflare KV rejects an `expirationTtl` below 60s, so clamp it so a short session TTL
  * still produces a valid (if slightly over-long) denylist entry. */
 const MIN_KV_TTL_SECONDS = 60;
 
@@ -77,7 +77,7 @@ export async function denySession(kv: Kv, username: string, ttlSeconds: number):
 }
 
 /** Lift a prior `denySession` (e.g. on reactivation). The key is username-scoped, so
- * without this a reactivated account would stay locked out — even for a fresh login —
+ * without this a reactivated account would stay locked out, even for a fresh login,
  * until the denylist entry expired on its own. */
 export async function allowSession(kv: Kv, username: string): Promise<void> {
   await kv.delete(denyKey(username));

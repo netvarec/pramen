@@ -1,4 +1,4 @@
-// @pramen/react — React hooks over @pramen/client.
+// @pramen/react: React hooks over @pramen/client.
 //
 //   const client = createClient<typeof app.handlers>({ url, token, tenant });
 //   function Notes() {
@@ -8,7 +8,7 @@
 //   }
 //
 // useLiveQuery opens a live subscription and re-renders on every server push
-// (row-level — only when this query's result actually changed).
+// (row-level, so only when this query's result actually changed).
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Input, PramenClient, Output } from "@pramen/client";

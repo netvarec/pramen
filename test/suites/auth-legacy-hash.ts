@@ -3,7 +3,7 @@
 // a wrong password against that scheme still fails, login UPGRADES the row to PBKDF2 on
 // the first successful sign-in (and the upgraded row keeps working), and an unregistered
 // scheme fails closed rather than erroring. The example app registers an unsalted
-// `sha256` scheme standing in for bcrypt — see registerPasswordVerifier in example/app.ts.
+// `sha256` scheme standing in for bcrypt; see registerPasswordVerifier in example/app.ts.
 // Runs on the default `main` tenant; usernames are `imp_`-prefixed to stay clear of
 // other suites.
 
@@ -42,7 +42,7 @@ export async function runLegacyHash(base: string): Promise<void> {
   const after = await call("passwordHashScheme", { username: "imp_dana" }, admin);
   assert(after.body.result.scheme === "pbkdf2", "legacy: a successful login upgrades the row to PBKDF2");
 
-  // The upgraded row keeps working — the rehash used the same plaintext.
+  // The upgraded row keeps working: the rehash used the same plaintext.
   const again = await call("login", { username: "imp_dana", password: "password123" });
   assert(again.body.ok, "legacy: the upgraded row still logs in with the same password");
   const wrongAfter = await call("login", { username: "imp_dana", password: "not-the-password" });
@@ -50,7 +50,7 @@ export async function runLegacyHash(base: string): Promise<void> {
 
   // --- an unregistered scheme fails closed ------------------------------------
   // Same payload, relabelled to a scheme nobody registered: verifyPassword returns false
-  // rather than throwing, so it presents as a bad password (401), not a 500 — and the
+  // rather than throwing, so it presents as a bad password (401), not a 500, and the
   // row is NOT upgraded, because nothing ever verified.
   const orphan = await call(
     "seedImportedUser",

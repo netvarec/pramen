@@ -1,13 +1,13 @@
 ---
 title: File storage
 order: 10
-summary: Store files in R2 with a fileRef column, ctx.files signed URLs, and direct-to-storage uploads — bytes never touch the database.
+summary: Store files in R2 with a fileRef column, ctx.files signed URLs, and direct-to-storage uploads, so bytes never touch the database.
 ---
 
 ## The model
 
 Files live in **R2**, not in the database. A `fileRef` column stores only small JSON
-metadata — never the bytes:
+metadata, never the bytes:
 
 ```ts
 const schema = defineSchema({
@@ -32,7 +32,7 @@ directly:
 // mint a signed upload URL + draft metadata (call from a mutation)
 const { url, ref } = await ctx.files.signUpload({ contentType, filename, maxSize });
 
-// mint a signed download URL — ONLY after an ACL'd read of the owning row
+// mint a signed download URL, ONLY after an ACL'd read of the owning row
 const { url } = await ctx.files.signDownload(note.attachment, { download: true });
 
 // confirm an upload landed / cascade-delete a blob
@@ -45,7 +45,7 @@ read the row through `ctx.db` (so row/field ACL gated it) and chose to sign one.
 
 ## The upload flow
 
-Bytes go **directly** between the client and R2 through the Worker — they never pass
+Bytes go **directly** between the client and R2 through the Worker; they never pass
 through the Durable Object.
 
 ```ts
@@ -84,7 +84,7 @@ window.location.href = pramen.fileUrl(dl.url); // resolve the relative signed UR
 ## How it works
 
 - Upload/download stream through the Worker's `/files/upload` (PUT) and
-  `/files/download` (GET) routes, authorized purely by an **HMAC token** in the URL —
+  `/files/download` (GET) routes, authorized purely by an **HMAC token** in the URL,
   no S3 credentials, and no bytes through the Durable Object.
 - Signed URLs are **relative**, so the server never needs to know its own public
   origin; the client resolves them with `pramen.fileUrl(...)`.

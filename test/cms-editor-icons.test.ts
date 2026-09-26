@@ -1,4 +1,4 @@
-// @pramen/cms-editor — every glyph the nav names actually draws.
+// @pramen/cms-editor: every glyph the nav names actually draws.
 //
 // `NAV_GLYPHS` is `satisfies Record<NavGlyph, Icon>`, so a name added to the union without a
 // drawing is already a compile error. What this adds is the RUNTIME, which the types cannot
@@ -7,7 +7,7 @@
 // Cheap enough to just render every one.
 //
 // It RENDERS rather than calling the component as a function: Phosphor's icons are
-// `forwardRef` exotic components, which cannot be invoked directly — a test that called them
+// `forwardRef` exotic components, which cannot be invoked directly, so a test that called them
 // would be asserting on the wrong thing even while it passed.
 //
 // In its own file because `nav.ts` is deliberately DOM-free and tested as such; this one
@@ -61,7 +61,7 @@ describe("nav glyphs", () => {
 
   test("the chrome's own controls come from the same family", () => {
     // These are the rail's CONTROLS rather than its destinations, and they used to come from
-    // podoba while the destinations came from here — two line sets in one 240px column.
+    // podoba while the destinations came from here: two line sets in one 240px column.
     for (const [name, Glyph] of Object.entries({ MenuToggleIcon, GroupOpenIcon, GroupFoldedIcon, LightThemeIcon, DarkThemeIcon, SignOutIcon })) {
       expect(draw(Glyph), `${name} is off-family`).toContain('viewBox="0 0 256 256"');
     }

@@ -1,4 +1,4 @@
-// The SECOND chrome: the Graphic Standard bar — brand left, tabs right, avatar at the end.
+// The SECOND chrome: the Graphic Standard bar, brand left, tabs right, avatar at the end.
 //
 // This is podoba's own `Topbar`, which is that bar extracted from the Graphic Standard apps,
 // used the way those apps use it: `Topbar.Brand` on the left, a `Topbar.Nav` pushed right by
@@ -16,8 +16,8 @@
 // that is exactly where the row failed the first time round: a dozen entries at 1280px was a
 // dense unlabelled ribbon over a horizontal scroller, which is what the sidebar replaced. So
 // the bar renders the FIRST nav section as tabs and folds each later section into a dropdown
-// (`topbarNav`), which is a shape the gs bar already has — its app switcher is a dropdown in
-// the same nav — rather than a scroller nobody discovers.
+// (`topbarNav`), which is a shape the gs bar already has (its app switcher is a dropdown in
+// the same nav) rather than a scroller nobody discovers.
 //
 // Below `md` the whole nav moves into a dialog behind a hamburger, which is what gs does
 // too. A DIALOG here and a disclosure in the sidebar, for a reason and not by accident: the
@@ -55,7 +55,7 @@ export function TopbarChrome({
   const { tabs, menus } = topbarNav(sections);
 
   return (
-    // Page-level surface so the whole viewport flips under `[data-theme="dark"]` — otherwise
+    // Page-level surface so the whole viewport flips under `[data-theme="dark"]`; otherwise
     // the body stays white in dark mode. The DOCUMENT stays the scroller (gs's `AppShell`
     // scrolls an inner column instead): the screen header's condense-on-scroll reads
     // `window.scrollY`, the page editor's three sticky levels are offset from the viewport,
@@ -71,12 +71,12 @@ export function TopbarChrome({
         {/* NOT `shrink-0`. podoba's base sets `min-w-0` on this slot precisely so it can give
             width back, and the crumb below is the reason: a long page title sized the brand
             block to max-content, `Topbar.Nav` was then the only sibling left to shrink, and
-            the tabs plus the avatar — the only route to theme, Settings and sign-out —
+            the tabs plus the avatar (the only route to theme, Settings and sign-out)
             collapsed behind the in-nav scroller this chrome exists to avoid. The wordmark
             itself keeps `shrink-0`, so shrinkage lands on the crumb, which truncates. */}
         <Topbar.Brand>
           {/* The wordmark is the way back to the top of the admin, as it is on every other
-              site — a `button` (not an `<a>`) so the SPA router handles it. */}
+              site: a `button` (not an `<a>`) so the SPA router handles it. */}
           <button
             type="button"
             onClick={onHome}
@@ -90,7 +90,7 @@ export function TopbarChrome({
               The sidebar's app bar carries a two-part trail because its rail is a column of
               a dozen rows and "which section" is worth restating. Here the lit TAB already
               says it, and repeating it would be the same word twice on one 77px line. What
-              the tab cannot say is which record is open — a page editor has no screen header
+              the tab cannot say is which record is open: a page editor has no screen header
               at all, so without this the bar names the section and nothing else.
               In the brand slot rather than a second row: a row that appears only on detail
               screens changes the chrome's height, which every sticky offset below is
@@ -102,7 +102,7 @@ export function TopbarChrome({
             // takes width off the tabs before it truncates at all; 320px is where it stops
             // costing them any; and between `md` and `lg` even that much is enough to push
             // the last two tabs behind the nav's own scroller. Nothing is lost when it
-            // goes — every screen that publishes a crumb also names the record on the screen
+            // goes: every screen that publishes a crumb also names the record on the screen
             // (the collection editor's "← Lectures / Edit lecture", the page editor's own
             // toolbar). The nav is the thing that cannot be recovered from elsewhere.
             <nav aria-label={t("breadcrumb.label")} className="hidden min-w-0 max-w-[320px] items-center gap-1.5 lg:flex">
@@ -131,8 +131,8 @@ export function TopbarChrome({
         {/* gs's account cluster: a bare avatar circle, no name beside it. The theme, Settings
             and the way out live inside it, as they do in the sidebar.
 
-            `Topbar.Actions`, not one more child of `Topbar.Nav` — which is where the gs app
-            puts it, and is a `<nav aria-label="Primary">` landmark, so "Account — <user>"
+            `Topbar.Actions`, not one more child of `Topbar.Nav`, which is where the gs app
+            puts it, and is a `<nav aria-label="Primary">` landmark, so "Account: <user>"
             was announced as a primary navigation destination. podoba ships this slot for
             exactly that reason and the sidebar already keeps the account menu outside its
             own nav. `ml-3` overrides the slot's `ml-auto`: two auto margins would SPLIT the
@@ -189,7 +189,7 @@ export function TopbarChrome({
                       )}
                     </div>
                   ))}
-                  {/* Settings NAVIGATES, so it has to take the dialog with it — this chrome
+                  {/* Settings NAVIGATES, so it has to take the dialog with it: this chrome
                       stays mounted across a route change, so the modal (focus trap and
                       scroll lock included) would otherwise be left sitting over the screen
                       it just opened. Same "only if it went" rule as the rows above. Theme
@@ -215,15 +215,15 @@ export function TopbarChrome({
       </Topbar>
 
       {/* The air gs leaves between its bar and the first section. It belongs to the column
-          rather than to `page-header.tsx` so that it applies to every screen — including the
-          ones with no screen header at all — and so that it SCROLLS AWAY instead of staying
+          rather than to `page-header.tsx` so that it applies to every screen, including the
+          ones with no screen header at all, and so that it SCROLLS AWAY instead of staying
           pinned above a stuck header. */}
       <div className={BELOW_CHROME_PAD}>{children}</div>
     </div>
   );
 }
 
-/** One flat tab — a route the bar navigates, or a host link it follows. */
+/** One flat tab: a route the bar navigates, or a host link it follows. */
 function TopbarEntry({
   entry,
   active,
@@ -249,7 +249,7 @@ function TopbarEntry({
   // `asChild` over a `<button>`, not an `<a href>`: these are SPA destinations reached
   // through the router, and every one of them goes through the unsaved-changes guard first.
   // `aria-current` alongside the tint, because the tab's only "you are here" cue is a
-  // background — invisible to a screen reader and marginal for anyone who cannot see it.
+  // background, invisible to a screen reader and marginal for anyone who cannot see it.
   return (
     <Topbar.NavLink asChild active={active === entry.key}>
       <button type="button" onClick={() => onGo(entry)} {...(active === entry.key ? { "aria-current": "page" as const } : {})}>
@@ -260,11 +260,11 @@ function TopbarEntry({
 }
 
 /**
- * One folded section — a dropdown trigger in the bar, its entries inside.
+ * One folded section: a dropdown trigger in the bar, its entries inside.
  *
  * podoba's `UserMenu` (React Aria's `Menu`) rather than a hand-rolled popover, and the same
  * component gs uses for the app switcher in this same nav. It takes no `className`, so the
- * tab metrics are applied to its trigger through an arbitrary variant on the wrapper — which
+ * tab metrics are applied to its trigger through an arbitrary variant on the wrapper, which
  * is how gs adjusts the same trigger in its own topbar. Without it a menu among the tabs is
  * a 36px pill next to 28px rects.
  */
@@ -306,7 +306,7 @@ function SectionMenu({
           if (!entry) return;
           // A route is navigated (guarded upstream). A host link that opens a NEW tab is a
           // real `<a href target="_blank">` below, so RAC's own link handling has already
-          // done the work and there is nothing to do here — doing it again would open two
+          // done the work and there is nothing to do here; doing it again would open two
           // tabs. Only the same-tab link is driven from here: it unloads THIS document, so
           // it has to consult the unsaved-changes guard, and an anchor inside a RAC menu
           // gives no click to cancel.

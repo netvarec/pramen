@@ -1,6 +1,6 @@
 // @pramen/auth user management: admin (listUsers / setUserRoles / setUserActive) +
 // self-service (changeEmail / changePassword), authorized declaratively by
-// authPolicies() — NOT imperative role checks. Runs on the default `main` tenant
+// authPolicies(), NOT imperative role checks. Runs on the default `main` tenant
 // (signup is anonymous). Proves: passwordHash is never projected, admin-only ops are
 // ACL-gated (a regular user is denied), self ops are scoped to the caller's own row,
 // deactivation blocks login, and a password change rotates the credential.
@@ -58,7 +58,7 @@ export async function runUserManagement(base: string): Promise<void> {
   assert(newEmail.body.ok && newEmail.body.result.email === "alice@new.example.com", "um: changeEmail updates own email");
 
   // a user cannot change another user's email (the self policy scopes to own row)
-  // — there's no input to target another row, so this is implicit; instead prove the
+  // There's no input to target another row, so this is implicit; instead prove the
   // admin path is the only cross-user writer (covered by setUserRoles above).
 
   // --- self-service: changePassword rotates the credential ------------------
@@ -73,7 +73,7 @@ export async function runUserManagement(base: string): Promise<void> {
 
   // --- self-service: a passwordless account sets its FIRST password ---------
   // Účet z pozvánky / magic linku má prázdný passwordHash. `changePassword` po něm dřív
-  // chtěl SOUČASNÉ heslo, takže si ho přihlášený uživatel nemohl nastavit vůbec — dostal
+  // chtěl SOUČASNÉ heslo, takže si ho přihlášený uživatel nemohl nastavit vůbec: dostal
   // „current password is incorrect" o hesle, které nikdy neexistovalo. Teď smí prázdnou
   // přihrádku zaplnit sezení; obsazenou pořád jen ten, kdo staré heslo zná (výš).
   const invited = await call("inviteUser", { email: "um_invited@example.com", roles: ["user"] }, admin);
@@ -118,16 +118,16 @@ export async function runUserManagement(base: string): Promise<void> {
   assert(clash.status === 400, "um: changeEmail rejects an email already in use (400, not 500)");
 
   // regression: a magic link for an address a password user holds as CONTACT email must
-  // NOT resolve to that account — login keys on the immutable username, not the mutable
-  // email — so this makes a separate passwordless account (no squatting / takeover, no 500).
+  // NOT resolve to that account: login keys on the immutable username, not the mutable
+  // email, so this makes a separate passwordless account (no squatting / takeover, no 500).
   await call("requestMagicLink", { email: "alice@new.example.com" });
-  // the email (dev token stash) is sent from a task after commit — drain before reading it
+  // the email (dev token stash) is sent from a task after commit, so drain before reading it
   await fetch(`${base}/admin/tasks/drain`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${admin}` }, body: JSON.stringify({ tenant: "main" }) });
   const mlTok = (await call("__magicInbox", { email: "alice@new.example.com" }, admin)).body.result.token;
   const mlLogin = await call("loginWithMagicLink", { token: mlTok });
   assert(
     mlLogin.body.ok && mlLogin.body.result.user.username === "alice@new.example.com",
-    "um: magic-link keys on username — a contact-email match does NOT take over the password account",
+    "um: magic-link keys on username, so a contact-email match does NOT take over the password account",
   );
 
   // --- admin: deleteUser (delete by a non-`id` PK) ---------------------------
@@ -152,7 +152,7 @@ export async function runUserManagement(base: string): Promise<void> {
   assert(adminData.body.ok && Array.isArray(adminData.body.result), "um: /admin/data lists auth_users");
   assert(
     (adminData.body.result as Row[]).every((r) => !("passwordHash" in r)),
-    "um: hidden() — /admin/data never returns passwordHash even under SYSTEM scope",
+    "um: hidden(): /admin/data never returns passwordHash even under SYSTEM scope",
   );
 
   // --- factory over a CUSTOM table (the multi-tenant accounts / Tah pattern) ---

@@ -1,4 +1,4 @@
-// Block Kit — a custom admin PAGE, described by the server as JSON and rendered by the
+// Block Kit: a custom admin PAGE, described by the server as JSON and rendered by the
 // editor. No project JavaScript ever runs in the admin (GitHub #33, motivated by #44).
 //
 // WHY THIS RATHER THAN "SHIP THE COMPONENT TREE"
@@ -6,7 +6,7 @@
 // Client sites are mostly conventional, but nearly every one grows one section that is not:
 // a screen over an external API, a filtered browse UI over data we do not own, a bespoke
 // picker. Before this the only seam was `extraNav`, which renders last and opens a NEW TAB
-// — so the odd 10% was a separate deployment with its own chrome, and the admin read as
+//, so the odd 10% was a separate deployment with its own chrome, and the admin read as
 // "the CMS, plus a bolted-on other thing".
 //
 // The tempting fix is to publish `@pramen/cms-editor`'s components so each project
@@ -14,7 +14,7 @@
 // a public component API to keep stable, version skew between editor internals and CMS
 // handlers becoming every project's problem, and the same 80% reassembled everywhere.
 //
-// So the registry is widened instead, which is how WordPress actually works — plugins there
+// So the registry is widened instead, which is how WordPress actually works: plugins there
 // do not work because they may ship PHP, they work because there is a registry of named
 // hook points and core renders them in its own chrome. `collection()` is already that trick
 // at the routing level (one generic editor, N collections, zero per-collection code) and
@@ -23,11 +23,11 @@
 //
 // AND YET `adminPanel()` SHIPS BESIDE IT, WHICH IS PROJECT CODE IN THE BROWSER
 //
-// It does, and the paragraph above is not quietly wrong — the two are one position, not two.
+// It does, and the paragraph above is not quietly wrong: the two are one position, not two.
 // What that paragraph rejects is publishing the EDITOR'S COMPONENT LIBRARY so that every
 // project assembles its own admin out of it: that is what makes N forks of the same 80%,
 // because each project then owns the chrome, the nav, the page list, the login and the media
-// browser, and every fix has to be made N times. A panel is the opposite trade — ONE SCREEN,
+// browser, and every fix has to be made N times. A panel is the opposite trade: ONE SCREEN,
 // rendered inside chrome that is still ours, at a route that is still ours, from a registry
 // entry that is still the server's. No component API is published: a panel is handed React,
 // four props and nothing else (`panel-runtime.ts` in @pramen/cms-editor is a long argument
@@ -39,24 +39,24 @@
 // against whichever React the editor loaded. That is why the seam is a numbered contract a
 // bundle must STATE and the editor refuses on mismatch, rather than a promise in a README.
 // Skew becomes one refusal naming the slug and the fix, on the screen the panel should have
-// been — which is precisely what "N per-project forks" never had.
+// been, which is precisely what "N per-project forks" never had.
 //
 // WHICH TO REACH FOR, AND WHAT THE SECOND ONE COSTS
 //
 // `adminPage()` for a list-and-form screen: rows, filters, a form, a confirm. No build step,
 // no bundle to keep deployed in step with the admin, no React version to keep aligned, and no
-// project code in the browser at all. `adminPanel()` when the screen IS the interaction —
+// project code in the browser at all. `adminPanel()` when the screen IS the interaction:
 // something that responds as you type, a row that expands, a dialog, a canvas, a date input.
 // Those are not elements Block Kit happens to be missing; they are things a server-driven
 // vocabulary cannot express, and the list does not shrink by adding blocks.
 //
 // The cost, stated plainly, because it is what makes that order more than a preference: A
 // PANEL IS TRUSTED CODE. Its bundle runs in the editor's own page with the editor's own
-// session in scope — it can read the stored token, make any call the caller could make, and
+// session in scope: it can read the stored token, make any call the caller could make, and
 // render anything anywhere on the page. `roles` on `adminPanel()` decides who is SHOWN the
 // screen and the ACL still bounds what the server will do for whoever is asking, but neither
-// constrains the bundle. `PanelApi` is a CONVENIENCE — the one obvious way to make an
-// authenticated call — and not a sandbox; there is no sandbox to be had short of a
+// constrains the bundle. `PanelApi` is a CONVENIENCE, the one obvious way to make an
+// authenticated call, and not a sandbox; there is no sandbox to be had short of a
 // cross-origin iframe, which would give up the shared chrome that is the entire point. Ship a
 // panel you wrote, from your own origin, and treat its bundle as part of the admin. Block
 // Kit's headline property is that none of this paragraph is ever needed.
@@ -68,7 +68,7 @@
 // everywhere else. What Block Kit removes is the browser code, not the boundary.
 //
 // It is also not a "virtual collection". A `collection()` promises ACL through `ctx.db`,
-// row scope, cell-level projection and `where` traversal — all of which follow from it
+// row scope, cell-level projection and `where` traversal, all of which follow from it
 // being a REAL TABLE. A page here promises none of those, and says so by not being called a
 // collection.
 
@@ -80,7 +80,7 @@ import { isAdminPanel, type AdminPanelDef } from "./panel";
 
 // --- the block/element vocabulary ------------------------------------------------------
 
-/** Text with no formatting. Rendered as text, never as markup — the editor puts every
+/** Text with no formatting. Rendered as text, never as markup: the editor puts every
  * string through React, so there is no HTML path here to sanitize. */
 export type AdminText = string;
 
@@ -89,7 +89,7 @@ export type AdminText = string;
  * `error` is the per-FIELD failure, rendered under the offending input. The page-level
  * `toast` cannot do that job: it names no field, it is gone in three seconds while the bad
  * value is still on screen, and a form with six inputs gives the reader no way to tell which
- * one "25:00 is not a time" is about. It is a plain part of the render — the whole page
+ * one "25:00 is not a time" is about. It is a plain part of the render: the whole page
  * comes back on every interaction, so an error lives exactly as long as the response that
  * carried it, and there is nothing to clear. */
 export type AdminInput =
@@ -109,7 +109,7 @@ export interface AdminButton {
   label: AdminText;
   style?: "primary" | "secondary" | "danger";
   value?: string;
-  /** Ask before firing. Any destructive action should set it — the page cannot put up its
+  /** Ask before firing. Any destructive action should set it: the page cannot put up its
    * own dialog, because it has no code in the browser. */
   confirm?: AdminText;
 }
@@ -127,8 +127,8 @@ export const ADMIN_ELEMENT_TYPES = ["button", "text_input", "number_input", "sel
 
 /** What one table cell holds: a value to READ, or an element to ACT with.
  *
- * The alternative shape was a per-COLUMN element declaration — `columns: [{ key, label,
- * element }]` — and it is the wrong unit. Everything about a row's control is a fact of the
+ * The alternative shape was a per-COLUMN element declaration (`columns: [{ key, label,
+ * element }]`, and it is the wrong unit. Everything about a row's control is a fact of the
  * ROW: the button's `value` is that row's id, its label is "Hide" or "Show" depending on
  * that row's state, and a row that must not be touched carries no control at all. A column
  * declaration would have to be a template with a substitution language, which is a second
@@ -139,7 +139,7 @@ export const ADMIN_ELEMENT_TYPES = ["button", "text_input", "number_input", "sel
  * The two are told apart by SHAPE: a display value is a primitive, an element is an object,
  * and nothing else may be an object. `normalizeAdminResponse` enforces that, so a page that
  * splats a whole row (`rows: found`) into the table is named at the boundary instead of
- * rendering a column of `[object Object]` — or, worse, of half-elements. */
+ * rendering a column of `[object Object]`, or, worse, of half-elements. */
 export type AdminCell = AdminText | number | boolean | null | AdminElement;
 
 /** One block in a rendered admin page. */
@@ -147,12 +147,12 @@ export type AdminBlock =
   | { type: "header"; text: AdminText; level?: 1 | 2 | 3 }
   | { type: "section"; text: AdminText }
   | { type: "divider" }
-  /** Small muted text — a caption, a timestamp, a hint. */
+  /** Small muted text: a caption, a timestamp, a hint. */
   | { type: "context"; text: AdminText }
   /** Label/value pairs, for a record's details. */
   | { type: "fields"; fields: { label: AdminText; value: AdminText }[] }
   /** `block_id` rides back on an interaction a CELL fired, the same way an `actions` block's
-   * does — so a page with two tables can tell which one a shared `action_id` came from. */
+   * does, so a page with two tables can tell which one a shared `action_id` came from. */
   | { type: "table"; block_id?: string; columns: { key: string; label: AdminText }[]; rows: Record<string, AdminCell>[]; empty?: AdminText }
   | { type: "stats"; stats: { label: AdminText; value: AdminText; hint?: AdminText }[] }
   | { type: "actions"; block_id?: string; elements: AdminElement[] }
@@ -181,8 +181,8 @@ export interface AdminPageInteraction {
   values?: Record<string, JsonValue>;
 }
 
-/** What a page answers with. The WHOLE page is re-rendered on every interaction — there is
- * no patch protocol — because a page that returns only what changed has to agree with the
+/** What a page answers with. The WHOLE page is re-rendered on every interaction. There is
+ * no patch protocol, because a page that returns only what changed has to agree with the
  * host about what is currently on screen, and the two drift the first time a render depends
  * on data that moved underneath it. */
 export interface AdminPageResponse {
@@ -199,7 +199,7 @@ export const MAX_ADMIN_BLOCK_DEPTH = 4;
 
 /** One custom admin page.
  *
- * Generic over the app's schema so `render`'s `ctx.db` is TYPED against it —
+ * Generic over the app's schema so `render`'s `ctx.db` is TYPED against it:
  * `adminPage<typeof schema>("…", …)`, the same shape `MigrationContext<typeof schema>` uses.
  * Without it `ctx.db.find({ from: "lectures", where: { title: { contains: q } } })` resolves
  * the table against the default `SchemaDef` and every column reads as a number. */
@@ -214,7 +214,7 @@ export interface AdminPageDef<S extends SchemaDef = SchemaDef> {
   readonly label: string;
   /** Optional nav icon (emoji or short string). */
   readonly icon?: string;
-  /** Where it sits in the nav — see {@link NAV_ORDER}. Defaults to `NAV_ORDER.adminPages`.
+  /** Where it sits in the nav. See {@link NAV_ORDER}. Defaults to `NAV_ORDER.adminPages`.
    * This is the half of #44 that makes a project section part of the admin rather than a
    * link at the end of it. */
   readonly navOrder?: number;
@@ -246,19 +246,19 @@ export function adminPage<S extends SchemaDef = SchemaDef>(slug: string, opts: O
 }
 
 /** One entry in the custom-screens registry: a Block Kit page, or a panel the browser
- * renders. They share a registry — and so a slug space, a route and a nav band — because
+ * renders. They share a registry (and so a slug space, a route and a nav band) because
  * from the editor's side they are the same thing (a project's own screen inside the chrome)
  * differing only in where the rendering happens. Two registries would have made a slug
  * collision between them a runtime surprise instead of a boot error. */
 export type AdminScreenDef<S extends SchemaDef = SchemaDef> = AdminPageDef<S> | AdminPanelDef;
 
 /** Every screen kind, as a runtime set. A value and not only a union because the editor
- * keeps its own copy and `test/cms-editor-mirrors.test.ts` fails if the two drift — a kind
+ * keeps its own copy and `test/cms-editor-mirrors.test.ts` fails if the two drift: a kind
  * the server sends and the editor has not heard of is a nav entry that renders nothing. */
 export const ADMIN_PAGE_KINDS = ["blocks", "panel"] as const;
 export type AdminPageKind = (typeof ADMIN_PAGE_KINDS)[number];
 
-/** The client-facing view of a registered screen — what the editor needs to put it in the
+/** The client-facing view of a registered screen: what the editor needs to put it in the
  * nav and decide how to render it. Never the `render` function, and never the role list
  * (which is a server fact; a screen the caller may not open is simply absent from the
  * listing). */
@@ -277,18 +277,18 @@ export interface AdminPageMeta {
  * starts rather than as a 404 the first time someone opens the one page nobody exercised.
  *
  * Pages and panels are validated TOGETHER, against one `seen` set: they share `/apps/:slug`,
- * so two entries with the same slug are a collision whatever their kinds — and the one that
+ * so two entries with the same slug are a collision whatever their kinds, and the one that
  * would win is decided by insertion order into a Map, which is not a thing to leave to
  * chance. */
 export function validateAdminPages(pages: readonly AdminScreenDef[]): void {
   const seen = new Set<string>();
   for (const p of pages) {
     if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(p.slug) || p.slug.length > 80) {
-      throw new Error(`pramen/cms: admin page slug '${p.slug}' must be a URL segment (lowercase letters, digits and single hyphens) — it is routed at /apps/:slug`);
+      throw new Error(`pramen/cms: admin page slug '${p.slug}' must be a URL segment (lowercase letters, digits and single hyphens), since it is routed at /apps/:slug`);
     }
-    if (seen.has(p.slug)) throw new Error(`pramen/cms: duplicate admin page slug '${p.slug}' — the slug is the registry's key`);
+    if (seen.has(p.slug)) throw new Error(`pramen/cms: duplicate admin page slug '${p.slug}': the slug is the registry's key`);
     seen.add(p.slug);
-    if (p.label.trim() === "") throw new Error(`pramen/cms: admin page '${p.slug}' has an empty label — it would render an unnamed nav entry`);
+    if (p.label.trim() === "") throw new Error(`pramen/cms: admin page '${p.slug}' has an empty label, so it would render an unnamed nav entry`);
     // A panel has no server render by definition, so the check is skipped for it rather
     // than relaxed for everyone: "no render function" stays a boot error for a Block Kit
     // page, which is the one it was written to catch.
@@ -326,7 +326,7 @@ export function createAdminPageHandlers(pages: readonly AdminScreenDef[], opts: 
   const mayOpen = (ctx: HandlerContext, p: AdminScreenDef): boolean => held(ctx).some((r) => rolesFor(p).includes(r));
 
   return {
-    /** The screens THIS caller may open — Block Kit pages and panels alike. Filtered rather
+    /** The screens THIS caller may open, Block Kit pages and panels alike. Filtered rather
      * than role-annotated: a nav entry that 403s when clicked is worse than one that is not
      * there, and the role list is a server fact the browser has no use for.
      *
@@ -342,14 +342,14 @@ export function createAdminPageHandlers(pages: readonly AdminScreenDef[], opts: 
     /**
      * Render a page, or act on it and render the result.
      *
-     * A MUTATION, always — including `page_load`. A page's `render` is arbitrary handler
+     * A MUTATION, always, including `page_load`. A page's `render` is arbitrary handler
      * code and a `form_submit` writes, so the call has to run inside the transaction the
      * dispatcher wraps a mutation in. Splitting loads into a query would mean one of the
      * two entry points into the same function was not transactional, and which one you got
      * would depend on the `type` field the CLIENT sent.
      */
     adminPageInteract: mutation(async (ctx, input: AdminPageInteraction): Promise<AdminPageResponse> => {
-      // The registry, keyed by slug — the same defence `collectionList` uses. An unknown
+      // The registry, keyed by slug, the same defence `collectionList` uses. An unknown
       // slug is a 400 naming nothing, never a dispatch to something the client chose.
       const page = bySlug.get(input.page);
       if (!page) throw new BadRequest(`unknown admin page '${input.page}'`);
@@ -359,8 +359,8 @@ export function createAdminPageHandlers(pages: readonly AdminScreenDef[], opts: 
       // plainly rather than folded into "unknown admin page": the caller may open this
       // screen (it passed the gate above), so hiding its existence would only send whoever
       // wired the call looking for a registration mistake that is not there. It is a client
-      // bug — the editor routes a panel to its component and never calls this.
-      if (isAdminPanel(page)) throw new BadRequest(`admin page '${input.page}' is a panel — it renders in the browser and has no server-side render`);
+      // bug: the editor routes a panel to its component and never calls this.
+      if (isAdminPanel(page)) throw new BadRequest(`admin page '${input.page}' is a panel: it renders in the browser and has no server-side render`);
       const res = await page.render(ctx, input);
       return normalizeAdminResponse(res);
     }, {
@@ -389,8 +389,8 @@ export function createAdminPageHandlers(pages: readonly AdminScreenDef[], opts: 
 /**
  * Check a page's response on the way OUT.
  *
- * Server-authored is not the same as trustworthy: a page builds blocks from data — a row's
- * title, a URL out of an external API — so the values inside a block can be anything the
+ * Server-authored is not the same as trustworthy: a page builds blocks from data, a row's
+ * title, a URL out of an external API, so the values inside a block can be anything the
  * store holds. Text is safe by construction (the editor renders every string through React,
  * so there is no markup path), which leaves the attributes that are NOT text:
  *
@@ -407,7 +407,7 @@ export function createAdminPageHandlers(pages: readonly AdminScreenDef[], opts: 
 export function normalizeAdminResponse(res: AdminPageResponse): AdminPageResponse {
   if (!res || !Array.isArray(res.blocks)) throw new Error("pramen/cms: an admin page must return { blocks: [...] }");
   // One set for the WHOLE response, because the value bag it guards is per PAGE, not per
-  // block — an input in a form and an input in a table cell collide just as hard as two in
+  // block. An input in a form and an input in a table cell collide just as hard as two in
   // one form.
   const inputIds = new Set<string>();
   const out: AdminPageResponse = { blocks: res.blocks.map((b) => normalizeAdminBlock(b, 0, inputIds)) };
@@ -455,7 +455,7 @@ function normalizeAdminBlock(block: AdminBlock, depth: number, inputIds: Set<str
   }
 }
 
-/** An object in a cell is claiming to be an element — nothing else may be one. Narrowed to
+/** An object in a cell is claiming to be an element, and nothing else may be one. Narrowed to
  * `AdminElement` here only so the check that follows can read its tag; whether it IS one is
  * exactly what {@link checkCellElement} decides. */
 const isElementCell = (cell: AdminCell | undefined): cell is AdminElement => cell !== null && typeof cell === "object";
@@ -464,22 +464,22 @@ function checkCellElement(cell: AdminElement, column: string, rowIndex: number):
   const where = `table column '${column}', row ${rowIndex}`;
   const kinds = ADMIN_ELEMENT_TYPES as readonly string[];
   if (!kinds.includes(cell.type)) {
-    throw new Error(`pramen/cms: ${where} holds an object that is not an admin element (type ${JSON.stringify(cell.type)}). A cell is a value or one of ${kinds.join(", ")} — a whole row object put in a cell would render as [object Object]`);
+    throw new Error(`pramen/cms: ${where} holds an object that is not an admin element (type ${JSON.stringify(cell.type)}). A cell is a value or one of ${kinds.join(", ")}: a whole row object put in a cell would render as [object Object]`);
   }
-  if (!cell.action_id) throw new Error(`pramen/cms: the element in ${where} has no action_id — nothing would come back when it fires`);
-  if (cell.type === "button" && !cell.label) throw new Error(`pramen/cms: the button in ${where} has no label — it would draw as an empty control`);
+  if (!cell.action_id) throw new Error(`pramen/cms: the element in ${where} has no action_id, so nothing would come back when it fires`);
+  if (cell.type === "button" && !cell.label) throw new Error(`pramen/cms: the button in ${where} has no label, so it would draw as an empty control`);
 }
 
 /** Claim one input's `action_id` for the page.
  *
  * The editor holds ONE value bag for the whole page, keyed by `action_id`, because that is
  * what makes a filter in one block reach a button in another. So two inputs sharing an id
- * are one field wearing two hats, which is only ever a bug — and the way to write it by
+ * are one field wearing two hats, which is only ever a bug, and the way to write it by
  * accident is to build a table and put the same input literal in every row. */
 function claimInputId(input: AdminInput, where: string, seen: Set<string>): void {
   if (seen.has(input.action_id)) {
     throw new Error(
-      `pramen/cms: action_id '${input.action_id}' is used by more than one input on this page (${where}) — the editor keys the page's value bag by action_id, so they would be ONE field: same value shown in every copy, and the last write wins on submit. A per-ROW input has to mint a per-row id (\`hours:\${row.id}\`); a per-row BUTTON does not, because its \`value\` rides back on the interaction instead`,
+      `pramen/cms: action_id '${input.action_id}' is used by more than one input on this page (${where}): the editor keys the page's value bag by action_id, so they would be ONE field: same value shown in every copy, and the last write wins on submit. A per-ROW input has to mint a per-row id (\`hours:\${row.id}\`); a per-row BUTTON does not, because its \`value\` rides back on the interaction instead`,
     );
   }
   seen.add(input.action_id);

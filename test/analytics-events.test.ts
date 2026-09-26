@@ -1,4 +1,4 @@
-// @pramen/analytics — the pure half of the collector: path normalization, device and
+// @pramen/analytics: the pure half of the collector, with path normalization, device and
 // source classification, bot filtering, and the beacon-value clamps.
 //
 // These are unit tests and not part of the e2e suite because each of them is a
@@ -108,7 +108,7 @@ describe("deriveSource", () => {
     expect(deriveSource("https://news.ycombinator.com/item?id=1", "example.com")).toBe("news.ycombinator.com");
   });
 
-  // A referrer host that merely CONTAINS a search engine's name is not that engine —
+  // A referrer host that merely CONTAINS a search engine's name is not that engine:
   // `notgoogle.com` must not be bucketed as search.
   test("a lookalike host is not a search engine", () => {
     expect(deriveSource("https://notgoogle.com/x", "example.com")).toBe("notgoogle.com");
@@ -117,7 +117,7 @@ describe("deriveSource", () => {
 
 describe("clampMetric", () => {
   // The beacon posts to a public endpoint. These values are not merely untrusted, they are
-  // untrusted numbers that feed an AVERAGE — a single absurd one moves a headline metric
+  // untrusted numbers that feed an AVERAGE, so a single absurd one moves a headline metric
   // without erroring anywhere.
   test("out-of-range and non-numeric values are dropped or clamped", () => {
     expect(clampMetric(50, 100)).toBe(50);
@@ -136,7 +136,7 @@ describe("clampMetric", () => {
 
 describe("sessionId", () => {
   // The whole privacy position rests on this: no salt, no session. An unsalted digest of
-  // (IP, User-Agent) is reversible by enumeration — it would look anonymous and not be.
+  // (IP, User-Agent) is reversible by enumeration: it would look anonymous and not be.
   test("without a salt there is no session id at all", async () => {
     expect(await sessionId(null, "1.2.3.4", "UA", "2026-09-08")).toBe(null);
     expect(await sessionId("", "1.2.3.4", "UA", "2026-09-08")).toBe(null);
@@ -189,7 +189,7 @@ describe("day helpers", () => {
 
 describe("the ingest gate", () => {
   // The collector's role is only a gate because `toIdentity` strips `__`-prefixed roles from
-  // every verified token — otherwise an IdP group of the same name would satisfy it, and the
+  // every verified token; otherwise an IdP group of the same name would satisfy it, and the
   // handler behind it writes rows with the ACL bypassed. Pinned here so a future rename
   // cannot quietly drop the prefix and take the guarantee with it.
   test("INGEST_ROLE is a SYSTEM role, so no verified token can present it", () => {

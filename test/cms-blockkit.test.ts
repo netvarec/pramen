@@ -1,4 +1,4 @@
-// @pramen/cms — Block Kit: custom admin pages described as JSON (GitHub #33, #44 tier 3).
+// @pramen/cms Block Kit: custom admin pages described as JSON (GitHub #33, #44 tier 3).
 //
 // The contract these tests hold is narrow and worth stating: Block Kit removes the browser
 // CODE from a project's admin screen, not the boundary around it. A page's `render` is an
@@ -42,12 +42,12 @@ type Handlers = {
 const H = (...pages: ReturnType<typeof adminPage>[]) => createAdminPageHandlers(pages) as unknown as Handlers;
 
 describe("the registry", () => {
-  test("a slug must be routable — it is served at /apps/:slug", () => {
+  test("a slug must be routable, because it is served at /apps/:slug", () => {
     expect(() => validateAdminPages([adminPage("My Page", { label: "x", render: () => ({ blocks: [] }) })])).toThrow(/URL segment/);
     expect(() => validateAdminPages([adminPage("my_page", { label: "x", render: () => ({ blocks: [] }) })])).toThrow(/URL segment/);
   });
 
-  test("duplicate slugs are refused — the slug IS the registry's key", () => {
+  test("duplicate slugs are refused, because the slug IS the registry's key", () => {
     expect(() => validateAdminPages([page(), page()])).toThrow(/duplicate admin page slug/);
   });
 
@@ -61,7 +61,7 @@ describe("the registry", () => {
 });
 
 describe("who sees and who may open", () => {
-  test("the listing is FILTERED, not annotated — a nav entry that 403s is worse than none", () => {
+  test("the listing is FILTERED, not annotated: a nav entry that 403s is worse than none", () => {
     const h = H(page(), adminPage("finance", { label: "Finance", roles: ["admin"], render: () => ({ blocks: [] }) }));
     expect(h.listAdminPages.run(ctxAs("editor")).map((p) => p.slug)).toEqual(["dispatch"]);
     expect(h.listAdminPages.run(ctxAs("admin")).map((p) => p.slug)).toEqual(["dispatch", "finance"]);
@@ -114,7 +114,7 @@ describe("the interaction envelope", () => {
     expect(seen).toEqual({ page: "dispatch", type: "form_submit", action_id: "save", block_id: "settings", values: { url: "x" } });
   });
 
-  test("render gets the CALLER's ctx — Block Kit removes the browser code, not the ACL", async () => {
+  test("render gets the CALLER's ctx: Block Kit removes the browser code, not the ACL", async () => {
     let seen: HandlerContext | null = null;
     const h = H(adminPage("dispatch", { label: "D", render: (c) => { seen = c; return { blocks: [] }; } }));
     const ctx = ctxAs("editor");
@@ -173,7 +173,7 @@ describe("a table row can carry a control", () => {
    * these checks are for is precisely the value the types said could not be there. */
   const badCell = (v: object): AdminCell => v as unknown as AdminCell;
 
-  test("a cell may hold an element — that is how one row acts without becoming its own block", () => {
+  test("a cell may hold an element: that is how one row acts without becoming its own block", () => {
     // The alternative was an `actions` block per row: 830 venues, 830 blocks, and a table
     // with the table taken out of it.
     const res = normalizeAdminResponse({
@@ -188,7 +188,7 @@ describe("a table row can carry a control", () => {
     expect(table.rows[1]!.act).toEqual({ type: "button", action_id: "toggle", label: "Show", value: "v-2" });
   });
 
-  test("one action_id serves every row — the button's `value` is what says which row", () => {
+  test("one action_id serves every row: the button's `value` is what says which row", () => {
     // The existing idiom, kept working. Buttons are deliberately NOT claimed the way inputs
     // are: repeating a button's action_id down a column is how a row column is written.
     expect(() => normalizeAdminResponse({
@@ -215,7 +215,7 @@ describe("a table row can carry a control", () => {
     expect(() => normalizeAdminResponse(table(cell({ label: "" })))).toThrow(/no label/);
   });
 
-  test("an empty cell is still an empty cell — null is a value, not a broken element", () => {
+  test("an empty cell is still an empty cell: null is a value, not a broken element", () => {
     // `isElementCell` decides by shape, and `typeof null === "object"`: read the check
     // wrongly and every blank cell becomes an element with no type.
     expect(() => normalizeAdminResponse({
@@ -223,7 +223,7 @@ describe("a table row can carry a control", () => {
     })).not.toThrow();
   });
 
-  test("only the cells a COLUMN names are checked — a row may carry data it does not show", () => {
+  test("only the cells a COLUMN names are checked: a row may carry data it does not show", () => {
     // The editor renders by column, so an element under an unnamed key is invisible. Both
     // halves walk the same set, so neither can act on something the other cannot see.
     expect(() => normalizeAdminResponse({
@@ -233,7 +233,7 @@ describe("a table row can carry a control", () => {
 });
 
 describe("a per-row input has to mint a per-row action_id", () => {
-  // The editor keys the page's WHOLE value bag by action_id — that is what lets a filter in
+  // The editor keys the page's WHOLE value bag by action_id: that is what lets a filter in
   // one block reach a button in another. A row input therefore cannot be `action_id: "hours"`
   // repeated 830 times, and the response is where that is caught, because on screen it looks
   // like one field that mysteriously shows the same value everywhere.
@@ -306,13 +306,13 @@ describe("a field can be wrong on its own", () => {
 // --- the editor half ----------------------------------------------------------------------
 //
 // Rendered rather than described: the additions above are only real if the editor draws them
-// and if pressing what it drew comes back with enough to act on. There is no DOM here — the
+// and if pressing what it drew comes back with enough to act on. There is no DOM here, so the
 // component tree is expanded by hand down to the leaf that carries the handler, which is
 // where the wiring actually lives.
 
 /** Our own components, expanded by NAME. Podoba's `Button` is deliberately NOT in the set:
  * it stays a leaf, and the props on that leaf (`onPress`, `children`) are exactly the wiring
- * under test — calling it would need a renderer and would assert on react-aria instead. A
+ * under test; calling it would need a renderer and would assert on react-aria instead. A
  * component renamed out of this set makes the tests below fail to find their control, which
  * is the failure you want. */
 const OURS = new Set(["BlockList", "BlockView", "TableBlock", "CellView", "ElementView", "ActionsBlock", "FormBlock", "InputView"]);
@@ -344,7 +344,7 @@ function walk(node: ReactNode, out: ReactElement[] = []): ReactElement[] {
   return walk(propsOf(node).children, out);
 }
 
-/** What a control hands back when it fires — the editor's own `Fired`, which is internal, so
+/** What a control hands back when it fires: the editor's own `Fired`, which is internal, so
  * the shape it must produce is written out here instead of imported. */
 interface FiredLike {
   type: "block_action" | "form_submit";
@@ -431,7 +431,7 @@ describe("a row's control, drawn and pressed", () => {
     expect(html).toMatch(/>Slavia<\/td><td[^>]*>no</);
   });
 
-  test("a table with no block_id still fires — the id is how you tell two tables apart", () => {
+  test("a table with no block_id still fires: the id is how you tell two tables apart", () => {
     const fired: FiredLike[] = [];
     const nodes = tree([{ type: "table", columns: [{ key: "a", label: "A" }], rows: [{ a: { type: "button", action_id: "go", label: "Go" } }] }], { onFire: (f) => fired.push(f) });
     pressable(nodes, "Go").onPress();
@@ -449,14 +449,14 @@ describe("a row's control, drawn and pressed", () => {
     expect(wrote).toEqual([["hours:v-2", "09:30"]]);
   });
 
-  test("a cell's input is seeded like any other — the walk reaches into rows", () => {
+  test("a cell's input is seeded like any other: the walk reaches into rows", () => {
     // An input the seed walk misses draws empty however good its `initial_value` was, and
     // then submits that emptiness over the value it was showing a moment ago.
     expect(seedValues([{ type: "table", columns: [{ key: "h", label: "H" }, { key: "on", label: "On" }], rows: [{ h: { type: "text_input", action_id: "hours:v-1", initial_value: "07:00" }, on: { type: "toggle", action_id: "on:v-1", initial_value: true } }] }]))
       .toEqual({ "hours:v-1": "07:00", "on:v-1": true });
   });
 
-  test("only the cells a column names are seeded — the same set the server checks", () => {
+  test("only the cells a column names are seeded, the same set the server checks", () => {
     expect(seedValues([{ type: "table", columns: [{ key: "h", label: "H" }], rows: [{ h: { type: "text_input", action_id: "shown", initial_value: "x" }, hidden: { type: "text_input", action_id: "unseen", initial_value: "y" } }] }]))
       .toEqual({ shown: "x" });
   });
@@ -466,7 +466,7 @@ describe("a row's control, drawn and pressed", () => {
     expect(labelled(nodes, "Hide").isDisabled).toBe(true);
   });
 
-  test("a control in a row draws small — 830 call-to-action pills are not a table", () => {
+  test("a control in a row draws small: 830 call-to-action pills are not a table", () => {
     // The server says what the control IS; how big it draws is the host's call, and a data
     // row is not a toolbar. The same button in an `actions` block keeps the toolbar size.
     expect(labelled(tree([VENUES]), "Hide").size).toBe("sm");
@@ -475,7 +475,7 @@ describe("a row's control, drawn and pressed", () => {
 
   test("a cell the editor cannot draw says so instead of drawing a dead control", () => {
     // A server newer than this build could put an element type here that does not exist yet.
-    // Named, like an unknown BLOCK is — a control that silently vanished from one row of 830
+    // Named, like an unknown BLOCK is: a control that silently vanished from one row of 830
     // reads as data that is not there.
     const html = draw([{ type: "table", columns: [{ key: "a", label: "A" }], rows: [{ a: { type: "colour_picker", action_id: "c" } as unknown as AdminCell }] }]);
     expect(html).toContain("[unsupported cell: colour_picker]");
@@ -509,20 +509,20 @@ describe("an error draws at the field", () => {
     expect(html.match(/aria-invalid="true"/g) ?? []).toHaveLength(1);
   });
 
-  test("a field with no error draws nothing — an empty slot under every input is noise", () => {
+  test("a field with no error draws nothing: an empty slot under every input is noise", () => {
     const html = draw([{ ...form, fields: [{ type: "text_input", action_id: "to", label: "To" }] }]);
     expect(html).not.toContain("role=\"alert\"");
     expect(html).not.toContain("aria-invalid");
   });
 
-  test("a toggle can be wrong too — it is the one input that returns early", () => {
+  test("a toggle can be wrong too: it is the one input that returns early", () => {
     const html = draw([{ type: "form", block_id: "f", fields: [{ type: "toggle", action_id: "on", label: "Published", error: "A hidden venue cannot be published" }], submit: { label: "Save", action_id: "save" } }]);
     expect(html).toContain("A hidden venue cannot be published");
     expect(html).toContain('aria-invalid="true"');
   });
 
   test("the generic missing-required hint still works beside it", () => {
-    // The two answer different questions — "you have not filled this in yet" is decided in
+    // The two answer different questions: "you have not filled this in yet" is decided in
     // the browser with no round trip, "25:00 is not a time" needs the server. Neither
     // replaces the other.
     const html = draw([{ type: "form", block_id: "f", fields: [{ type: "text_input", action_id: "from", label: "From", required: true }], submit: { label: "Save", action_id: "save" } }], { values: { from: "" } });

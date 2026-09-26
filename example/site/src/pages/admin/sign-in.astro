@@ -1,5 +1,5 @@
 ---
-// The example's sign-in page — the door the CMS editor sends an unauthenticated visitor to.
+// The example's sign-in page: the door the CMS editor sends an unauthenticated visitor to.
 //
 // The editor is BYO-IdP by design: it verifies a bearer token and knows nothing about how one
 // is obtained, so the SITE owns this screen. That is the same shape a real deployment uses
@@ -8,7 +8,7 @@
 // hands over.
 //
 // Credentials come from `devUserBootstrap` in example/app.ts, seeded only when
-// PRAMEN_DEV_SEED is set — which `oblaka.ts` does for the local env and nowhere else.
+// PRAMEN_DEV_SEED is set, which `oblaka.ts` does for the local env and nowhere else.
 export const prerender = true;
 
 // The same env var the integration resolves its backend from, so the page and the editor
@@ -103,7 +103,7 @@ const devPassword = "pramen-dev";
           }
           // The key and the shape must match `LS` in @pramen/cms-editor/api.ts. The shell
           // declares the backend itself and wins over anything stored, so the token is the
-          // part that matters — the rest is written for a standalone editor mount.
+          // part that matters; the rest is written for a standalone editor mount.
           localStorage.setItem("pramen.cmsEditor", JSON.stringify({ baseUrl: backend, tenant, token: body.result.token }));
           say("Signed in. Opening the editor…", "ok");
           location.replace("/__admin");

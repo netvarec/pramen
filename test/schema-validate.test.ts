@@ -1,4 +1,4 @@
-// Unit test for validateSchema — the static schema invariants enforced before
+// Unit test for validateSchema: the static schema invariants enforced before
 // migrate (relation targets exist, no relation crosses a partition boundary).
 
 import { describe, expect, test } from "bun:test";
@@ -38,7 +38,7 @@ describe("validateSchema", () => {
     });
     expect(() => validateSchema(schema)).toThrow(
       "relation 'notes.author' crosses a partition boundary: 'notes' is in partition " +
-        "'default' but target 'users' is in 'audit'. Relations cannot cross partitions — " +
+        "'default' but target 'users' is in 'audit'. Relations cannot cross partitions: " +
         "put both entities in the same partition or drop the relation.",
     );
   });
@@ -51,7 +51,7 @@ describe("validateSchema", () => {
       ),
     });
     expect(() => validateSchema(schema)).toThrow(
-      "relation 'notes.author' targets unknown entity 'nope' — " +
+      "relation 'notes.author' targets unknown entity 'nope': " +
         "no such entity in the schema. Check the relation target name.",
     );
   });

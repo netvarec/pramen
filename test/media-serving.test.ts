@@ -1,4 +1,4 @@
-// `/media/<key>` is public, unauthenticated and INLINE — it is the preview path. Two
+// `/media/<key>` is public, unauthenticated and INLINE: it is the preview path. Two
 // properties of that route are load-bearing and neither is obvious from reading the handler.
 
 import { describe, expect, test } from "bun:test";
@@ -9,7 +9,7 @@ describe("active content types are sandboxed", () => {
   // `signMediaUpload` takes `contentType` from its caller with no allow-list, and the media
   // route echoes it back. `nosniff` prevents a browser guessing its way INTO an executable
   // type; it does nothing when the type is declared outright. So an editor can upload an
-  // SVG — an ordinary thing to want — and without a sandbox that file runs script on the
+  // SVG (an ordinary thing to want) and without a sandbox that file runs script on the
   // origin that, in the embedded topology, holds the editor's session token.
   test("the document types a browser will execute", () => {
     expect(isActiveType("image/svg+xml")).toBe(true);
@@ -55,7 +55,7 @@ describe("fallbackFilename", () => {
     expect(fallbackFilename(media("image/svg+xml"))).toBe("m-1.svg");
   });
 
-  // The content type is caller-supplied, so it cannot be pasted into a filename unchecked —
+  // The content type is caller-supplied, so it cannot be pasted into a filename unchecked:
   // a subtype carrying a path separator or a second extension is dropped, not sanitized
   // halfway.
   test("a subtype that is not a plausible extension is dropped entirely", () => {

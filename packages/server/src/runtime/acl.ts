@@ -1,4 +1,4 @@
-// ACL resolution — the runtime counterpart of sdk/acl.ts.
+// ACL resolution: the runtime counterpart of sdk/acl.ts.
 // Given an identity + (entity, action), resolves a Scope: whether access is
 // granted, the row-level predicate to merge into the query, and any field
 // restriction. Deny-by-default; grants OR-merge across the identity's roles.
@@ -55,30 +55,30 @@ export interface AclContext {
   readonly acl: CompiledAcl;
   readonly identity: Identity | null;
   /** The request input (handler args), so policy `where` rules can reference an
-   * `$input(...)` marker — a capability / by-unguessable-key read grant. */
+   * `$input(...)` marker: a capability / by-unguessable-key read grant. */
   readonly input?: unknown;
   /** Resolver results for this request (resolverId -> rule), from warmup(). */
   readonly resolved?: Map<number, PolicyRule>;
-  /** SYSTEM mode bypasses all ACL — used for warmup reads and internal ops. */
+  /** SYSTEM mode bypasses all ACL, and is used for warmup reads and internal ops. */
   readonly system?: boolean;
-  /** The app schema — lets `where` rules traverse relations (`{ rel: { col } }`),
+  /** The app schema, which lets `where` rules traverse relations (`{ rel: { col } }`),
    * compiled to a subquery with the related entity's read scope AND-merged in. */
   readonly schema?: SchemaDef;
-  /** The tenant this request is for — the `x-pramen-tenant` value the DO was addressed
+  /** The tenant this request is for: the `x-pramen-tenant` value the DO was addressed
    * with. Carried so a handler can mint a tenant-scoped capability (e.g. a signed page
    * preview link) without the caller supplying, and thus being able to forge, a tenant. */
   readonly tenant?: string;
-  /** Which substrate is serving this request — `"do"` (a Durable Object, the default) or
+  /** Which substrate is serving this request: `"do"` (a Durable Object, the default) or
    * `"d1"` (the shared D1 database, selected per-request with `x-pramen-store: d1`). A
    * handler needs this when a capability it mints can only be redeemed on one of them. */
   readonly store?: "do" | "d1";
   /** The partition this DO serves. When set, Db rejects any access to a table that
    * lives in a different partition (a partition-DO only owns its own tables). Unset
-   * (e.g. the D1/Worker shared-store path) disables the guard — a no-op. */
+   * (e.g. the D1/Worker shared-store path) disables the guard, making it a no-op. */
   readonly partition?: string;
   /** Suppress declarative write-triggers for this Db. Set on the privileged context
    * that DRAINS tasks, so a task handler's writes don't re-fire triggers (which would
-   * cascade — a trigger → task → write → trigger loop). Triggers fire on request-path
+   * cascade, in a trigger → task → write → trigger loop). Triggers fire on request-path
    * writes, not on task-handler writes. */
   readonly suppressTriggers?: boolean;
 }
@@ -153,14 +153,14 @@ interface Grant {
 }
 
 /** Build a grant from a policy/relation rule, resolving markers in `where` and each
- * conditional `when` (the `when` predicate is single-table — evaluated in memory). */
+ * conditional `when` (the `when` predicate is single-table, evaluated in memory). */
 function grantOf(rule: PolicyRules | RelationAclRule, where: SqlExpr | null, entity: string, ctx: AclContext, depth: number): Grant {
   return {
     where,
     fields: rule.fields ?? null,
     conditional: (rule.conditionalFields ?? []).map((cf) => ({
       // Cell-level `when` is evaluated per-row in memory (evalExpr), so it must stay
-      // single-table — `allowRelations: false` rejects a relation key up front.
+      // single-table: `allowRelations: false` rejects a relation key up front.
       when: compileScopedWhere(cf.when as WhereRule, entity, ctx, depth, false),
       fields: cf.fields,
     })),
@@ -185,7 +185,7 @@ function getPath(obj: unknown, path: string): unknown {
 const UNRESOLVED = Symbol("unresolved");
 
 // Resolve a value that may be an $identity marker (against the caller), an
-// $input marker (against the request input — a capability/by-key grant), or a
+// $input marker (against the request input, a capability/by-key grant), or a
 // $now marker (the evaluation instant). An unresolvable marker yields UNRESOLVED,
 // which makes its rule match nothing. $now always resolves.
 /** A resolved where value, or the sentinel meaning "this marker could not resolve". */
@@ -207,10 +207,10 @@ function resolveValue(v: WhereValue, identity: Identity | null, input: unknown):
 // Resolve every $identity/$input/$now marker in a SINGLE level of a where-rule (bare
 // values, operator objects, in/notIn arrays). AND/OR groups are split off by
 // `compileScopedWhere` before this runs, so this only ever sees plain columns.
-// Returns a plain WhereInput, or null if any marker is unresolvable — in which
+// Returns a plain WhereInput, or null if any marker is unresolvable, in which
 // case this branch matches nothing (FALSE). Note: because branches are resolved
 // independently, an unresolvable marker nullifies only its own branch, not the
-// whole rule — so `OR: [{ x: $identity(...) }, { public: true }]` still matches
+// whole rule, so `OR: [{ x: $identity(...) }, { public: true }]` still matches
 // the `public` branch for a caller whose marker can't resolve. (See the comment
 // on `compileScopedWhere`.)
 function resolveMarkers(rule: WhereRule, identity: Identity | null, input: unknown): WhereRule | null {
@@ -255,7 +255,7 @@ function resolveMarkers(rule: WhereRule, identity: Identity | null, input: unkno
 }
 
 /** Max relation-traversal nesting depth in a `where` (guards cyclic relations).
- * Kept in lockstep with the `WhereClause` type's depth bound in sdk/infer.ts — if
+ * Kept in lockstep with the `WhereClause` type's depth bound in sdk/infer.ts: if
  * you change one, change the other. */
 export const MAX_REL_DEPTH = 5;
 
@@ -267,7 +267,7 @@ function pkOf(schema: SchemaDef | undefined, entity: string): string {
   return "id";
 }
 
-/** Reject a relation `where` that filters the target on a column it can't read —
+/** Reject a relation `where` that filters the target on a column it can't read,
  * anywhere in the clause, including inside nested AND/OR groups (else a hidden/
  * unreadable column is LIKE-oracle'able through the subquery). Nested relation keys
  * are skipped: they're re-scoped against THEIR own target's read scope downstream.
@@ -300,7 +300,7 @@ function relationPredicate(rel: RelationDef, nested: unknown, parentEntity: stri
   // Security: a relation filter must respect the target's read ACL (else it leaks).
   // Two distinct "no" outcomes, matching how the rest of the read path behaves:
   //   - No read grant on the target at all  -> the relation simply yields no rows
-  //     to match against (FALSE, empty result) — a valid query over a table you
+  //     to match against (FALSE, empty result), a valid query over a table you
   //     can't see.
   //   - Readable target, but the filter names a column you can't read -> 403, the
   //     same as ordering/aggregating by a hidden column (you referenced something
@@ -339,7 +339,7 @@ function relationPredicate(rel: RelationDef, nested: unknown, parentEntity: stri
  * contexts (no relations) behave exactly like the flat compiler.
  *
  * Marker semantics: AND/OR branches compile independently, so an unresolvable
- * marker collapses ONLY its own branch to FALSE — it does not nullify sibling
+ * marker collapses ONLY its own branch to FALSE. It does not nullify sibling
  * branches. `OR: [{ ownerId: $identity("userId") }, { public: true }]` therefore
  * still grants the `public` branch to a caller whose `userId` can't resolve (and,
  * conversely, an unresolvable marker in one OR branch no longer revokes access the
@@ -382,7 +382,7 @@ export function compileScopedWhere(
   return parts.length === 1 ? parts[0]! : and(...parts);
 }
 
-/** The concrete rules that apply for (entity, action) under this identity — with
+/** The concrete rules that apply for (entity, action) under this identity, with
  * resolvers replaced by their warmup result and resolver/unresolved entries dropped. */
 function matchedRules(ctx: AclContext, entity: string, action: Action): (AllowMarker | DenyMarker | PolicyRules)[] {
   const k = key(entity, action);

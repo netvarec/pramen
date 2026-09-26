@@ -25,7 +25,7 @@ export default createPage()
         slug={params.slug}
         onSaved={(slug) => {
           // The nav's per-type tabs come from `listContentTypes`, which the app context
-          // fetched once at boot — without this a type created here has no tab until the
+          // fetched once at boot: without this a type created here has no tab until the
           // next full reload, which reads as "it didn't save".
           refreshContentTypes();
           navigate("content-type", { params: { slug } });

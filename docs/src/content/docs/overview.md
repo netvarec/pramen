@@ -25,9 +25,9 @@ and a 3-line `worker.ts` that calls `createPramen(app)`.
   single-writer serialization is free. Each tenant is its own DO, addressed by
   `idFromName` (the `X-Pramen-Tenant` header; default `main`).
 - **The Worker is the stateless front door.** It verifies the bearer JWT,
-  authorizes the tenant, and forwards a trusted identity to the DO — which never
+  authorizes the tenant, and forwards a trusted identity to the DO, which never
   re-derives it.
-- **The SDK (`@pramen/server`, `packages/server/src/sdk/`) is platform-agnostic** —
+- **The SDK (`@pramen/server`, `packages/server/src/sdk/`) is platform-agnostic**,
   the portable product surface. `packages/server/src/runtime/` is the Cloudflare glue.
 
 ## What you get
@@ -35,19 +35,19 @@ and a 3-line `worker.ts` that calls `createPramen(app)`.
 - A typed query/mutation layer over the schema (`ctx.db`), with no hand-written SQL.
 - **Deny-by-default ACL** with row-level scopes and **cell-level (per-row) field
   permissions**.
-- **Live queries** over WebSockets — the server pushes fresh results whenever a
+- **Live queries** over WebSockets: the server pushes fresh results whenever a
   mutation writes a table a subscription reads.
 - **Pluggable auth** (HS256 shared secret, or RS256 against a JWKS).
-- **File storage** on R2 — a `fileRef` column + `ctx.files` signed URLs, with
+- **File storage** on R2: a `fileRef` column + `ctx.files` signed URLs, with
   direct-to-storage uploads that never touch the database.
-- **Automatic migrations** on every boot — additive and destructive.
+- **Automatic migrations** on every boot, additive and destructive.
 - Typed end-to-end clients (`@pramen/client`, `@pramen/react`) and a CLI.
 
 ## Local development
 
 ```bash
 bun install
-bun run dev   # lopata dev — fast reload + a dashboard at /__dashboard
+bun run dev   # lopata dev: fast reload + a dashboard at /__dashboard
 ```
 
 `bun run dev` runs on [lopata](https://github.com/contember/lopata), a Bun-based

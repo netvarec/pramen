@@ -1,9 +1,9 @@
-// @pramen/cms — site furniture: menus, redirects, taxonomies, widget areas (GitHub #32).
+// @pramen/cms site furniture: menus, redirects, taxonomies, widget areas (GitHub #32).
 //
 // Everything here is a WRITE-path or READ-path rule that the editor's UI happens to also
 // enforce, and that is exactly why it is tested at the handler: the editor is not the only
-// writer. Every one of these shapes is reachable with a curl, and three of them —
-// a `javascript:` menu href, a term cycle, an unsanitized widget document — are the kind of
+// writer. Every one of these shapes is reachable with a curl, and three of them
+// (a `javascript:` menu href, a term cycle, an unsanitized widget document) are the kind of
 // input the front end renders straight into the page.
 
 import { describe, expect, test } from "bun:test";
@@ -75,7 +75,7 @@ describe("menus", () => {
     const h = H();
     const { ctx } = stubCtx();
     // The menu is rendered into an `<a href>` on every page of the site, so this is the
-    // hole `isSafeHref` exists to close — and the editor is not the only writer.
+    // hole `isSafeHref` exists to close, and the editor is not the only writer.
     await expect(call(h, "createMenu", { name: "primary", label: "Primary", items: [{ label: "x", url: "javascript:alert(1)" }] }, ctx)).rejects.toThrow(/valid url/);
     await expect(call(h, "createMenu", { name: "primary", label: "Primary", items: [{ label: "x", url: "/about" }] }, ctx)).resolves.toBeTruthy();
   });
@@ -109,7 +109,7 @@ describe("menus", () => {
     await expect(call(h, "createMenu", { name: "m", label: "M", items: [{ label: "x", url: "/", target: "someWindow" }] }, ctx)).rejects.toThrow(/unsupported target/);
   });
 
-  test("getMenu resolves a page reference to a path — and DROPS one that no longer resolves", async () => {
+  test("getMenu resolves a page reference to a path, and DROPS one that no longer resolves", async () => {
     const h = H();
     const { ctx } = stubCtx({
       cms_menus: [{
@@ -119,7 +119,7 @@ describe("menus", () => {
           // The page read goes through `ctx.db`, so for an anonymous caller the public
           // policy (published, not trashed) is what decides this. A menu link to an
           // unpublished page must not render, and a nav entry with no href is a dead link
-          // on every page of the site — so the item goes, and its subtree with it.
+          // on every page of the site, so the item goes, and its subtree with it.
           { id: "b", label: "Gone", kind: "page", ref: "missing", children: [{ id: "c", label: "Child", kind: "custom", url: "/c" }] },
         ],
       }],
@@ -151,7 +151,7 @@ describe("menus", () => {
     expect(menu.items[0]!.url).toBe("/clanky/about");
   });
 
-  test("an unknown menu is null, not a 404 — a layout asking for one not yet created is normal", async () => {
+  test("an unknown menu is null, not a 404, since a layout asking for one not yet created is normal", async () => {
     expect(await call(H(), "getMenu", { name: "primary" }, stubCtx().ctx)).toBeNull();
   });
 });
@@ -189,14 +189,14 @@ describe("redirects", () => {
     await expect(call(h, "createRedirect", { fromPath: "/a", toPath: "/a" }, ctx)).rejects.toThrow(/point at itself/);
     // A TRAILING-SLASH redirect is a loop here, which this test previously asserted was
     // fine. The reasoning was that `/a` -> `/a/` is the canonicalization everyone eventually
-    // writes — true in general, and false for THIS lookup, because `resolveRedirect`
+    // writes, true in general, and false for THIS lookup, because `resolveRedirect`
     // canonicalizes the slash away again: the visitor is sent to `/a/`, whose 404 handler
     // normalizes it back to `/a` and matches the same row. Both sides go through
     // `normalizeRedirectPath` now.
     await expect(call(h, "createRedirect", { fromPath: "/a", toPath: "/a/" }, ctx)).rejects.toThrow(/point at itself/);
     await expect(call(h, "createRedirect", { fromPath: "/a", toPath: "/b" }, ctx)).resolves.toBeTruthy();
     await expect(call(h, "createRedirect", { fromPath: "/a", toPath: "/c" }, ctx)).rejects.toThrow(/already exists/);
-    // An ABSOLUTE destination names an origin, and `resolveRedirect` is only handed paths —
+    // An ABSOLUTE destination names an origin, and `resolveRedirect` is only handed paths,
     // so it can never be a loop with a rooted source.
     await expect(call(h, "createRedirect", { fromPath: "/d", toPath: "https://elsewhere.example/d" }, ctx)).resolves.toBeTruthy();
   });
@@ -207,7 +207,7 @@ describe("redirects", () => {
     // Canonicalized on the way in, so a request for "/old/" hits the row stored as "/old".
     expect(await call(h, "resolveRedirect", { path: "/old/" }, ctx)).toEqual({ to: "/new", status: 301 });
     expect(await call(h, "resolveRedirect", { path: "/nope" }, ctx)).toBeNull();
-    // No `auth` — this is what a front end calls on every 404, as anonymous traffic.
+    // No `auth`: this is what a front end calls on every 404, as anonymous traffic.
     expect(H().resolveRedirect.auth).toBeUndefined();
   });
 
@@ -269,7 +269,7 @@ describe("taxonomies", () => {
     await call(h, "setPageTerms", { pageId: "p1", termIds: ["t1", "t2"] }, ctx);
     const links = store.cms_page_terms!;
     expect(links.map((l) => l.termId).sort()).toEqual(["t1", "t2"]);
-    // The row that survived is the SAME row — not deleted and reinserted.
+    // The row that survived is the SAME row, not deleted and reinserted.
     expect(links.find((l) => l.termId === "t1")!.id).toBe("link-old");
     await call(h, "setPageTerms", { pageId: "p1", termIds: [] }, ctx);
     expect(store.cms_page_terms).toEqual([]);
@@ -329,7 +329,7 @@ describe("widget areas", () => {
 describe("a reference is not an href (menu items)", () => {
   test("a ref that starts with a slash cannot mint a protocol-relative url", async () => {
     // `menuHref` interpolates a ref into a path, so `/evil.example` became `//evil.example/`
-    // — off-origin, in the site's primary nav on every page — while the sibling `custom`
+    // (off-origin, in the site's primary nav on every page) while the sibling `custom`
     // branch three lines away ran its string through `isSafeHref`.
     const h = H();
     const { ctx } = stubCtx();
@@ -351,8 +351,8 @@ describe("a reference is not an href (menu items)", () => {
   });
 
   test("a menu is bounded by ITEM COUNT, not only by depth", async () => {
-    // A flat 800-item menu is legal under MAX_MENU_DEPTH and turns every anonymous getMenu —
-    // the read on every page render — into one unchunked `IN (?×800)`.
+    // A flat 800-item menu is legal under MAX_MENU_DEPTH and turns every anonymous getMenu
+    // (the read on every page render) into one unchunked `IN (?×800)`.
     const h = H();
     const { ctx } = stubCtx();
     const flat = Array.from({ length: MAX_MENU_ITEMS + 1 }, (_, i) => ({ label: `i${i}`, url: "/" }));
@@ -367,7 +367,7 @@ describe("a widget area embeds a RESOLVED menu", () => {
   test("a menu widget goes through the same resolution getMenu does", async () => {
     // It used to embed the raw stored items: a `page` item came back with no `url` (the
     // layout renders `href=undefined`) and an UNPUBLISHED page's label and id were served to
-    // anonymous callers — the exact leak the drop in `getMenu` prevents.
+    // anonymous callers: the exact leak the drop in `getMenu` prevents.
     const h = H();
     const { ctx } = stubCtx({
       cms_widget_areas: [{ id: "w1", name: "sidebar", label: "S", description: null, widgets: [{ id: "x", type: "menu", menuName: "primary" }] }],
@@ -392,7 +392,7 @@ describe("a widget area embeds a RESOLVED menu", () => {
 describe("a page's terms follow the page's own visibility", () => {
   test("an unpublished page's classification is not public", async () => {
     // The handler never read cms_pages, and the public grants on the junction and on terms
-    // are unscoped allow() — so a page id was enough to confirm the page exists and read its
+    // are unscoped allow(), so a page id was enough to confirm the page exists and read its
     // editorial classification. `listPagesByTerm` was already safe for the opposite reason.
     const h = H();
     const visible = stubCtx({
@@ -430,7 +430,7 @@ describe("redirect paths are stored as a request will present them", () => {
 describe("an authored handler name cannot traverse a path", () => {
   test("referenceFrom / optionsFrom are identifiers, not arbitrary strings", () => {
     // The editor interpolates these into `fetch(`${base}/rpc/${name}`)`, and "../admin/data"
-    // normalizes to /admin/data — an editor-authored string becoming a same-origin
+    // normalizes to /admin/data, so an editor-authored string became a same-origin
     // authenticated POST fired by whoever opens the block, including an admin.
     const h = H();
     const parse = (schema: unknown) => h.createBlockType.input!({ name: "B", slug: "b", fieldsSchema: schema });
@@ -443,7 +443,7 @@ describe("an authored handler name cannot traverse a path", () => {
 
 describe("whole-document writes conflict instead of clobbering", () => {
   // `updateMenu`/`updateWidgetArea` replace the ENTIRE `items`/`widgets` document, so two
-  // editors on one menu meant the second silently discarded the first's whole tree — a
+  // editors on one menu meant the second silently discarded the first's whole tree: a
   // sharper failure than a page edit, which at least conflicts field by field.
   const menuStore = () => ({ cms_menus: [{ id: "m1", name: "primary", label: "P", items: [], version: 3 }] });
 
@@ -460,7 +460,7 @@ describe("whole-document writes conflict instead of clobbering", () => {
     expect(store.cms_menus![0]!.version).toBe(4);
   });
 
-  test("omitting it still works — the guard is opt-in per caller", async () => {
+  test("omitting it still works, because the guard is opt-in per caller", async () => {
     // A script that has no version to send is not forced to read one first; what it gives
     // up is the protection, not the ability to write.
     const h = H();
@@ -525,7 +525,7 @@ describe("term nesting is capped at the level the cap names", () => {
       ],
     };
     await expect(call(H(), "updateTerm", { id: "t1", parentId: "d3" }, stubCtx(store).ctx)).rejects.toThrow(/at most 5 levels/);
-    // A LEAF moved to the same place is fine — it adds one level, not three.
+    // A LEAF moved to the same place is fine: it adds one level, not three.
     await expect(call(h, "updateTerm", { id: "t3", parentId: "d3" }, stubCtx(store).ctx)).resolves.toBeTruthy();
   });
 });
@@ -533,7 +533,7 @@ describe("term nesting is capped at the level the cap names", () => {
 describe("who counts as an editor", () => {
   test("the UNION of `role` and `roles`, matching the dispatcher", async () => {
     // `authorizeHandler` (which enforces a handler's own `auth`) takes the union; the local
-    // copy took one or the other, so an identity carrying both saw only `roles` — and
+    // copy took one or the other, so an identity carrying both saw only `roles`, and
     // `canEdit` disagreed with what the caller could actually call.
     const caps = (ctx: HandlerContext) => (H() as unknown as { listCmsCapabilities: { run: (c: HandlerContext) => { canEdit: boolean } } }).listCmsCapabilities.run(ctx);
     expect(caps({ identity: { role: "admin", roles: ["viewer"] } } as unknown as HandlerContext).canEdit).toBe(true);
@@ -566,13 +566,13 @@ describe("who may call what", () => {
 /*
  * --- Nasazení, jehož front-end tohle nekreslí ------------------------------------------
  *
- * Menu, štítek, widget area ani redirect nemá sám o sobě žádný účinek — účinek mu dává až
+ * Menu, štítek, widget area ani redirect nemá sám o sobě žádný účinek. Účinek mu dává až
  * to, že se na něj šablona zeptá a že ho edge respektuje. Tam, kde front-end nedělá ani
  * jedno, nabízí administrace čtyři sekce, které píší do tabulky, kterou nikdo nečte: žádná
  * chyba, žádná stopa, jen práce, která se tiše nestane. To je horší, než kdyby ta funkce
  * nebyla.
  *
- * `siteFurniture` byla dřív v `listCmsCapabilities` natvrdo `true` — odpovídala na otázku
+ * `siteFurniture` byla dřív v `listCmsCapabilities` natvrdo `true`, odpovídala na otázku
  * „umí to server?", jenže tu se editor ptát nepotřebuje. Handlery tam jsou vždycky, protože
  * se spreadují všechny naráz. Otázka je, jestli to kreslí FRONT-END, a to ví jenom aplikace.
  */
@@ -583,7 +583,7 @@ describe("siteFurniture deklaruje nasazení, ne knihovna", () => {
       {},
     );
 
-  test("výchozí stav se nemění — kdo nic neřekl, dostane všechno jako dosud", async () => {
+  test("výchozí stav se nemění: kdo nic neřekl, dostane všechno jako dosud", async () => {
     expect((await caps()).siteFurniture).toBe(true);
     expect((await caps({})).siteFurniture).toBe(true);
     expect((await caps({ siteFurniture: true })).siteFurniture).toBe(true);
@@ -593,10 +593,10 @@ describe("siteFurniture deklaruje nasazení, ne knihovna", () => {
     expect((await caps({ siteFurniture: false })).siteFurniture).toBe(false);
   });
 
-  test("handlery zůstávají registrované — je to výrok o UI, ne o API", async () => {
+  test("handlery zůstávají registrované: je to výrok o UI, ne o API", async () => {
     // Schovat sekci a odebrat handler jsou dvě různá rozhodnutí. Kdyby `false` handlery
     // odpojilo, aplikace, která si menu čte vlastním kódem a jen ho needituje v administraci,
-    // by o tu možnost přišla — a odpojený handler by navíc rozbil deep link na 404 místo
+    // by o tu možnost přišla, a odpojený handler by navíc rozbil deep link na 404 místo
     // na vysvětlení, které editor na té routě umí ukázat.
     const off = createCmsHandlers({ siteFurniture: false });
     for (const name of ["listMenus", "getMenu", "listRedirects", "listTaxonomies", "listWidgetAreas"]) {

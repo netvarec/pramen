@@ -2,9 +2,9 @@
 // section is derived from the current path, so a deep link or refresh lands with the right
 // item lit.
 //
-// This module DERIVES; it does not draw. Two chromes render the same nav — the default
+// This module DERIVES; it does not draw. Two chromes render the same nav: the default
 // sidebar rail (`chrome-sidebar.tsx`) and the Graphic Standard topbar (`chrome-topbar.tsx`),
-// chosen per deployment by `CHROME_LAYOUT` — and both are handed the same props
+// chosen per deployment by `CHROME_LAYOUT`, and both are handed the same props
 // (`ChromeProps` in `chrome-shared.tsx`): the grouped nav, what is lit, the breadcrumb, and
 // callbacks that are already wrapped in the unsaved-changes guard.
 //
@@ -48,7 +48,7 @@ const CONFIGURED_ACCOUNT_MENU = resolveAccountMenu(readAccountMenuConfig(globalT
  *
  * `useRoute().pathname` comes off a `URL`, so it is percent-encoded; the slugs it is compared
  * against are the raw values the server stored. buzola encodes when it builds an href and
- * decodes into `params` when it matches, so routing is unaffected — only this comparison was,
+ * decodes into `params` when it matches, so routing is unaffected. Only this comparison was,
  * and a content type called `články` navigated correctly to a nav with nothing lit.
  *
  * A malformed sequence (`%zz`) throws in `decodeURIComponent`; that cannot match any slug
@@ -76,9 +76,9 @@ export default function RootLayout() {
   // chrome silently discards unsaved edits. An `extraNav` link that opens a NEW tab leaves
   // this document alone and needs no guard; one honoured as `_self` is a real cross-document
   // navigation, so it takes the guard too (in the chrome, which owns the anchor).
-  // `beforeunload` is not a fallback for it — only `PageEditor` registers one, so a dirty
+  // `beforeunload` is not a fallback for it: only `PageEditor` registers one, so a dirty
   // CollectionEditor form would otherwise be discarded with no prompt of any kind.
-  // Returns whether it went, which a chrome that dismisses itself on click needs — see the
+  // Returns whether it went, which a chrome that dismisses itself on click needs. See the
   // note on `ChromeProps`.
   const guarded = (go: () => void) => (): boolean => {
     if (!confirmNavigation()) return false;
@@ -88,7 +88,7 @@ export default function RootLayout() {
 
   // Dark mode. The choice lives in `theme.ts` rather than here: podoba's tokens flip under
   // `[data-theme="dark"]` on the document root, `main.tsx` applies the stored one before the
-  // first paint, and a PANEL is handed the same value — three readers, so one store.
+  // first paint, and a PANEL is handed the same value: three readers, so one store.
   const theme = useTheme();
 
   // The active collection slug, if we're under /collections/:slug(/...).
@@ -98,7 +98,7 @@ export default function RootLayout() {
   // …and the active Block Kit page, under /apps/:slug.
   const appSlug = segmentAt(pathname, "/apps/");
 
-  // "Pages" stays lit while editing a page (/pages/:id) too — but only on a deployment that
+  // "Pages" stays lit while editing a page (/pages/:id) too, but only on a deployment that
   // still HAS a pooled Pages entry. Split by type, the page editor lights nothing: the route
   // carries a page id and nothing else, so which type's entry to light isn't knowable here
   // without fetching the page the editor is already fetching.
@@ -108,7 +108,7 @@ export default function RootLayout() {
     : pathname.startsWith("/pages") || pathname === "/" ? "pages"
     : pathname.startsWith("/media") ? "media"
     // `/schema` rather than `/types`, because `/types/:slug` is already one content type's
-    // PAGE LIST — a different thing entirely, and the entry keyed `type:<slug>` above.
+    // PAGE LIST, a different thing entirely, and the entry keyed `type:<slug>` above.
     : pathname.startsWith("/schema") ? "types"
     : pathname.startsWith("/menus") ? "menus"
     : pathname.startsWith("/taxonomies") ? "taxonomies"
@@ -122,7 +122,7 @@ export default function RootLayout() {
   const extraNav: ExtraNavLink[] = typeof window !== "undefined" ? window.PRAMEN_CMS_EDITOR?.extraNav ?? [] : [];
   // Collections-only deployments hide the block/page builder entirely.
   const hidePages = pagesHidden();
-  // Same rule as the landing redirect and the page editor's back target — see `splitsByType`.
+  // Same rule as the landing redirect and the page editor's back target. See `splitsByType`.
   const splitByType = splitsByType(contentTypes, cms, hidePages);
   const nav = buildNav({ collections, adminPages, contentTypes, cms, hidePages, splitByType, isAdmin, extraNav });
   // A deployment's say over the nav (`slots.nav`, see `nav-hooks.ts`), applied HERE so both
@@ -142,7 +142,7 @@ export default function RootLayout() {
   const [crumb, setCrumb] = useState<string | null>(null);
 
   // See `opensInSameTab`. The rules live in `mount.ts` beside the containment they depend
-  // on; what this supplies is the URL the BROWSER will resolve a relative href against — the
+  // on; what this supplies is the URL the BROWSER will resolve a relative href against: the
   // current document, not the origin. Empty when there is no `window`, which makes every
   // href unparseable and so degrades to the safe new-tab default.
   const basePath = useRouter().basePath;
@@ -150,7 +150,7 @@ export default function RootLayout() {
 
   /** Navigate to a nav entry, through the guard. Not inlined into `chrome` below because
    * buzola's `navigate` is typed off the generated page map and an entry's `page`/`params`
-   * are the untyped halves of a runtime-built list — the casts belong in one place. */
+   * are the untyped halves of a runtime-built list, so the casts belong in one place. */
   const onGo = (entry: NavRoute): boolean =>
     guarded(() => navigate(entry.page as never, entry.params ? ({ params: entry.params } as never) : (undefined as never)))();
 

@@ -1,4 +1,4 @@
-// Unit test for routeQueue — pure function, no wrangler/server boot. Pins the queue-name
+// Unit test for routeQueue: pure function, no wrangler/server boot. Pins the queue-name
 // → handler matching (env-prefixed remote names, longest-suffix precedence, single-handler
 // fallback) that dispatchQueueBatch relies on.
 
@@ -15,7 +15,7 @@ describe("routeQueue", () => {
     expect(tagOf(routeQueue(q, "email-jobs"))).toBe("email-jobs");
   });
 
-  // M2 — the longest '-<key>' suffix must win regardless of insertion order, so an
+  // M2: the longest '-<key>' suffix must win regardless of insertion order, so an
   // env-prefixed 'prod-email-jobs' routes to 'email-jobs', not 'jobs'.
   test("M2: longest suffix wins for an env-prefixed name (order-independent)", () => {
     const q: AppQueueMap = { jobs: h("jobs"), "email-jobs": h("email-jobs") };
@@ -26,8 +26,8 @@ describe("routeQueue", () => {
     expect(tagOf(routeQueue(q2, "prod-email-jobs"))).toBe("email-jobs");
   });
 
-  test("M2: no reverse match — a handler key ending in '-<queueName>' does NOT match", () => {
-    // key 'email-jobs', queue 'jobs' — the old reverse arm (k.endsWith('-jobs')) would
+  test("M2: no reverse match, a handler key ending in '-<queueName>' does NOT match", () => {
+    // key 'email-jobs', queue 'jobs': the old reverse arm (k.endsWith('-jobs')) would
     // have (mis)matched; now it must NOT (and with two handlers there's no fallback).
     const q: AppQueueMap = { "email-jobs": h("email-jobs"), other: h("other") };
     expect(routeQueue(q, "jobs")).toBeNull();

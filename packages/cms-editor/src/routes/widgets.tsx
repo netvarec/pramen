@@ -11,7 +11,7 @@ export default createPage()
   .render(function WidgetsRoute() {
     const { api, cms, setError } = useApp();
     const navigate = useNavigate();
-    // The nav hides these on a server without the handlers, but a BOOKMARK does not —
+    // The nav hides these on a server without the handlers, but a BOOKMARK does not;
     // without this the screen mounts fully interactive and every call 404s. The
     // `/schema` routes already gated on their own capability; these did not.
     if (!cms.siteFurniture) return <Notice>{t("furniture.unavailable")}</Notice>;

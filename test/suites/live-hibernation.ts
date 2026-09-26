@@ -1,7 +1,7 @@
 // A live subscription surviving DO hibernation.
 //
 // The DO holds subscriptions in MEMORY, keyed by socket, because the WS attachment is
-// capped at ~2 KB and a full set does not fit. Hibernation drops that map — but it
+// capped at ~2 KB and a full set does not fit. Hibernation drops that map, but it
 // leaves the socket OPEN. So the client saw no close, never replayed, and the DO
 // broadcast to a socket it no longer believed was subscribed to anything: pushes died
 // silently, for the life of the tab, with every indicator still reading "connected".
@@ -9,7 +9,7 @@
 //
 // This suite has to wait, because hibernation is the thing under test. Measured on
 // workerd: a five-second idle still pushes, a ten-second idle does not. IDLE_MS is three
-// times the largest idle observed NOT to hibernate — the smallest wait that reliably
+// times the largest idle observed NOT to hibernate: the smallest wait that reliably
 // reaches the bug.
 
 import { assert, http, sleep, token, wsClient } from "../lib";
@@ -37,7 +37,7 @@ export async function runLiveHibernation(base: string, wsUrl: string): Promise<v
 
   await post("createNote", { title: "after-hibernation", body: "y" }, auth);
 
-  // The DO cannot push — a woken instance has no record that this socket subscribed to
+  // The DO cannot push: a woken instance has no record that this socket subscribed to
   // anything. Saying so is the whole fix: a close is what tells the client to replay.
   // Before it, this socket stayed open and deaf and the assertion below timed out.
   const code = await live.closed(8000);

@@ -1,7 +1,7 @@
-// PramenDOBase — the database. One instance per tenant (see worker.ts routing).
+// PramenDOBase: the database. One instance per tenant (see worker.ts routing).
 // Holds the SQLite store in-process, applies the schema on boot, dispatches
 // handler RPCs over HTTP, and serves live queries over WebSockets. The concrete,
-// app-bound class is produced by pramenDO(app) (and createPramen) — the DO can't
+// app-bound class is produced by pramenDO(app) (and createPramen): the DO can't
 // take constructor args beyond (ctx, env), so the app is closed over.
 //
 // ACL: policies are compiled once on boot. Identity is resolved by the Worker
@@ -38,9 +38,9 @@ import type { ClientMsg, ServerMsg, Subscription } from "./runtime/protocol";
 import type { EnvBag } from "./sdk/handlers";
 import type { JsonValue } from "./sdk/infer";
 
-/** Durable per-socket state — kept SMALL and stable, since it rides the WebSocket
+/** Durable per-socket state, kept SMALL and stable, since it rides the WebSocket
  * attachment which workerd caps at ~2 KB. Only auth/routing identity lives here so it
- * survives hibernation; the (potentially large) subscription list does NOT — see
+ * survives hibernation; the (potentially large) subscription list does NOT. See
  * `subsBySocket`. */
 interface SocketAttachment {
   identity: Identity | null;
@@ -49,7 +49,7 @@ interface SocketAttachment {
   /** Partition fixed at connect time (read from x-pramen-partition at upgrade);
    * survives hibernation via the attachment, like `tenant`. */
   partition: string;
-  /** Whether this socket had any live subscription. One bit, not the list — the list is
+  /** Whether this socket had any live subscription. One bit, not the list: the list is
    * far too big for the attachment, but this is enough to tell "subscribed to nothing"
    * apart from "subscriptions lost to hibernation", which otherwise look identical and
    * silently kill every push on the socket. See `subsFor`. */
@@ -57,7 +57,7 @@ interface SocketAttachment {
 }
 
 export interface DoEnv {
-  /** Project KV — tenant registry (`tenant:`) + handler ctx.kv (`app:`). */
+  /** Project KV: tenant registry (`tenant:`) + handler ctx.kv (`app:`). */
   KV: KVNamespace;
   /** R2 bucket backing ctx.files + the Worker /files/* route. */
   FILES: R2Bucket;
@@ -66,11 +66,11 @@ export interface DoEnv {
   /** Bearer-JWT secret; also the fallback for signing file tokens. */
   AUTH_SECRET?: string;
   /** "true" to apply destructive schema migrations (drop/rebuild/type-change). Off by
-   * default — data-loss is gated behind this explicit opt-in. */
+   * default, since data-loss is gated behind this explicit opt-in. */
   PRAMEN_ALLOW_DESTRUCTIVE?: string;
 }
 
-/** Per-socket subscription cap — bounds memory and per-mutation re-run cost. */
+/** Per-socket subscription cap, which bounds memory and per-mutation re-run cost. */
 const MAX_SUBSCRIPTIONS = 64;
 
 /** WebSocket close code for an auth failure (RFC 6455 leaves 4000-4999 to the app;
@@ -78,7 +78,7 @@ const MAX_SUBSCRIPTIONS = 64;
 const WS_CLOSE_UNAUTHORIZED = 4401;
 
 /** Application close code for "this socket's subscriptions did not survive hibernation".
- * Sent so the client reconnects and replays them — which it already does on any close. */
+ * Sent so the client reconnects and replays them, which it already does on any close. */
 const WS_CLOSE_RESUBSCRIBE = 4410;
 
 export class PramenDOBase extends DurableObject<DoEnv> {
@@ -95,18 +95,18 @@ export class PramenDOBase extends DurableObject<DoEnv> {
    * default partition (a single-partition app, or a stray request with no header). */
   private partition = DEFAULT_PARTITION;
   /** Boot migration runs on the FIRST fetch (once the partition is known), not in the
-   * constructor — see `ensureMigrated`. Guards against re-running. */
+   * constructor. See `ensureMigrated`. Guards against re-running. */
   private migrated = false;
   private files?: Files;
   /** Have we persisted (tenant, partition) to DO storage this instance? They're
    * persisted so a COLD alarm wake (no request header) can build a correctly-scoped
-   * task context — a DO can't introspect its own idFromName. */
+   * task context: a DO can't introspect its own idFromName. */
   private identityPersisted = false;
   private identityLoaded = false;
-  /** Live subscriptions per socket — held IN MEMORY, not in the WS attachment. The
+  /** Live subscriptions per socket, held IN MEMORY, not in the WS attachment. The
    * attachment is capped at ~2 KB by workerd, and 64 subs (each with arbitrary input
    * JSON + a read-set + digest) blow past that well before MAX_SUBSCRIPTIONS. The
-   * tradeoff: this map is lost on DO hibernation/eviction. That is NOT self-healing —
+   * tradeoff: this map is lost on DO hibernation/eviction. That is NOT self-healing:
    * a hibernated socket stays OPEN, so the client sees no close, never replays, and
    * every push to it is silently dropped forever. `subscribed` on the attachment is the
    * one bit that survives to detect it; `subsFor` turns that into a close, and the close
@@ -124,7 +124,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
     this.driver = new DoSqliteDriver(ctx.storage);
 
     // NOTE: the boot migration is NOT run here. The constructor cannot know which
-    // partition this DO serves — that arrives in the x-pramen-partition header on the
+    // partition this DO serves: that arrives in the x-pramen-partition header on the
     // first request, after construction. Migrating the full schema here would create
     // OTHER partitions' tables in this DO (defeating partition isolation), so we defer
     // the partition-scoped migrate() to the first fetch (`ensureMigrated`), guarded by
@@ -135,7 +135,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
   // served. Runs once per DO lifetime: the `migrated` flag + blockConcurrencyWhile
   // serialize concurrent first fetches (the platform queues other requests while the
   // block runs), so two in-flight first requests can't both migrate. Scoped to
-  // this.partition — only this partition's tables are created/altered (migrate()
+  // this.partition: only this partition's tables are created/altered (migrate()
   // never touches other partitions' tables). Wrapped in a transaction so a partial
   // migration can't leave a half-rebuilt table. This preserves the single-partition
   // (default) behavior exactly: a default DO migrates its full default-partition
@@ -186,7 +186,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
   // concurrent first fetches can't double-run it. Default partition ONLY: reference data
   // (content types, roles, …) lives in the default partition, and a non-default DO doesn't
   // own those tables (a write would trip assertInPartition). A failing reconciler is logged
-  // and swallowed — unlike migrate(), it must never brick a tenant's boot; it retries next
+  // and swallowed, unlike migrate(), it must never brick a tenant's boot; it retries next
   // boot. Uses a SYSTEM-scoped Db (ACL bypassed) with triggers suppressed (a boot-time seed
   // shouldn't fan out reactive side-effects).
   private async runBootstrap(): Promise<void> {
@@ -217,7 +217,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
     // READ-ONLY PROBE, answered before the boot. Everything below this line migrates:
     // ensureMigrated() runs migrate(), the data migrations and bootstrap. Answering the
     // ledger after that would make `pramen migrations status` apply every pending backfill
-    // as a side effect of ASKING — it could never report PENDING, and `--all-tenants`
+    // as a side effect of ASKING: it could never report PENDING, and `--all-tenants`
     // (advertised as the read-only "is it safe to prune?" check) would silently migrate the
     // whole fleet. Reads no table it might have to create; see handleMigrations.
     if (new URL(request.url).pathname === "/__migrations") return this.handleMigrations();
@@ -226,7 +226,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
     await this.ensureRegistered(request);
     // Persist (tenant, partition) once per instance so a cold alarm can rebuild the
     // right task context (it has no request header to learn them from). Stored in the
-    // SQL store (_pramen_meta), NOT ctx.storage.put — mixing the KV-style storage API
+    // SQL store (_pramen_meta), NOT ctx.storage.put, since mixing the KV-style storage API
     // with raw `PRAGMA` trips workerd's DO SQLite authorizer (SQLITE_AUTH).
     if (!this.identityPersisted) {
       await this.driver.exec(
@@ -255,7 +255,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
     }
 
     const name = new URL(request.url).pathname.replace(/^\/rpc\//, "");
-    // The RPC body is JSON — parse it into the domain type once, here at the boundary.
+    // The RPC body is JSON, so parse it into the domain type once, here at the boundary.
     let input: JsonValue = null;
     if (request.method === "POST") {
       input = ((await request.json().catch(() => null)) ?? null) as JsonValue;
@@ -274,7 +274,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
         input,
       );
       // Arm the drain BEFORE broadcasting so enqueued tasks are always scheduled even
-      // if broadcast has trouble (broadcast is best-effort and never throws — a failed
+      // if broadcast has trouble (broadcast is best-effort and never throws: a failed
       // push must not 500 a COMMITTED write nor skip the alarm).
       if (enqueued > 0) await this.armDrain();
       if (kind === "mutation" && touched.length > 0) await this.broadcast(touched);
@@ -338,7 +338,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
    * (manual / cron). Returns the drain stats incl. `nextRunAt` for rescheduling, plus
    * the union of tables the drained task handlers touched (for a post-commit broadcast). */
   private async drainTasks(): Promise<{ result: Awaited<ReturnType<typeof drainOutbox>>; touched: string[] }> {
-    await ensureOutbox(this.driver); // idempotent — the table may predate this instance (cold alarm)
+    await ensureOutbox(this.driver); // idempotent: the table may predate this instance (cold alarm)
     const { ctx, db } = this.taskCtx();
     const result = await drainOutbox(this.driver, bindTasks(this.app.tasks, ctx), Date.now());
     return { result, touched: [...db.touched] };
@@ -346,12 +346,12 @@ export class PramenDOBase extends DurableObject<DoEnv> {
 
   override async alarm(): Promise<void> {
     await this.loadIdentity(); // cold wake: restore tenant/partition before building taskCtx
-    // A post-deploy cold alarm may run against the old schema — reconcile it first, or a
+    // A post-deploy cold alarm may run against the old schema, so reconcile it first, or a
     // task handler writing a new column dead-letters. loadIdentity() restored the partition.
     await this.ensureMigrated();
     const { result, touched } = await this.drainTasks();
     // Deferred/triggered writes are invisible to live queries unless we broadcast the
-    // tables the task handlers touched (post-commit — the drain has already committed).
+    // tables the task handlers touched (post-commit, since the drain has already committed).
     if (touched.length > 0) await this.broadcast(touched);
     // Reschedule to the NEXT task's due time (a backed-off retry, or the next batch if
     // the drain hit its limit) so a failed task can't stall waiting for a new enqueue.
@@ -387,8 +387,8 @@ export class PramenDOBase extends DurableObject<DoEnv> {
 
     // A hibernated DO can be reconstructed and routed here WITHOUT fetch() running
     // again, so the boot migration may not have run on this fresh instance. Adopt this
-    // socket's (tenant, partition) — fixed at connect time, survives via the attachment
-    // — and ensure the schema is migrated before any handler/ctx.db work. Idempotent
+    // socket's (tenant, partition), fixed at connect time, survives via the attachment
+    //, and ensure the schema is migrated before any handler/ctx.db work. Idempotent
     // (the `migrated` flag), so a no-op after the first call.
     const att = this.getAttachment(ws);
     this.tenant = att.tenant;
@@ -402,7 +402,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
 
     // A woken socket whose subscriptions the map lost cannot be repaired one frame at a
     // time: every id an `unsubscribe` or a re-`subscribe` names refers to a subscription
-    // this instance has never seen, and letting one through would repopulate the map —
+    // this instance has never seen, and letting one through would repopulate the map,
     // making the socket look healthy while the rest of its subscriptions stay zombies.
     // Close it instead and let the client replay the whole set. A one-shot `call`
     // depends on none of that, so it is answered normally.
@@ -475,7 +475,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
     } catch (err) {
       return this.send(ws, toWsError(id, err));
     }
-    // The mutation is committed — send its result FIRST, then run post-commit
+    // The mutation is committed, so send its result FIRST, then run post-commit
     // side-effects that must never turn a committed write into a spurious error frame:
     // arm the drain (independent of broadcast), then broadcast (best-effort, never throws).
     const { result, kind, touched, enqueued } = outcome;
@@ -486,7 +486,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
 
   // Re-run every subscription whose read-set intersects the written tables, each
   // under its own socket's identity, and push only when its result changed. Best-effort:
-  // a failure for one subscription or socket is logged and skipped — it must NEVER throw,
+  // a failure for one subscription or socket is logged and skipped. It must NEVER throw,
   // because it runs after a mutation has committed (a throw here would 500 that write).
   private async broadcast(touched: string[]): Promise<void> {
     const written = new Set(touched);
@@ -530,7 +530,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
             this.send(ws, { type: "data", id: sub.id, result });
           } catch (err) {
             // One subscription failing (re-dispatch error, or a send to a dead socket)
-            // must not abort the other subs — surface it to that sub, swallow otherwise.
+            // must not abort the other subs: surface it to that sub, swallow otherwise.
             try {
               this.send(ws, toWsError(sub.id, err));
             } catch {
@@ -548,7 +548,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
 
   // --- helpers ---
 
-  // A DO addressed by idFromName(tenant) doesn't know its own name — the Worker
+  // A DO addressed by idFromName(tenant) doesn't know its own name; the Worker
   // forwards it. On the first touch ever (guarded by a persisted meta flag), the
   // tenant records itself in the registry KV so it stays discoverable. Exactly
   // one KV write per tenant across its whole lifetime.
@@ -572,7 +572,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
   // Point-in-time recovery (admin-gated at the Worker). Arms a restore to the
   // given time and returns the `undo` bookmark (the point just before recovery,
   // so the operation is reversible). We intentionally do NOT call ctx.abort()
-  // here, so this response can return the undo bookmark — the restore completes
+  // here, so this response can return the undo bookmark: the restore completes
   // when the DO next restarts. PITR is unavailable in local dev (no change-log).
   private async handleRecover(request: Request): Promise<Response> {
     const body = (await request.json().catch(() => ({}))) as { timestamp?: unknown };
@@ -591,7 +591,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
       const undo = await storage.onNextSessionRestoreBookmark!(bookmark);
       return Response.json({ ok: true, result: { restoredTo: ts, bookmark, undo, applied: false } });
     } catch (err) {
-      // PITR is a platform feature — unavailable in local dev, and can otherwise
+      // PITR is a platform feature, unavailable in local dev, and it can otherwise
       // fail operationally. Report 501 (not a generic 500); log the real reason.
       console.error("pramen: recovery unavailable", err);
       return Response.json(
@@ -603,7 +603,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
 
   // Introspection: this tenant's applied schema hash + table/column shape (admin-gated
   // at the Worker). Powers the CLI's `schema status`. Both are read from _pramen_meta
-  // (written by migrate on boot) — NOT a request-time `PRAGMA`/introspection: once the
+  // (written by migrate on boot), NOT a request-time `PRAGMA`/introspection: once the
   // DO-storage alarm API has run in this object, workerd's SQLite authorizer rejects
   // PRAGMA (SQLITE_AUTH), so the outbox's alarm would otherwise break this endpoint.
   private async handleSchema(): Promise<Response> {
@@ -619,13 +619,13 @@ export class PramenDOBase extends DurableObject<DoEnv> {
   }
 
   // Introspection: which data migrations this partition has applied (admin-gated at the
-  // Worker). Powers the CLI's `migrations status` — the fleet-wide "is it safe to prune this
+  // Worker). Powers the CLI's `migrations status`, the fleet-wide "is it safe to prune this
   // id yet?" answer, which nothing else can give: a tenant nobody has touched since the
   // migration shipped is still unmigrated, and the schema hash says nothing about backfills.
   // Ensure the ledger exists first so a DO that has never applied one answers with [] rather
   // than a missing-table error.
   private async handleMigrations(): Promise<Response> {
-    // Strictly read-only — NOT ensureMigrationsTable(). A DO that has never applied a
+    // Strictly read-only, and NOT ensureMigrationsTable(). A DO that has never applied a
     // migration has no ledger table, and CREATE-ing one here would make the probe a write
     // (and would boot an otherwise-untouched tenant's store just to answer a question about
     // it). An absent table is simply "none applied".
@@ -637,7 +637,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
   }
 
   // Generic admin data ops (admin-gated at the Worker). Runs through a SYSTEM-mode
-  // Db, so ACL is bypassed — admin can browse/edit any row of any table — while the
+  // Db, so ACL is bypassed (admin can browse/edit any row of any table) while the
   // json/fileRef codec, transactions, and live-query broadcast still apply.
   private async handleAdminData(request: Request): Promise<Response> {
     const b = (await request.json().catch(() => ({}))) as Record<string, unknown>;
@@ -659,7 +659,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
           result = await db.count({ from: table, where: b.where });
           break;
         case "get":
-          // Resolve the PK from the schema — a custom-PK table (e.g. auth_users keyed on
+          // Resolve the PK from the schema: a custom-PK table (e.g. auth_users keyed on
           // `username`) has no `id` column, so a hardcoded `{ id }` would 500.
           result = (await db.find({ from: table, where: { [db.pkOf(table)]: b.id }, limit: 1 }))[0] ?? null;
           break;
@@ -678,7 +678,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
         default:
           return Response.json({ ok: false, error: `unknown op: ${op}`, code: "bad_request" }, { status: 400 });
       }
-      // Admin-data writes fire triggers too — arm the drain if any task was enqueued
+      // Admin-data writes fire triggers too, so arm the drain if any task was enqueued
       // (independent of broadcast), then broadcast the touched tables to live queries.
       if (mutated && db.taskEnqueues > 0) await this.armDrain();
       if (mutated && db.touched.size > 0) await this.broadcast([...db.touched]);
@@ -770,7 +770,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
 
   private setSubs(ws: WebSocket, subs: Subscription[]): void {
     this.subsBySocket.set(ws, subs);
-    // Keep the durable marker in step, and only when it actually flips — an attachment
+    // Keep the durable marker in step, and only when it actually flips: an attachment
     // write per subscription update would be churn for nothing.
     const att = this.getAttachment(ws);
     const subscribed = subs.length > 0;
@@ -786,7 +786,7 @@ export class PramenDOBase extends DurableObject<DoEnv> {
   private subsFor(ws: WebSocket, att: SocketAttachment): Subscription[] | null {
     const subs = this.subsBySocket.get(ws);
     // An ABSENT entry is the signal, not an empty one: the upgrade seeds every socket
-    // with `[]`, so "no entry" can only mean this instance never saw this socket — it
+    // with `[]`, so "no entry" can only mean this instance never saw this socket: it
     // was accepted by an instance that has since been evicted.
     if (subs) return subs;
     return att.subscribed ? null : [];

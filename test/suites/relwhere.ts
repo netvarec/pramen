@@ -30,7 +30,7 @@ export async function runRelWhere(base: string): Promise<void> {
   const byOwner = await call("queryNotes", { where: { owner: { name: "Alice" } } }, admin);
   assert(
     byOwner.body.ok && byOwner.body.result.length === 2 && byOwner.body.result.every((n: any) => n.ownerId === "u-alice"),
-    "relwhere: belongsTo traversal — notes filtered by owner.name",
+    "relwhere: belongsTo traversal, notes filtered by owner.name",
   );
   const noMatch = await call("queryNotes", { where: { owner: { name: "Nobody" } } }, admin);
   assert(noMatch.body.ok && noMatch.body.result.length === 0, "relwhere: belongsTo traversal with no match → empty");
@@ -39,7 +39,7 @@ export async function runRelWhere(base: string): Promise<void> {
   const owners = await call("queryUsers", { where: { notes: { ownerId: "u-bob" } } }, admin);
   assert(
     owners.body.ok && owners.body.result.length === 1 && owners.body.result[0].id === "u-bob",
-    "relwhere: hasMany traversal — users filtered by their notes",
+    "relwhere: hasMany traversal, users filtered by their notes",
   );
 
   // --- security: a role that reads notes but NOT users can't filter through owner ---
@@ -52,7 +52,7 @@ export async function runRelWhere(base: string): Promise<void> {
   );
 
   // --- security: filtering on a field the caller can't read is denied (403), the
-  // same as ordering/aggregating by a hidden column — a filter is otherwise an
+  // same as ordering/aggregating by a hidden column: a filter is otherwise an
   // oracle for the hidden value. reader has no `body` grant. ---
   const filterHidden = await call("queryNotes", { where: { body: "x" } }, reader);
   assert(

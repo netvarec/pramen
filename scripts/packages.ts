@@ -1,6 +1,6 @@
 // Single source of truth for the publishable @pramen/* packages. Both bump.ts
 // (lockstep version bump) and publish.ts (ordered publish) consume this list, so
-// they can't drift apart — a package added to one but not the other was exactly
+// they can't drift apart: a package added to one but not the other was exactly
 // how cms/cms-astro/cms-editor got left out of releases.
 //
 // Order is dependency order: a package appears after anything it depends on
@@ -19,8 +19,8 @@ export const PUBLISH_PKGS = [
   "packages/cms-editor",
   "packages/admin",
   // LAST, though it only needs to be after `server` and `cms` (its dependency and its
-  // optional peer). Ordering does not affect the `workspace:` rewrite at all — that reads
-  // versions from DISK, not the registry — so the only thing order decides is which packages
+  // optional peer). Ordering does not affect the `workspace:` rewrite at all: that reads
+  // versions from DISK, not the registry, so the only thing order decides is which packages
   // a mid-run failure takes down with it. A newly added package has the least proven npm-side
   // configuration in the set, so it belongs where a failure blocks nothing.
   //
@@ -43,7 +43,7 @@ export async function assertNoPackageDrift(): Promise<void> {
   for await (const manifest of new Glob("packages/*/package.json").scan(".")) {
     // Glob.scan yields the platform separator, so on Windows this arrives as
     // `packages\server\package.json` and a forward-slash-only strip left the full path
-    // in `dir` — which matched nothing in PUBLISH_PKGS and reported every package as
+    // in `dir`, which matched nothing in PUBLISH_PKGS and reported every package as
     // missing, refusing every bump and publish on that platform.
     const dir = manifest.replaceAll("\\", "/").replace(/\/package\.json$/, "");
     const pkg = JSON.parse(await Bun.file(manifest).text());

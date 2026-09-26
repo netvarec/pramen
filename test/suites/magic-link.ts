@@ -36,9 +36,9 @@ export async function runMagicLink(base: string): Promise<void> {
   const linkToken = inbox.body.result?.token as string;
   assert(typeof linkToken === "string" && linkToken.length > 0, "magic: a token was emailed");
 
-  // hardening: the dev inbox is admin-gated — an anonymous caller can't read the token.
+  // hardening: the dev inbox is admin-gated, so an anonymous caller can't read the token.
   const anonInbox = await call("__magicInbox", { email });
-  assert(anonInbox.status === 403, "magic: __magicInbox is admin-only (anonymous denied — no token leak)");
+  assert(anonInbox.status === 403, "magic: __magicInbox is admin-only (anonymous denied, no token leak)");
 
   // a bad token → 401 (same shape as expired)
   const wrong = await call("loginWithMagicLink", { token: "deadbeef-not-real" });
@@ -56,7 +56,7 @@ export async function runMagicLink(base: string): Promise<void> {
 
   // the issued token is accepted by the core verifier (me echoes the identity)
   const me = await call("me", {}, session);
-  assert(me.body.ok && me.body.result?.userId === email, "magic: issued token verifies — me returns the identity");
+  assert(me.body.ok && me.body.result?.userId === email, "magic: issued token verifies, me returns the identity");
 
   // single-use: replaying the same link → 401
   const replay = await call("loginWithMagicLink", { token: linkToken });

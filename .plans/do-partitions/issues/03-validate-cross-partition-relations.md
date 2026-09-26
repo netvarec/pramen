@@ -1,4 +1,4 @@
-# Issue 03: Schema validation — reject cross-partition relations
+# Issue 03: Schema validation, reject cross-partition relations
 
 **Priority:** high
 **Files:** `packages/server/src/sdk/schema.ts` (or new `packages/server/src/sdk/validate.ts`), `packages/server/src/runtime/migrate.ts`
@@ -16,14 +16,14 @@ runtime surprise.
     `partitionOf(schema, E)` with `partitionOf(schema, R.target)`. If they differ,
     throw:
     `relation '<E>.<relName>' crosses a partition boundary: '<E>' is in partition
-    '<pE>' but target '<R.target>' is in '<pT>'. Relations cannot cross partitions —
+    '<pE>' but target '<R.target>' is in '<pT>'. Relations cannot cross partitions:
     put both entities in the same partition or drop the relation.`
   - Also validate the relation target exists in the schema (reuse/centralize if such a
     check already exists; otherwise add it here).
 - Call `validateSchema(schema)` once before/at the start of `migrate()` so both the DO
   boot path (`durable-object.ts`) and the Worker D1 path (`worker.ts ensureD1Migrated`)
   get it for free. Validation must run even when there is only one (default) partition
-  — it's cheap and catches target typos.
+  because it's cheap and catches target typos.
 
 ## Acceptance criteria
 

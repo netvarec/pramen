@@ -1,4 +1,4 @@
-// Schema definition — the portable layer: an `Entity(t => ({...}))` factory and
+// Schema definition: the portable layer, an `Entity(t => ({...}))` factory and
 // `defineSchema({...})`. Field builders return `as const` literals so
 // the exact field shape survives into the type system; sdk/infer.ts turns that
 // shape into row/where/insert types.
@@ -8,7 +8,7 @@
 // foreign-key column. Relation traversal is ACL-governed (see runtime/acl.ts).
 
 // "json" and "fileRef" are logical types stored as TEXT (JSON). The value a handler
-// reads/writes is the parsed value (a JsonValue, or a FileRef) — db.ts codecs it
+// reads/writes is the parsed value (a JsonValue, or a FileRef); db.ts codecs it
 // to/from the column, and infer.ts types it accordingly. "uuid" is a TEXT column
 // typed as `string`; wrap it with `generated()` to auto-mint a v4 on insert.
 export type FieldType = "text" | "integer" | "real" | "boolean" | "json" | "fileRef" | "uuid";
@@ -31,7 +31,7 @@ export interface FieldDef {
   readonly generated?: boolean;
   /** A column DEFAULT (a literal). Makes the column optional on insert. */
   readonly default?: DefaultValue;
-  /** A column DEFAULT that is raw SQL, emitted UNQUOTED (e.g. `datetime('now')`) —
+  /** A column DEFAULT that is raw SQL, emitted UNQUOTED (e.g. `datetime('now')`),
    * set by `defaultTo(field, expr.now())`/`expr.raw(...)`. Distinct from `default`
    * (a quoted literal). Makes the column optional on insert. */
   readonly defaultExpr?: string;
@@ -39,7 +39,7 @@ export interface FieldDef {
    * rebuilds the table, copying data from the old column. A diff cannot tell a
    * rename from a drop+add, so the rename must be declared explicitly. */
   readonly renamedFrom?: string;
-  /** Never project this column on any ORM read — find/get, mutation echoes, relation
+  /** Never project this column on any ORM read: find/get, mutation echoes, relation
    * loads, and the SYSTEM-mode admin data API all strip it, even under a full-access
    * (allow()) or SYSTEM scope. Writable on insert/update, and still visible to raw
    * `ctx.db.exec` (the escape hatch credential code uses). For secrets/internal
@@ -58,10 +58,10 @@ const builders = {
    * (a JsonValue); db.ts stringifies on write and parses on read. */
   json: () => ({ type: "json" }) as const,
   /** A reference to a stored file (R2 object). Holds JSON metadata (a FileRef),
-   * not the bytes — upload/download go through ctx.files + the Worker /files/* route. */
+   * not the bytes; upload/download go through ctx.files + the Worker /files/* route. */
   fileRef: () => ({ type: "fileRef" }) as const,
   /** A UUID stored in a TEXT column (typed as `string`). Wrap with `generated()` to
-   * auto-mint a v4 on insert, and/or `primaryKey()` to use it as the PK — the kvalt
+   * auto-mint a v4 on insert, and/or `primaryKey()` to use it as the PK, which is the kvalt
    * pattern `id: primaryKey(generated(t.uuid()))`. A provided value is validated. */
   uuid: () => ({ type: "uuid" }) as const,
 };
@@ -103,7 +103,7 @@ export interface ManyToManyDef<T extends string = string> {
   readonly targetColumn: string;
 }
 /** One-to-one (owning side): THIS entity holds `column` = the target's primary key, and
- * the pairing is 1:1 — mark `column` `unique()` for the DB-enforced guarantee. Reads as a
+ * the pairing is 1:1, so mark `column` `unique()` for the DB-enforced guarantee. Reads as a
  * single target (like belongsTo); FK-capable via `onDelete`. */
 export interface OneHasOneDef<T extends string = string> {
   readonly kind: "oneHasOne";
@@ -136,21 +136,21 @@ export type RelationBuilders = typeof relationBuilders;
 /** The default partition name for entities that don't declare one. */
 export const DEFAULT_PARTITION = "default";
 
-// --- triggers — declarative "on write → enqueue a task" (layered on the outbox) ---
+// --- triggers: declarative "on write → enqueue a task" (layered on the outbox) ---
 
 export type TriggerOp = "create" | "update" | "delete";
 
 /** A declarative trigger on an entity: when a matching write commits, the `Db` write
  * path enqueues a task of `task` (handled by `app.tasks[task]`) IN THE SAME transaction
  * as the write, with payload `{ entity, op, id, row }`. So a side effect (webhook,
- * notification email) fires reliably after the write, off the single-writer path —
+ * notification email) fires reliably after the write, off the single-writer path,
  * reusing the whole outbox machinery (retry, idempotency, drain). Only ORM writes
  * (`ctx.db` insert/update/delete) fire triggers; the raw `ctx.db.exec` escape hatch
  * does not. */
 export interface TriggerDef {
   /** The `app.tasks` handler kind that runs the side effect. */
   readonly task: string;
-  /** Which ops fire it. For `update`, an array names the columns to watch — fire only
+  /** Which ops fire it. For `update`, an array names the columns to watch, firing only
    * when the update writes one of them; `true` fires on any update. */
   readonly on: { create?: boolean; update?: boolean | readonly string[]; delete?: boolean };
 }
@@ -203,7 +203,7 @@ export function triggersOf(schema: SchemaDef, entity: string): readonly TriggerD
   return schema[entity]?.triggers ?? [];
 }
 
-/** Throw if any declarative trigger names a `task` not in `taskNames` — caught at
+/** Throw if any declarative trigger names a `task` not in `taskNames`, caught at
  * deploy/load by createPramen, so a typo can't silently enqueue a task that never runs
  * (it would retry then dead-letter). */
 export function validateTriggerTasks(schema: SchemaDef, taskNames: Iterable<string>): void {
@@ -223,9 +223,9 @@ export function renamedFrom<F extends FieldDef>(field: F, from: string): F & { r
   return { ...field, renamedFrom: from };
 }
 
-// --- field modifiers — wrap a builder result, preserving its literal type. They
+// --- field modifiers: wrap a builder result, preserving its literal type. They
 // compose: `unique(notNull(t.text()))`, `defaultTo(t.int(), 0)`. (Wrapper style,
-// like renamedFrom — avoids the method/field name clash a `.notNull()` chain hits.)
+// like renamedFrom, which avoids the method/field name clash a `.notNull()` chain hits.)
 
 /** Mark a column NOT NULL. */
 export function notNull<F extends FieldDef>(field: F): F & { readonly notNull: true } {
@@ -259,7 +259,7 @@ export class ExprDefault {
 
 /**
  * The SQL `expr.now()` emits: the current UTC instant as **ISO-8601 TEXT with
- * milliseconds and a `Z`** — `'2026-09-03T21:33:07.222Z'`, byte-for-byte what
+ * milliseconds and a `Z`**: `'2026-09-03T21:33:07.222Z'`, byte-for-byte what
  * `new Date().toISOString()` produces.
  *
  * Exported because three things have to agree on it and none of them can see the others:
@@ -272,7 +272,7 @@ export const ISO_NOW_SQL = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
 /**
  * SQL-expression defaults for `defaultTo(field, expr.now())`.
  *
- * `now()` is the current UTC instant as ISO-8601 TEXT (`'2026-09-03T21:33:07.222Z'`) —
+ * `now()` is the current UTC instant as ISO-8601 TEXT (`'2026-09-03T21:33:07.222Z'`), so
  * pair it with `t.text()`.
  *
  * **It used to emit `datetime('now')`**, the `CURRENT_TIMESTAMP` space form
@@ -282,7 +282,7 @@ export const ISO_NOW_SQL = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
  *   - It does not compare against `$now()`, which is an ISO string. Lexicographic TEXT
  *     comparison is exact within one format and wrong across two: both open with
  *     `YYYY-MM-DD`, so values on different dates still order correctly, but on the SAME
- *     date index 10 decides — a space (0x20) always sorts below `T` (0x54), whatever the
+ *     date index 10 decides: a space (0x20) always sorts below `T` (0x54), whatever the
  *     time-of-day. So `{ publishedAt: { lte: $now() } }` over a space-form column matches
  *     any row dated today, including one scheduled for later today. A time boundary that
  *     silently does not hold, for a day at a time.
@@ -290,7 +290,7 @@ export const ISO_NOW_SQL = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
  *     `ORDER BY createdAt` falls back to an arbitrary tiebreak. `%f` gives milliseconds.
  *
  * Changing it means a column's stored values change shape, so **existing rows must be
- * rewritten** — a rebuild copies values through untouched and would leave the two formats
+ * rewritten**: a rebuild copies values through untouched and would leave the two formats
  * mixed in one column, which is worse than either alone. {@link isoTimestampBackfill} is
  * that rewrite; declare it in `app.migrations`.
  *
@@ -302,7 +302,7 @@ export const expr = {
   raw: (sql: string): ExprDefault => new ExprDefault(sql),
 };
 
-/** Give the column a DEFAULT — also makes it optional on insert. Pass a literal
+/** Give the column a DEFAULT, which also makes it optional on insert. Pass a literal
  * (rendered as a quoted SQL literal) or an `expr.*()` value (raw SQL, unquoted),
  * e.g. `defaultTo(t.text(), "pending")` or `defaultTo(t.text(), expr.now())`. */
 export function defaultTo<F extends FieldDef>(field: F, value: ExprDefault): F & { readonly defaultExpr: string };
@@ -317,7 +317,7 @@ export function primaryKey<F extends FieldDef>(field: F): F & { readonly primary
   return { ...field, primaryKey: true, notNull: true };
 }
 
-/** Auto-generate the column's value on insert when omitted — uuid only (minted via
+/** Auto-generate the column's value on insert when omitted. Uuid only (minted via
  * crypto.randomUUID()). Makes the column optional on insert. Rejected at schema
  * construction on a non-uuid column, since the runtime only knows how to mint uuids. */
 export function generated<F extends FieldDef>(field: F): F & { readonly generated: true } {
@@ -333,7 +333,7 @@ export function defineSchema<S extends SchemaDef>(entities: S): S {
   return entities;
 }
 
-// --- partition helpers — enumerate / resolve the partition (Durable Object class)
+// --- partition helpers: enumerate / resolve the partition (Durable Object class)
 // an entity lives in. Used by the migrator/admin to group tables per DO.
 
 /** The partition an entity lives in. Defaults to `"default"` for unknown entities. */
@@ -360,18 +360,18 @@ export function entitiesInPartition(schema: SchemaDef, partition: string): strin
   return Object.keys(schema).filter((entity) => partitionOf(schema, entity) === partition);
 }
 
-// --- schema validation — static invariants checked once before migrate (DO boot
+// --- schema validation: static invariants checked once before migrate (DO boot
 // + the D1 path) and at codegen. Cloudflare-free, so it stays in sdk/.
 
 /**
  * Validate a schema's static invariants, throwing on the first violation:
  *
  *  - every relation's `target` names an entity that exists in the schema;
- *  - no relation crosses a partition boundary — a relation's source and target
+ *  - no relation crosses a partition boundary: a relation's source and target
  *    must live in the same partition (a Durable Object can't reach into another).
  *
  * Relations are static, so these are caught at validation time (boot + codegen),
- * never as a runtime surprise. Runs even for a single (default) partition — it's
+ * never as a runtime surprise. Runs even for a single (default) partition, since it's
  * cheap and catches relation-target typos.
  */
 export function validateSchema(schema: SchemaDef): void {
@@ -379,7 +379,7 @@ export function validateSchema(schema: SchemaDef): void {
     for (const [relName, rel] of Object.entries(def.relations)) {
       if (!(rel.target in schema)) {
         throw new Error(
-          `relation '${entity}.${relName}' targets unknown entity '${rel.target}' — ` +
+          `relation '${entity}.${relName}' targets unknown entity '${rel.target}': ` +
             `no such entity in the schema. Check the relation target name.`,
         );
       }
@@ -388,7 +388,7 @@ export function validateSchema(schema: SchemaDef): void {
       if (pE !== pT) {
         throw new Error(
           `relation '${entity}.${relName}' crosses a partition boundary: '${entity}' is in partition ` +
-            `'${pE}' but target '${rel.target}' is in '${pT}'. Relations cannot cross partitions — ` +
+            `'${pE}' but target '${rel.target}' is in '${pT}'. Relations cannot cross partitions: ` +
             `put both entities in the same partition or drop the relation.`,
         );
       }
@@ -404,7 +404,7 @@ export function validateSchema(schema: SchemaDef): void {
         }
         if (partitionOf(schema, rel.through) !== pE) {
           throw new Error(
-            `relation '${entity}.${relName}' junction '${rel.through}' is in a different partition than '${entity}' — ` +
+            `relation '${entity}.${relName}' junction '${rel.through}' is in a different partition than '${entity}': ` +
               `the source, junction, and target must share a partition (traversal is single-DO).`,
           );
         }
@@ -413,7 +413,7 @@ export function validateSchema(schema: SchemaDef): void {
     for (const t of def.triggers) {
       if (!t.task) throw new Error(`trigger on '${entity}' is missing a 'task'.`);
       if (!t.on.create && !t.on.update && !t.on.delete) {
-        throw new Error(`trigger '${t.task}' on '${entity}' fires on nothing — set on.create/update/delete.`);
+        throw new Error(`trigger '${t.task}' on '${entity}' fires on nothing. Set on.create/update/delete.`);
       }
       const watched = Array.isArray(t.on.update) ? t.on.update : [];
       for (const f of watched) {

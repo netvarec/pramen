@@ -1,4 +1,4 @@
-// @pramen/cms-editor — the panel registry: where a deployment's own React screens are
+// @pramen/cms-editor, the panel registry: where a deployment's own React screens are
 // registered, and how their bundles get loaded.
 //
 // Tested without a DOM, which is the point of `panels.ts` being free of React at runtime.
@@ -36,7 +36,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { getTheme, initTheme, resetTheme, setTheme, subscribeTheme } from "../packages/cms-editor/src/theme";
 
 const DOC = "https://site.example/__admin/apps/curation";
-/** A component, as far as the registry is concerned — it only checks that it is callable. */
+/** A component, as far as the registry is concerned: it only checks that it is callable. */
 const Screen = () => null;
 /** Collect warnings instead of printing them. */
 const sink = () => {
@@ -73,7 +73,7 @@ describe("registering", () => {
 
   test("only the slug and the component are kept", () => {
     // A bundle that declares a label or a position is asserting placement with nothing to
-    // check it against — those are the server's, and they stay the server's.
+    // check it against: those are the server's, and they stay the server's.
     registerPanel({ slug: "curation", contract: PANEL_RUNTIME_CONTRACT, render: Screen, label: "Mine", navOrder: 1 } as never);
     expect(Object.keys(getPanel("curation")!).sort()).toEqual(["render", "slug"]);
   });
@@ -96,7 +96,7 @@ describe("registering", () => {
   test("a duplicate slug warns and the LAST wins", () => {
     // Not a throw. Registration runs inside a dynamic import of code this editor does not
     // own, where a throw is swallowed by the loader's per-bundle catch and reappears as "the
-    // panel never registered" — the least informative possible report of "you did it twice".
+    // panel never registered", the least informative possible report of "you did it twice".
     // Last-wins is also the only rule under which re-evaluating a bundle (a dev reload)
     // behaves.
     const Other = () => null;
@@ -115,7 +115,7 @@ describe("registering", () => {
 // a mismatch: the import map resolves, the shims hand over a perfectly good React, and the
 // failure arrives as a missing export or a differently-behaving hook inside a stranger's
 // minified bundle. The contract number is the only fact about the build that survives into
-// the bundle, so it is the only thing there is to check — and the check is worth as much as
+// the bundle, so it is the only thing there is to check, and the check is worth as much as
 // the sentence it produces, which is why the wording is asserted and not just the refusal.
 
 describe("the runtime contract", () => {
@@ -131,10 +131,10 @@ describe("the runtime contract", () => {
 
   test("a bundle BEHIND this editor is refused, and told to rebuild", () => {
     // Exercised through `contractRefusal` with the implemented number handed in, because at
-    // contract 1 there is no legal number below ours — and this is the branch the whole
+    // contract 1 there is no legal number below ours, and this is the branch the whole
     // mechanism was built for, so it must not ship with a typecheck as its only evidence.
     const message = contractRefusal("curation", 1, 2);
-    // Everything a reader needs to act: which panel, which two numbers, and the two steps —
+    // Everything a reader needs to act: which panel, which two numbers, and the two steps,
     // rebuild the bundle, then move the literal. A message missing the second sends someone
     // to edit the number alone, which is the one fix that changes nothing.
     expect(message).toContain("'curation'");
@@ -147,7 +147,7 @@ describe("the runtime contract", () => {
   });
 
   test("a bundle AHEAD of this editor is refused too, and the fix is the other one", () => {
-    // Not a bundle that is wrong — a deployment that is. The panel was built for a newer
+    // Not a bundle that is wrong, but a deployment that is. The panel was built for a newer
     // editor than the shell is serving, and rendering it would link it against a runtime
     // missing whatever the newer contract added. Waving it through because "newer is
     // probably fine" is how a version check becomes decorative.
@@ -155,7 +155,7 @@ describe("the runtime contract", () => {
     registerPanel({ slug: "curation", contract: ahead, render: Screen } as never, warn);
     expect(getPanel("curation")).toBeUndefined();
     expect(seen).toHaveLength(1);
-    // The console half carries the package prefix; the screen half does not — same sentence,
+    // The console half carries the package prefix; the screen half does not. Same sentence,
     // two readers, and the prefix is a log convention rather than something to show a person
     // looking at the admin.
     expect(seen[0]!.startsWith("pramen/cms-editor: The 'curation' panel")).toBe(true);
@@ -164,7 +164,7 @@ describe("the runtime contract", () => {
     expect(seen[0]).toContain(`implementing contract ${ahead}`);
   });
 
-  test("a bundle that states nothing is refused — the default that would have waved it through", () => {
+  test("a bundle that states nothing is refused, unlike the default that would have waved it through", () => {
     // The whole set the check exists for: every bundle built before the field existed says
     // nothing here. Defaulting an absent contract to the current one would admit exactly
     // those, which is to say all of the ones that are actually stale.
@@ -188,7 +188,7 @@ describe("the runtime contract", () => {
   });
 
   test("the refusal is readable where the panel should have been, not only in the console", () => {
-    // `/apps/curation` would otherwise say "no panel is registered — check that the bundle is
+    // `/apps/curation` would otherwise say "no panel is registered, check that the bundle is
     // listed and calls registerPanel", every clause of which is false here: it is listed, it
     // loaded, it ran, and it called. The route reads this and shows it instead.
     const { warn } = sink();
@@ -207,7 +207,7 @@ describe("the runtime contract", () => {
     expect(panelsVersion()).toBeGreaterThan(0);
   });
 
-  test("a later good registration clears the refusal — a dev loop must not keep the old message", () => {
+  test("a later good registration clears the refusal, so a dev loop must not keep the old message", () => {
     const { warn } = sink();
     registerPanel({ slug: "curation", contract: ahead, render: Screen } as never, warn);
     registerPanel({ slug: "curation", contract: PANEL_RUNTIME_CONTRACT, render: Screen }, warn);
@@ -216,7 +216,7 @@ describe("the runtime contract", () => {
   });
 
   test("a render that is not a component is recorded the same way", () => {
-    // Same class of mistake as a bad contract — the bundle ran and was turned away — so it
+    // Same class of mistake as a bad contract (the bundle ran and was turned away) so it
     // gets the same treatment, and the route stops claiming nothing registered.
     const { warn } = sink();
     registerPanel({ slug: "curation", contract: PANEL_RUNTIME_CONTRACT, render: "<div/>" } as never, warn);
@@ -232,8 +232,8 @@ describe("the runtime contract", () => {
 
   test("the number is pinned, because every deployed bundle has it typed into its source", async () => {
     // The one constant in this package a consumer COPIES rather than imports. Moving it
-    // invalidates every panel bundle in the field at once — they are all refused until each
-    // is rebuilt — so it must not be possible to move it as a passing edit. And the two
+    // invalidates every panel bundle in the field at once: they are all refused until each
+    // is rebuilt, so it must not be possible to move it as a passing edit. And the two
     // places that tell people what to type are checked against it, since a doc that still
     // says `contract: 1` after a bump hands every reader the number that will be refused.
     expect(PANEL_RUNTIME_CONTRACT).toBe(1);
@@ -246,7 +246,7 @@ describe("the runtime contract", () => {
 
   test("the contract records which React major it stands for, and the manifest cannot drift from it", async () => {
     // The rule that gets missed. A React major upgrade is a line in package.json, nowhere
-    // near panels.ts, done for reasons that have nothing to do with panels — and it moves
+    // near panels.ts, done for reasons that have nothing to do with panels, and it moves
     // every panel bundle ever built onto a React it was not compiled against. So the number
     // the contract stands for is written down and pinned HERE: bump react and this goes red,
     // which is the only place the decision to bump the contract can be forced.
@@ -266,12 +266,12 @@ describe("what may be a bundle URL", () => {
     expect(panelBundleUrl("./panel.js", DOC)).toBe("https://site.example/__admin/apps/panel.js");
   });
 
-  test("an absolute http(s) URL is kept — a panel may live on a CDN", () => {
+  test("an absolute http(s) URL is kept, because a panel may live on a CDN", () => {
     expect(panelBundleUrl("https://cdn.example/panel.js", DOC)).toBe("https://cdn.example/panel.js");
     expect(panelBundleUrl("http://localhost:5173/panel.js", DOC)).toBe("http://localhost:5173/panel.js");
   });
 
-  test("a non-web scheme is refused — this string is IMPORTED, which is to say executed", () => {
+  test("a non-web scheme is refused, because this string is IMPORTED, which is to say executed", () => {
     // `javascript:`, `data:` and `blob:` all parse happily as URLs and all name code with no
     // origin to attribute it to. An http(s) URL is fetched under the page's own CSP and
     // shows up in the network log like every other asset.
@@ -305,7 +305,7 @@ describe("reading the shell's declaration", () => {
     expect(readPanelUrls(host(["/a.js", "https://cdn.example/b.js"]), DOC)).toEqual(["https://site.example/a.js", "https://cdn.example/b.js"]);
   });
 
-  test("a bad entry is dropped and warned about — it does not take the admin down", () => {
+  test("a bad entry is dropped and warned about, and does not take the admin down", () => {
     // The value is server-generated, so one that fails the check means something upstream is
     // wrong. A green deploy is the worst place to discover that, and a blank admin is the
     // worst way to be told.
@@ -335,7 +335,7 @@ describe("loading bundles", () => {
       await blocked;
       registerPanel({ slug: "curation", contract: PANEL_RUNTIME_CONTRACT, render: Screen });
     });
-    // While it is in flight the route must say "Loading…", not "no panel is registered" —
+    // While it is in flight the route must say "Loading…", not "no panel is registered":
     // this is the whole reason the count exists.
     expect(panelsSettled()).toBe(false);
     expect(getPanel("curation")).toBeUndefined();
@@ -359,7 +359,7 @@ describe("loading bundles", () => {
     );
     expect(getPanel("curation")).toBeDefined();
     expect(panelsSettled()).toBe(true);
-    expect(seen[0]).toMatch(/\/bad\.js failed to load — 404/);
+    expect(seen[0]).toMatch(/\/bad\.js failed to load: 404/);
   });
 
   test("a failure still settles, so the route stops claiming to be loading", async () => {
@@ -381,7 +381,7 @@ describe("loading bundles", () => {
 // --- which kind a listed screen is ------------------------------------------------------
 
 describe("adminPageKind", () => {
-  test("an absent kind is Block Kit — what every entry was before panels existed", () => {
+  test("an absent kind is Block Kit, what every entry was before panels existed", () => {
     // And what an older server still sends. Defaulting the other way would route every
     // existing deployment's `adminPage()` at a component nobody registered.
     expect(adminPageKind({ slug: "dispatch", label: "Dispatch" })).toBe("blocks");
@@ -394,7 +394,7 @@ describe("adminPageKind", () => {
 
   test("an unrecognised kind degrades to Block Kit rather than to a blank screen", () => {
     // From a NEWER server. Block Kit then asks it to render a screen it may have no server
-    // render for, and the reader gets an error naming the page — which is a legible failure.
+    // render for, and the reader gets an error naming the page, which is a legible failure.
     // Passing the string through instead would fall out of every branch and paint nothing.
     expect(adminPageKind({ slug: "x", label: "x", kind: "hologram" })).toBe("blocks");
     expect(adminPageKind({ slug: "x", label: "x", kind: "" })).toBe("blocks");
@@ -406,7 +406,7 @@ describe("adminPageKind", () => {
 describe("PanelProps", () => {
   test("a registered component renders with the four things a panel gets, and no more", () => {
     // The route hands these to `<panel.render />`; this pins the SHAPE, which is the part a
-    // consumer writes against. `me` is deliberately absent — a panel that branches on the
+    // consumer writes against. `me` is deliberately absent: a panel that branches on the
     // caller's roles to decide what to show is doing client-side authorization, and the gate
     // that counts is `roles` on `adminPanel()`, enforced before the entry is even listed.
     let handed: PanelProps | undefined;
@@ -423,7 +423,7 @@ describe("PanelProps", () => {
     const html = renderToStaticMarkup(createElement(getPanel("curation")!.render, props));
     expect(html).toBe("<p>dark @ /__admin → https://cms.example/m/1.jpg</p>");
     expect(Object.keys(handed!).sort()).toEqual(["api", "basePath", "setError", "theme"]);
-    // The transport is the NARROW view, not the editor's `Api` class — handing that over
+    // The transport is the NARROW view, not the editor's `Api` class. Handing that over
     // would make its ~40 CMS wrappers an API this package has to keep.
     expect(Object.keys(handed!.api).sort()).toEqual(["call", "resolve"]);
   });
@@ -432,7 +432,7 @@ describe("PanelProps", () => {
 // --- the theme, as a store --------------------------------------------------------------
 //
 // It moved out of `_layout.tsx` because a panel is handed it and is rendered by that layout
-// through `<Outlet />` — so threading it as a prop would have put a value one route wants on
+// through `<Outlet />`, so threading it as a prop would have put a value one route wants on
 // every route, and a second `useState` would have been two sources of truth for one document
 // attribute. Tested here, beside the thing that made it a store.
 

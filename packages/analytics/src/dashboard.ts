@@ -3,12 +3,12 @@
 // Block Kit rather than a panel, on the rule stated in `@pramen/cms`'s own header: a panel
 // is for a screen that IS the interaction, and this one is a period picker over numbers.
 // It also means no project JavaScript, no bundle to keep in step with the editor, and no
-// React version to align — for a screen that is read far more often than it is touched.
+// React version to align, for a screen that is read far more often than it is touched.
 //
 // `@pramen/cms` is an OPTIONAL peer, and the import below is type-only (erased at runtime),
 // so a deployment with no CMS can still use the collector, the rollup and the queries; it
 // simply has nowhere to render this. The returned value is a plain `AdminPageDef` literal
-// rather than a call to `adminPage()` for exactly that reason — `adminPage` is a runtime
+// rather than a call to `adminPage()` for exactly that reason: `adminPage` is a runtime
 // import, and this module must not have one.
 
 import type { AdminBlock, AdminPageDef, AdminPageResponse } from "@pramen/cms";
@@ -35,13 +35,13 @@ function rangeFor(period: string, now = new Date()) {
 }
 
 function fmtDuration(ms: number | null): string {
-  if (ms === null) return "—";
+  if (ms === null) return "-";
   const s = Math.round(ms / 1000);
   if (s < 60) return `${s}s`;
   return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
 }
 
-const fmtPct = (v: number | null): string => (v === null ? "—" : `${Math.round(v * 100)}%`);
+const fmtPct = (v: number | null): string => (v === null ? "-" : `${Math.round(v * 100)}%`);
 
 /** Turn a `{ key: count }` breakdown into a table, biggest first. */
 function breakdownTable(label: string, counts: Record<string, number>, limit = 8): AdminBlock[] {
@@ -68,7 +68,7 @@ function breakdownTable(label: string, counts: Record<string, number>, limit = 8
  * A table and not a picture, deliberately: the alternatives were to render a chart as an
  * `image` (a server-side SVG, which the editor would have to be allowed to inline) or to
  * make this the project's first `adminPanel`. Both are larger decisions than the first
- * slice should be making on its own, and a numeric series is honest about what it is —
+ * slice should be making on its own, and a numeric series is honest about what it is,
  * where an ASCII bar chart in a monospace column only looks like one. */
 function seriesTable(days: { day: string; pageviews: number }[]): AdminBlock[] {
   const rows = [...days].reverse().map((d) => ({ day: d.day, views: String(d.pageviews) }));
@@ -94,7 +94,7 @@ function statsBlock(m: RangeMetrics): AdminBlock {
       { label: "Sessions", value: String(m.sessions), hint: "Distinct visits. Requires ANALYTICS_SALT (or AUTH_SECRET) to be set." },
       { label: "Bounce rate", value: fmtPct(m.bounceRate), hint: "Sessions that viewed exactly one page. Lower is better." },
       { label: "Avg. time", value: fmtDuration(m.avgDurationMs), hint: "Averaged over views the beacon reported on, not over all pageviews." },
-      { label: "Avg. scroll", value: m.avgScrollDepth === null ? "—" : `${m.avgScrollDepth}%` },
+      { label: "Avg. scroll", value: m.avgScrollDepth === null ? "-" : `${m.avgScrollDepth}%` },
       { label: "Measured views", value: String(m.engagedViews), hint: "Pageviews the browser beacon reported engagement for." },
     ],
   };
@@ -127,10 +127,10 @@ export function analyticsDashboard(opts: AnalyticsDashboardOpts = {}): AdminPage
     roles: opts.roles,
     async render(ctx, interaction): Promise<AdminPageResponse> {
       // The period rides in the interaction's values; a page_load has none, so it falls
-      // back to the default. There is no server-side state to keep — the whole page is
+      // back to the default. There is no server-side state to keep: the whole page is
       // rebuilt on every interaction, which is the Block Kit contract.
       const raw = interaction.values?.period;
-      // `interaction.type` is "page_load" on first render and has no values at all — hence
+      // `interaction.type` is "page_load" on first render and has no values at all, hence
       // the fallback rather than an error.
       const period = typeof raw === "string" && PERIODS.some((p) => p.value === raw) ? raw : DEFAULT_PERIOD;
       const { from, to } = rangeFor(period);

@@ -25,12 +25,12 @@ it. See [Migrations](/docs/migrations#data-migrations).
 
 ## Configuration: oblaka
 
-Cloudflare topology is declared in **`oblaka.ts`** (the source of truth) — the
+Cloudflare topology is declared in **`oblaka.ts`** (the source of truth): the
 Worker, the `PRAMEN` Durable Object, its SQLite migration, vars, and observability.
 `oblaka` generates `wrangler.jsonc` from it (git-ignored; never edit by hand).
 
 Each project sets a unique `PROJECT` in `oblaka.ts`, which names the Worker, the DO,
-and the KV namespace — so multiple projects in one Cloudflare account never collide.
+and the KV namespace, so multiple projects in one Cloudflare account never collide.
 
 ## Deploy
 
@@ -53,7 +53,7 @@ uploads the Worker entry (`worker.ts`, your `createPramen(app)` call).
 ## Testing
 
 `bun test` generates the config from `oblaka.ts`, boots a single `wrangler dev`
-against fresh local state, and runs every suite (each on its own tenant) — ACL,
+against fresh local state, and runs every suite (each on its own tenant): ACL,
 cell-level ACL, relations, live-query invalidation, pagination, aggregates, auth,
 migrations, and more. CI runs typecheck + `bun test` on every push/PR; no Cloudflare
 credentials are needed (miniflare).

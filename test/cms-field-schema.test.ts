@@ -1,9 +1,9 @@
-// @pramen/cms — validating an AUTHORED field schema (GitHub #9).
+// @pramen/cms: validating an AUTHORED field schema (GitHub #9).
 //
 // `validateFields` checks a VALUE against a schema. This checks the SCHEMA. It did not need
 // to exist while the only way to make a block type was a developer writing
 // `defineBlockType(...)` in the repo, where tsc is the check. Now the editor authors types,
-// so `fieldsSchema` arrives from a browser as free JSON into a `t.json()` column — and a
+// so `fieldsSchema` arrives from a browser as free JSON into a `t.json()` column, and a
 // malformed one is caught NOWHERE downstream: `FieldForm` renders nothing for an unknown
 // type, `validateFields` is documented as lenient about them, and the field's content is
 // silently lost on every save.
@@ -20,7 +20,7 @@ import {
 import type { HandlerContext } from "@pramen/server";
 
 describe("field schemas", () => {
-  test("a field needs a usable name — it is an object key and a generated TS property", () => {
+  test("a field needs a usable name, since it is an object key and a generated TS property", () => {
     expect(() => normalizeFieldSchema([{ name: "", type: "text" }])).toThrow(/must be a field name/);
     expect(() => normalizeFieldSchema([{ name: "my-field", type: "text" }])).toThrow(/must be a field name/);
     expect(() => normalizeFieldSchema([{ name: "1st", type: "text" }])).toThrow(/must be a field name/);
@@ -32,7 +32,7 @@ describe("field schemas", () => {
     expect(() => normalizeFieldSchema([{ name: "a", type: "text" }, { name: "a", type: "number" }])).toThrow(/declares 'a' twice/);
   });
 
-  test("a nested group may reuse an outer name — it writes into its own bag", () => {
+  test("a nested group may reuse an outer name, because it writes into its own bag", () => {
     expect(() => normalizeFieldSchema([
       { name: "title", type: "text" },
       { name: "card", type: "group", fields: [{ name: "title", type: "text" }] },
@@ -47,18 +47,18 @@ describe("field schemas", () => {
    * Help text.
    *
    * `validateFieldSchema` rebuilds every entry from a whitelist, so a key it does not name
-   * is dropped in silence — which is what makes this worth its own test rather than trusting
+   * is dropped in silence, which is what makes this worth its own test rather than trusting
    * the type. An authored description would round-trip through `createContentType` and come
    * back gone, and the only symptom would be a field in the editor with no explanation under
    * it, indistinguishable from one where nobody wrote an explanation.
    */
-  test("a description survives — it is the field's help text, not decoration", () => {
+  test("a description survives, because it is the field's help text, not decoration", () => {
     expect(normalizeFieldSchema([{ name: "address", type: "text", label: "Address", description: "Only used when no venue is attached." }]))
       .toEqual([{ name: "address", type: "text", label: "Address", description: "Only used when no venue is attached." }]);
   });
 
   test("a blank description is dropped rather than stored as an empty string", () => {
-    // An empty string is falsy in the editor, so it renders nothing either way — but stored,
+    // An empty string is falsy in the editor, so it renders nothing either way, but stored,
     // it makes every diff of a content type noisy and every `toEqual` in a test lie.
     expect(normalizeFieldSchema([{ name: "a", type: "text", description: "   " }])).toEqual([{ name: "a", type: "text" }]);
     expect(normalizeFieldSchema([{ name: "a", type: "text", description: "" }])).toEqual([{ name: "a", type: "text" }]);
@@ -99,7 +99,7 @@ describe("field schemas", () => {
     expect(() => normalizeFieldSchema([{ name: "a", type: "reference" }])).toThrow(/needs a `referenceFrom`/);
   });
 
-  test("an empty group or repeater is refused — it is the shape of a half-finished edit", () => {
+  test("an empty group or repeater is refused, being the shape of a half-finished edit", () => {
     expect(() => normalizeFieldSchema([{ name: "a", type: "group", fields: [] }])).toThrow(/at least one nested field/);
     expect(() => normalizeFieldSchema([{ name: "a", type: "repeater" }])).toThrow(/at least one nested field/);
   });
@@ -120,7 +120,7 @@ describe("field schemas", () => {
       { name: "slug", type: "slug", from: "count" },
       { name: "count", type: "number" },
     ])).toThrow(/can only follow a text field/);
-    // Forward references are legitimate — a slug may be declared before the title it follows.
+    // Forward references are legitimate: a slug may be declared before the title it follows.
     expect(() => normalizeFieldSchema([
       { name: "slug", type: "slug", from: "title" },
       { name: "title", type: "text" },
@@ -172,7 +172,7 @@ describe("the type handlers hold the line", () => {
     expect(() => parse("createBlockType", { name: "x", slug: "Rich Text" })).toThrow(/must be a key/);
   });
 
-  test("a content type's slug follows the same rule — both are registry keys", () => {
+  test("a content type's slug follows the same rule, because both are registry keys", () => {
     // These were split (block types admitted `_`, content types did not) for no reason that
     // survives inspection: an underscore is as legal in the `/types/:slug` segment as
     // anywhere else in a URL, and the example ships `seeded_doc`.

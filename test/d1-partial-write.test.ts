@@ -1,6 +1,6 @@
 // D1 has NO interactive transactions: `D1Driver.transaction(fn)` runs `fn` as-is, so a
 // mutation that throws midway keeps whatever it already wrote. That is a documented,
-// deliberate limit — but it used to be documented only in a source comment, and in
+// deliberate limit, but it used to be documented only in a source comment, and in
 // production a partially-applied mutation looks exactly like an ordinary 500.
 //
 // These pin the write counter that lets the Worker say so out loud.
@@ -8,7 +8,7 @@
 import { describe, expect, test } from "bun:test";
 import { D1Driver } from "../packages/server/src/runtime/driver";
 
-/** A fake D1 session — enough to count what the driver sends. */
+/** A fake D1 session: enough to count what the driver sends. */
 function fakeD1(onExec?: (sql: string) => void) {
   const session = {
     prepare(sql: string) {
@@ -52,7 +52,7 @@ describe("D1Driver write accounting", () => {
   });
 
   // The count is what distinguishes "the request failed" from "the request failed and left
-  // half a mutation behind" — the only signal available, since there is nothing to roll back.
+  // half a mutation behind", the only signal available, since there is nothing to roll back.
   test("a mutation that throws midway still reports what it committed", async () => {
     const d = new D1Driver(
       fakeD1((sql) => {
@@ -61,7 +61,7 @@ describe("D1Driver write accounting", () => {
     );
     await d.exec("INSERT INTO notes (id) VALUES (?)", ["a"]);
     await expect(d.exec("DELETE FROM notes WHERE id = ?", ["a"])).rejects.toThrow("boom");
-    expect(d.writtenCount()).toBe(2); // counted before the statement ran — the insert DID commit
+    expect(d.writtenCount()).toBe(2); // counted before the statement ran; the insert DID commit
   });
 
   // `transaction` is a pass-through by design; pinning it stops someone "fixing" it into a

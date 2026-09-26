@@ -1,4 +1,4 @@
-// Example app — schema, handlers, and ACL. The entire user-facing surface.
+// Example app: schema, handlers, and ACL. The entire user-facing surface.
 // In a finished pramen this would be deployed as a bundle at runtime; for the v0
 // skeleton the DO imports it statically.
 
@@ -49,8 +49,8 @@ import {
   createAuthHandlers,
   hashPassword,
 } from "@pramen/auth";
-// @pramen/cms — the block/page builder, wired as an ordinary app fragment.
-// @pramen/analytics — the traffic collector. `analyticsSchema` migrates alongside the
+// @pramen/cms: the block/page builder, wired as an ordinary app fragment.
+// @pramen/analytics: the traffic collector. `analyticsSchema` migrates alongside the
 // rest; the routes are PUBLIC (a visitor has no session), and the dashboard is a Block Kit
 // page in the editor's own chrome.
 import {
@@ -76,11 +76,11 @@ type NoteInsert = {
   meta?: JsonValue;
 };
 
-/** The columns `logEvent` writes — `id` is optional (generated when omitted). */
+/** The columns `logEvent` writes; `id` is optional (generated when omitted). */
 type EventInsert = { kind: string; id?: string };
 
 // @pramen/auth: teach login one imported hash scheme. Unsalted `sha256` stands in for
-// whatever the system you are migrating FROM used — the real-world case is usually
+// whatever the system you are migrating FROM used: the real-world case is usually
 // bcrypt (`registerPasswordVerifier("bcrypt", (p, payload) => bcryptjs.compare(p, payload))`),
 // which is not used here only because it would pull a pure-JS bcrypt into the example.
 // Either way login upgrades the row to PBKDF2 on the first successful sign-in, so the
@@ -96,11 +96,11 @@ registerPasswordVerifier("sha256", async (password, payload) => {
 const ownedByCaller = { set: { ownerId: (i: Identity | null) => i?.userId ?? null } };
 
 const schema = defineSchema({
-  // @pramen/auth's user table (signup/login) — migrated alongside the app's own.
+  // @pramen/auth's user table (signup/login), migrated alongside the app's own.
   ...authSchema,
   // @pramen/auth's passwordless magic-link table (requestMagicLink/loginWithMagicLink).
   ...magicLinkSchema,
-  // @pramen/auth's one-time email tokens — password reset + email verification.
+  // @pramen/auth's one-time email tokens: password reset + email verification.
   ...emailTokenSchema,
   // @pramen/cms's block/page-builder tables (cms_pages, cms_blocks, cms_block_types, …).
   ...cmsSchema,
@@ -108,17 +108,17 @@ const schema = defineSchema({
   ...analyticsSchema,
   // A COLLECTION-backed entity: `lectures` is an ordinary pramen entity (real, queryable
   // columns), registered as a CMS collection below so it gets a generic list/edit UI in the
-  // editor — the "edit arbitrary content, not just pages" escape hatch. No mandatory slug.
+  // editor: the "edit arbitrary content, not just pages" escape hatch. No mandatory slug.
   lectures: Entity((t) => ({
     id: primaryKey(generated(t.uuid())),
     title: t.text(),
     speaker: defaultTo(t.text(), ""),
     date: defaultTo(t.text(), ""),
-    // A `richtext` collection field is a DOCUMENT, not a scalar — it maps to t.json()
+    // A `richtext` collection field is a DOCUMENT, not a scalar: it maps to t.json()
     // exactly like a group/repeater field. In a TEXT column the Db chokepoint would bind
     // the object raw and DO SQLite would reject the parameter.
     abstract: t.json(),
-    // Managed by the collection's `supports: ["drafts", "scheduling", …]` — the CMS writes
+    // Managed by the collection's `supports: ["drafts", "scheduling", …]`: the CMS writes
     // these, the collection's `fields` may NOT declare them (that would put the publish
     // gate back in the client-writable `values` bag, which is a boot error).
     status: defaultTo(t.text(), "draft"),
@@ -127,7 +127,7 @@ const schema = defineSchema({
     unpublishAt: t.text(),
     createdAt: defaultTo(t.text(), expr.now()),
   })),
-  // A custom, authSchema-shaped users table with an EXTRA `tenants` column — the
+  // A custom, authSchema-shaped users table with an EXTRA `tenants` column: the
   // multi-tenant accounts pattern. createUserHandlers({ table: "org_accounts" }) +
   // authPolicies({ table: "org_accounts", ... }) manage it without a rename.
   org_accounts: Entity((t) => ({
@@ -136,14 +136,14 @@ const schema = defineSchema({
     roles: t.json(),
     email: unique(t.text()),
     active: defaultTo(t.bool(), true),
-    tenants: t.json(), // string[] — the extra column the built-in handlers ignore
+    tenants: t.json(), // string[], the extra column the built-in handlers ignore
     createdAt: t.int(),
   })),
   users: Entity(
     (t) => ({
       id: t.textId(), // PK = the JWT subject (e.g. "alice")
       name: t.text(),
-      email: t.text(), // sensitive — not exposed via relation traversal
+      email: t.text(), // sensitive: not exposed via relation traversal
     }),
     (r) => ({ notes: r.hasMany("notes", "ownerId") }),
   ),
@@ -155,16 +155,16 @@ const schema = defineSchema({
       ownerId: t.text(),
       createdAt: t.int(),
       // Arbitrary JSON metadata (tags, structured fields). Stored as a TEXT column;
-      // handlers read/write the parsed value — db.ts codecs it.
+      // handlers read/write the parsed value; db.ts codecs it.
       meta: t.json(),
       // Optional attached file (R2 object). Stored as JSON metadata (a FileRef),
-      // not the bytes — see ctx.files + the upload/download handlers below.
+      // not the bytes. See ctx.files + the upload/download handlers below.
       attachment: t.fileRef(),
     }),
     (r) => ({ owner: r.belongsTo("users", "ownerId") }),
     {
       // Declarative trigger: when a note is created or its `title` changes, the Db
-      // write path auto-enqueues a `note-changed` task (atomic with the write) — no
+      // write path auto-enqueues a `note-changed` task (atomic with the write), with no
       // ctx.tasks.enqueue in the handler. Runs the side effect off the write path.
       triggers: [trigger({ task: "note-changed", on: { create: true, update: ["title"] } })],
     },
@@ -174,8 +174,8 @@ const schema = defineSchema({
   signups: Entity((t) => ({
     id: t.id(),
     email: t.text(),
-    code: unique(t.text()), // unique constraint (a unique index) — like a unique slug
-    status: defaultTo(t.text(), "pending"), // DEFAULT — optional on insert, DB fills it
+    code: unique(t.text()), // unique constraint (a unique index), like a unique slug
+    status: defaultTo(t.text(), "pending"), // DEFAULT: optional on insert, DB fills it
   })),
   // UUID columns. `id` is a generated UUID primary key (the kvalt pattern); `traceId`
   // is a generated non-PK UUID. Both are minted server-side on insert when omitted
@@ -191,7 +191,7 @@ const schema = defineSchema({
   // Partitioned entity: an append-only audit log living in its OWN Durable Object
   // (partition "audit"), separate from the default-partition `notes`/`users`. The
   // two partitions are independent DOs (different idFromName) sharing one PramenDO
-  // class — so they migrate, store, and broadcast in isolation. NOTE: this entity
+  // class, so they migrate, store, and broadcast in isolation. NOTE: this entity
   // has NO relations on purpose; a relation crossing into a default-partition table
   // would fail validateSchema at boot (proven in test/schema-validate.test.ts).
   auditLog: Entity(
@@ -205,10 +205,10 @@ const schema = defineSchema({
   ),
 });
 
-// Handlers bound to this schema — ctx.db is fully typed against it.
+// Handlers bound to this schema: ctx.db is fully typed against it.
 const { query, mutation } = createApp(schema);
 
-// @pramen/auth: passwordless magic-link login. Delivery goes through `ctx.mail` — on
+// @pramen/auth: passwordless magic-link login. Delivery goes through `ctx.mail`: on
 // Cloudflare that's Cloudflare Email Sending (the `EMAIL`/send_email binding, when a
 // MAIL_FROM sender is configured); local/dev captures it instead. We also stash the raw
 // token in KV so the e2e suite can complete the login without parsing the email.
@@ -264,7 +264,7 @@ const orgAccounts = createUserHandlers({ table: "org_accounts" });
 
 // CMS collections: register the `lectures` entity as an editable collection. The editor
 // discovers it via listCollections and renders a generic list + form (FieldForm over these
-// fields) — no page/slug involved. Scalar fields are real columns on the entity.
+// fields), with no page/slug involved. Scalar fields are real columns on the entity.
 const collections = [
   collection("lectures", {
     entity: "lectures",
@@ -274,7 +274,7 @@ const collections = [
     list: ["title", "speaker", "date"],
     orderBy: { column: "date", dir: "desc" },
     // Opt into the page-style workflow: a draft/published status, scheduled publication,
-    // revision history and signed preview links — all over this ordinary entity.
+    // revision history and signed preview links, all over this ordinary entity.
     supports: ["drafts", "scheduling", "revisions", "preview"],
     fields: [
       { name: "title", type: "text", required: true },
@@ -286,11 +286,11 @@ const collections = [
 ];
 
 // @pramen/cms Block Kit: a custom admin PAGE, described as JSON and rendered by the editor
-// inside its own chrome — no project JavaScript in the admin (GitHub #33/#44).
+// inside its own chrome, with no project JavaScript in the admin (GitHub #33/#44).
 //
 // This one is the shape a client project actually asks for: a filtered browse UI over data
 // the CMS does not model, with an action on each row. It reads through `ctx.db` like any
-// other handler, so the row ACL still applies — Block Kit removes the browser code, not the
+// other handler, so the row ACL still applies: Block Kit removes the browser code, not the
 // boundary.
 const lectureDesk = adminPage<typeof schema>("lecture-desk", {
   label: "Lecture desk",
@@ -301,7 +301,7 @@ const lectureDesk = adminPage<typeof schema>("lecture-desk", {
   async render(ctx, i) {
     let toast: { text: string; tone: "success" | "error" } | undefined;
     // An action is handled BEFORE the read below, so the table it returns already reflects
-    // it — the whole page is re-rendered on every interaction, so there is nothing to patch.
+    // it: the whole page is re-rendered on every interaction, so there is nothing to patch.
     if (i.type === "block_action" && i.action_id === "clear-speaker" && typeof i.value === "string") {
       await ctx.db.update("lectures", i.value, { speaker: null });
       toast = { text: "Speaker cleared", tone: "success" };
@@ -338,7 +338,7 @@ const lectureDesk = adminPage<typeof schema>("lecture-desk", {
               ],
               rows: rows.map((r) => ({
                 title: String(r.title ?? ""),
-                speaker: r.speaker == null ? "—" : String(r.speaker),
+                speaker: r.speaker == null ? "-" : String(r.speaker),
                 date: r.date == null ? "" : String(r.date),
               })),
             },
@@ -397,7 +397,7 @@ const handlers = {
   // Emails go out from the sendPasswordResetEmail / sendVerificationEmail tasks below.
   ...passwordReset.handlers,
   ...emailVerification.handlers,
-  // @pramen/auth: user management — listUsers / setUserRoles / setUserActive (admin),
+  // @pramen/auth: user management, listUsers / setUserRoles / setUserActive (admin),
   // changeEmail / changePassword (self). Gated by authPolicies() in the ACL below.
   ...userHandlers,
 
@@ -430,7 +430,7 @@ const handlers = {
       },
     },
   ),
-  // Reports only the SCHEME prefix of a stored hash, never the hash — enough to observe
+  // Reports only the SCHEME prefix of a stored hash, never the hash: enough to observe
   // the upgrade, nothing an admin couldn't already infer.
   passwordHashScheme: query(
     async (ctx, input: { username: string }) => {
@@ -447,7 +447,7 @@ const handlers = {
       },
     },
   ),
-  // @pramen/cms: block/page builder — createBlockType / createContentType / createPage /
+  // @pramen/cms: block/page builder, createBlockType / createContentType / createPage /
   // addBlock / publishPage / schedulePage (editor-gated) + getPage (public content API).
   ...cmsHandlers,
   // @pramen/cms collections: listCollections + collectionList/get/create/update/delete over
@@ -457,14 +457,14 @@ const handlers = {
   // collection rather than a 500 on the first publish.
   ...createCollectionHandlers(collections, { schema }),
   // @pramen/cms Block Kit: listAdminPages (role-filtered) + adminPageInteract. No ACL
-  // fragment goes with it — a page reads through `ctx.db` under whatever policies the
+  // fragment goes with it: a page reads through `ctx.db` under whatever policies the
   // caller already holds, so there is nothing here to grant.
   ...createAdminPageHandlers([lectureDesk, analyticsDashboard()]),
   // @pramen/analytics: the privileged ingest sink plus the role-gated metric reads. The
   // dashboard above renders from the same queries these expose.
   ...createAnalyticsHandlers(),
   // The PUBLIC read for the `lectures` collection. Deliberately un-gated (no `auth`), so
-  // anonymous can call it — what limits the result is the ACL, not this query. Anonymous
+  // anonymous can call it: what limits the result is the ACL, not this query. Anonymous
   // holds only `collectionPublicPolicies`, which scopes `lectures` reads to
   // `status = 'published' AND publishedAt <= $now()`, so a draft or a scheduled-but-not-yet-due
   // row is simply not among the rows this returns. The boundary is the policy; the handler
@@ -472,7 +472,7 @@ const handlers = {
   publicLectures: query((ctx) => ctx.db.find({ from: "lectures", orderBy: { column: "date", dir: "desc" }, limit: 50 })),
   // The same handlers over the custom org_accounts table, under prefixed names, plus
   // an app-owned setOrgAccountTenants writing the extra `tenants` column (the Tah
-  // setUserTenants analog) — permitted by authPolicies adminWriteFields below.
+  // setUserTenants analog), permitted by authPolicies adminWriteFields below.
   listOrgAccounts: orgAccounts.listUsers,
   setOrgAccountRoles: orgAccounts.setUserRoles,
   setOrgAccountTenants: mutation((ctx, input: { username: string; tenants: string[] }) =>
@@ -480,7 +480,7 @@ const handlers = {
   ),
   // Dev-only: lets the e2e suite read the token the demo "emailed". These `__*Inbox`
   // handlers read captured tokens straight from KV (which bypasses the row-ACL), so they
-  // gate the CALL with `auth: ["admin"]` — without it any anonymous caller could read
+  // gate the CALL with `auth: ["admin"]`: without it any anonymous caller could read
   // another address's magic-link token. Not for production.
   __magicInbox: query(async (ctx, input: { email: string }) => ({ token: await ctx.kv.get(`magiclink:${input.email}`) }), {
     auth: ["admin"],
@@ -500,11 +500,11 @@ const handlers = {
   createNoteAndNotify: mutation(async (ctx, input: { title: string; to: string; fail?: boolean }) => {
     const note = await ctx.db.insert("notes", { title: input.title, body: "", ownerId: String(ctx.identity?.userId ?? "anon"), createdAt: 1 });
     await ctx.tasks.enqueue({ kind: "notify", payload: { to: input.to, title: input.title } });
-    if (input.fail) throw new BadRequest("forced failure — note + task must both roll back");
+    if (input.fail) throw new BadRequest("forced failure: note + task must both roll back");
     return note;
   }),
   // Dev-only (admin-gated): read the ctx.mail "inbox" (the dev KvMailAdapter stashes
-  // under mail:<to>) — returns the email text the `notify` task sent.
+  // under mail:<to>): returns the email text the `notify` task sent.
   __notifyInbox: query(
     async (ctx, input: { to: string }) => {
       const raw = (await ctx.kv.get(`mail:${input.to}`)) as string | null;
@@ -519,7 +519,7 @@ const handlers = {
 
   // ctx.queue (Cloudflare Queues) demo: enqueue a job onto the NATIVE queue. Unlike
   // ctx.tasks (the transactional outbox, atomic with a DB write), a queue send is NOT
-  // transactional — it's decoupled, high-throughput fan-out with a consumer (app.queues)
+  // transactional: it's decoupled, high-throughput fan-out with a consumer (app.queues)
   // that could even live in another Worker. Send addresses the queue by its BINDING name
   // ("JOBS", declared in oblaka.ts). Gated, as it touches ctx.queue directly (bypasses ACL).
   enqueueJob: mutation(
@@ -551,7 +551,7 @@ const handlers = {
   }),
 
   // ownerId is accepted here but the create policy's `set` forces it to the
-  // caller — so a forged ownerId in the request body is ignored. The `input`
+  // caller, so a forged ownerId in the request body is ignored. The `input`
   // validator rejects malformed bodies at the boundary (400).
   createNote: mutation(
     (ctx, input: { title: string; body: string; ownerId?: string; meta?: JsonValue }) => {
@@ -625,10 +625,10 @@ const handlers = {
     }),
   ),
 
-  // References the `body` column — denied for roles that can't read it.
+  // References the `body` column: denied for roles that can't read it.
   maxBody: query((ctx) => ctx.db.aggregate({ from: "notes", aggregations: { m: { fn: "max", column: "body" } } })),
 
-  // Anonymous (no token) public write — the anonymous role grants `signups` create.
+  // Anonymous (no token) public write: the anonymous role grants `signups` create.
   createSignup: mutation(
     (ctx, input: { email: string; code: string }) => ctx.db.insert("signups", { email: input.email, code: input.code }),
     {
@@ -650,7 +650,7 @@ const handlers = {
 
   // UUID demo. `id` and `traceId` are omitted on insert, so the runtime mints them
   // (the echoed row carries the generated uuids). Passing an `id` is allowed too, as
-  // long as it's a valid uuid — otherwise the write is rejected (400).
+  // long as it's a valid uuid. Otherwise the write is rejected (400).
   logEvent: mutation(
     (ctx, input: { kind: string; id?: string }) => {
       const values: EventInsert = { kind: input.kind };
@@ -668,7 +668,7 @@ const handlers = {
 
   listEvents: query((ctx) => ctx.db.find({ from: "events", orderBy: { column: "id", dir: "asc" } })),
 
-  // ctx.env — Worker/DO env (bindings + vars + secrets). Real handlers use it to
+  // ctx.env: Worker/DO env (bindings + vars + secrets). Real handlers use it to
   // call external APIs (Stripe, Resend, …). Here we only report presence, never the
   // value, to prove env reaches handlers without leaking a secret.
   envCheck: query((ctx) => ({
@@ -676,7 +676,7 @@ const handlers = {
     hasKvBinding: ctx.env.KV != null,
   })),
 
-  // ctx.kv — GLOBAL (cross-tenant) config/cache, not per-tenant data (use db for that).
+  // ctx.kv: GLOBAL (cross-tenant) config/cache, not per-tenant data (use db for that).
   getConfig: query((ctx, input: { key: string }) => ctx.kv.get(`config:${input.key}`)),
   setConfig: mutation((ctx, input: { key: string; value: string }) =>
     ctx.kv.put(`config:${input.key}`, input.value).then(() => ({ key: input.key, value: input.value })),
@@ -721,7 +721,7 @@ const handlers = {
     },
   ),
 
-  // A tight maxSize (8 bytes) — shows the cap and lets the suite prove the Worker
+  // A tight maxSize (8 bytes): shows the cap and lets the suite prove the Worker
   // rejects an over-size body while streaming, not just when a length is declared.
   requestTinyUpload: mutation((ctx, input: { contentType: string }) => {
     if (!ctx.identity?.userId) throw new Forbidden("authentication required to upload");
@@ -730,7 +730,7 @@ const handlers = {
 
   // 2) Attach an uploaded file to a note. Confirms the blob is really in R2 (and
   //    captures its true size) before persisting; the note update is ACL-gated.
-  //    Note: head() is an R2 round-trip inside the mutation's transaction — the
+  //    Note: head() is an R2 round-trip inside the mutation's transaction, and the
   //    coupling is intentional (no blob → no row), at the cost of holding this
   //    tenant's single writer for the call. A hot path could instead trust the
   //    size the upload endpoint already returned.
@@ -765,7 +765,7 @@ const handlers = {
     },
   ),
 
-  // 3) Get a signed download url for a note's attachment — only if ACL lets the
+  // 3) Get a signed download url for a note's attachment, only if ACL lets the
   //    caller read the note. Returns null when there's no note or no attachment.
   getNoteAttachment: query(async (ctx, input: { id: number }) => {
     const rows = await ctx.db.find({ from: "notes", where: { id: input.id }, limit: 1 });
@@ -776,7 +776,7 @@ const handlers = {
 
   // --- partitioned handlers (run in the "audit" partition DO) ---
   // These are declared with { partition: "audit" }, so the Worker routes them to
-  // idFromName(partitionDoName(tenant, "audit")) — a different DO than the default
+  // idFromName(partitionDoName(tenant, "audit")): a different DO than the default
   // notes/users handlers above. ctx.db here only sees the audit partition's tables.
 
   // Append an audit entry. Writing to `notes` (default partition) from here would
@@ -798,7 +798,7 @@ const handlers = {
   }),
 };
 
-// ACL — deny-by-default; roles only grant.
+// ACL: deny-by-default; roles only grant.
 //  admin   : full access to notes and users.
 //  author  : own notes only; may create; may traverse note.owner (id+name, no
 //            email) via directAccess, but has NO flat users read.
@@ -822,10 +822,10 @@ const acl = [
     // name entities). The audit DO loads this same ACL, so admin can write/read it.
     policy("admin:audit:read", "auditLog", "read", allow()),
     policy("admin:audit:create", "auditLog", "create", allow()),
-    // @pramen/auth user management: admin reads (projected — no passwordHash) and
+    // @pramen/auth user management: admin reads (projected, no passwordHash) and
     // updates roles/email/active on any user.
     ...authPolicies().admin,
-    // Same, for the custom org_accounts table — distinct `prefix` (unique policy
+    // Same, for the custom org_accounts table: distinct `prefix` (unique policy
     // names) and `tenants` added to the read/write fields so the admin can see and
     // set it (powering setOrgAccountTenants).
     ...authPolicies({
@@ -843,7 +843,7 @@ const acl = [
   ]),
   // anonymous: applied to callers with NO verified token. A guest may create a
   // signup (public write) and read one back only by presenting its `code`
-  // ($input capability) — they cannot enumerate signups or touch notes/users.
+  // ($input capability). They cannot enumerate signups or touch notes/users.
   role("anonymous", [
     policy("anon:signups:create", "signups", "create", allow()),
     policy("anon:signups:read", "signups", "read", { where: { code: $input("code") } }),
@@ -852,18 +852,18 @@ const acl = [
     ...cmsPolicies().public,
     // …and PUBLISHED collection rows. For `lectures` this compiles to
     // `status = 'published' AND publishedAt <= $now()`, so a scheduled row stays invisible
-    // until its instant actually arrives — the read scope IS the boundary, not a UI filter.
+    // until its instant actually arrives: the read scope IS the boundary, not a UI filter.
     ...collectionPublicPolicies(collections),
   ]),
   // @pramen/cms editorial roles: an `editor` can author + submit for review; a `reviewer`
   // can approve/reject/publish. Both need the same CMS data ACL (full CRUD on cms_ tables);
   // the workflow gate is the per-handler `auth` (submit → editor, approve/reject → reviewer).
   // Distinct policy-name prefixes so the grants don't collide with admin's.
-  // The editor reads analytics but cannot roll up or prune — the dashboard is a read.
+  // The editor reads analytics but cannot roll up or prune: the dashboard is a read.
   role("editor", [...cmsPolicies({ prefix: "cms-ed" }).editor, ...collectionPolicies(collections, { prefix: "cms-ed" }), ...analyticsPolicies({ prefix: "an-ed" }).viewer]),
   // A reviewer needs the COLLECTION grants too, not just the page ones: getCollectionPreview
   // is gated with viewerRoles (editor ∪ reviewer), so a reviewer-only identity passes the
-  // handler gate and then hits the row ACL. Without this the direct RPC 404s — the preview
+  // handler gate and then hits the row ACL. Without this the direct RPC 404s, while the preview
   // ROUTE happens to work anyway, because it presents admin alongside reviewer and grants
   // OR-merge across roles, which is exactly the kind of asymmetry that hides the gap.
   role("reviewer", [...cmsPolicies({ prefix: "cms-rev" }).editor, ...collectionPolicies(collections, { prefix: "cms-rev" })]),
@@ -884,13 +884,13 @@ const acl = [
   role("reader", [
     policy("reader:read", "notes", "read", { fields: ["id", "title", "ownerId", "createdAt"] }),
   ]),
-  // user: the default role @pramen/auth assigns on signup — proves an issued token
+  // user: the default role @pramen/auth assigns on signup: proves an issued token
   // flows through the verifier + ACL (here: read notes, no body).
   role("user", [
     policy("user:read", "notes", "read", { fields: ["id", "title", "ownerId", "createdAt"] }),
     // Public CMS content, AGAIN. `anonymous` is only assigned to callers with NO verified
     // token (see rolesOf), so spreading the public grants there alone means a LOGGED-IN
-    // user is denied content a logged-OUT visitor can read — `publicLectures` would 403 for
+    // user is denied content a logged-OUT visitor can read: `publicLectures` would 403 for
     // every signed-in member. Every role that should see published content needs the grant;
     // there is no implicit "everyone".
     ...cmsPolicies({ prefix: "cms-user" }).public,
@@ -899,7 +899,7 @@ const acl = [
     // auth_users row (changePassword is a self-scoped credential op, no policy needed).
     ...authPolicies().self,
   ]),
-  // owneronly: ACL `where` that TRAVERSES a relation — read notes whose owner is the
+  // owneronly: ACL `where` that TRAVERSES a relation: read notes whose owner is the
   // caller (`note.owner.id == $identity`). Needs a read grant on the target (users),
   // since a relation filter respects the target's read ACL; here scoped to self.
   role("owneronly", [
@@ -907,7 +907,7 @@ const acl = [
     policy("owneronly:users", "users", "read", { where: { id: $identity("userId") } }),
   ]),
   // orfallback: OR with a marker on a claim that may be absent. Each OR branch is
-  // resolved independently, so an unresolvable marker collapses only ITS branch —
+  // resolved independently, so an unresolvable marker collapses only ITS branch:
   // the literal `title` branch still matches (a "public fallback" pattern).
   role("orfallback", [
     policy("orfallback:read", "notes", "read", {
@@ -940,13 +940,13 @@ const acl = [
       fieldsFn: (identity, row) => (row.ownerId === identity?.userId ? ["body"] : []),
     }),
   ]),
-  // manager: reads notes owned by anyone on the caller's team — an ACL `where`
+  // manager: reads notes owned by anyone on the caller's team, via an ACL `where`
   // using an operator (`in`) whose value is an $identity marker resolving to an
   // array. No `team` claim -> the rule matches nothing (safe deny).
   role("manager", [
     policy("manager:read", "notes", "read", { where: { ownerId: { in: $identity("team") } } }),
   ]),
-  // member: read access is computed per request from DB state — you may read
+  // member: read access is computed per request from DB state: you may read
   // everything only once you've authored at least one note; otherwise nothing.
   role("member", [
     policy("member:create", "notes", "create", ownedByCaller),
@@ -963,7 +963,7 @@ const acl = [
   ]),
 ];
 
-// Public (pre-auth) routes — e.g. a payment/webhook callback that authenticates by
+// Public (pre-auth) routes, e.g. a payment/webhook callback that authenticates by
 // signature, not JWT. A real handler verifies the signature on the raw body; here we
 // just accept and forward a privileged mutation into the DO via ctx.callPrivileged.
 const routes = [
@@ -979,7 +979,7 @@ const routes = [
   // @pramen/cms: public GET /sitemap.xml + /robots.txt (origin derived from the request).
   ...cmsRoutes(),
   // @pramen/analytics: the beacon endpoint and the script it lives in. Both PUBLIC and
-  // pre-auth by necessity — a visitor has no session, and matching them here means they
+  // pre-auth by necessity: a visitor has no session, and matching them here means they
   // never reach the DO's auth path at all.
   //
   // `createAnalyticsSink` picks the transport: with the ANALYTICS queue bound it hands the
@@ -1013,17 +1013,17 @@ const tasks = {
   // @pramen/cms: scheduled publish/unpublish (backing schedulePage), run off the write path.
   ...cmsTasks,
   // Without this, `collectionSchedule` stores the schedule and enqueues the tasks but the
-  // drain finds no handler for their kind — the row would silently stay a draft.
+  // drain finds no handler for their kind, so the row would silently stay a draft.
   ...createCollectionTasks(collections),
-  // @pramen/auth: sendMagicLinkEmail — invokes the app's sendEmail after commit, so a slow
+  // @pramen/auth: sendMagicLinkEmail invokes the app's sendEmail after commit, so a slow
   // transport can't hold the requestMagicLink mutation's storage transaction open.
   ...magicLink.tasks,
-  // @pramen/auth: sendPasswordResetEmail + sendVerificationEmail — same deferred-send shape.
+  // @pramen/auth: sendPasswordResetEmail + sendVerificationEmail, the same deferred-send shape.
   ...passwordReset.tasks,
   ...emailVerification.tasks,
 };
 
-// Cloudflare Queues consumers, keyed by QUEUE name (the oblaka `Queue` name —
+// Cloudflare Queues consumers, keyed by QUEUE name (the oblaka `Queue` name,
 // env-prefixed in remote envs, matched leniently by createPramen().queue). A consumer is
 // Worker-level: no ctx.db, so it reaches tenant data via ctx.callPrivileged (the message
 // body carries the tenant). Here it just records the job in KV so the e2e can read it back;
@@ -1034,7 +1034,7 @@ const queues = {
     await ctx.kv.put(`job:${id}`, `done:${id}`, { expirationTtl: 900 });
   },
   // @pramen/analytics: drains a batch of events into the store. Declared even though this
-  // example binds no analytics queue — the handler is what a deployment ADDS the binding
+  // example binds no analytics queue: the handler is what a deployment ADDS the binding
   // for, and `createPramen` would reject a queue message it had no route for.
   ...createAnalyticsQueues({ queueName: ANALYTICS_QUEUE }),
 };
@@ -1042,24 +1042,24 @@ const queues = {
 // @pramen/cms code-defined types: declare block + content types in code and have every
 // tenant's store converge to them on boot (no manual createContentType). Distinct slugs so
 // they don't collide with the ones the cms e2e suite creates over RPC. The suite asserts a
-// fresh tenant is already seeded with `seeded_doc` before it creates anything — proving the
+// fresh tenant is already seeded with `seeded_doc` before it creates anything, proving the
 // server invokes app.bootstrap after migration on boot.
 // A demo account, so `bun run dev` leads somewhere.
 //
 // On a fresh store there was no way IN. `signup` assigns the `user` role, which no CMS policy
-// accepts, so the editor's Setup screen — which asks for a bearer token and nothing else —
+// accepts, so the editor's Setup screen (which asks for a bearer token and nothing else)
 // could only be satisfied by hand-signing a JWT with the dev AUTH_SECRET. That is a fine
 // escape hatch (`bun tools/dev-token.ts`) and a terrible front door.
 //
 // GATED on `PRAMEN_DEV_SEED`, which `oblaka.ts` sets for the `local` env and for no other.
 // The gate is the whole point: a known username and a known password reconciled onto every
 // boot is precisely the reference data that must never reach a deployment, and `bun run
-// deploy` runs this same file. Reading it needs `BootstrapContext.env` — a boot-time
+// deploy` runs this same file. Reading it needs `BootstrapContext.env`: a boot-time
 // reconciler has no request to carry a flag on, so before that existed the only gates
 // available were "always" and "never".
 const DEV_USER = "pramen@local";
 // Eight characters, because `login` parses its input with the same rule `signup` does and
-// rejects anything shorter before it ever looks at a hash — a 6-character demo password would
+// rejects anything shorter before it ever looks at a hash: a 6-character demo password would
 // be unusable however it was stored. Override with PRAMEN_DEV_PASSWORD.
 const DEV_PASSWORD = "pramen-dev";
 
@@ -1067,10 +1067,10 @@ const devUserBootstrap: BootstrapFn = async ({ db, env }) => {
   if (env.PRAMEN_DEV_SEED !== "true") return;
   // Present ⇒ leave it ALONE. `bootstrap` runs on every boot, so writing the hash
   // unconditionally would silently reset a password someone had changed, every time the DO
-  // woke up — the reconcile-to-the-repo behaviour that is right for a block type and wrong
+  // woke up: the reconcile-to-the-repo behaviour that is right for a block type and wrong
   // for a credential.
   // A SELECT before the hash, not `INSERT OR IGNORE`: `hashPassword` is PBKDF2 at 100k
-  // iterations — seconds of CPU — and this runs inside `blockConcurrencyWhile` on a tenant's
+  // iterations (seconds of CPU) and this runs inside `blockConcurrencyWhile` on a tenant's
   // first fetch. Paying that on every boot to discover there was nothing to insert would put
   // a multi-second stall in front of the first request after every cold start.
   const existing = await db.exec("SELECT username FROM auth_users WHERE username = ? LIMIT 1", DEV_USER);
@@ -1082,12 +1082,12 @@ const devUserBootstrap: BootstrapFn = async ({ db, env }) => {
   // that are exactly what was configured.
   const configured = String(env.PRAMEN_DEV_PASSWORD ?? "");
   if (configured !== "" && configured.length < 8) {
-    console.warn(`[example] PRAMEN_DEV_PASSWORD is under the 8 characters \`login\` requires — seeding the default instead`);
+    console.warn(`[example] PRAMEN_DEV_PASSWORD is under the 8 characters \`login\` requires, so seeding the default instead`);
   }
   const password = configured.length >= 8 ? configured : DEV_PASSWORD;
   // Raw SQL, like `seedIdentityUser` above and for the same reason: a `BootstrapFn`'s `db` is
   // schema-AGNOSTIC (the contract has to accept any app's), so the ORM's row types are not
-  // available here and `roles` — a `t.json()` column — is serialized by hand rather than by
+  // available here and `roles` (a `t.json()` column) is serialized by hand rather than by
   // the codec at the `Db` chokepoint.
   await db.exec(
     "INSERT INTO auth_users (username, passwordHash, roles, email, emailVerified, active, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -1098,11 +1098,11 @@ const devUserBootstrap: BootstrapFn = async ({ db, env }) => {
     // someone who came here to see the CMS.
     JSON.stringify(["admin", "editor", "reviewer"]),
     DEV_USER,
-    Date.now(), // emailVerified — nothing to confirm for an address that is not real
+    Date.now(), // emailVerified: nothing to confirm for an address that is not real
     1, // active (SQLite has no boolean)
     Date.now(),
   );
-  console.warn(`[example] seeded the dev account ${DEV_USER} — local only, gated on PRAMEN_DEV_SEED`);
+  console.warn(`[example] seeded the dev account ${DEV_USER}: local only, gated on PRAMEN_DEV_SEED`);
 };
 
 const seededNote = defineBlockType("seeded_note", [{ name: "body", type: "richtext" }] as const, { name: "Seeded Note" });
@@ -1113,7 +1113,7 @@ const seededDoc = defineContentType("seeded_doc", {
 });
 
 // Data migrations: the imperative, recorded half of schema evolution. `migrate()` diffs
-// SHAPES and so can only enact structure; these transform DATA — and unlike `bootstrap`
+// SHAPES and so can only enact structure; these transform DATA, and unlike `bootstrap`
 // each runs exactly ONCE per (id, partition), recorded in `_pramen_migrations`, so a
 // non-idempotent backfill is safe. Ordered, and fail closed: a throw aborts the tenant's
 // boot rather than recording a half-finished backfill as done.
@@ -1127,15 +1127,15 @@ const migrations = [
   ...cmsMigrations,
   // The framework-supplied one: `expr.now()` used to emit the `datetime('now')` space form
   // and now emits ISO-8601, so any row this store wrote under an older build still holds the
-  // old shape — and a same-day pair across the two sorts by its separator rather than its
+  // old shape, and a same-day pair across the two sorts by its separator rather than its
   // instant. Declared unconditionally: on a store that was never written by an older build
   // every UPDATE matches no rows, and "was it?" is not a question the code can answer later.
   //
-  // `CMS_LEGACY_TIMESTAMP_COLUMNS` covers the one column the schema cannot find on its own —
+  // `CMS_LEGACY_TIMESTAMP_COLUMNS` covers the one column the schema cannot find on its own:
   // `cms_pages.publishedAt` has no `expr.now()` default, it was stamped from handler code.
   isoTimestampBackfill({ extraColumns: CMS_LEGACY_TIMESTAMP_COLUMNS }),
   {
-    // The raw-driver path: one bulk UPDATE is the right shape for a backfill — walking rows
+    // The raw-driver path: one bulk UPDATE is the right shape for a backfill, since walking rows
     // through ctx.db on a large table is what blows the DO's wall-clock budget.
     id: "2026-09-03-backfill-note-meta",
     async up({ driver }: MigrationContext<typeof schema>) {
@@ -1145,7 +1145,7 @@ const migrations = [
   {
     // The typed path: the same privileged, SYSTEM-scoped ctx.db handlers use (ACL bypassed,
     // triggers suppressed), for a transformation that needs the ORM rather than one statement.
-    // `MigrationContext<typeof schema>` is what makes ctx.db fully typed here — the DataMigration
+    // `MigrationContext<typeof schema>` is what makes ctx.db fully typed here: the DataMigration
     // contract is schema-agnostic, so an unparameterized ctx would hand back untyped rows.
     id: "2026-09-03-normalize-signup-status",
     async up({ db }: MigrationContext<typeof schema>) {

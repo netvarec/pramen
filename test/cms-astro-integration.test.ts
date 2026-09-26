@@ -1,11 +1,11 @@
-// @pramen/cms-astro — the `pramenCms()` Astro integration (issue #35).
+// @pramen/cms-astro: the `pramenCms()` Astro integration (issue #35).
 //
 // The integration is the front door: one typed `backend` descriptor instead of a base URL
 // repeated at every call site, and generated collections instead of a hand-written
 // `defineCollection` per content type that has to track rows in the store.
 //
 // These drive the real hooks with fakes for Astro's, and assert on the SOURCE the virtual
-// module emits — that is the contract a site consumes.
+// module emits, since that is the contract a site consumes.
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -72,7 +72,7 @@ describe("pramenCms()", () => {
     expect(code).not.toContain("page:"); // the store's other type is not generated
   });
 
-  test("the backend descriptor reaches the client — base url, tenant and token", async () => {
+  test("the backend descriptor reaches the client: base url, tenant and token", async () => {
     const { code } = await setup({ backend: { url: "https://cms.example.workers.dev", tenant: "acme", token: "t0ken" } });
     expect(code).toContain('createCmsClient({"baseUrl":"https://cms.example.workers.dev","tenant":"acme","token":"t0ken"})');
   });
@@ -98,7 +98,7 @@ describe("pramenCms()", () => {
     );
   });
 
-  test("an empty store warns rather than failing — a legitimate early state", async () => {
+  test("an empty store warns rather than failing, since it is a legitimate early state", async () => {
     const { code, logs } = await setup({ backend: { url: "https://x.dev" } }, []);
     expect(logs.join()).toContain("warn:no content types found");
     expect(code).toContain("export const collections = {");
@@ -132,7 +132,7 @@ describe("pramenCms({ admin })", () => {
   test("no admin option means no route, and nothing to resolve", async () => {
     const { injected, plugin, adminCode } = await setup({ backend: { url: "https://cms.example.workers.dev" } });
     expect(injected).toHaveLength(0);
-    // Not just unrouted — unresolvable, so a stray import fails loudly instead of loading
+    // Not just unrouted but unresolvable, so a stray import fails loudly instead of loading
     // a shell for a mount that does not exist.
     expect(plugin.resolveId("pramen:cms/admin")).toBeNull();
     expect(adminCode).toBe("");
@@ -144,7 +144,7 @@ describe("pramenCms({ admin })", () => {
     // side effect of an edit somewhere else.
     expect(ADMIN_BASE).toBe("/__admin");
     // …and the two shapes it must never take again. It named the framework
-    // (`/_pramen/admin`), which is the same mistake `brand` exists to undo — a URL an
+    // (`/_pramen/admin`), which is the same mistake `brand` exists to undo: a URL an
     // editor reads out loud is no place for the name of the library the agency built with.
     expect(ADMIN_BASE).not.toContain("pramen");
     // A dot-segment is what dotfile protection in common static hosts, CDNs and proxies
@@ -189,7 +189,7 @@ describe("pramenCms({ admin })", () => {
     const { vite } = await setup({ backend: { url: "https://cms.example.workers.dev" }, admin: true });
     expect(vite.assetsInclude).toContain("**/@pramen/cms-editor/dist/editor.js");
     // …and the panel shims with it. They read the editor's React off a global, so following
-    // their (nonexistent) imports would achieve nothing — and BUNDLING one would put the
+    // their (nonexistent) imports would achieve nothing, and BUNDLING one would put the
     // shim behind the very specifier it exists to resolve.
     expect(vite.assetsInclude).toContain("**/@pramen/cms-editor/dist/panel-*.js");
   });
@@ -204,7 +204,7 @@ describe("pramenCms({ admin })", () => {
   });
 });
 
-describe("panels — a project's own React screens inside the chrome", () => {
+describe("panels: a project's own React screens inside the chrome", () => {
   test("the declared bundle URLs ride along in the same inline config", async () => {
     const { adminCode } = await setup({
       backend: { url: "https://cms.example.workers.dev" },
@@ -212,7 +212,7 @@ describe("panels — a project's own React screens inside the chrome", () => {
     });
     // The editor IMPORTS these; the shell does not script-tag them. A panel bundle links
     // against the editor's React, so it cannot be evaluated until the editor has published
-    // it — which is a line of code in `main.tsx`, not an ordering of script tags.
+    // it, which is a line of code in `main.tsx`, not an ordering of script tags.
     expect(adminCode).toContain('\\"panels\\":[\\"/admin/curation.js\\"]');
   });
 
@@ -230,7 +230,7 @@ describe("panels — a project's own React screens inside the chrome", () => {
   test("the map covers EVERY specifier a panel build can emit", () => {
     // The link between the shell and the shims, and the one place the two lists can drift.
     // A specifier the shims resolve but the map omits is the failure this pins: it is the
-    // only bare import that still RESOLVES — from the consumer's own node_modules — so the
+    // only bare import that still RESOLVES, from the consumer's own node_modules, so the
     // panel silently ships a second React and its first hook throws.
     const map = JSON.parse(adminImportMap({ react: "/r.js", reactDom: "/rd.js", jsxRuntime: "/j.js", jsxDevRuntime: "/jd.js" })) as { imports: Record<string, string> };
     expect(Object.keys(map.imports).sort()).toEqual(PANEL_GLOBAL_SHIMS.map((s) => s.specifier).sort());
@@ -273,7 +273,7 @@ describe("the editor's runtime config in an inline <script>", () => {
   });
 });
 
-describe("admin.editorAssets — serving an editor the host built", () => {
+describe("admin.editorAssets: serving an editor the host built", () => {
   /** What the shell imports with `?url` when the packaged editor is used. */
   const packaged = {
     editor: "/_astro/editor.abc.js",
@@ -290,7 +290,7 @@ describe("admin.editorAssets — serving an editor the host built", () => {
 
   test("set, ALL SIX come from that directory", () => {
     // All six or none. A deployment that built its own editor built its own shims too, and
-    // they re-export the names of the React that bundle linked — one packaged shim left
+    // they re-export the names of the React that bundle linked: one packaged shim left
     // behind beside a host-built editor is a link error inside someone's panel, which is the
     // hardest kind of break to trace back to a config line.
     const urls = adminAssetUrls("/admin", packaged);
@@ -302,7 +302,7 @@ describe("admin.editorAssets — serving an editor the host built", () => {
       jsxRuntime: "/admin/panel-jsx-runtime.js",
       jsxDevRuntime: "/admin/panel-jsx-dev-runtime.js",
     });
-    // And the import map names the host's shims, not ours — the map is the whole mechanism,
+    // And the import map names the host's shims, not ours. The map is the whole mechanism,
     // so a base that reached the assets but not the map would be silently half-applied.
     expect(adminImportMap(urls)).not.toContain("_astro");
   });
@@ -327,14 +327,14 @@ describe("admin.editorAssets — serving an editor the host built", () => {
 
   test("a relative base is refused, with the shape it needs", () => {
     // `"admin"` resolves against the CURRENT admin route, so it would 404 on
-    // /__admin/pages/42 and work at /__admin — a bug that reproduces on some routes only.
+    // /__admin/pages/42 and work at /__admin, a bug that reproduces on some routes only.
     expect(() => adminAssetUrls("admin", packaged)).toThrow(/root-relative/);
     expect(() => adminAssetUrls("./admin", packaged)).toThrow(/root-relative/);
   });
 });
 
 describe("the shell does not resolve assets it will not serve", () => {
-  /** The shell's frontmatter, read as text — the contract here is about IMPORT SHAPE. */
+  /** The shell's frontmatter, read as text. The contract here is about IMPORT SHAPE. */
   const shell = readFileSync(new URL("../packages/cms-astro/src/PramenAdmin.astro", import.meta.url), "utf8");
 
   test("the shell has no packaged imports; the configured module owns the graph", async () => {

@@ -1,5 +1,5 @@
 // Mint HS256 JWTs for the smoke tests. Delegates to @pramen/server's signer so the repo
-// has ONE implementation — the tests, the `pramen` bin and the `pramen-cms` bin all share
+// has ONE implementation: the tests, the `pramen` bin and the `pramen-cms` bin all share
 // it. The explicit DEV_SECRET argument preserves this helper's deliberate behaviour of
 // always using the wrangler dev secret, ignoring any AUTH_SECRET in the environment.
 

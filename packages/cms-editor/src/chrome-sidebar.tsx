@@ -4,7 +4,7 @@
 // is a brand-left / few-tabs-right bar, and this admin outgrew it: Pages, one tab per
 // content type, N collections, Media, Menus, Taxonomies, Widgets, Redirects, Apps, Types,
 // Users, Settings and any host links is a dozen-plus destinations, which on a 1280px screen
-// left the tabs a dense unlabelled ribbon and below that a horizontal scroller — a nav whose
+// left the tabs a dense unlabelled ribbon and below that a horizontal scroller: a nav whose
 // items you have to scroll to discover. A column has room for all of them AT ONCE, plus an
 // icon per row and headings that group them (see `navSections`), which is the same
 // information in a shape that can be scanned rather than read.
@@ -12,7 +12,7 @@
 // It is shaped like NOTION's rail, which is the shape this kind of nav has converged on and
 // the one an editor already knows how to read:
 //
-//   - a GROUND of its own — the rail is `surface-card`, the content `surface` — so the two
+//   - a GROUND of its own (the rail is `surface-card`, the content `surface`) so the two
 //     regions separate without a rule between them. In DARK the two tokens are the same
 //     colour by design (podoba flattens the card onto the surface), so there the hairline
 //     does the separating; that is why the border is unconditional and the tone is not.
@@ -26,7 +26,7 @@
 // `text-compact`, and every colour is a token (`surface-card` / `surface-muted` / `fg-muted`
 // / `border`). What changed is the chrome's LAYOUT and DENSITY, not the design system.
 //
-// `chrome-topbar.tsx` is the other shape, for the deployment that wants the row back — see
+// `chrome-topbar.tsx` is the other shape, for the deployment that wants the row back. See
 // the note on `ChromeLayout` in `chrome.ts` for when that is the right call.
 
 import { useEffect, useState } from "react";
@@ -44,7 +44,7 @@ import {
 } from "./icons";
 import { NAV_SECTION_IDS, railIsNarrow, type ExtraNavLink, type NavIcon, type NavSectionId } from "./nav";
 
-/** Which nav groups this browser has folded away. Per-browser, like the theme — it is a
+/** Which nav groups this browser has folded away. Per-browser, like the theme: it is a
  * reading preference, not deployment configuration, and nothing server-side should carry it. */
 const COLLAPSED_KEY = "pramen.cms.nav.collapsed";
 /** …and whether the whole rail is down to icons. Same reasoning, separate key: folding a
@@ -55,7 +55,7 @@ const RAIL_KEY = "pramen.cms.nav.rail";
  *
  * `try`/`catch` and no `typeof` guard, matching `readCollapsed` below: referencing an absent
  * `localStorage` throws a ReferenceError the catch already handles, and the catch additionally
- * covers the case a `typeof` check cannot — a browser that HAS the object and throws on access
+ * covers the case a `typeof` check cannot: a browser that HAS the object and throws on access
  * (a private window with site data blocked). One shape for both readers. */
 function readRail(): boolean {
   try {
@@ -104,7 +104,7 @@ export function SidebarChrome({
   // Below `md` the rail collapses to a disclosure under the brand row. A DISCLOSURE, not an
   // overlay drawer: an overlay owes the reader a focus trap, a restore and an Esc handler,
   // and the pieces to do that properly (react-aria's ModalOverlay) are podoba's dependency,
-  // not ours — a hand-rolled one would be a modal that keyboard focus walks straight out of.
+  // not ours, and a hand-rolled one would be a modal that keyboard focus walks straight out of.
   // In the flow it is just a `<nav>` that is there or not.
   const [menuOpen, setMenuOpen] = useState(false);
   // Navigating is what a nav is for, so arriving somewhere closes it. Keyed on what is LIT
@@ -114,7 +114,7 @@ export function SidebarChrome({
 
   // Folded groups, remembered. A deployment where nobody touches Site or System should not
   // have to re-fold them every morning, and the state is small enough to keep as a list of
-  // ids — the sections are named, so an id that no longer exists simply matches nothing.
+  // ids: the sections are named, so an id that no longer exists simply matches nothing.
   const [collapsed, setCollapsed] = useState<NavSectionId[]>(() => (typeof localStorage === "undefined" ? [] : readCollapsed()));
   useEffect(() => {
     try {
@@ -136,12 +136,12 @@ export function SidebarChrome({
       /* a private window that refuses writes costs the memory of the choice, nothing else */
     }
   }, [railChoice]);
-  // Below `md` the rail is already a disclosure under the wordmark — a width it does not have
+  // Below `md` the rail is already a disclosure under the wordmark, a width it does not have
   // there. Narrowing is a desktop affordance, and every class that expresses it is `md:`-scoped.
   //
   // Which is why the STORED CHOICE is not the same thing as being narrowed, and JS has to know
   // the difference. The choice is per-browser and persisted, so a rail narrowed on a laptop
-  // came back narrowed on a phone — where the `md:` classes do nothing, so the rows kept their
+  // came back narrowed on a phone, where the `md:` classes do nothing, so the rows kept their
   // labels, but the JS gate below removed every group heading AND the hairline that stands in
   // for one is `md:`-only too. That left one undifferentiated column of a dozen rows, with the
   // toggle that would undo it `hidden md:inline-flex`: no way back from that viewport.
@@ -149,13 +149,13 @@ export function SidebarChrome({
 
   return (
     // Page-level surface so the whole viewport (not just the rail + cards) flips under
-    // `[data-theme="dark"]` — otherwise the body stays white in dark mode. The rail is a grid
+    // `[data-theme="dark"]`, since otherwise the body stays white in dark mode. The rail is a grid
     // COLUMN rather than a fixed overlay, so the content column needs no compensating offset
     // and the document keeps its own scroll (which is what the page editor's full-height
     // grid and every in-page anchor already assume).
     <div className={`min-h-screen bg-surface text-fg md:grid ${railNarrow ? "md:grid-cols-[3.5rem_1fr]" : "md:grid-cols-[15rem_1fr]"}`}>
       {/* The rail's own ground. `border-r` is unconditional and the tone is not, because in
-          DARK podoba maps `surface-card` onto `surface` — the hairline is the only separation
+          DARK podoba maps `surface-card` onto `surface`: the hairline is the only separation
           left there, and a border that appeared only in one theme would be a rule with no
           reason a reader could see. */}
       <aside
@@ -165,8 +165,8 @@ export function SidebarChrome({
         <div className="flex min-h-full flex-col">
           <div className={`flex h-12 shrink-0 items-center gap-1 ${railNarrow ? "md:justify-center md:px-0" : ""} px-2`}>
             {/* The workspace row: the wordmark is the way back to the top of the admin, as it
-                is on every other site — a `button` (not an `<a>`) so the SPA router handles
-                it — and it reads as a row of the rail rather than a masthead above one. */}
+                is on every other site: a `button` (not an `<a>`) so the SPA router handles
+                it, and it reads as a row of the rail rather than a masthead above one. */}
             <button
               type="button"
               onClick={onHome}
@@ -203,10 +203,10 @@ export function SidebarChrome({
             <nav aria-label={t("chrome.primaryNav")} className={`flex flex-col pb-2 ${railNarrow ? "md:px-1.5" : ""} px-2`}>
               {sections.map((section) => {
                 // Only a LABELLED group can be folded: the header is the control, so without
-                // one there would be no way back — and an unlabelled rail is the
+                // one there would be no way back, and an unlabelled rail is the
                 // single-group case, where there is nothing to fold away from anyway.
                 // Narrowed, a group cannot be folded: the heading IS the control, and at 56px
-                // there is no room for one. The rows show instead — hiding them behind a
+                // there is no room for one. The rows show instead, since hiding them behind a
                 // control that is not on screen would strand a section with no way back.
                 const foldable = labelled && !railNarrow;
                 const open = !foldable || !collapsed.includes(section.id);
@@ -270,13 +270,13 @@ export function SidebarChrome({
           table, a long slug) push the column past its track and squeeze the rail. */}
       <div className="min-w-0">
         {/* The app bar. Everything here belongs to the SESSION rather than to the screen, which
-            is why it is not in the screen header — and why it survives a narrowed rail, where
+            is why it is not in the screen header, and why it survives a narrowed rail, where
             the sign-out and theme controls used to live and no longer fit. Sticky at the top of
             the content column; `page-header.tsx` pins the screen header directly beneath it,
             both off the one length in `chrome.ts`. No rule under it, and the header below has no
             padding above it: the two read as one block of chrome rather than a bar with a
             panel parked beneath it. `bg-surface` is what keeps content from scrolling
-            through — the border was never what did that. */}
+            through; the border was never what did that. */}
         <div className={`sticky top-0 z-30 flex ${APP_BAR_H} items-center gap-2 bg-surface px-[var(--pramen-gutter)]`}>
           <Button
             variant="ghost"
@@ -289,7 +289,7 @@ export function SidebarChrome({
             <RailToggleIcon className="h-[17px] w-[17px]" />
           </Button>
           {/* The trail. The section is a BUTTON while a detail crumb is showing and plain text
-              otherwise — a link to the page you are already on is a link that does nothing,
+              otherwise: a link to the page you are already on is a link that does nothing,
               and the only thing more annoying than no breadcrumb is one that lies about being
               navigable. */}
           <nav aria-label={t("breadcrumb.label")} className="flex min-w-0 items-center gap-1 text-compact">
@@ -325,7 +325,7 @@ export function SidebarChrome({
             <AccountMenu me={me} theme={theme} items={accountItems} onTheme={onTheme} onSettings={onSettings} onSignOut={onSignOut} />
           </div>
         </div>
-        {/* `BELOW_CHROME_PAD` is 0 here — the header meets the bar directly, which is the
+        {/* `BELOW_CHROME_PAD` is 0 here: the header meets the bar directly, which is the
             whole reason the bar carries no rule. It is applied anyway so the one element that
             owns the gap is the same element in both chromes. */}
         <div className={BELOW_CHROME_PAD}>{children}</div>
@@ -349,7 +349,7 @@ export function ErrorBanner({ error }: { error: string }) {
   );
 }
 
-/** The shared shape of a rail row — a full-width ghost rect, icon then label.
+/** The shared shape of a rail row: a full-width ghost rect, icon then label.
  *
  * Three overrides of podoba's `Button`, all for the same reason: it is an ACTION button and
  * this is a list row. `justify-start`, because a centred label gives a column with no left
@@ -394,7 +394,7 @@ function SectionHeader({ label, open, controls, onPress }: { label: string; open
  *
  * `aria-current` alongside the tint: the rail is N mutually-exclusive destinations whose
  * only "you are here" cue is a background, which is invisible to a screen reader and
- * marginal for anyone who cannot see it. The active row also takes `font-medium` — podoba
+ * marginal for anyone who cannot see it. The active row also takes `font-medium`: podoba
  * has ONE muted-surface token, so hover and active would otherwise be the same pixel, and
  * "where am I" would vanish under the cursor.
  */
@@ -403,7 +403,7 @@ function NavItem({ icon, label, narrow, active, onPress }: { icon: NavIcon; labe
     <Button
       variant="ghost"
       size="sm"
-      // Narrowed, the label is gone from the screen but not from the accessible name — the
+      // Narrowed, the label is gone from the screen but not from the accessible name: the
       // row is still "Media", not an unnamed button with a picture in it.
       {...(narrow ? { "aria-label": label } : {})}
       className={`${ROW} ${narrow ? "md:justify-center md:px-0" : ""} ${active ? "bg-surface-muted font-medium text-fg" : "text-fg-muted hover:text-fg"}`}
@@ -427,7 +427,7 @@ function NavItem({ icon, label, narrow, active, onPress }: { icon: NavIcon; labe
  * destination as `Referer`, and `_self` is honoured for cross-origin destinations.
  *
  * The key pairs href with label, because two entries may legitimately point at the same href
- * and differ only in label or target — keyed on href alone React reconciles them together
+ * and differ only in label or target. Keyed on href alone React reconciles them together
  * and the rendered label can end up on the other one's anchor.
  */
 function NavLink({ link, icon, narrow, sameTab, confirm }: { link: ExtraNavLink; icon: NavIcon; narrow: boolean; sameTab: boolean; confirm: () => boolean }) {

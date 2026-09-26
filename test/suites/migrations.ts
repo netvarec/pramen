@@ -1,5 +1,5 @@
 // Data migrations, end-to-end: proves the BOOT WIRING that the unit tests
-// (test/data-migrations.test.ts) deliberately don't reach — that a real DO runs
+// (test/data-migrations.test.ts) deliberately don't reach: that a real DO runs
 // `app.migrations` after migrate() on its first fetch, records the ledger, and reports it
 // over the admin surface. The example app declares two default-partition migrations.
 //
@@ -25,7 +25,7 @@ export async function runMigrations(base: string): Promise<void> {
     }));
   };
 
-  // Touch the tenant so its DO boots — migration is lazy, so before a first fetch there is
+  // Touch the tenant so its DO boots. Migration is lazy, so before a first fetch there is
   // no store at all, let alone a ledger. This has to be a REAL (tenant-authorized) request:
   // reading the ledger deliberately does not boot anything, so a 403'd "boot" would leave
   // nothing to report and every assertion below would be vacuous.
@@ -54,7 +54,7 @@ export async function runMigrations(base: string): Promise<void> {
 
   // The probe is READ-ONLY: asking an UNTOUCHED tenant must not boot it (which would apply
   // every pending migration as a side effect of asking, so `migrations status` could never
-  // report PENDING — the one question the command exists to answer). A never-fetched tenant
+  // report PENDING, the one question the command exists to answer). A never-fetched tenant
   // has no ledger table at all, and that reads as "none applied", not as an error.
   const virgin = await fetch(`${base}/admin/migrations?tenant=${TENANT}-untouched`, {
     headers: { authorization: `Bearer ${admin}` },
@@ -68,7 +68,7 @@ export async function runMigrations(base: string): Promise<void> {
   // An unknown partition is rejected rather than minting a junk DO + a permanent registry key.
   assert((await ledger(admin, "nope")).status === 400, "migrations: an unknown partition is a 400");
 
-  // A partition that declares no migrations still answers — with an empty list, not an
+  // A partition that declares no migrations still answers, with an empty list, not an
   // error about a missing ledger table.
   const audit = await ledger(admin, "audit");
   assert(audit.body.ok && audit.body.result.partition === "audit", "migrations: an unmigrated partition answers");

@@ -1,8 +1,8 @@
-// Schema shape + diff — powers the CLI's `schema diff`. The diff is a REPORTING tool; it
+// Schema shape + diff, which powers the CLI's `schema diff`. The diff is a REPORTING tool; it
 // does not itself migrate. On the next DO boot migrate() applies ADDITIVE changes only
 // (new table -> CREATE TABLE; new column -> ALTER TABLE ADD COLUMN). DESTRUCTIVE changes
 // (drop column/table, type change, table rebuild) are SKIPPED unless the deploy sets
-// PRAMEN_ALLOW_DESTRUCTIVE=true — and when skipped the schema hash is left unwritten so a
+// PRAMEN_ALLOW_DESTRUCTIVE=true, and when skipped the schema hash is left unwritten so a
 // later opt-in deploy retries. A rename can't be detected from a shape diff; it shows as
 // drop+add unless declared with `renamedFrom` in the schema.
 //
@@ -12,9 +12,9 @@
 // existing column (a NOT NULL / DEFAULT / PRIMARY KEY change via a rebuild, a UNIQUE
 // change via a create/drop index), so a `change-column` is `appliesOnBoot: true`. It is
 // flagged `destructive` when it tightens a constraint (adds NOT NULL / UNIQUE / PRIMARY
-// KEY) — those apply only under PRAMEN_ALLOW_DESTRUCTIVE, or are skipped when the live
+// KEY): those apply only under PRAMEN_ALLOW_DESTRUCTIVE, or are skipped when the live
 // data conflicts (NULL rows / duplicates), leaving the hash unwritten. A partition MOVE
-// still CANNOT be enacted on boot (a partition is a separate Durable Object — it needs a
+// still CANNOT be enacted on boot (a partition is a separate Durable Object, so it needs a
 // manual cross-DO data migration), so it stays `appliesOnBoot: false`.
 
 import type { FieldDef, SchemaDef } from "../sdk/schema";
@@ -68,7 +68,7 @@ const MODIFIER_KEYS: (keyof ColumnFingerprint)[] = ["notNull", "unique", "primar
 
 /** Does `next` tighten a constraint `prev` lacked (add NOT NULL / UNIQUE / PRIMARY KEY)?
  * Such a change may require the destructive gate or be skipped when the live data
- * conflicts (NULL rows / duplicates) — so the diff flags it `destructive`. */
+ * conflicts (NULL rows / duplicates), so the diff flags it `destructive`. */
 function tightensConstraint(prev: ColumnFingerprint, next: ColumnFingerprint): boolean {
   return (!!next.notNull && !prev.notNull) || (!!next.unique && !prev.unique) || (!!next.primaryKey && !prev.primaryKey);
 }
@@ -82,7 +82,7 @@ function modifierDiff(prev: ColumnFingerprint, next: ColumnFingerprint): string 
 }
 
 function fmt(v: unknown): string {
-  return v === undefined ? "—" : String(v);
+  return v === undefined ? "-" : String(v);
 }
 
 export interface SchemaChange {
@@ -91,13 +91,13 @@ export interface SchemaChange {
   column?: string;
   detail?: string;
   /** true = rebuilds the table and may lose data (drop / type change). false = additive
-   * OR a metadata-only change (modifier / partition move) — see `appliesOnBoot`. */
+   * OR a metadata-only change (modifier / partition move). See `appliesOnBoot`. */
   destructive: boolean;
   /** Whether migrate() enacts this change on the next DO boot. Additive changes are
    * always applied; destructive changes (type/drop, or a constraint-tightening modifier
    * change) apply only when the deploy sets PRAMEN_ALLOW_DESTRUCTIVE=true (and are
    * skipped when the live data conflicts, leaving the hash unwritten). `false` here means
-   * the boot migrator will NEVER enact it — today only a partition MOVE (needs a manual
+   * the boot migrator will NEVER enact it: today only a partition MOVE (needs a manual
    * cross-DO data migration). Reported for honesty. */
   appliesOnBoot: boolean;
 }
@@ -136,7 +136,7 @@ export function diffSchemaFingerprint(prev: SchemaFingerprint, next: SchemaFinge
           detail: `${pc.type} → ${ncol.type}`,
           destructive: true,
           // Applied only under PRAMEN_ALLOW_DESTRUCTIVE (a table rebuild). Report it as
-          // boot-applicable — the destructive-gating note explains the opt-in.
+          // boot-applicable, since the destructive-gating note explains the opt-in.
           appliesOnBoot: true,
         });
       } else {

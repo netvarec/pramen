@@ -1,4 +1,4 @@
-// Mint an HS256 JWT for local development and tooling — what a real auth service would
+// Mint an HS256 JWT for local development and tooling: what a real auth service would
 // issue, without running one.
 //
 // Extracted because it was already written twice (the `pramen` CLI and the repo's test
@@ -6,7 +6,7 @@
 // package that owns tokens.
 //
 // NOT an auth system: the dev fallback secret is public, so a token signed with it is
-// worthless anywhere `AUTH_SECRET` is set to something real. That is the point — it makes
+// worthless anywhere `AUTH_SECRET` is set to something real. That is the point: it makes
 // a forgotten secret fail loudly rather than quietly accept dev tokens in production.
 
 /** The scaffolded oblaka.ts dev secret. Used only when AUTH_SECRET is unset. */

@@ -5,7 +5,7 @@ summary: Additive schema reconciliation on every DO boot; destructive changes ar
 ---
 
 The schema is reconciled with the live store on **every DO boot**, inside a storage
-transaction. There is no separate migration step — you edit the schema and redeploy.
+transaction. There is no separate migration step: you edit the schema and redeploy.
 A schema hash in `_pramen_meta` skips the work entirely when nothing changed.
 
 ## Two passes
@@ -16,18 +16,18 @@ A schema hash in `_pramen_meta` skips the work entirely when nothing changed.
 - a new column → `ALTER TABLE ADD COLUMN` (nullable; SQLite can't add `NOT NULL` to
   a populated table)
 
-**Destructive** (*opt-in — off by default*; *can* lose data when enabled):
+**Destructive** (*opt-in, off by default*; *can* lose data when enabled):
 
 - a column the schema no longer declares is **dropped**
 - a column whose type changed is **rebuilt** (with a `CAST`)
 - a table absent from the schema is **dropped**
 
 Drops and type changes use the standard SQLite **table-rebuild** (create a new
-table, copy the data, drop the old, rename) — preserving rows and ids.
+table, copy the data, drop the old, rename) preserving rows and ids.
 
 This pass runs **only when the deploy sets `PRAMEN_ALLOW_DESTRUCTIVE=true`** (local
 dev sets it on). Otherwise each destructive change is skipped and logged, and the
-schema hash is left unwritten so a later opt-in deploy retries — a schema edit can't
+schema hash is left unwritten so a later opt-in deploy retries: a schema edit can't
 silently drop a column on a plain deploy. (pramen is WIP with no backward-compat
 constraints, so enabling it is a deliberate data-loss trade-off.)
 
@@ -65,7 +65,7 @@ bun run pramen schema status --tenant acme   # is a deployed tenant caught up?
 
 A diff between two table **shapes** can only ever express structure. It cannot split
 `name` into `firstName`/`lastName`, backfill the column `ADD COLUMN` just created
-(always nullable — SQLite can't add `NOT NULL` to a populated table, so every new
+(always nullable, since SQLite can't add `NOT NULL` to a populated table, so every new
 column starts as a hole), rewrite `priceHalers` into `priceCzk`, or normalize a
 `t.json()` blob whose shape changed.
 
@@ -93,7 +93,7 @@ const migrations = [
 export const app = { schema, handlers, acl, migrations };
 ```
 
-`up()` gets a privileged, SYSTEM-scoped context: `{ db, driver, schema, partition }` —
+`up()` gets a privileged, SYSTEM-scoped context: `{ db, driver, schema, partition }`.
 `db` is the ORM with the ACL bypassed and triggers suppressed, `driver` is raw SQL. A
 bulk `UPDATE` is usually the right tool; walking rows through `db` is what blows the
 DO's wall-clock budget.
@@ -116,7 +116,7 @@ Keyed by `(id, partition)` for the same reason the schema hash is
 `schema_hash:<partition>`: partitions are independent Durable Objects and must not
 thrash each other's state. On the DO path each partition-DO runs **its own**
 partition's migrations. The D1 store is one shared database with no partition split,
-so there every declared migration runs — still recorded under its own partition key.
+so there every declared migration runs, still recorded under its own partition key.
 
 The `id` is the ledger key: stable, unique across the whole array, **never reused**.
 
@@ -130,23 +130,23 @@ On every boot: `migrate()` → **data migrations** → the outbox table →
 | | `app.bootstrap` | `app.migrations` |
 |---|---|---|
 | cardinality | every boot | once, ever |
-| idempotency | **required** | not required — that's the point |
+| idempotency | **required** | not required, which is the point |
 | subject | code-defined reference data | existing user rows |
 | failure | logged and **swallowed** | **fails closed** |
 
 The `failure` row is about the reconciler **at boot**. A factory called from `app.ts` may
-still refuse to build one — `cmsBootstrap` validates its type definitions there and throws,
-like `validateCollections` and `validateMigrations` — which fails the deploy, not a boot.
+still refuse to build one: `cmsBootstrap` validates its type definitions there and throws,
+like `validateCollections` and `validateMigrations`, which fails the deploy, not a boot.
 
 A backfill that doubles a value on the second run is precisely what bootstrap's
 "MUST be safe to run repeatedly" contract forbids. And the schema hash says nothing
-about backfills — a perfectly in-sync store carries no evidence one ran.
+about backfills: a perfectly in-sync store carries no evidence one ran.
 
 ### Fail closed
 
 A throwing migration writes **no ledger row**, does not let the boot complete, and
 propagates: the tenant's request fails and the migration is retried on the next fetch.
-This mirrors `migrate()`'s withhold-the-hash-on-a-skip invariant — the store is never
+This mirrors `migrate()`'s withhold-the-hash-on-a-skip invariant: the store is never
 marked as having reached a state it did not reach. Migrations declared *after* the
 failing one do not run either, since a later one may depend on an earlier one's output.
 
@@ -174,17 +174,17 @@ store is in play. On the DO the work and the ledger row commit together.
 
 The ledger row is **claimed before** the work, not written after it, and the claim carries
 a **lease**. On the DO that is just bookkeeping order inside one transaction; on D1 it is
-what makes "once, ever" hold at all — there is no single writer, so two cold Worker
+what makes "once, ever" hold at all: there is no single writer, so two cold Worker
 isolates would otherwise both read an empty ledger and both run the same backfill.
 
 A row is therefore either *in flight* (a runner holds it until its lease expires) or
 *applied*. Only an applied row counts, so a migration still running reads as `PENDING`
 everywhere, the admin ledger included. A runner that meets a **live** lease waits for the
-holder — up to 5s — and then either proceeds (the holder committed, and the data is
+holder (up to 5s) and then either proceeds (the holder committed, and the data is
 migrated), takes the row (the holder released it), or fails closed. It never skips past a
 live lease: that would serve traffic against half-migrated data, and would strand the
-migration entirely if the holder then failed. A holder that dies without releasing — an
-isolate evicted mid-backfill, which no compensating delete can cover — is recovered by its
+migration entirely if the holder then failed. A holder that dies without releasing (an
+isolate evicted mid-backfill, which no compensating delete can cover) is recovered by its
 lease expiring, after which the next runner steals the row.
 
 The lease is 60s, which must exceed your slowest migration: a lease that expires under a
@@ -196,12 +196,12 @@ constraint as the wall-clock one below, from the other direction.
 Most migrations are yours. This one ships with pramen, because a change to `expr.now()`
 changed the *shape* of values already in your columns and no declarative diff can fix that.
 
-`expr.now()` used to emit `datetime('now')` — `'2026-09-03 21:05:00'` — and now emits
+`expr.now()` used to emit `datetime('now')` (`'2026-09-03 21:05:00'`) and now emits
 ISO-8601 with millis and a `Z`. Changing a column's DEFAULT is a modifier change, so
 `migrate()` rebuilds the table; a rebuild **copies existing values through untouched**. New
 rows get the new shape, old rows keep the old one, in the same column.
 
-Mixed, they order by their separator rather than their instant — but only on the *same
+Mixed, they order by their separator rather than their instant, but only on the *same
 date*, since both forms open with `YYYY-MM-DD`. Same date, index 10 decides, and `' '`
 (0x20) always sorts below `'T'` (0x54). So the rows written either side of the deploy are
 exactly the pairs that invert, and a `{ publishedAt: { lte: $now() } }` policy lets a row
@@ -223,26 +223,26 @@ it cannot find: a column written by *handler* code in the same shape has no defa
 recognize (`cms_pages.publishedAt` is the real instance, which is what
 `CMS_LEGACY_TIMESTAMP_COLUMNS` covers).
 
-The `WHERE` is exact — length 19 with a space at index 11 — so a value in some third format
+The `WHERE` is exact (length 19 with a space at index 11) so a value in some third format
 is left alone rather than guessed at, and a converted value can never be converted twice.
 Declaring it on a store that was never written by an older build costs nothing: every
 `UPDATE` matches no rows. Declare it anyway, because "was this store ever written by an
 older build?" is not a question the code can answer later.
 
 Multiple partitions need one per partition (`isoTimestampBackfill({ partition: "audit", id:
-"pramen:iso-timestamps:audit" })`) — a partition-DO only sees its own tables.
+"pramen:iso-timestamps:audit" })`) because a partition-DO only sees its own tables.
 
 ### Pruning: check before you delete
 
 Migration is **lazy and per-DO**. A tenant nobody has touched for six months is
-unmigrated until someone touches it — so deleting an `id` from the array on a hunch
+unmigrated until someone touches it, so deleting an `id` from the array on a hunch
 silently skips it for every tenant that had not yet woken. (Same trap as `renamedFrom`,
 which for the identical reason can never be safely removed either.)
 
 ```bash
 bun run pramen migrations list                    # declared ids, in order
 bun run pramen migrations status --tenant acme    # applied vs pending for one tenant
-bun run pramen migrations status --all-tenants    # the fleet — fans out over /tenants
+bun run pramen migrations status --all-tenants    # the fleet; fans out over /tenants
 ```
 
 `status` marks each id `✓` applied, `•` PENDING, or `?` applied but **not declared** (a

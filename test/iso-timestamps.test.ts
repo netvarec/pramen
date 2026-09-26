@@ -1,13 +1,13 @@
-// `isoTimestampBackfill()` — rewriting timestamps written before `expr.now()` emitted ISO.
+// `isoTimestampBackfill()`: rewriting timestamps written before `expr.now()` emitted ISO.
 //
 // The reason this migration exists at all is that `migrate()` does the WRONG half of the
 // job on its own, correctly: a DEFAULT change is a modifier change, so it rebuilds the
-// table — and a rebuild copies existing values through untouched. New rows get the new
+// table, and a rebuild copies existing values through untouched. New rows get the new
 // shape, old rows keep the old one, in the same column.
 //
 // That is worse than either format alone, and the failure is narrow enough to be worth
 // pinning down: both forms open with `YYYY-MM-DD`, so values on DIFFERENT dates still order
-// correctly. It is the SAME date that breaks — index 10 is ` ` (0x20) in the space form and
+// correctly. It is the SAME date that breaks: index 10 is ` ` (0x20) in the space form and
 // `T` (0x54) in ISO, so a same-day space-form value always sorts below a same-day ISO one
 // whatever the time-of-day. The deploy window is therefore its own blast radius: the rows
 // written either side of the change are exactly the same-day pairs that invert.
@@ -29,7 +29,7 @@ const ISO = "2026-09-03T21:33:07.222Z";
 
 const schema = defineSchema({
   events: Entity((b) => ({ id: b.textId(), at: defaultTo(b.text(), expr.now()), note: b.text() })),
-  // No expr default — the case an app has to name, because there is nothing on the column
+  // No expr default: the case an app has to name, because there is nothing on the column
   // to find. `cms_pages.publishedAt` is the real instance of this.
   posts: Entity((b) => ({ id: b.textId(), publishedAt: b.text() })),
 });
@@ -69,7 +69,7 @@ describe("why the backfill is needed", () => {
 
   test("a `lte: $now()` boundary lets a row dated today through early", () => {
     // `$now()` is ISO. A space-form value dated today is below it whatever the time, so a
-    // row scheduled for later today reads as already past — for the rest of the day.
+    // row scheduled for later today reads as already past, for the rest of the day.
     const nowIso = "2026-09-03T09:00:00.000Z";
     const scheduledForLaterToday = "2026-09-03 23:00:00";
     expect(scheduledForLaterToday <= nowIso).toBe(true);
@@ -123,7 +123,7 @@ describe("the rewrite", () => {
     await isoTimestampBackfill().up(ctxFor(driver));
     const { at } = db.query("SELECT at FROM events WHERE id = 'a'").get() as { at: string };
     // The space form is UTC with no zone marker, so reading it as UTC is the only correct
-    // reading — and it is what SQLite's own `datetime('now')` meant by it.
+    // reading, and it is what SQLite's own `datetime('now')` meant by it.
     expect(Date.parse(at)).toBe(Date.parse(`${SPACE.replace(" ", "T")}Z`));
   });
 
@@ -134,7 +134,7 @@ describe("the rewrite", () => {
     db.run("INSERT INTO events (id, at) VALUES ('early', '2026-09-03T01:00:00.000Z')");
 
     const wrong = db.query("SELECT id FROM events ORDER BY at DESC").all() as { id: string }[];
-    expect(wrong[0]!.id).toBe("early"); // 01:00 above 23:00 — the bug
+    expect(wrong[0]!.id).toBe("early"); // 01:00 above 23:00, the bug
 
     await isoTimestampBackfill().up(ctxFor(driver));
     const after = db.query("SELECT id FROM events ORDER BY at DESC").all() as { id: string }[];
@@ -177,7 +177,7 @@ describe("the rewrite", () => {
     expect((db.query("SELECT publishedAt FROM posts WHERE id = 'p'").get() as { publishedAt: string }).publishedAt).toBe(SPACE);
   });
 
-  test("a fresh store pays nothing — every UPDATE matches no rows", async () => {
+  test("a fresh store pays nothing, since every UPDATE matches no rows", async () => {
     const { db, driver } = await seeded();
     db.run("INSERT INTO events (id) VALUES ('a')"); // DB fills `at` with the new default
     const before = (db.query("SELECT at FROM events WHERE id = 'a'").get() as { at: string }).at;
@@ -188,7 +188,7 @@ describe("the rewrite", () => {
 });
 
 describe("the migration's own shape", () => {
-  test("it has a stable default ledger id — that is what makes it run once", () => {
+  test("it has a stable default ledger id, which is what makes it run once", () => {
     expect(isoTimestampBackfill().id).toBe("pramen:iso-timestamps");
     expect(isoTimestampBackfill({ id: "custom" }).id).toBe("custom");
   });

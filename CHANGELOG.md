@@ -9,7 +9,7 @@ All notable changes to the `@pramen/*` packages are recorded here. The ten packa
 > is the record for that range; this file resumes at 0.0.52 rather than reconstructing it.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/). This project is
-**pre-1.0 and under active development**: 0.0.x releases may include breaking changes —
+**pre-1.0 and under active development**: 0.0.x releases may include breaking changes, and
 there are no backward-compatibility guarantees yet.
 
 ## [Unreleased]
@@ -217,7 +217,7 @@ there are no backward-compatibility guarantees yet.
 
 - **Fixed: `editorAssets` no longer leaves the packaged assets loaded anyway
   (`@pramen/cms-astro`).** The shell imported `editor.js`, `editor.css` and the four
-  `panel-*.js` with static `?url` imports, which ran for every deployment — including one
+  `panel-*.js` with static `?url` imports, which ran for every deployment, including one
   that had set `editorAssets` and therefore names none of them. An unused `?url` import of a
   CSS file is not free: in dev Vite treats it as a CSS module and **injects it as a `<style>`
   tag**, so a host that built the editor against its own design system got the packaged
@@ -241,17 +241,17 @@ there are no backward-compatibility guarantees yet.
   urgent: a host's tokens are declared in a plain `:root`, while the packaged stylesheet's
   come through `@theme` into `@layer theme`, and unlayered declarations beat layered ones in
   the cascade whatever the source order. Verified by comparing all 128 of one host's tokens
-  against their computed values in the browser — every one of them wins. The remaining cost
+  against their computed values in the browser: every one of them wins. The remaining cost
   is weight: a wasted stylesheet download in dev and ~1.3MB of orphan assets in the build.
 
   The real fix is for the integration to inject a DIFFERENT shell entrypoint when
   `editorAssets` is set, so the packaged assets never enter the graph at all. Not done here.
 
-- **`admin: { pageHeader }` — a deployment dresses the screen header without touching the DOM
+- **`admin: { pageHeader }`: a deployment dresses the screen header without touching the DOM
   (`@pramen/cms-editor`, `@pramen/cms-astro`).** The sticky panel carrying the `<h1>` and the
   primary action was the one surface a host could not influence: `brand` and `layout` dress the
   chrome and `panels`/`adminPage()` add whole screens, but the editor's OWN screens were closed.
-  So a project reached for the only hook left — a stylesheet selecting on the header's internal
+  So a project reached for the only hook left: a stylesheet selecting on the header's internal
   DOM (`div.sticky[class*="max-w-[1200px]"] > div.relative.isolate… > div.relative.grid >
   :not(h1)`), which encodes the gutter, the panel's radius, the grid and the fact that the cover
   art is a direct-child `<svg>`. The release that reworked the header would have voided it with
@@ -259,15 +259,15 @@ there are no backward-compatibility guarantees yet.
 
   Three tokens replace it: `variant` (`"cover"`, the seeded artwork every screen has today |
   `"flat"`, the panel without it | `"bare"`, no panel at all), `accent`, and `titleFont` for the
-  `<h1>`. Unconfigured renders identically — same panel, same art, same classes.
+  `<h1>`. Unconfigured renders identically: same panel, same art, same classes.
 
   **`accent` is PARSED, not passed through**, and that is the substance rather than a
   restriction. A structural hook cannot tell one screen from another or a container from the
   control inside it, and both cost a real bug in the version that shipped: a label injected for
   "the header's action" read `New + Upload` on Media, and a rule meant for the panel landed on
-  the button too — white on mint, 1.58:1. Here the host names ONE colour and the editor derives
+  the button too: white on mint, 1.58:1. Here the host names ONE colour and the editor derives
   what the host got wrong: the label colour on it (whichever of podoba's ink and paper wins on
-  WCAG contrast) and the hover shade (a dark accent lightens, a light one darkens — a fixed
+  WCAG contrast) and the hover shade (a dark accent lightens, a light one darkens, because a fixed
   direction takes a mint button somewhere invisible). Which is why `var(--your-token)`, `oklch()`
   and any colour with alpha are refused with a warning rather than honoured: a value whose
   contrast cannot be computed is one where the derivation silently stops happening, and that is
@@ -275,14 +275,14 @@ there are no backward-compatibility guarantees yet.
 
   The accent lands as podoba's own custom properties (`--color-brand-primary`,
   `--color-fg-inverted`, `--color-neutral-600`) **scoped to the header element**, so it reaches
-  whatever control the slot holds — today a `Button`, tomorrow a second one beside it — without
+  whatever control the slot holds (today a `Button`, tomorrow a second one beside it) without
   every future control remembering a prop, and nothing outside the header moves. Resolution
   lives in the leaf `page-header-style.ts` beside `brand.ts` and `chrome.ts`, with their rule:
   read at module load, every malformed value warned about and fallen back rather than thrown on,
   because a throw there is a blank page. Closes #60.
 - **The editor's build, as an API (`@pramen/cms-editor`, `@pramen/cms-astro`).**
   `buildEditor()` from `@pramen/cms-editor/build` is the same build that produces the published
-  `dist/`, parameterized — `designSystem` links podoba and React out of your project instead of
+  `dist/`, parameterized: `designSystem` links podoba and React out of your project instead of
   ours, `styles` compiles the stylesheet from your own Tailwind entry, and `slots` puts your
   component in place of one of ours (today: `pageHeader`). `admin: { editorAssets: "/admin" }`
   then points the mount at what you built. Called with only `outdir` it reproduces the published
@@ -291,7 +291,7 @@ there are no backward-compatibility guarantees yet.
   This exists because the published bundle is **sealed**: `editor.css` is Tailwind already
   compiled against the podoba tokens this package pins, with the web font inlined as a data:
   URI, and `editor.js` has podoba's components compiled in. Self-contained is what makes the
-  drop-in mount work with no build config — and it means a site whose own design system is
+  drop-in mount work with no build config, and it means a site whose own design system is
   podoba gets our generation of it, with no configuration that can reach inside a compiled
   bundle to change it. A deployment hit exactly that and rebuilt the editor out of the `src/`
   we ship, getting the rest of the way with ~70 string replacements against our source
@@ -302,11 +302,11 @@ there are no backward-compatibility guarantees yet.
   out of `designSystem`, because Tailwind resolves a bare `@import` from the directory of the
   file that wrote it: our `app.css` resolves podoba out of our `node_modules` wherever it is
   compiled from, so a host's tokens can only arrive through a stylesheet in the host's own
-  tree. Setting one without the other links your podoba against our compiled tokens — it comes
-  up, the colours are subtly not yours — so the build **warns**. **Slots are few**: one, because
+  tree. Setting one without the other links your podoba against our compiled tokens: it comes
+  up, the colours are subtly not yours, so the build **warns**. **Slots are few**: one, because
   a slot is a standing promise that a component's props are stable, and `pageHeader` takes the
   same `{ lead, em, children }` it has taken since it was one component. The landing route was
-  tried and rejected — `routes/home.tsx` is a buzola `createPage()` carrying the redirect rules
+  tried and rejected: `routes/home.tsx` is a buzola `createPage()` carrying the redirect rules
   for collections-only and split-by-type deployments, so slotting it would put `@buzola/router`
   in every host's build and hand over redirects the one deployment that tried simply dropped,
   leaving `/` landing nowhere on a collections-only site. **A slot that stops resolving is a
@@ -315,17 +315,17 @@ there are no backward-compatibility guarantees yet.
   `admin.editorAssets` takes one directory rather than six URLs because the four `panel-*.js`
   shims re-export the export names of the React *their* bundle linked: a packaged shim beside a
   host-built editor is a browser link error in someone else's panel. A relative base is refused
-  outright — `"admin"` resolves against the current admin route, so it would work at `/__admin`
+  outright: `"admin"` resolves against the current admin route, so it would work at `/__admin`
   and 404 at `/__admin/pages/42`.
 
 - **A SECOND editor chrome: the horizontal Graphic Standard bar (`@pramen/cms-editor`,
   `@pramen/cms-astro`).** `admin: { layout: "topbar" }` swaps the sidebar rail for podoba's
-  `Topbar` used the way the Graphic Standard apps use it — brand left, tabs pushed right, the
+  `Topbar` used the way the Graphic Standard apps use it: brand left, tabs pushed right, the
   account avatar as a bare circle at the end, a 77px bar with a hairline under it and gs's air
   below that. Everything under the chrome is unchanged: the same screens, the same theme and
   sign-out in the avatar menu, the same unsaved-changes guard on every way out. The default
   stays `"sidebar"`, and an existing deployment renders identically (the DOM gains two
-  wrappers — one declaring the chrome's custom properties, one carrying a 0px gap — and every
+  wrappers (one declaring the chrome's custom properties, one carrying a 0px gap) and every
   measured offset is unchanged).
 
   The bar does **not** revive the horizontal scroller the rail was built to replace. Twelve
@@ -333,7 +333,7 @@ there are no backward-compatibility guarantees yet.
   scroll to discover what was in it; here the **first** nav group renders as flat tabs and each
   later group folds into a dropdown (`topbarNav`), so a full admin reads as
   `Pages · Lectures · Media · Site ⌄ · Apps ⌄ · System ⌄` plus the avatar. A dropdown among the
-  tabs is the gs bar's own shape — its app switcher is one — so it stays one design rather than
+  tabs is the gs bar's own shape (its app switcher is one) so it stays one design rather than
   a compromise bolted onto it. Below `md` the whole nav moves into a dialog behind a hamburger
   (React Aria's, via podoba's `Dialog`, so the focus trap and Esc are the design system's).
   The breadcrumb keeps only its **detail** half, beside the wordmark: the lit tab already names
@@ -341,51 +341,51 @@ there are no backward-compatibility guarantees yet.
   height. An `extraNav` link stays a real anchor with its `rel` and `target` wherever it lands.
 
   What made this a seam rather than a fork: `routes/_layout.tsx` now **derives and does not
-  draw** — it builds the nav, works out what is lit, and hands `chrome-sidebar.tsx` or
+  draw**: it builds the nav, works out what is lit, and hands `chrome-sidebar.tsx` or
   `chrome-topbar.tsx` the same `ChromeProps`. The subtle half (the order rule, the
   percent-decoding in `segmentAt`, the guard, the same-tab containment rules) has exactly one
   implementation, and a third shape is markup. The chrome's HEIGHT is the one thing that
-  differs and that screens depend on — `page-header.tsx` and the page editor's toolbar and
-  inspector are all sticky beneath it — so it moved from two literal Tailwind classes to a CSS
+  differs and that screens depend on: `page-header.tsx` and the page editor's toolbar and
+  inspector are all sticky beneath it, so it moved from two literal Tailwind classes to a CSS
   custom property set once by the chrome and defaulted in `app.css` (a screen rendered outside
   the chrome, in a panel or a test, still lays out). Those class strings name the property as
   literal text on purpose: Tailwind v4 finds utilities by scanning source, so a built
   `` `top-[var(${VAR})]` `` is a rule that is silently never generated and a sticky header that
   silently stops sticking.
 
-- **Custom admin PANELS — a project's own React screen inside the editor's chrome
+- **Custom admin PANELS: a project's own React screen inside the editor's chrome
   (`@pramen/cms`, `@pramen/cms-editor`, `@pramen/cms-astro`).** Block Kit is a server-driven
   vocabulary, and the properties that make it safe are the same ones that cap it: the whole page
   comes back on every interaction, so an input cannot fire one, every control is disabled for the
   round trip (focus and caret with it), a row cannot expand, and there is no link, no redirect,
   no dialog, no autofocus and no date input. Those are not gaps to patch one element at a time.
   The thing a project reaches for instead is what this replaces: a standalone React SPA served
-  next to the editor with the chrome rebuilt by hand — "it goes outside the application, it does
+  next to the editor with the chrome rebuilt by hand: "it goes outside the application, it does
   not even have the same layout".
 
   `adminPanel(slug, { label, icon, navOrder, roles })` is the **same registry entry** as
   `adminPage()` with the render moved to the browser. Same slug space, same `/apps/:slug` route,
-  same "Apps" nav band, same `listAdminPages` — which is the part that matters: **the server owns
+  same "Apps" nav band, same `listAdminPages`, which is the part that matters: **the server owns
   the entry, the bundle owns only the component.** The role filter is therefore identical, so a
   panel the caller may not open is absent from the listing exactly as a Block Kit page is; and a
   bundle that fails to load renders a diagnostic naming the slug rather than making a nav section
   quietly cease to exist. A slug used by both kinds is a boot error, because they share a route.
 
-  A panel is written as **ordinary React** — `import { useState } from "react"`, nothing in the
-  source marking it as a panel except one `registerPanel({ slug, render })` call — and built with
+  A panel is written as **ordinary React**: `import { useState } from "react"`, nothing in the
+  source marking it as a panel except one `registerPanel({ slug, render })` call, and built with
   react, react-dom and both JSX runtimes marked **external**. The editor publishes its own React
   on `globalThis.PRAMEN_CMS_EDITOR_RUNTIME` and the shell emits an import map pointing those four
   specifiers at generated shim modules that read it back out, so a panel links against the React
   already on the page. Two copies would share no hook dispatcher and the panel's first `useState`
   would throw. The shims are GENERATED from the editor's own React namespaces at build time
   (`dist/panel-react.js`, `panel-react-dom.js`, `panel-jsx-runtime.js`, `panel-jsx-dev-runtime.js`),
-  so their export lists cannot drift from the React actually loaded — a hand-written list is a
+  so their export lists cannot drift from the React actually loaded: a hand-written list is a
   copy of React's export table whose first omission surfaces as a browser link error in someone
   else's bundle. The dev JSX runtime is mapped deliberately: unmapped, it is the one bare import
   that still RESOLVES, from the consumer's own `node_modules`, silently producing the second React
   the whole mechanism exists to prevent.
 
-  A panel is handed four things and no more — `api` (a narrow `call`/`resolve` view of the
+  A panel is handed four things and no more: `api` (a narrow `call`/`resolve` view of the
   session, not the editor's whole `Api` class), `basePath` (so links stay inside the mount
   prefix), `theme`, and `setError` (the chrome's one error banner). The identity is deliberately
   absent: it is one `api.call("me")` away, and a panel branching on the caller's roles to decide
@@ -393,7 +393,7 @@ there are no backward-compatibility guarantees yet.
   `adminPanel()`.
 
   Delivery is `admin: { panels: ["/admin/curation.js"] }` on `pramenCms()`. The **editor imports**
-  those URLs rather than the shell script-tagging them — a panel bundle cannot evaluate before the
+  those URLs rather than the shell script-tagging them: a panel bundle cannot evaluate before the
   shared React is published, and neither script order works: first is too early, second races the
   first render. The loads do not block the first paint (the panel route re-reads the registry as
   registrations land), a bundle that 404s costs its own panel and nothing else, and a URL that is
@@ -401,7 +401,7 @@ there are no backward-compatibility guarantees yet.
   executed.
 
   A panel renders behind an **error boundary**, because it is someone else's component in this
-  app's React tree and React unmounts the whole root on an uncaught render error — without one,
+  app's React tree and React unmounts the whole root on an uncaught render error. Without one,
   a bad panel does not break a screen, it blanks the admin: no sidebar, and no way off the route
   that is failing. The fallback names the panel and the failure; the chrome survives.
 
@@ -411,16 +411,16 @@ there are no backward-compatibility guarantees yet.
   loading path notices when those disagree, so a React major in `@pramen/cms-editor` would move
   every existing bundle onto a React it was never built for, surfacing as a missing export or a
   differently-behaving hook inside a stranger's minified bundle. The number is the only fact
-  about the BUILD that survives into it — which is also why it is a literal in the bundle's
+  about the BUILD that survives into it, which is also why it is a literal in the bundle's
   source and is deliberately **not** published on `PRAMEN_CMS_EDITOR_RUNTIME`: a number read off
   the runtime and passed back would be the editor comparing its own value to itself, green
   against every editor forever. Both directions are refused (a stale bundle is told to rebuild,
   a bundle built for a newer editor is told the deployment is out of step), and the refusal is
   rendered on the panel's own route naming the slug and the fix, rather than only warned to the
-  console under the generic "no panel is registered for this slug" — which would be true and
+  console under the generic "no panel is registered for this slug", which would be true and
   useless, since the bundle is listed, loaded, ran and called `registerPanel`. What bumps the
   number is written down at `PANEL_RUNTIME_CONTRACT` (a React major here, a change to what a
-  panel is handed, a name leaving the published runtime — and nothing else), and a test pins it
+  panel is handed, a name leaving the published runtime, and nothing else), and a test pins it
   to the `react` range in the package manifest so a React upgrade cannot silently leave it
   behind.
 
@@ -435,37 +435,37 @@ there are no backward-compatibility guarantees yet.
   A **table cell may now hold an element** (`AdminCell = string | number | boolean | null |
   AdminElement`), and `table` takes an optional `block_id`. `TableBlock` was the one
   interactive-capable block the editor never handed the value bag or `onFire` to, so a list of
-  830 venues with a per-row control had to be written as 830 `actions` blocks — a table with the
+  830 venues with a per-row control had to be written as 830 `actions` blocks: a table with the
   table taken out of it. The element goes in the CELL rather than in a per-column declaration
   because everything about a row's control is a fact of the row: the `value` is that row's id,
   the label is "Hide" or "Show" depending on its state, and a row that must not be touched
   carries no control. A cell renders its element through the same `ElementView` an `actions`
   block uses, on the same page value bag, so a row's button reaches the handler with exactly
-  what a toolbar button reaches it with — the row is identified by the button's `value`, the
+  what a toolbar button reaches it with: the row is identified by the button's `value`, the
   idiom that already existed. Values and elements are told apart by SHAPE (an element is an
   object, a display value never is), and `normalizeAdminResponse` enforces it, so `rows: found`
   is named at the boundary instead of rendering a column of `[object Object]`.
 
-  An **input** in a cell has no such carrier — the editor keys the page's whole value bag by
-  `action_id` — so a per-row input must mint a per-row id (`hours:<row id>`), and a response
+  An **input** in a cell has no such carrier: the editor keys the page's whole value bag by
+  `action_id`, so a per-row input must mint a per-row id (`hours:<row id>`), and a response
   where two inputs share one `action_id` is now REFUSED with a message that says so. That check
   is page-wide (form, actions and cells share one bag), and it is new for existing pages too: an
   `action_id` reused across two inputs was already one field wearing two hats, which only ever
   showed up as a field that mysteriously carried someone else's value. Buttons are deliberately
-  not claimed — repeating one down a column is how a row column is written.
+  not claimed: repeating one down a column is how a row column is written.
 
   Every input also takes an optional **`error`**, drawn under that input (`role="alert"`, with
   `aria-invalid` on the control). The page-level `toast` was the only failure surface there was,
   and it is the wrong one for "25:00 is not a time": it names no field, it is gone in three
   seconds while the bad value is still on screen, and `form` renders a flat list of inputs, so a
   page could not even interleave a `context` block to put the message where it belongs. Errors
-  are part of the render, not client state — the whole page comes back on every interaction — and
+  are part of the render, not client state (the whole page comes back on every interaction) and
   they do not block submitting the fix. The generic "Fill in: …" hint for empty required fields
   is unchanged; the two answer different questions.
 
-- **`app.migrations` — imperative, recorded data migrations (`@pramen/server`).** Schema
+- **`app.migrations`: imperative, recorded data migrations (`@pramen/server`).** Schema
   reconciliation is a diff between two table SHAPES, so it can only ever enact structure: there
-  was no way to express a TRANSFORMATION — split a column, backfill the nullable column
+  was no way to express a TRANSFORMATION: split a column, backfill the nullable column
   `ADD COLUMN` just created, rewrite units, normalize a `t.json()` blob whose shape changed.
   That work ended up as a hand-written admin handler someone curls once per tenant and hopes
   they got them all, with no record that it ran and no ordering guarantee against the schema
@@ -477,19 +477,19 @@ there are no backward-compatibility guarantees yet.
   `app.bootstrap` could not be stretched to cover this and the differences are the ones that
   matter: bootstrap runs on every boot, MUST be idempotent, and swallows its errors. A
   migration runs once, need not be idempotent (a backfill that doubles on the second run is the
-  whole point), and **fails closed** — a throw writes no ledger row, aborts the boot, and
+  whole point), and **fails closed**: a throw writes no ledger row, aborts the boot, and
   retries on the next fetch rather than marking a half-finished backfill as done. There are no
   down migrations, deliberately.
 
   The claim carries a **lease**, because D1 has no single writer: one atomic upsert inserts the
   row, steals one whose lease has expired, or does nothing, and only the runner it hands the row
   to runs the migration. A runner meeting a live lease waits for the holder rather than skipping
-  past it — skipping would serve traffic against half-migrated data and strand the migration if
-  that holder then failed — and a holder that dies mid-backfill without releasing, which no
+  past it: skipping would serve traffic against half-migrated data and strand the migration if
+  that holder then failed, and a holder that dies mid-backfill without releasing, which no
   compensating delete can cover, is recovered by its lease expiring. Ledger over HTTP at
   `GET /admin/migrations?tenant=&partition=`
   (admin-gated, both stores) and in the CLI as `pramen migrations list` / `pramen migrations
-  status [--tenant t] [--all-tenants]` — the latter is the only honest answer to "is it safe to
+  status [--tenant t] [--all-tenants]`. The latter is the only honest answer to "is it safe to
   delete this migration?", since migration is lazy and per-DO and a tenant nobody has touched is
   still unmigrated (the same trap `renamedFrom` carries).
 
@@ -512,18 +512,18 @@ there are no backward-compatibility guarantees yet.
   tabs. A real deployment is not a few: Pages (or one tab per content type), N collections,
   Media, Menus, Taxonomies, Widgets, Redirects, any Block Kit page, Types, Users, Settings and
   whatever `extraNav` adds is a dozen-plus destinations. Past six or seven they became a dense
-  unlabelled ribbon and then a horizontal scroller — a nav you have to scroll to discover, which
+  unlabelled ribbon and then a horizontal scroller: a nav you have to scroll to discover, which
   is the one thing a primary nav must not be. The rail shows every destination at once, with an
   icon per row and headings that group them; below `md` it collapses to a disclosure under the
   wordmark. Everything else stays podoba (ghost pills, `text-compact`, the surface and border
   tokens); only the chrome's layout changed, and no page's own content moved.
 
-  The groups — Content, Site, Apps, System — are BANDS OF `order`, not a hand-written list of
+  The groups (Content, Site, Apps, System) are BANDS OF `order`, not a hand-written list of
   sections, so the module's one contract still decides everything: an entry placed at
   `NAV_ORDER.pages + 50` is in Content and one at `NAV_ORDER.menus + 10` is in Site, exactly as
   the number reads. Enumerating keys instead would have let a host-placed entry land visually
   inside a group it is not a member of. Empty groups are dropped, and a deployment with only one
-  group (collections-only, no site furniture) gets no headings at all — a single heading over a
+  group (collections-only, no site furniture) gets no headings at all: a single heading over a
   whole rail captions a list with no sibling to distinguish it from.
 
   A collection's or a Block Kit page's declared `icon` now goes in the ICON COLUMN. It used to be
@@ -535,10 +535,10 @@ there are no backward-compatibility guarantees yet.
   The rail is shaped like NOTION's, which is the shape this kind of nav has converged on and the
   one an editor already knows how to read: a ground of its own (`surface-card` against the
   content's `surface`), so the two regions separate without a rule between them; dense rows
-  (13px label, 15px icon, ~26px tall — a list to scan, not a strip of buttons to aim at, which
+  (13px label, 15px icon, ~26px tall, a list to scan, not a strip of buttons to aim at, which
   is what podoba's `rounded-full` / `py-2` action pill made them); and **collapsible groups**,
   the fold remembered per browser in `localStorage`. In DARK, podoba maps `surface-card` onto
-  `surface`, so there the hairline does the separating — which is why the border is
+  `surface`, so there the hairline does the separating, which is why the border is
   unconditional and the tone is not. The active row also takes `font-medium`: podoba has one
   muted-surface token, so hover and active are otherwise the same pixel and "where am I"
   disappears under the cursor.
@@ -549,31 +549,31 @@ there are no backward-compatibility guarantees yet.
   row of type chips. All three are SERVER-side, because the library is paged: sorting or
   filtering the 60 rows that arrived sorts and filters 60 rows, which is neither.
 
-  That required real columns. `cms_media.file` is a `t.fileRef()` — JSON in a TEXT cell — so
+  That required real columns. `cms_media.file` is a `t.fileRef()` (JSON in a TEXT cell) so
   its `filename`, `contentType` and `size` are invisible to `orderBy` and `where`. They are now
   projected onto indexed columns beside it, written where a media row is CREATED and nowhere
   else, so there is one writer and `file` stays the source of truth for serving. SQLite
   generated columns would remove the duplication outright, but the schema DSL cannot declare
   one. Nullable, so an existing store takes a plain `ADD COLUMN`.
 
-  **`cmsMigrations` is new and must be spread into `app.migrations`** — it backfills those
+  **`cmsMigrations` is new and must be spread into `app.migrations`**: it backfills those
   columns from the JSON that has always held the same values. Forgetting it fails quietly, in
   the way this package's other fragments do: pre-existing rows keep NULL and sort together
   under a name sort. The backfill is one bulk `UPDATE … json_extract(…)`, with an ORM walk as a
   fallback, because nothing in this repo had depended on JSON1 before and DO SQLite is
-  Cloudflare's own engine — a missing function must not brick a tenant's boot, which is
+  Cloudflare's own engine: a missing function must not brick a tenant's boot, which is
   precisely what a data migration's fail-closed contract would otherwise do.
 
   The `other` bucket needs its own NULL clause, and shipped without one. SQL is three-valued:
   against a NULL `contentType` every `LIKE` is NULL, so `NOT (… OR …)` is NULL rather than
   TRUE and the row is excluded. `other` therefore matched everything except the rows it is
-  defined to hold, and a legacy row — the deployment that upgraded and did not spread
-  `cmsMigrations` — was invisible under all five chips, findable only by clearing the filter
+  defined to hold, and a legacy row (the deployment that upgraded and did not spread
+  `cmsMigrations`) was invisible under all five chips, findable only by clearing the filter
   and with nothing on screen saying why.
 
   `sort` and `kind` are a CLOSED vocabulary on the server, never a column name and a direction
   from the client: both compile straight into `ORDER BY` and `WHERE`, so accepting a column
-  would hand a caller the ability to order by — and therefore probe — `alt` or `deletedAt`. An
+  would hand a caller the ability to order by (and therefore probe) `alt` or `deletedAt`. An
   unrecognised value falls back to the default rather than erroring, so a bookmark outliving a
   rename shows the library. Search matches the filename OR the alt text, since that is the only
   human description a media row carries and "logo" should find the file somebody described as
@@ -581,22 +581,22 @@ there are no backward-compatibility guarantees yet.
   literals by the read engine, which `test/suites/cms.ts` asserts.
 
 - **Media carries taxonomy terms (`@pramen/cms`, `@pramen/cms-editor`).** Files are tagged with
-  the SAME vocabularies pages are — `cms_taxonomies` / `cms_terms`, through a new
-  `cms_media_terms` junction — so a deployment that declares "Topics" tags a photo with one
+  the SAME vocabularies pages are: `cms_taxonomies` / `cms_terms`, through a new
+  `cms_media_terms` junction, so a deployment that declares "Topics" tags a photo with one
   without declaring it twice, and the Taxonomies screen stays the one place a vocabulary is
   edited. `listMediaTerms` / `setMediaTerms` mirror the page pair (set semantics: the panel
   holds the whole selection, and two calls each patching one end of it race into a state
   neither asked for), and `listMedia` gains `term`, which ANDs with `kind` and `q`.
 
   A second junction rather than one polymorphic `cms_object_terms(objectType, objectId, …)`: a
-  polymorphic key cannot carry a real foreign key, and the FKs are what does the work — purging
+  polymorphic key cannot carry a real foreign key, and the FKs are what does the work: purging
   a file or deleting a term takes its assignments with it, with no handler remembering to. The
   `where` traversal needs a typed column to join on too; `objectId` would have to be filtered by
   a discriminator the read engine cannot require, so one forgotten `objectType` clause would
   silently mix a page's tags into a media query.
 
   Filtering by term is a relation traversal compiled to a subquery, so it costs the same page of
-  rows as filtering by kind — which is the whole reason the assignments are a junction and not a
+  rows as filtering by kind, which is the whole reason the assignments are a junction and not a
   JSON array on the media row. A tag you cannot filter a paged library by is decoration.
   `listCmsCapabilities().mediaTerms` declares it: on an older server the detail panel's Tags
   section would 404 on open and the library's tag filter would send an argument that is silently
@@ -606,26 +606,26 @@ there are no backward-compatibility guarantees yet.
   everything), because reusing the page vocabularies wholesale meant offering all of them in
   both places: a photo filed under "Local news", and `getTermTree("category")` filling up with
   terms like "hero" that no page listing will ever use. `listTaxonomies({ target })` narrows to
-  it — server-side, so the page panel, the media panel and the write-side guard read one answer
+  it, server-side, so the page panel, the media panel and the write-side guard read one answer
   and cannot disagree.
 
   It is enforced on the WRITE, not just in the UI. Hiding a vocabulary from a panel without
   refusing the assignment is the `hideI18n` mistake this package already retired once: the
   control disappears, the request does not. And narrowing a vocabulary away from something it is
   still assigned to is refused, on the same grounds the `hierarchical` flag already refuses being
-  turned off under nested terms — the assignments would stay stored and returned while
+  turned off under nested terms: the assignments would stay stored and returned while
   disappearing from the only panel that could remove them.
 
   `null` is the un-narrowed state and the reading for every row written before the column
   existed, so an existing vocabulary keeps applying to everything and both stores behave alike.
-  Nothing to migrate — a new table is additive, `migrate()` creates it, and `appliesTo` is a
+  Nothing to migrate: a new table is additive, `migrate()` creates it, and `appliesTo` is a
   nullable `ADD COLUMN`.
 
 - **The page editor is rebuilt around a toolbar (`@pramen/cms-editor`).** It opened onto
   three columns of panels with no header, and everything you came to do was somewhere you
   would not look for it.
 
-  **Publishing was behind a tab called "workflow"** — a lowercase ghost button among five that
+  **Publishing was behind a tab called "workflow"**: a lowercase ghost button among five that
   read as filter chips, so the point of the screen required knowing that word. The transitions
   now live in a sticky toolbar beside the status they act on: the obvious next move is the
   primary button (Publish on a draft, Approve on one in review, Unpublish on a live page) and
@@ -636,22 +636,22 @@ there are no backward-compatibility guarantees yet.
   identically unlabelled one in the inspector saving the other half, and blocks in between
   autosaving silently. The page's own fields are content, exactly like a block, so they
   autosave on the same 800 ms debounce and the toolbar carries one line of truth about it.
-  Title and slug keep an explicit **Save settings** — a slug is the page's URL, and autosaving
+  Title and slug keep an explicit **Save settings**: a slug is the page's URL, and autosaving
   one keystroke at a time would publish `/ab`, `/abo`, `/abou` and race the uniqueness check on
-  each — now disabled until something actually differs.
+  each. Now disabled until something actually differs.
 
   **The title appeared three times** (app-bar crumb, a rail card, the inspector) and the status
   twice. The rail card and the inspector's status row are gone, and the editor no longer
   publishes a detail crumb: the toolbar names the page.
 
   A narrowed rail no longer strands a phone. The narrow look is expressed entirely in
-  `md:`-scoped classes, so it exists only at desktop widths — while the choice behind it is
+  `md:`-scoped classes, so it exists only at desktop widths, while the choice behind it is
   persisted per browser and travels to every viewport that browser opens. A rail narrowed on a
   laptop came back "narrowed" on a phone, where those classes are inert: the rows kept their
   labels and full width, while the JS gated on the stored choice removed all four group
   headings, and the hairline that stands in for one at 56px is `md:`-only too. One
   undifferentiated column of a dozen rows, with the toggle that would undo it
-  `hidden md:inline-flex` — no way back from that viewport. `railIsNarrow(choice, wide)` is
+  `hidden md:inline-flex`: no way back from that viewport. `railIsNarrow(choice, wide)` is
   now the one rule, and JS agrees with the breakpoint instead of ignoring it.
 
   The media library also stops claiming to be empty when a filter simply matched nothing:
@@ -661,10 +661,10 @@ there are no backward-compatibility guarantees yet.
   **The 260px left rail held three lines you could not click**, and is gone. It became an
   outline first, which was the wrong answer to the same question: it is a table of contents for
   a document that is almost never longer than the screen, printing the same region names in the
-  same order as the canvas one column away, and its only extra — a block count — is what "is
+  same order as the canvas one column away, and its only extra (a block count) is what "is
   this region empty" looks like when you look at it. Its one real service, jumping to a far
   region, is scrolling on a page you are already scrolling. The region headings are sticky
-  instead, so on a long page the slot you are editing is always named — which is the
+  instead, so on a long page the slot you are editing is always named, which is the
   orientation an outline was standing in for.
 
   Smaller, in passing: the page-fields heading says "Page fields", because a region is very
@@ -680,26 +680,26 @@ there are no backward-compatibility guarantees yet.
   the gap between them.
 
   The page editor never minted one. `signPagePreview` has existed on the server, tested end to
-  end, since preview stopped being a role check — and no editor screen called it, so the only
+  end, since preview stopped being a role check, and no editor screen called it, so the only
   way to get a link was to write the RPC by hand. The collection editor has had its button
   since `supports: ["preview"]`; the page half now has the same one, in the Workflow panel.
   It is not keyed to the status, because a published page is exactly what you preview before
   changing it and a draft is exactly what you send for comment.
 
   And the link opened JSON. The CMS redeems the token itself and answers with the assembled
-  draft, because a headless CMS has the content and no idea what it should look like —
+  draft, because a headless CMS has the content and no idea what it should look like:
   correct for a machine, useless for the stakeholder without an account who a preview link is
   FOR. A host can now declare **`admin.previewUrl`**: a route of its own that the editor sends
-  the token to instead. Same seam as `menuHref` and the sitemap's `pageUrl` — the CMS cannot
+  the token to instead. Same seam as `menuHref` and the sitemap's `pageUrl`: the CMS cannot
   know how a deployment routes, so the deployment says. Unset, nothing changes.
 
   The link it copies is ABSOLUTE. `previewUrl` is normally written as a path, so the
-  configured — recommended — path put `/preview?token=…` in the clipboard: dead the moment it
+  configured (recommended) path put `/preview?token=…` in the clipboard: dead the moment it
   is pasted into Slack, which is half of what the button is for. The new tab hid it, because a
   blank window opened by the editor inherits its base URL and resolves a relative href
   perfectly well.
 
-  The button OPENS it, in a new tab, and still shows and copies the link — "look at my draft"
+  The button OPENS it, in a new tab, and still shows and copies the link: "look at my draft"
   and "send this to someone" are both what it is for, and only one of them ends in the new tab.
   The tab is opened synchronously before the round trip and pointed at the link afterwards,
   because `window.open` called after an `await` has lost the user gesture that authorised it
@@ -709,18 +709,18 @@ there are no backward-compatibility guarantees yet.
 
   `example/site` ships the other end: `src/pages/preview.astro` redeems the token with
   `client.getPreview(token)` and renders the draft through the SAME `Article.astro` the
-  published route uses — the layout was extracted for exactly this reason, since a preview
+  published route uses. The layout was extracted for exactly this reason, since a preview
   drawn by a second copy of the markup is a preview of the copy. It carries a draft banner,
   `noindex`, `no-store`, and answers a forged or expired token with a 404 indistinguishable
   from a missing page, so spraying tokens at it confirms nothing.
 
-  Pages only. A collection row has no canonical URL — the site decides what one looks like, if
-  anything — so `signCollectionPreview` keeps pointing at the backend.
+  Pages only. A collection row has no canonical URL: the site decides what one looks like, if
+  anything, so `signCollectionPreview` keeps pointing at the backend.
 
 - **The screen header stays as the page scrolls, condensed (`@pramen/cms-editor`).** Scrolling a
   media library past the first row used to take the header away, leaving a wall of thumbnails
-  with no title and no primary action. Sticky alone would be worse — a 190px banner pinned to
-  the top eats a third of the viewport on every scroll — so it condenses to a bar: same panel,
+  with no title and no primary action. Sticky alone would be worse: a 190px banner pinned to
+  the top eats a third of the viewport on every scroll, so it condenses to a bar: same panel,
   same artwork, same button, a third of the height. The two near-identical headers that used to
   live one in `components.tsx` and one in `furniture.tsx` are now one `page-header.tsx` with a
   size; a LEAF module, because `components.tsx` already imports from `furniture.tsx` and either
@@ -729,34 +729,34 @@ there are no backward-compatibility guarantees yet.
   Getting it to stop flickering took three things, and only the third is the real cause.
   Hysteresis (condense above 120px, expand below 16px) because a single threshold toggles on
   trackpad jitter. No transition on the type, because `transition-all` was tweening `font-size`
-  56px → 22px, relaying out the panel on every frame — of a STICKY element whose height feeds
-  back into the scroll position — while `display` (two stacked lines → one baseline row) cannot
+  56px → 22px, relaying out the panel on every frame, of a STICKY element whose height feeds
+  back into the scroll position, while `display` (two stacked lines → one baseline row) cannot
   be tweened and snapped mid-animation anyway. And **`overflow-anchor: none` on the scroller**,
   which is what actually fixed it: condensing removes ~134px of layout ABOVE the viewport, and
   scroll anchoring exists precisely to compensate for that, so the browser silently subtracted
-  the same 134px from `scrollY` — a new scroll position feeding the very condition that
+  the same 134px from `scrollY`: a new scroll position feeding the very condition that
   condensed the header, which flips back, restores the height, and gets the offset returned.
   Measured: asking for `scrollY` 121 settled at 17. Hysteresis cannot fix that, since the
   compensation is the same size as the change; the dead band would have to be wider than the
-  collapse. Turning anchoring off also removed a second, separate bug — the page yanking by
+  collapse. Turning anchoring off also removed a second, separate bug: the page yanking by
   134px on the scroll that crossed the threshold.
 
 - **Screen headers are cover panels with generated artwork (`@pramen/cms-editor`).** Six list
   screens whose only difference is a word at the top read as one screen you keep landing on.
   The header is now a panel carrying the title and the primary action over art DERIVED from
-  the screen's name: an FNV-1a hash seeds a PRNG, and the PRNG lays out a Truchet field — a
-  grid of quarter-circle arcs whose per-tile orientation is the only random thing about it —
+  the screen's name: an FNV-1a hash seeds a PRNG, and the PRNG lays out a Truchet field (a
+  grid of quarter-circle arcs whose per-tile orientation is the only random thing about it)
   under a colour wash. Same name, same picture, forever; a new collection gets its own without
   anyone drawing one. Nothing to author, nothing to upload, no screen that looks like another.
 
   Seeded on the header's `lead`, NOT its `em`. `lead` is the screen's NAME ("Media", a
-  collection's plural label) and `em` is its STATE ("None yet", "3 files") — seeding on what is
+  collection's plural label) and `em` is its STATE ("None yet", "3 files"), and seeding on what is
   displayed would redraw the artwork every time someone uploaded a file, which is the one thing
   a picture meant to make a screen recognisable must never do.
 
   Two constraints shaped the rest, both from what the art sits under. Line work is
   `currentColor` at low alpha, so it is dark on the light theme and light on the dark one BY
-  CONSTRUCTION — which matters specifically because podoba does not redefine its accent tokens
+  CONSTRUCTION, which matters specifically because podoba does not redefine its accent tokens
   per theme, and a fixed accent stroke would be near-white mint on white, or near-black blue on
   near-black. Colour therefore arrives as a wash, from a CLOSED list of mid-toned podoba tokens
   rather than a free hue (a free hue puts colours in the chrome that exist nowhere else in the
@@ -764,25 +764,25 @@ there are no backward-compatibility guarantees yet.
   the left, so 56px type never lands on pattern whatever the seed produced. One inline SVG
   built during render: no dependency, no canvas, no image to load.
 
-- **The header's action is the button, not a pill around it (`@pramen/cms-editor`).** `Cta` —
+- **The header's action is the button, not a pill around it (`@pramen/cms-editor`).** `Cta`,
   a 360px mint pill carrying a sentence ("Let's upload something") wrapped around the actual
-  button — is gone from all four list headers. Once the header grew a cover, a saturated pill
+  button, is gone from all four list headers. Once the header grew a cover, a saturated pill
   on top of it was a panel inside a panel, two filled surfaces competing for the same corner;
   and the sentence was by then the third telling of one fact, between a title reading "Media /
   None yet" and an empty state reading "No media yet. Upload images to…".
 
   It was also hiding a bug that only showed on the dark theme: the wrapper filled with
-  `brand-green` (#75e7b8) and podoba maps `brand-primary` — what a default `Button` fills with
-  — onto that same #75e7b8 in dark. Mint on mint, so the button had no edge and read as a run
+  `brand-green` (#75e7b8) and podoba maps `brand-primary` (what a default `Button` fills with)
+  onto that same #75e7b8 in dark. Mint on mint, so the button had no edge and read as a run
   of text. On `surface-card` it has the contrast podoba designed for it, in both themes.
 
   Media's Upload control became a real `Button` driving a hidden input, replacing a `<label>`
   painted to look like one: the lookalike restated podoba's primary fill by hand, and with the
-  wrapper gone the app's two primary actions were visibly different colours in dark —
+  wrapper gone the app's two primary actions were visibly different colours in dark:
   `surface-inverted` (cream) there against `brand-primary` (mint) everywhere else.
 
 - **`BootstrapContext` carries `env` (`@pramen/server`).** A boot-time reconciler has no
-  request to carry a flag on, so the only gates it had were "always" and "never" — which is
+  request to carry a flag on, so the only gates it had were "always" and "never", which is
   the wrong pair for reference data that belongs in local dev and nowhere else. `env` is the
   same widened bag a handler sees as `ctx.env`, on both boot paths (DO and D1). While
   threading it through, `ensureD1Migrated` now takes `env` instead of the one boolean it used
@@ -791,10 +791,10 @@ there are no backward-compatibility guarantees yet.
 
 - **The example seeds a demo account, so `bun run dev` leads somewhere.** On a fresh store
   there was no way IN: `signup` assigns the `user` role, which no CMS policy accepts, so the
-  editor's Setup screen — which asks for a bearer token and nothing else — could only be
+  editor's Setup screen (which asks for a bearer token and nothing else) could only be
   satisfied by hand-signing a JWT with the dev `AUTH_SECRET`. `devUserBootstrap` in
   `example/app.ts` now seeds **`pramen@local` / `pramen-dev`**, gated on `PRAMEN_DEV_SEED`
-  (set by `oblaka.ts` for the `local` env only — a known username with a known password is
+  (set by `oblaka.ts` for the `local` env only: a known username with a known password is
   exactly the reference data that must never reach a deployment, and `bun run deploy` ships
   the same `app.ts`). It inserts only when the row is ABSENT: `bootstrap` runs every boot, so
   writing the hash unconditionally would reset a changed password on every cold start, and
@@ -803,7 +803,7 @@ there are no backward-compatibility guarantees yet.
 
   Ten characters, not the obvious `pramen`: `login` parses its input with the same
   `parseCreds` `signup` uses, which rejects anything under eight before it ever looks at a
-  hash. `example/site` gains `/admin/sign-in` and `admin: { signInUrl }` — the SITE owns the
+  hash. `example/site` gains `/admin/sign-in` and `admin: { signInUrl }`: the SITE owns the
   sign-in screen, which is what keeps the editor BYO-IdP (it verifies a bearer token and knows
   nothing about how one is obtained), and mirrors how a real deployment does it.
   `tools/dev-token.ts` still mints a token for `/__admin?setup=1`, which is the way in when
@@ -812,7 +812,7 @@ there are no backward-compatibility guarantees yet.
 - **The editor's icons are Phosphor, regular weight (`@pramen/cms-editor`).** One family,
   chosen for plainness: at 15px in a nav rail an icon has to survive as a silhouette, and
   Phosphor's regular weight is the simplest set that still reads at that size. It replaces two
-  half-families that had ended up side by side in a 240px column — podoba's own line set, which
+  half-families that had ended up side by side in a 240px column: podoba's own line set, which
   does not cover a CMS's nouns (no taxonomy, no widget area, no redirect), and the glyphs the
   editor had drawn by hand to fill those gaps. Two sets of hand-fitted curves next to each
   other is the one outcome worse than either.
@@ -820,26 +820,26 @@ there are no backward-compatibility guarantees yet.
   Everything the editor draws now comes from `cms-editor/src/icons.tsx`, aliased to names that
   say what a glyph MEANS here rather than what it depicts (`MenuToggleIcon`, `GroupOpenIcon`,
   `NAV_GLYPHS.taxonomies`). That is what keeps the family one decision in one file: changing it
-  — or moving it into `@podoba/react`, where it belongs once the design system adopts a set —
+  (or moving it into `@podoba/react`, where it belongs once the design system adopts a set)
   is this module's imports and nothing else, because no call site names a vendor. Costs ~45 KB
   raw in the bundle (each Phosphor module carries all six weights).
 
   A HOST's own icon stays a separate thing: `collection(..., { icon: "🎓" })` and
   `adminPage(..., { icon: "🚚" })` go into the icon column verbatim. Resolving such a string
-  against Phosphor BY NAME is deliberately not offered — a by-name lookup needs the whole
+  against Phosphor BY NAME is deliberately not offered: a by-name lookup needs the whole
   3000-icon registry in the bundle, which is megabytes to let a deployment name one glyph it
   can already supply directly.
 
 - **The editor mounts at `/__admin`, not `/_pramen/admin` (`@pramen/cms-astro`).** BREAKING for a
   deployed site: the old path stops resolving, so update any bookmark, `signInUrl` target, or
   access rule written against it. The old prefix named the framework in a URL an editor
-  bookmarks, types and reads out over the phone — the same mistake `brand` exists to undo, and
+  bookmarks, types and reads out over the phone, the same mistake `brand` exists to undo, and
   the name of the library the agency happened to build with belongs there no more than it does
   in the wordmark. `__` is the settled "the framework serves this, not you" marker (`/_next`,
   `/_nuxt`, `/_astro`, Cloudflare's `/__scheduled`, and pramen's own `/__migrations`), doubled to
   keep clear of Astro's single-underscore conventions. A leading DOT (`/.admin`) was the shape to
   avoid: dotfile protection is on by default in a great many static hosts, CDNs and reverse
-  proxies, so it is a path a share of deployments would simply 404 — `.well-known` needed an RFC
+  proxies, so it is a path a share of deployments would simply 404. `.well-known` needed an RFC
   and per-server carve-outs to be reachable, which is the proof rather than the counterexample.
   Still one constant feeding both the injected route pattern and the prefix stamped on the mount
   node, so the router cannot end up mounted where the server does not serve.
@@ -915,8 +915,8 @@ there are no backward-compatibility guarantees yet.
 - **One `media` field holding something other than an id took down the whole page editor
   (`@pramen/cms-editor`).** `MediaField` rendered the raw stored value as the fallback for a
   missing filename. React refuses an object as a child, so a field holding
-  `{ url, alt }` — the shape `getPage` RESOLVES a media id into for the site to render, and
-  the shape a seeding script or an import naturally writes — threw straight through the
+  `{ url, alt }` (the shape `getPage` RESOLVES a media id into for the site to render, and
+  the shape a seeding script or an import naturally writes) threw straight through the
   router's error boundary: `Route error: Objects are not valid as a React child`, no fields,
   no blocks, no toolbar. The whole `/pages/:id` route, for every page holding one.
 
@@ -927,18 +927,18 @@ there are no backward-compatibility guarantees yet.
 
   The value is now narrowed once, in `mediaFieldValue`, and the component only ever sees
   strings: a non-empty string is an id to look up, anything else is not, and an unrecognised
-  object shows what it points at (its `url`) instead of reading as an empty field — the
+  object shows what it points at (its `url`) instead of reading as an empty field: the
   image is usually still live on the site, and "empty" sends an editor looking for a picture
   that is not missing. `clear` is offered whenever there is ANY value, not just a valid id:
   the picker cannot represent one of these, so clearing it is how an editor repairs the field
-  from inside the editor rather than from the database — and that now includes a bare `42` or
+  from inside the editor rather than from the database, and that now includes a bare `42` or
   `true`, which used to read as an empty field with no clear button, i.e. as nothing wrong at
   all. The field's declared type is not taken as evidence about the column's contents
-  anywhere — the cast at the call site is gone too.
+  anywhere, and the cast at the call site is gone too.
 
   The RESOLVED shape is not merely tolerated but repaired: `getPage` builds it as
   `{ id, key, url, alt, … }`, so it still carries the id it was resolved from. That id is read
-  back, the field resolves and renders normally — thumbnail, filename and all — and the next
+  back, the field resolves and renders normally (thumbnail, filename and all) and the next
   save writes the bare id, so the round trip undoes itself instead of costing a clear and a
   manual re-pick.
 
@@ -948,7 +948,7 @@ there are no backward-compatibility guarantees yet.
   a field the editor never touched, on every save, forever. Editing the heading of an affected
   block was impossible until someone guessed that a media field displaying a perfectly good
   url was the culprit and cleared it. A stored non-id value is now tolerated when the incoming
-  value is exactly what is already in the row — the same `legacyBaseline` carve-out `richtext`
+  value is exactly what is already in the row: the same `legacyBaseline` carve-out `richtext`
   has, except by VALUE rather than by `===`, since this one is an object that has been through
   JSON and reference equality could never hold. A caller still cannot introduce a new non-id
   value, and with no baseline the strict check is unchanged.
@@ -964,7 +964,7 @@ there are no backward-compatibility guarantees yet.
   (migrate → data migrations → outbox → bootstrap) memoized as a bare promise shared by every
   request. Async work belongs to the invocation that starts it: when the first request after a
   deploy carrying a table rebuild legitimately ran past the caller's ceiling and the caller
-  disconnected, the runtime canceled that invocation's pending I/O — and a promise chained on
+  disconnected, the runtime canceled that invocation's pending I/O, and a promise chained on
   canceled I/O never settles. Not rejects; never settles. So the `.catch` meant to clear the
   memo never ran, and every later request in that isolate awaited it for as long as its own
   caller allowed. Crons ran in another isolate; the ~54 % was the share of traffic routed to
@@ -975,14 +975,14 @@ there are no backward-compatibility guarantees yet.
   on (the `scheduled` entry now receives and passes `ctx` too). And awaiters no longer trust a
   shared boot unconditionally: the boot reports progress on every statement, and one that has
   made none for 30 s (the platform's `waitUntil` cap, measured from the last statement so a
-  slow-but-live rebuild is never mistaken for a dead one) is treated as orphaned — the next
+  slow-but-live rebuild is never mistaken for a dead one) is treated as orphaned: the next
   awaiter, arriving or already waiting, starts a fresh boot in its own invocation and logs a
   warning. An isolate can now be wedged for at most 30 s, never for its lifetime; every boot
   step already tolerated a second runner (lease-claimed ledger, diff-based migrate, upsert
   bootstrap), so a false positive costs a redundant boot, not correctness. `SharedBoot` +
   `observeDriver` in `runtime/boot.ts`, platform-agnostic and unit-tested.
 
-## [0.0.59] — 2026-09-02
+## [0.0.59] - 2026-09-02
 
 ### Added
 
@@ -996,17 +996,17 @@ there are no backward-compatibility guarantees yet.
   `EMAIL` binding when both are present: the binding tends to exist because the
   infrastructure declares it, whereas an API key is only ever there because somebody put
   it there. A half-configured Mailgun (key but no domain) falls through to the next
-  transport rather than sending nowhere, and a non-2xx throws — carrying Mailgun's own
-  reason, never the key — so the outbox retries and then dead-letters visibly instead of
+  transport rather than sending nowhere, and a non-2xx throws, carrying Mailgun's own
+  reason, never the key, so the outbox retries and then dead-letters visibly instead of
   turning a bounced sign-in link into silence.
 
-## [0.0.58] — 2026-09-02
+## [0.0.58] - 2026-09-02
 
 ### Fixed
 
 - **Live subscriptions died when the Durable Object hibernated (`@pramen/server`).** The DO
   holds subscriptions in memory, keyed by socket, because the WS attachment is capped at
-  ~2 KB and a full set does not fit. Hibernation dropped that map — but left the socket
+  ~2 KB and a full set does not fit. Hibernation dropped that map, but left the socket
   OPEN. So the client saw no close, never replayed, and the DO went on broadcasting to a
   socket it no longer believed was subscribed to anything: every push silently dropped,
   for the life of the tab, with the connection reading healthy the whole time. Only a
@@ -1014,7 +1014,7 @@ there are no backward-compatibility guarantees yet.
   on the socket so it survives DO hibernation", which was the intent and never the code.
 
   The map still lives in memory, but a one-bit `subscribed` marker now rides the
-  attachment — the one thing that survives — so a woken DO can tell "subscribed to
+  attachment (the one thing that survives) so a woken DO can tell "subscribed to
   nothing" apart from "subscriptions lost", which until now read identically. On noticing
   the loss the DO closes the socket (4410), and the client's existing reconnect-and-replay
   does the rest. Verified against a live app on workerd: after a 20 s idle the socket
@@ -1027,7 +1027,7 @@ there are no backward-compatibility guarantees yet.
 
 - **An EMPTY `contentType` slug listed every type's pages (`@pramen/cms`).** The narrowing
   branch was picked with a falsy check while the validator three lines below deliberately let
-  `""` through — the exact inverse of the rule the handler documents, and reachable, because
+  `""` through: the exact inverse of the rule the handler documents, and reachable, because
   a content type's slug is caller-supplied and nothing rejected an empty one. An empty slug is
   now an ordinary unmatchable slug (nothing), and `createContentType`/`updateContentType`
   refuse an empty `slug`/`name` outright: a type with an empty slug also got a tab that could
@@ -1035,8 +1035,8 @@ there are no backward-compatibility guarantees yet.
   could leave `/` permanently blank.
 
 - **`listPages` was open to anonymous callers (`@pramen/cms`).** It is now viewer-gated, like
-  every comparable read in the same factory. The rows are full page records — schedule stamps,
-  the revision pointer, the whole `fields` bag, every SEO column — which is the editing
+  every comparable read in the same factory. The rows are full page records: schedule stamps,
+  the revision pointer, the whole `fields` bag, every SEO column, which is the editing
   surface; `listPublishedPages` remains this file's deliberate public projection and is still
   anonymous. (Pre-existing: the handler had no options object at all before it grew one.)
 
@@ -1048,7 +1048,7 @@ there are no backward-compatibility guarantees yet.
 
 - **The create modal kept filing pages under the previous tab's type (`@pramen/cms-editor`).**
   Its `typeId` was seeded from the screen once at mount and never re-synced, and the picker is
-  hidden on a type-scoped list — so opening "+ New page" on one type's tab and navigating to
+  hidden on a type-scoped list, so opening "+ New page" on one type's tab and navigating to
   another's (history navigation is not blocked by the modal overlay, and the component instance
   survives it) filed the page under the type you left, with nothing on screen saying so. It
   re-syncs now, and the modal names the type it is filing under.
@@ -1065,32 +1065,32 @@ there are no backward-compatibility guarantees yet.
   deployment has one type", and the redirect and the render bail are gated on one condition
   rather than two that could disagree and leave `/` blank.
 
-- **A failed `listContentTypes` showed "Loading…" forever (`@pramen/cms-editor`).** A 5xx — or
-  a session whose role cannot call it at all — was swallowed into the same empty array as "not
+- **A failed `listContentTypes` showed "Loading…" forever (`@pramen/cms-editor`).** A 5xx (or
+  a session whose role cannot call it at all) was swallowed into the same empty array as "not
   loaded yet", so `/types/:slug` sat on a loading state over data it already had, with the way
   back suppressed for the same reason. The failure is recorded and the screen offers a retry.
 
 - **Rows from the previous type sat under the new type's heading (`@pramen/cms-editor`).** The
   per-type fetch neither cleared the list nor cancelled in flight, and the router renders the
-  same component instance across a params-only change — so switching tabs showed the old type's
+  same component instance across a params-only change, so switching tabs showed the old type's
   pages under the new type's name until the fetch landed, and permanently if it failed.
 
 - **The page list reported the server's cap as a total (`@pramen/cms`, `@pramen/cms-editor`).**
   `listPages` capped at 100 with no way to ask for more, and the header printed that count as
-  "N total" — a deployment with 400 articles read as having 100, with the other 300 unreachable
+  "N total": a deployment with 400 articles read as having 100, with the other 300 unreachable
   from the editor. The handler takes `limit`/`offset` (default 100, ceiling 500) and the list
   pages with a "Load more" button and an `N+` count, exactly as collection lists already did.
 
 - **An older CMS made every type tab show every type's pages (`@pramen/cms`,
   `@pramen/cms-editor`).** An unknown input key is passed through, not rejected, so a
-  pre-`contentType` server accepted the argument and answered with the pooled list — N tabs each
+  pre-`contentType` server accepted the argument and answered with the pooled list: N tabs each
   claiming one type and showing all of them, with "New page" from any of them stamping that
   tab's type. `listCmsCapabilities` now declares `pagesByType`, and the editor renders the split
-  only when the server says so — the same declared-not-inferred rule as `locales`.
+  only when the server says so, the same declared-not-inferred rule as `locales`.
 
 - **`cmsLoader` filtered an already-truncated list in JS (`@pramen/cms-astro`, `@pramen/cms`).**
   It fetched every published page (capped at 5000) and narrowed by content type and locale
-  client-side — the very pattern the per-type page list exists to avoid. With
+  client-side, the very pattern the per-type page list exists to avoid. With
   `collections: "auto"` generating one collection per type, each re-fetched the same capped
   rows and silently lost the tail of its own type past the cap, build still green.
   `listPublishedPages` now takes `contentType`/`locale` and narrows server-side.
@@ -1103,7 +1103,7 @@ there are no backward-compatibility guarantees yet.
 
 - **Adding an input parser to `listPages` narrowed what the ACL saw (`@pramen/cms`).** Dispatch
   hands the PARSED input to `Db` as the value `$input("path")` policy markers resolve against,
-  and the parser rebuilt a fresh object holding only the keys it knew — so a host scoping
+  and the parser rebuilt a fresh object holding only the keys it knew, so a host scoping
   `cms_pages` with a capability key had that scope silently collapse to nothing. Both page
   listings now spread the raw input rather than rebuilding it.
 
@@ -1116,63 +1116,63 @@ there are no backward-compatibility guarantees yet.
   said so, but the pooled list's own wording changed for everyone: "N pages total" became
   "N entries total" and "No pages yet." became "No entries yet.", unscoped by the split. It also
   put the collections vocabulary on a page screen, so a type-scoped list read "Article" /
-  "No entries yet" / "+ New page" / "Create a new page" — three vocabularies at once. The
+  "No entries yet" / "+ New page" / "Create a new page": three vocabularies at once. The
   wording is back to "pages" throughout; the type's `name` heads the screen and is never bent
   into a noun phrase, since it is a label a host writes and is often already plural.
 
 - **"← all pages" from the editor landed in another type's list (`@pramen/cms-editor`).** Every
   way back targeted `/`, which on a split deployment redirects to whichever type sorts first by
-  name — and `replace`s the history entry, so Back could not undo it. The page editor returns to
+  name, and `replace`s the history entry, so Back could not undo it. The page editor returns to
   its own page's type.
 
 ### Added
 
 - **`listPages` takes `limit`/`offset` and `select` (`@pramen/cms`).** The handler caps its
-  result, so without paging a caller cannot tell a full first page from the whole table — and
+  result, so without paging a caller cannot tell a full first page from the whole table, and
   the editor's header printed the cap as if it were the total. `limit`/`offset` page the list
   (default 100, ceiling 500); `select` projects it to the columns a list screen actually
   renders, instead of pulling the widest row in the CMS over RPC (the D1 shape from #22). The
   `contentType` slug added in 0.0.55 is now resolved by traversing the `type` relation the
-  schema already declares — one query rather than two, no throw for a caller who may read
-  pages but not content types — and `cms_pages.typeId` is indexed to serve it.
+  schema already declares: one query rather than two, no throw for a caller who may read
+  pages but not content types, and `cms_pages.typeId` is indexed to serve it.
 
 - **`listPublishedPages` takes `contentType` and `locale` (`@pramen/cms`).** Same argument, the
   public half: `@pramen/cms-astro`'s `cmsLoader` passes them so each generated collection asks
   the server for its own type instead of narrowing one capped fetch after the fact.
 
-- **`getPageById` (`@pramen/cms`).** One page, wide, by id — what the editor opens `/pages/:id`
+- **`getPageById` (`@pramen/cms`).** One page, wide, by id: what the editor opens `/pages/:id`
   with. Viewer-gated and row-ACL'd like every other read.
 
-## [0.0.56] — 2026-09-01
+## [0.0.56] - 2026-09-01
 
 ### Fixed
 
 - **A token the server won't accept now ends the session (`@pramen/cms-editor`).** The editor
-  decided it was signed in from the token's own `exp` claim, parsed client-side — which covers
+  decided it was signed in from the token's own `exp` claim, parsed client-side, which covers
   exactly one way to stop being signed in. Every other way (the signing secret rotated, the
   account deleted or deactivated, the token revoked onto the denylist, a stored token from an
   older deployment) leaves an unexpired `exp` on a token the server resolves to nobody. And
-  anonymous is not an error in pramen — the ACL answers it — so the editor mounted and rendered
+  anonymous is not an error in pramen (the ACL answers it) so the editor mounted and rendered
   a shell that looked signed in and was empty: `listContentTypes` and `listBlockTypes` 403 into
   swallowed catches, so the tabs collapsed to the pre-types default and the Users tab vanished,
   and the page list showed only what the public can read. No error banner, nothing to click, no
-  way back to sign-in. `me` — the one call that asks the server who it thinks you are — now
+  way back to sign-in. `me` (the one call that asks the server who it thinks you are) now
   hands off to the sign-in page (or the Setup screen) when it resolves to no identity. A call
   that THROWS does not: a network blip must not sign anyone out. A signed-in user with no roles
   yet is a session, and stays in the editor with the access-denied banner rather than looping
   through sign-in.
 
-## [0.0.55] — 2026-09-01
+## [0.0.55] - 2026-09-01
 
 ### Added
 
 - **Each content type gets its own tab and its own list (`@pramen/cms-editor`,
-  `@pramen/cms`).** A deployment declaring two content types — pages AND articles, say —
+  `@pramen/cms`).** A deployment declaring two content types (pages AND articles, say)
   pooled both into a single "Pages" list: one column, one row shape, and nothing but the slug
   to tell a landing page from a news item. With more than one type the topbar now shows a tab
   per type (labelled with the type's own `name`) pointing at `/types/:slug`, `/` hands off to
   the first of them, and the create modal opens on the type whose list you are standing in
-  instead of asking again. A deployment with a single type is untouched — it keeps the plain
+  instead of asking again. A deployment with a single type is untouched: it keeps the plain
   "Pages" tab, because there is nothing there to separate.
 
   > The last sentence overstated it: the pooled list's own wording changed for every
@@ -1181,17 +1181,17 @@ there are no backward-compatibility guarantees yet.
 - **`listPages` takes an optional `contentType` slug (`@pramen/cms`).** The filtering has to
   happen on the server: the handler caps at 100 rows, so an editor narrowing a pooled fetch
   would be narrowing an already-truncated list and would quietly lose the tail of every type
-  past that cap. An unknown slug returns nothing rather than falling back to everything — a
+  past that cap. An unknown slug returns nothing rather than falling back to everything: a
   renamed type must not make every article surface under a tab that no longer matches it.
   Omitting the input is unchanged behaviour.
 
-## [0.0.54] — 2026-08-31
+## [0.0.54] - 2026-08-31
 
 ### Fixed
 
 - **`extraNav`'s `target: "_self"` decided on the wrong URL (`@pramen/cms-editor`).** The
   check resolved the href against `window.location.origin`, but a browser resolves
-  `<a href>` against the current DOCUMENT — so a relative href like `curate` from
+  `<a href>` against the current DOCUMENT, so a relative href like `curate` from
   `/_pramen/admin/pages/abc` was judged off-prefix (same tab) while the browser navigated to
   `/_pramen/admin/pages/curate`, which is IN-prefix, straight onto the in-app 404 the check
   exists to prevent. `?tab=x` and `#top` failed the same way. The document URL is now a
@@ -1199,7 +1199,7 @@ there are no backward-compatibility guarantees yet.
 
 - **`_self` no longer discards unsaved edits silently.** A same-tab link is a real
   cross-document navigation, but the links were deliberately exempt from the topbar's
-  unsaved-changes guard on the reasoning that they "leave nothing behind" — true only while
+  unsaved-changes guard on the reasoning that they "leave nothing behind", true only while
   they always opened a new tab. `CollectionEditor` registers no `beforeunload` either, so a
   half-filled collection form was lost with no prompt of any kind. Same-tab links now run the
   guard.
@@ -1214,26 +1214,26 @@ there are no backward-compatibility guarantees yet.
   likewise judged only on its path.
 
 - **`_self` now works for a cross-origin tool on a root-mounted editor.** The old `!basePath`
-  test refused it, though the catch-all can only claim same-origin paths — so the one
+  test refused it, though the catch-all can only claim same-origin paths, so the one
   configuration that is provably safe unmounted was the one denied.
 
 - **A mount path is restricted to characters that survive URL parsing.** Every comparison
-  against it — here and in buzola's own `stripBasePath` — is a raw `startsWith` against a
+  against it (here and in buzola's own `stripBasePath`) is a raw `startsWith` against a
   percent-ENCODED `pathname`, so a mount of `/správa` could never match `/spr%C3%A1va/…` and
   every in-prefix URL read as off-prefix. The admitted set is now derived from the parser.
 
 ### Changed
 
 - **`scopeToBasePath` spreads the adapter instead of listing its methods**, so a member added
-  by a future `@buzola/router` is forwarded rather than silently dropped — which matters for
+  by a future `@buzola/router` is forwarded rather than silently dropped, which matters for
   the planned bump past `^0.0.12`. Adding the same handler twice is now a no-op instead of
   orphaning a wrapper that could never be removed.
 - **`opensInSameTab` moved into `mount.ts`** and the test imports it. The test previously
   re-implemented the predicate under a "mirrors" comment, and the copy carried the same
-  resolution bug — six green tests that said nothing about the shipped code.
+  resolution bug: six green tests that said nothing about the shipped code.
 - **`target` is documented** in both READMEs and the CMS guide; it had appeared in none.
 
-## [0.0.53] — 2026-08-30
+## [0.0.53] - 2026-08-30
 
 ### Added
 
@@ -1241,7 +1241,7 @@ there are no backward-compatibility guarantees yet.
   `pramenCms({ backend, admin: true })` injects one catch-all route at `/_pramen/admin`, and
   that route renders the editor's shell. The editor stops being something you deploy beside
   the site and becomes part of it: no `dist/` to copy, no SPA-fallback rewrite to configure,
-  no second hostname for it, and no Setup screen asking for a URL the server already knows —
+  no second hostname for it, and no Setup screen asking for a URL the server already knows:
   the shell declares the backend, so the first screen asks for a JWT and nothing else.
   (It moves where the editor is served, not where the API is: RPC still goes to
   `backend.url`, so a CMS on its own Worker still needs `CORS_ORIGINS`.)
@@ -1253,24 +1253,24 @@ there are no backward-compatibility guarantees yet.
   paths (its bundler emits and fingerprints them), the deep links (every view is a real
   server route) and the configuration (typed options rendered into the page) at once.
 
-  `admin` also carries the editor's own configuration — `brand`, `signInUrl`, `hidePages`,
-  `extraNav` — replacing the hand-edited `/config.js`. `@pramen/cms-editor` is an optional
+  `admin` also carries the editor's own configuration (`brand`, `signInUrl`, `hidePages`,
+  `extraNav`) replacing the hand-edited `/config.js`. `@pramen/cms-editor` is an optional
   peer dependency; omit `admin` and nothing is injected.
 
 - **An example Astro site (`example/site`), which is also the test.** It reads the example
-  CMS backend and serves its editor from the same origin — the whole wiring is one
+  CMS backend and serves its editor from the same origin: the whole wiring is one
   `pramenCms()` call. `test/astro-site.test.ts` builds it against a stub CMS, boots the
   output with `@astrojs/node` and asserts what only a real build can show: that the site's
   bundler emitted `editor.js`/`editor.css` at URLs the shell reaches, that a deep link like
   `/_pramen/admin/pages/abc` is served by the server rather than a rewrite, that the shell
   carries the mount prefix and the declared backend, and that it is sent `private, no-store`.
 
-  It also runs **`astro check`** — the only thing in this repo that type-checks `.astro`
+  It also runs **`astro check`**: the only thing in this repo that type-checks `.astro`
   files. It lives in the test rather than in `bun run typecheck` because it syncs before it
   checks, which runs the content loaders and so needs a reachable CMS.
 
 - **Navigation is scoped to the mount (`@pramen/cms-editor`).** `_404.tsx` registers the
-  catch-all `/:__notFound+`, so buzola's `Router.start()` matched — and intercepted — every
+  catch-all `/:__notFound+`, so buzola's `Router.start()` matched (and intercepted) every
   same-origin path. At the origin root that was right; co-hosted it was not, and a click on
   the host site's own `/blog` would have been cancelled and rendered the editor's "Nothing
   lives here" with the address bar still reading `/blog`. `scopeToBasePath` filters the
@@ -1282,7 +1282,7 @@ there are no backward-compatibility guarantees yet.
 
 - **`RichText.astro` could not be compiled by Astro (`@pramen/cms-astro`).** The heading case
   computed its level inline in the template, and Astro's compiler scans a template expression
-  for markup — so `attrs.level <= 6` was read as the start of a tag and failed the build
+  for markup, so `attrs.level <= 6` was read as the start of a tag and failed the build
   outright (`Unable to assign attributes when using <> Fragment shorthand syntax`). The
   comparison moved to the frontmatter, where it is plain TypeScript. Found by the new example
   site, which is the first thing in this repo to put these components through `astro build`.
@@ -1301,7 +1301,7 @@ there are no backward-compatibility guarantees yet.
   last, which is what `@podoba/tokens/fonts.css` documents.
 - **A declared backend is not remembered by the browser.** With a shell that declares one,
   `baseUrl`/`tenant` come from the server on every load and only the session token is read
-  from `localStorage` — a stale url from an earlier deployment can no longer outlive it.
+  from `localStorage`: a stale url from an earlier deployment can no longer outlive it.
 
 ### Removed
 
@@ -1310,12 +1310,12 @@ there are no backward-compatibility guarantees yet.
 
   The idea survives; the level was wrong. A browser-side prefix cannot work while the editor
   ships its own `index.html`, because that shell can only reference `/editor.js`
-  root-absolute — the one deployment shape the option existed for was the one shape it could
+  root-absolute: the one deployment shape the option existed for was the one shape it could
   not boot in. The mount prefix is now the constant the route was injected at, stamped onto
   the mount node by the same code that injected it, so a router mounted where the server
   does not serve is not a state that can be reached.
 
-## [0.0.52] — 2026-08-30
+## [0.0.52] - 2026-08-30
 
 ### Added
 
@@ -1325,7 +1325,7 @@ there are no backward-compatibility guarantees yet.
   read-and-delete, and the ID token verified through the same `JwksStrategy` the Worker uses,
   plus a nonce match binding it to the request that started it.
 
-  It mints a **pramen session**, not a passthrough of the provider's token — that is what
+  It mints a **pramen session**, not a passthrough of the provider's token, and that is what
   keeps `refreshSession`, the KV revocation denylist and role-in-token ACL working, instead
   of putting role resolution on every request's hot path. The session arrives in the
   redirect's URL **fragment**, which is never sent to a server.
@@ -1337,25 +1337,25 @@ there are no backward-compatibility guarantees yet.
 
   Accounts key on the **verified** email by default, so an OIDC login lands on the same row
   as a magic-link or password login. An unverified address is refused rather than trusted or
-  silently keyed on `sub` — a provider allowing arbitrary addresses would otherwise be a
+  silently keyed on `sub`: a provider allowing arbitrary addresses would otherwise be a
   takeover path into an existing account. `accountKey: "sub"` namespaces by issuer instead.
 
   The verify-only path is unchanged: a frontend that already holds an IdP token still needs
   only `JWKS_URL`.
 
 - **`ctx.callPrivileged` works on the D1 store.** A pre-auth route has no `ctx.db` and
-  reached handlers by forwarding to a Durable Object, so everything built on such a route —
-  signed preview links, the sitemap — was DO-only, and `@pramen/cms` had to refuse to mint
+  reached handlers by forwarding to a Durable Object, so everything built on such a route (
+  signed preview links, the sitemap) was DO-only, and `@pramen/cms` had to refuse to mint
   preview links on D1 rather than hand out one that could never be redeemed. On D1 the
   engine runs in the Worker, so it now dispatches locally, through one shared `dispatchD1`
   that the request path uses too (migration, bootstrap, the multi-tenant guard and the
   outbox drain cannot drift between them).
 
-  This is what makes D1 a first-class CMS store — and D1 is the only store that can live
+  This is what makes D1 a first-class CMS store, and D1 is the only store that can live
   inside an Astro site's Worker, because it is a binding while a DO must be exported from
   the worker entry.
 
-- **`pramenCms()` — an Astro integration for `@pramen/cms-astro`** (closes #35). One entry in
+- **`pramenCms()`: an Astro integration for `@pramen/cms-astro`** (closes #35). One entry in
   `integrations` configures the backend; a `pramen:cms` virtual module exports the client,
   a bound `resolve()` and the generated collections, with types injected. `collections:
   "auto"` reads the store's content types at config time via a new public
@@ -1366,7 +1366,7 @@ there are no backward-compatibility guarantees yet.
   once: `export { collections } from "pramen:cms"`.
 
 - **CMS locales are declared, not inferred.** `createCmsHandlers({ locales: ["cs", "en"] })`
-  and `listCmsCapabilities` — the pages-side counterpart to a collection's `supports: [...]`.
+  and `listCmsCapabilities`, the pages-side counterpart to a collection's `supports: [...]`.
   One locale means monolingual: no i18n chrome, and `locale` comes off the wire entirely so
   nothing can overwrite a field the editor no longer shows. `locales[0]` is the default
   stamp, derived rather than a second option that can disagree. Deliberately not inferred
@@ -1382,13 +1382,13 @@ there are no backward-compatibility guarantees yet.
 
 - **A failed mutation on D1 now says it was partially applied.** D1 has no interactive
   transactions, so `transaction(fn)` runs `fn` as-is and a mutation that throws midway keeps
-  what it wrote. That is unavoidable — pramen mutations interleave reads, writes, `RETURNING`
-  and trigger-into-outbox, and `batch()` cannot read mid-batch — but it used to be invisible:
+  what it wrote. That is unavoidable: pramen mutations interleave reads, writes, `RETURNING`
+  and trigger-into-outbox, and `batch()` cannot read mid-batch, but it used to be invisible:
   a half-applied mutation looked exactly like an ordinary 500. The Worker now logs the
   handler and how many statements had committed.
 
 - **A missing Cron trigger on the D1 store is no longer silent.** The DO self-drains via an
-  alarm; D1 has none, so a delayed task — a scheduled publish, a retry backoff — runs only
+  alarm; D1 has none, so a delayed task (a scheduled publish, a retry backoff) runs only
   under a Cron trigger, and forgetting it meant the row simply never went live. The Worker
   warns once per isolate when a request-tail drain leaves a future-due task and no Cron drain
   has been seen, and stops once one fires.
@@ -1404,8 +1404,8 @@ there are no backward-compatibility guarantees yet.
   Revision history stopped leaking: `collectionListRevisions` projects each snapshot to the
   caller's readable fields (it returned the raw JSON from a flatly-granted table), restore
   writes back only that set, and `cmsPolicies` no longer grants update/delete on the
-  append-only revisions table. The generic CRUD handlers gained input validation — an
-  operator object where an id belongs returned an arbitrary row — and `collectionList` clamps
+  append-only revisions table. The generic CRUD handlers gained input validation: an
+  operator object where an id belongs returned an arbitrary row, and `collectionList` clamps
   its limit.
 
   `createCollectionHandlers` now requires your schema and validates the whole registry at
@@ -1420,8 +1420,8 @@ there are no backward-compatibility guarantees yet.
   without a stamp no longer vanish the moment `scheduling` is enabled, and it grants
   `publishedAt` so "newest published first" stops 403ing for anonymous.
 
-- **The collection editor can publish.** With `drafts` enabled there was no UI path at all —
-  `collectionCreate` seeds `status: "draft"` and `collectionUpdate` strips `status` — so a row
+- **The collection editor can publish.** With `drafts` enabled there was no UI path at all:
+  `collectionCreate` seeds `status: "draft"` and `collectionUpdate` strips `status`, so a row
   authored in the editor could never be made public. Adds publish/unpublish, a schedule
   picker, a preview link and a restorable revision list, all driven by `supports`.
 
@@ -1431,11 +1431,11 @@ there are no backward-compatibility guarantees yet.
   release. `embed` generated a Worker entrypoint against a `dist/_worker.js` layout only
   `@astrojs/cloudflare` v12 emits; v13/v14 hand the build to `@cloudflare/vite-plugin` and
   emit no such file, so the generated entry could not resolve its first import. `basePath`
-  had no other consumer and four defects that only surface once something is mounted —
+  had no other consumer and four defects that only surface once something is mounted:
   `/files` and `/media` were dead under a prefix, minted URLs did not know about it, and
   `basePath: "/"` 404'd everything. Both will return built against the current adapter.
 
-## [Shipped, version unrecorded — between 0.0.15 and 0.0.51]
+## [Shipped, version unrecorded: between 0.0.15 and 0.0.51]
 
 These entries sat under "Unreleased" while the file went untended. The work SHIPPED; which
 release carried it was never recorded, so they are kept verbatim rather than assigned a
@@ -1445,14 +1445,14 @@ version they might not belong to.
 
 - **Session revocation, without a session store.** Tokens are stateless (roles baked in at
   login), so a token used to outlive any change to the account behind it. Two mechanisms
-  close that gap. **`refreshSession()`** (`@pramen/auth`, authenticated — in both
+  close that gap. **`refreshSession()`** (`@pramen/auth`, authenticated, in both
   `authHandlers` and `createMagicLinkAuth`) re-reads `roles`/`active` and reissues a token:
   refreshing at ~half-TTL keeps `AUTH_SESSION_TTL_SECONDS` short (bounding how long a stale
-  role lingers) and picks up a role **grant** immediately — e.g. after a subscription
-  checkout — with no re-login. It 401s for a deleted or deactivated account, so a refresh
+  role lingers) and picks up a role **grant** immediately, e.g. after a subscription
+  checkout, with no re-login. It 401s for a deleted or deactivated account, so a refresh
   can't launder a revoked session into a longer-lived one. For hard revocation, a **KV
   denylist**: `setUserActive(false)` / `deleteUser` write `authDenied:<username>`, which the
-  Worker checks right after resolving identity — before both the DO and D1 paths — and fails
+  Worker checks right after resolving identity (before both the DO and D1 paths) and fails
   **closed** with 401 (never a silent downgrade to anonymous), covering HTTP and the
   WebSocket upgrade. The entry self-expires at the session TTL, so the list never grows;
   reactivation lifts it (the key is username-scoped and would otherwise block a fresh login).
@@ -1462,7 +1462,7 @@ version they might not belong to.
 ### Fixed
 
 - **The admin dashboard rendered blank against any real deployment.** `GET /tenants`
-  returns `DoRef[]` (`{tenant, partition}` — one entry per registered Durable Object),
+  returns `DoRef[]` (`{tenant, partition}`, one entry per registered Durable Object),
   but `@pramen/admin` typed the call `string[]` and passed each entry straight to
   `<SelectItem>`. React throws on an object child, so the whole dashboard failed to
   render for anyone whose deployment had even one tenant, which is all of them. Present
@@ -1470,7 +1470,7 @@ version they might not belong to.
 
   The client now normalizes: tenant names are extracted, deduped (a tenant spanning
   several partitions is one choice in a picker that selects tenants) and sorted, so KV
-  listing order cannot reshuffle the list. A plain `string[]` is still accepted — the
+  listing order cannot reshuffle the list. A plain `string[]` is still accepted: the
   admin is a client you point at arbitrary deployments, which need not run the version
   that built the bundle.
 
@@ -1482,25 +1482,25 @@ version they might not belong to.
 
 - **`@pramen/auth` was unusable on Cloudflare.** Password hashing used 600k PBKDF2
   iterations (OWASP guidance), but workerd caps PBKDF2 at **100k** and throws rather than
-  clamping — `NotSupportedError: Pbkdf2 failed: iteration counts above 100000 are not
+  clamping: `NotSupportedError: Pbkdf2 failed: iteration counts above 100000 are not
   supported`. Every `signup` and `login` returned a 500 on any real deployment. New hashes
   are now written at the platform maximum, which is also the strongest KDF Workers offers
   (WebCrypto there has no scrypt or argon2). Lowering the count is safe because the
   iteration count is encoded in the stored string and read back on verify.
 
-  This escaped the entire test suite because Bun — which runs the tests, and which
-  `lopata` runs workers on — has no such cap, so the bug was reachable only by deploying.
+  This escaped the entire test suite because Bun, which runs the tests, and which
+  `lopata` runs workers on, has no such cap, so the bug was reachable only by deploying.
   The new regression test therefore asserts the **number recorded in the stored hash**
   rather than any behaviour, since behaviour under Bun cannot tell 100k from 600k.
 
   Verification also gained a diagnosis: the count comes FROM the stored hash, so a row
   written at 600k by an earlier release (or by a Bun/Node deployment sharing a database
   with a Worker) can never be verified on Workers. That now raises an error naming the
-  count, the cap and the remedies, instead of a bare `NotSupportedError` — or, if a caller
+  count, the cap and the remedies, instead of a bare `NotSupportedError`, or, if a caller
   swallowed it, a silent "wrong password" that locks the account out with nothing logged.
 - **A live WebSocket could outlive its token.** The token was verified once at upgrade and
   the identity fixed for the life of the socket, so a long-lived or hibernating connection
-  kept calling and receiving pushes indefinitely past `exp` — role changes and revocation
+  kept calling and receiving pushes indefinitely past `exp`: role changes and revocation
   only ever bit on reconnect. The DO now re-checks `exp` on every message: an expired socket
   gets an `unauthorized` error frame and is closed with **4401**, and expired sockets are
   dropped from the broadcast path instead of pushed to. `Identity` carries `exp` (a standard
@@ -1513,7 +1513,7 @@ version they might not belong to.
   `undefined`. The base url is also normalized (trailing slash stripped) so `${url}/rpc`
   can't become `//rpc`.
 - **`@pramen/client` D1 read-your-writes bookmark keeps the maximum**, not
-  last-response-wins — a slower earlier response can no longer clobber a newer bookmark and
+  last-response-wins: a slower earlier response can no longer clobber a newer bookmark and
   regress read-your-writes under concurrency.
 - **`@pramen/client` surfaces live-connection failures.** A missing WebSocket
   implementation, or a socket that keeps closing past `maxReconnectAttempts` (default 8),
@@ -1524,7 +1524,7 @@ version they might not belong to.
 ### Changed
 
 - **`pramen schema diff` now reports modifier and partition changes**, not just column
-  types — `notNull`/`unique`/`primaryKey`/`generated`/`default`/`hidden` changes and
+  types: `notNull`/`unique`/`primaryKey`/`generated`/`default`/`hidden` changes and
   entity partition moves are surfaced, each labeled `[NOT applied on boot]` because the
   boot migrator only rebuilds on a type change (partition moves need a manual cross-DO data
   migration).
@@ -1532,13 +1532,13 @@ version they might not belong to.
   `PRAMEN_ALLOW_DESTRUCTIVE` (off by default), not auto-applied. Fixed the misleading
   "auto-applied" wording in the CLI, `schema diff`, and the README/docs.
 
-## [0.0.14] — 2026-06-25
+## [0.0.14] - 2026-06-25
 
 ### Added
 
-- **`ctx.queue` — native Cloudflare Queues.** A producer + consumer seam (the same shape
+- **`ctx.queue`, native Cloudflare Queues.** A producer + consumer seam (the same shape
   as `ctx.mail`): `ctx.queue.send(binding, body, opts?)` / `sendBatch(...)` over a
-  `QueueAdapter` (Cloudflare / in-memory), plus a consumer dispatch — register handlers in
+  `QueueAdapter` (Cloudflare / in-memory), plus a consumer dispatch: register handlers in
   `app.queues` (keyed by queue name) and wire `createPramen(app).queue` as the Cloudflare
   `queue(batch, env)` entry. Distinct from `ctx.tasks` (the transactional outbox): a queue
   send is **not** transactional with the write, but gets platform-native batching, retry,
@@ -1555,11 +1555,11 @@ version they might not belong to.
 
 - **Reserved-word identifiers.** The DDL generator and migrator emitted bare identifiers,
   so a column or table named after a SQL keyword (`order`, `group`, …) broke the migration
-  outright — and would have broken every read/write once created. All identifiers are now
+  outright, and would have broken every read/write once created. All identifiers are now
   double-quoted through a single `quoteIdent` authority (DDL, the table-rebuild, reads, and
-  writes). Backward-compatible — existing stores don't re-migrate.
+  writes). Backward-compatible: existing stores don't re-migrate.
 - **Live queries under `PRAMEN_STORE=d1`.** The D1 default routed `/live` onto the D1 path
-  and returned a `400` instead of falling through to the Durable Object — silently
+  and returned a `400` instead of falling through to the Durable Object, silently
   disabling live subscriptions. Live queries now always use the DO.
 - **Unbound Durable Object.** A request routed to the DO with no DO bound crashed the whole
   RPC surface (`Cannot read 'get' of undefined`). It now returns a clear `400`, and
@@ -1568,27 +1568,27 @@ version they might not belong to.
 
 ### Documentation
 
-- The `x-pramen-store: d1` **header is the reliable way to pin the D1 store** — a
+- The `x-pramen-store: d1` **header is the reliable way to pin the D1 store**: a
   `PRAMEN_STORE` env default can be dropped by some adapters' `cloudflare:workers` env
   proxies (e.g. Astro's).
 - A trailing-slash-enforcing framework (Astro `trailingSlash: 'always'`) 308-redirects
-  `/rpc/*` and browsers drop the POST body on the redirect — use `'ignore'` / `'never'`
+  `/rpc/*` and browsers drop the POST body on the redirect, so use `'ignore'` / `'never'`
   for the API routes.
 
-## [0.0.13] — 2026-06-23
+## [0.0.13] - 2026-06-23
 
 ### Added
 
 - **Per-handler authorization.** `query` / `mutation` accept an `auth` option
   (`"authenticated"` | role list | `(identity) => boolean`), enforced before the handler
-  runs — to gate handlers that reach `ctx.kv` / `ctx.env` / `ctx.mail` / `ctx.queue`
+  runs, to gate handlers that reach `ctx.kv` / `ctx.env` / `ctx.mail` / `ctx.queue`
   directly (those bypass the row-level ACL).
 
-## [0.0.12] — 2026-06-23
+## [0.0.12] - 2026-06-23
 
 ### Added
 
-- **`ctx.mail` facade.** Send email through an adapter seam — Cloudflare Email Sending (the
+- **`ctx.mail` facade.** Send email through an adapter seam: Cloudflare Email Sending (the
   `EMAIL` / `send_email` binding, no API keys), with a dev capture mode and an in-memory
   adapter for tests. Available in handlers and task-drain contexts.
 
@@ -1597,13 +1597,13 @@ version they might not belong to.
 - `ctx.mail` **fails closed** when unconfigured, so a misconfigured production never
   silently stashes a security email; the example's dev inbox handlers are admin-gated.
 
-## [0.0.11] — 2026-06-23
+## [0.0.11] - 2026-06-23
 
 ### Added
 
 - **Declarative `$triggers`.** An entity may declare
   `triggers: [trigger({ task, on: { create?, update?, delete? } })]`; a matching ORM write
-  auto-enqueues the task in the write's transaction — no `ctx.tasks.enqueue` in the handler.
+  auto-enqueues the task in the write's transaction: no `ctx.tasks.enqueue` in the handler.
 
 ### Fixed
 
@@ -1611,11 +1611,11 @@ version they might not belong to.
   from payloads, a loop guard for task-handler writes, value-change semantics on
   field-filtered updates, and fail-fast validation of trigger → task wiring.
 
-## [0.0.10] — 2026-06-23
+## [0.0.10] - 2026-06-23
 
 ### Added
 
-- **Deferred tasks — transactional outbox.** `ctx.tasks.enqueue({ kind, payload, delayMs? })`
+- **Deferred tasks: a transactional outbox.** `ctx.tasks.enqueue({ kind, payload, delayMs? })`
   writes to an outbox table **atomically with the mutation**; a drainer runs the matching
   `app.tasks` handler after commit, off the write path. At-least-once with retry/backoff,
   dead-letter, and a `meta.id` idempotency key. The DO self-drains via an alarm; the D1
@@ -1626,19 +1626,19 @@ version they might not belong to.
 - Production-hardened the outbox: claim-based concurrent drains (disjoint batches),
   retention pruning, and stale-claim reclaim.
 
-## [0.0.9] — 2026-06-23
+## [0.0.9] - 2026-06-23
 
 ### Added
 
-- `createUserHandlers({ table })` + `authPolicies(...)` — user management (admin + self)
+- `createUserHandlers({ table })` + `authPolicies(...)`: user management (admin + self)
   over any `authSchema`-shaped table.
 
 ### Fixed
 
 - **Security:** magic-link login keys on the immutable `username`, not the mutable `email`
-  — prevents account takeover and a PK-collision migration regression.
+  to prevent account takeover and a PK-collision migration regression.
 
-## [0.0.8] — 2026-06-23
+## [0.0.8] - 2026-06-23
 
 ### Added
 
@@ -1650,7 +1650,7 @@ version they might not belong to.
   fixing entities whose PK isn't `id` (e.g. `auth_users`, PK = `username`); `hidden()`
   columns are stripped from every read projection.
 
-## [0.0.7] — 2026-06-23
+## [0.0.7] - 2026-06-23
 
 ### Added
 
@@ -1659,41 +1659,41 @@ version they might not belong to.
 ### Fixed
 
 - Publish: rewrite `workspace:*` dependency ranges to concrete versions before
-  `npm publish` — the previously published `@pramen/react` / `@pramen/auth` shipped an
+  `npm publish`: the previously published `@pramen/react` / `@pramen/auth` shipped an
   unrewritten `workspace:*` dep and were uninstallable.
 
-## [0.0.6] — 2026-06-23
+## [0.0.6] - 2026-06-23
 
 ### Changed
 
 - Release-workflow / CI maintenance (GitHub Action version bumps); no library changes.
 
-## [0.0.5] — 2026-06-22
+## [0.0.5] - 2026-06-22
 
 ### Added
 
-- **SQL-expression column defaults** — `defaultTo(t.text(), expr.now())` / `expr.raw(sql)`,
+- **SQL-expression column defaults**: `defaultTo(t.text(), expr.now())` / `expr.raw(sql)`,
   emitted unquoted and parenthesized in the DDL.
 
-## [0.0.4] — 2026-06-22
+## [0.0.4] - 2026-06-22
 
 ### Added
 
 - **Durable Object partitions.** An entity may declare a `partition` (the DO class it lives
   in); partition-aware routing, per-partition migrate + admin endpoints, a self-maintained
   `(tenant, partition)` registry, and static rejection of cross-partition relations.
-- **`uuid` field type** — `t.uuid()` with `generated()` + `primaryKey()`, validated on write.
+- **`uuid` field type**: `t.uuid()` with `generated()` + `primaryKey()`, validated on write.
 
-## [0.0.3] — 2026-06-22
+## [0.0.3] - 2026-06-22
 
 ### Fixed
 
 - Relation-aware `WhereClause` for relationless entities; annotated release tags in the
   bump script.
 
-## [0.0.2] — 2026-06-22
+## [0.0.2] - 2026-06-22
 
-First published release — the foundational runtime:
+First published release, the foundational runtime:
 
 - Schema + handlers + ORM over a `Driver` / `Dialect` substrate seam (DO SQLite + D1).
 - Deny-by-default **ACL**: roles, policies, row-level scopes, cell-level field permissions,

@@ -14,7 +14,7 @@ export default async function Home() {
         <h1>pramen</h1>
         <p class="lede">
           A reactive backend runtime for TypeScript on Cloudflare. Define a schema and handlers; get a complete backend
-          deployed as a Worker + per-tenant Durable Object — with row- and cell-level ACL, live queries, and typed
+          deployed as a Worker + per-tenant Durable Object, with row- and cell-level ACL, live queries, and typed
           end-to-end clients.
         </p>
         <p class="hero-ctas">

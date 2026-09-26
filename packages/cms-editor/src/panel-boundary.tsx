@@ -1,7 +1,7 @@
 // The blast radius of a panel.
 //
 // A panel is a project's own component rendering inside THIS app's React tree, which is the
-// whole point of it — and the cost of that is that a throw in its render is a throw in ours.
+// whole point of it, and the cost of that is that a throw in its render is a throw in ours.
 // React's answer to an uncaught render error is to unmount the entire root, so without a
 // boundary one bad panel does not break a screen, it blanks the admin: no sidebar, no way to
 // navigate off the route that is failing, and a reload lands straight back on it because the
@@ -10,7 +10,7 @@
 // So the panel route wraps it. The chrome survives, the reader is told which panel failed and
 // with what, and every other section stays one click away.
 //
-// A CLASS, because `componentDidCatch`/`getDerivedStateFromError` have no hook equivalent —
+// A CLASS, because `componentDidCatch`/`getDerivedStateFromError` have no hook equivalent:
 // there is still no way to catch a render error from a function component. Its own module so
 // the decision is testable without dragging in the router and the design system.
 
@@ -19,7 +19,7 @@ import { t } from "./i18n";
 import { rich } from "./i18n/rich";
 
 interface Props {
-  /** Named in the message — a deployment with three panels needs to know which one. */
+  /** Named in the message, since a deployment with three panels needs to know which one. */
   slug: string;
   children: ReactNode;
 }
@@ -51,7 +51,7 @@ export class PanelBoundary extends Component<Props, State> {
   }
 
   override componentDidUpdate(prev: Props): void {
-    // Navigating to a different panel must clear the failure — the route keys on the slug so
+    // Navigating to a different panel must clear the failure. The route keys on the slug so
     // this rarely fires, but a boundary that latched would turn one panel's bug into every
     // panel's bug for the rest of the session.
     if (prev.slug !== this.props.slug && this.state.failure !== null) this.setState({ failure: null });

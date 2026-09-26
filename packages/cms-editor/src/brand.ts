@@ -16,7 +16,7 @@ export interface BrandConfig {
 export interface Brand {
   name: string;
   suffix: string | null;
-  /** Name and suffix joined for `document.title` — where the middot reads correctly. */
+  /** Name and suffix joined for `document.title`, where the middot reads correctly. */
   title: string;
   /** The same words with no punctuation, for an accessible name. A screen reader announces
    * "·" as "middle dot" at higher verbosity, so the decorative separator that belongs in a
@@ -30,7 +30,7 @@ export const DEFAULT_BRAND_SUFFIX = "cms";
 /** Coerce one config value to a trimmed string, or undefined for anything else.
  *
  * /config.js is hand-edited, untyped, and often templated from an env var, so a value here
- * can be any JSON type. `?.trim()` guards null and undefined ONLY — `suffix: false` (a
+ * can be any JSON type. `?.trim()` guards null and undefined ONLY: `suffix: false` (a
  * plausible slip next to `hidePages: true`) or `name: 123` would THROW, and since `BRAND` is
  * resolved at module load in the entry bundle's import graph, that throw aborts evaluation
  * before `createRoot` and renders a blank page with nothing but a console error. Every other
@@ -49,7 +49,7 @@ function str(v: unknown): string | undefined {
  * A `brand` that is present but yields no usable name is WARNED about rather than silently
  * accepted: `brand: "Acme"` (the shorthand instead of `{ name: "Acme" }`), a misspelled key,
  * or a template that resolved to an empty string all end up shipping the framework's name to
- * the client — the exact outcome this config exists to prevent — and a green deploy is the
+ * the client, the exact outcome this config exists to prevent, and a green deploy is the
  * worst place to discover it. */
 export function resolveBrand(cfg?: BrandConfig): Brand {
   const configured = str(cfg?.name);
@@ -59,13 +59,13 @@ export function resolveBrand(cfg?: BrandConfig): Brand {
     );
   }
   const name = configured ?? DEFAULT_BRAND_NAME;
-  // `undefined` (not configured) keeps the default; `null` — and any non-string — drops it.
+  // `undefined` (not configured) keeps the default; `null`, and any non-string, drops it.
   const suffix = cfg?.suffix === undefined ? DEFAULT_BRAND_SUFFIX : (str(cfg.suffix) ?? null);
   return { name, suffix, title: suffix ? `${name} · ${suffix}` : name, spoken: suffix ? `${name} ${suffix}` : name };
 }
 
 /** The global the host's /config.js writes. Declared structurally rather than reaching for
- * `Window`, so this module needs no DOM lib — and so a test can hand it a plain object. */
+ * `Window`, so this module needs no DOM lib, and so a test can hand it a plain object. */
 export interface BrandHost {
   PRAMEN_CMS_EDITOR?: { brand?: BrandConfig };
 }
@@ -76,12 +76,12 @@ export function readBrandConfig(host: BrandHost | undefined): BrandConfig | unde
   return host?.PRAMEN_CMS_EDITOR?.brand;
 }
 
-/** The wordmark for THIS page load. Read at module load, like `SIGN_IN_URL` — /config.js is
+/** The wordmark for THIS page load. Read at module load, like `SIGN_IN_URL`: /config.js is
  * a plain script tag ahead of the bundle, so it is already set. */
 export const BRAND: Brand = resolveBrand(readBrandConfig(globalThis as BrandHost));
 
 /** The two chrome strings built from the wordmark, in one place so the words that are NOT
- * the client's name can be seen together — and so neither call site re-invents them.
+ * the client's name can be seen together, and so neither call site re-invents them.
  *
  * Both keep saying "editor" on the DEFAULT wordmark, because that is what the Setup screen
  * and the browser tab have always said; a configured brand replaces the lot rather than
@@ -89,7 +89,7 @@ export const BRAND: Brand = resolveBrand(readBrandConfig(globalThis as BrandHost
 export const SETUP_TITLE: string = BRAND.suffix ? `· ${BRAND.suffix}${isDefault(BRAND) ? " editor" : ""}` : "";
 export const DOCUMENT_TITLE: string = isDefault(BRAND) ? `${BRAND.title} editor` : BRAND.title;
 
-/** Whether nothing was configured — the unbranded default, which must render exactly as it
+/** Whether nothing was configured: the unbranded default, which must render exactly as it
  * did before this module existed. */
 function isDefault(b: Brand): boolean {
   return b.name === DEFAULT_BRAND_NAME && b.suffix === DEFAULT_BRAND_SUFFIX;

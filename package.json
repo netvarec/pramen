@@ -2,7 +2,7 @@
   "name": "pramen",
   "version": "0.0.0",
   "private": true,
-  "description": "Reactive backend runtime for TypeScript on Cloudflare — schema + handlers, deployed as Workers + Durable Objects.",
+  "description": "Reactive backend runtime for TypeScript on Cloudflare: schema + handlers, deployed as Workers + Durable Objects.",
   "type": "module",
   "workspaces": [
     "packages/*",

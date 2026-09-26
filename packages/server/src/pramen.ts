@@ -1,4 +1,4 @@
-// createPramen(app) — the server library entry. Turns an app (schema + handlers +
+// createPramen(app): the server library entry. Turns an app (schema + handlers +
 // ACL) into the two things a Cloudflare deployment needs: a Worker `fetch` and the
 // `PramenDO` Durable Object class. A consumer's whole entry is three lines:
 //
@@ -22,14 +22,14 @@ import type { Role } from "./sdk/acl";
 import type { EnvBag } from "./sdk/handlers";
 import type { JsonValue } from "./sdk/infer";
 
-/** Injected into a public route's handler — forward a privileged mutation into the
+/** Injected into a public route's handler: forward a privileged mutation into the
  * tenant's DO without the handler importing any deploy-side code (so app.ts stays
  * authoring-only). The synthetic identity defaults to the admin role. */
 export interface RouteContext {
   callPrivileged(opts: { name: string; input?: JsonValue; tenant?: string; roles?: string[] }): Promise<Response>;
 }
 
-/** A public, pre-auth route — matched before identity resolution, so it can host a
+/** A public, pre-auth route, matched before identity resolution, so it can host a
  * signature-authenticated endpoint (e.g. a Stripe webhook) that doesn't fit the
  * JWT-gated /rpc surface. The handler verifies its own auth (a signature), then can
  * `ctx.callPrivileged(...)` to apply a mutation. `env` is loosely typed here so the
@@ -49,29 +49,29 @@ export interface PramenApp {
   handlers: HandlerMap;
   acl?: Role[];
   routes?: PublicRoute[];
-  /** Deferred side-effect handlers keyed by `kind` — drained from the outbox after a
+  /** Deferred side-effect handlers keyed by `kind`, drained from the outbox after a
    * mutation enqueues via `ctx.tasks.enqueue`. For notification email, webhooks, etc. */
   tasks?: AppTaskMap;
-  /** Cloudflare Queues consumers keyed by queue name — process messages produced via
+  /** Cloudflare Queues consumers keyed by queue name, to process messages produced via
    * `ctx.queue.send(...)`. Dispatched by `createPramen(app).queue` (a consumer is
    * Worker-level: no `ctx.db`, reach a tenant via `ctx.callPrivileged`). */
   queues?: AppQueueMap;
-  /** Idempotent reconcilers run once after schema migration on each boot — converge
+  /** Idempotent reconcilers run once after schema migration on each boot, to converge
    * code-defined reference data into the store (see `BootstrapFn`). Each runs with a
    * privileged system Db; failures are logged, never fatal. */
   bootstrap?: readonly BootstrapFn[];
-  /** Imperative DATA migrations — backfills, splits, normalizations — run in declaration
+  /** Imperative DATA migrations (backfills, splits, normalizations) run in declaration
    * order after `migrate()` and before `bootstrap`, each recorded ONCE per (id, partition)
    * in `_pramen_migrations` (see `DataMigration`). The declarative migrator diffs shapes
    * and so can only enact structure; this is the transformation half. Unlike `bootstrap`,
-   * a failure is NOT swallowed — it fails the boot closed and retries next fetch. */
+   * a failure is NOT swallowed: it fails the boot closed and retries next fetch. */
   migrations?: readonly DataMigration[];
 }
 
 export type { Env, DoEnv };
 
 /** Build the deployable pair for an app. `scheduled` is a Cron Trigger entry that
- * drains the D1 outbox (the DO path self-drains via an alarm) — wire it only if you
+ * drains the D1 outbox (the DO path self-drains via an alarm). Wire it only if you
  * use the D1 store with deferred tasks. */
 export function createPramen(app: PramenApp): {
   fetch: (request: Request, env: Env, ctx: ExecutionContext) => Promise<Response>;
@@ -81,7 +81,7 @@ export function createPramen(app: PramenApp): {
 } {
   validateTriggerTasks(app.schema, Object.keys(app.tasks ?? {})); // fail fast on a typo'd trigger task
   validateMigrations(app.schema, app.migrations); // fail fast on a duplicate/empty id or an unknown partition
-  validateHandlerAuth(app.handlers); // warn (never throw) about an `auth: []` handler — see the note there
+  validateHandlerAuth(app.handlers); // warn (never throw) about an `auth: []` handler; see the note there
   const worker = makeWorker(app);
   return { fetch: worker.fetch, scheduled: worker.scheduled, queue: worker.queue, PramenDO: pramenDO(app) };
 }

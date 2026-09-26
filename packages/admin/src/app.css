@@ -5,7 +5,7 @@
 @import "@podoba/tokens/variables.css";
 @import "@podoba/tailwind";
 
-/* v4 auto-detects this app's sources, but node_modules is ignored by default —
+/* v4 auto-detects this app's sources, but node_modules is ignored by default;
  * @podoba/react ships TS source with class strings the compiler must scan, so name
  * it explicitly (paths are relative to this file). */
 @source "./**/*.{ts,tsx}";

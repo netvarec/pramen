@@ -54,7 +54,7 @@ export async function runExtras(base: string): Promise<void> {
 
   // --- P7 anonymous role + P9 capability read (on the default `main` tenant, which
   // anonymous callers may reach; the `anonymous` ACL role gates the data) ---
-  const main = http(base, "main"); // post(name, input, bearer?) — omit bearer = anonymous
+  const main = http(base, "main"); // post(name, input, bearer?), omit bearer = anonymous
 
   // anonymous can create a signup (public write), but can't read notes
   const anonNote = await main("listNotes", {});
@@ -101,7 +101,7 @@ export async function runExtras(base: string): Promise<void> {
   const aNote = await p6("createNote", { title: "p6", body: "alice-secret" }, T6.alice);
   const noteId = aNote.body.result.id;
 
-  // tina (teammate) may edit any title but can't read body on another's note — the
+  // tina (teammate) may edit any title but can't read body on another's note: the
   // update echo must include the written title but NOT leak body
   const edited = await p6("updateNote", { id: noteId, title: "p6-edited" }, T6.tina);
   assert(edited.body.result?.title === "p6-edited", "P6: update echo returns the written field");

@@ -1,4 +1,4 @@
-// Collection list route (`/collections/:slug`). Generic over any registered collection —
+// Collection list route (`/collections/:slug`). Generic over any registered collection:
 // resolves the CollectionMeta from the app context and renders its rows. Opening a row (or
 // "+ New") navigates to the item route.
 

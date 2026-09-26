@@ -3,16 +3,16 @@
 //   dist/editor.js    the whole app (Bun bundles it; no chunks, no bare imports)
 //   dist/editor.css   the whole design system (Tailwind + podoba tokens + the web font,
 //                     inlined as a data: URI so the stylesheet references nothing else)
-//   dist/panel-*.js   four shims that hand a PANEL bundle the editor's own React — see
+//   dist/panel-*.js   four shims that hand a PANEL bundle the editor's own React. See
 //                     `src/panel-globals.ts` and `src/panel-runtime.ts`
 //
 // The build itself is `buildEditor` in `src/build-editor.ts`; this script is the in-repo caller
 // that produces the published `dist/`. It lives there rather than here because a HOST needs to
-// run the same build against its own podoba and its own stylesheet — a sealed bundle is what
+// run the same build against its own podoba and its own stylesheet: a sealed bundle is what
 // drove one deployment to rebuild us out of `src/` with 70 string replacements.
 //
-// Deliberately NOT an index.html. The editor is served by a SHELL its host renders — an
-// injected Astro route in @pramen/cms-astro, the dev preview below — and the shell is what
+// Deliberately NOT an index.html. The editor is served by a SHELL its host renders: an
+// injected Astro route in @pramen/cms-astro, the dev preview below, and the shell is what
 // knows where the editor is mounted, which backend it talks to and what the page is called.
 // A baked index.html could not know any of that: it hard-coded root-absolute asset paths
 // (`/editor.js`), so it only worked at the origin root, and its companion `config.js` was a
@@ -30,7 +30,7 @@ const root = new URL("..", import.meta.url).pathname;
 const dist = `${root}dist`;
 const watch = process.argv.includes("--watch");
 
-/** Which chrome the PREVIEW shell asks for — `--layout=topbar` to see the Graphic Standard
+/** Which chrome the PREVIEW shell asks for. `--layout=topbar` shows the Graphic Standard
  * bar instead of the default sidebar. A dev-loop flag, not a build input: it only reaches
  * the preview's inline config below, which is the same global a real shell writes. */
 const previewLayout = process.argv.find((a) => a.startsWith("--layout="))?.slice("--layout=".length) ?? "";
@@ -61,7 +61,7 @@ await rm(dist, { recursive: true, force: true });
 await build();
 
 if (watch) {
-  // The preview's own shell — the same four things every shell owes the bundle: the
+  // The preview's own shell, the same four things every shell owes the bundle: the
   // stylesheet, the import map that resolves a panel bundle's React against the editor's,
   // the mount node carrying `data-base-path`, and the module script. Served at the origin
   // root with an empty prefix, which is the standalone shape; the prefixed mount is what
@@ -106,11 +106,11 @@ if (watch) {
     port: 5175,
     fetch(req) {
       const path = new URL(req.url).pathname;
-      // Extensionless paths are client routes — serve the shell so a deep link or refresh
+      // Extensionless paths are client routes, so serve the shell so a deep link or refresh
       // boots the SPA and lets the router resolve the path.
       if (!extname(path)) return new Response(shell, { headers: { "content-type": "text/html; charset=utf-8" } });
       return new Response(Bun.file(`${dist}${path}`));
     },
   });
-  console.log("watching src/ — preview on http://localhost:5175");
+  console.log("watching src/, preview on http://localhost:5175");
 }

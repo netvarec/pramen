@@ -5,7 +5,7 @@
 // landing on. The cover is what makes "Media" and "Menus" recognisable before the type is.
 //
 // So it is DERIVED, not chosen: a hash of the screen's name seeds a PRNG, and the PRNG lays
-// out a Truchet field — a grid of quarter-circle arcs whose per-tile orientation is the only
+// out a Truchet field: a grid of quarter-circle arcs whose per-tile orientation is the only
 // random thing about it. Same name, same picture, forever; a new collection gets its own
 // without anyone drawing one. That is the whole appeal over a stock image: nothing to author,
 // nothing to upload, and no screen that looks like another.
@@ -13,7 +13,7 @@
 // Two rules govern every choice below, and both come from what this art sits UNDER:
 //
 //   LEGIBILITY. The header carries 56px type and the primary action. Line work is
-//   `currentColor` at low alpha — a tint of the foreground, so it is dark on the light theme
+//   `currentColor` at low alpha, a tint of the foreground, so it is dark on the light theme
 //   and light on the dark one BY CONSTRUCTION. That matters here specifically: podoba does
 //   not redefine its accent tokens per theme, so a fixed accent stroke would be near-white
 //   mint on a white ground in light, or near-black blue on a dark ground in dark. Colour
@@ -30,7 +30,7 @@ import type { ReactElement } from "react";
  * which is what makes it bleed to the panel edges at any header height.
  *
  * Tuned by looking at it. A 14×3 field puts ~80px tiles in a 1140px panel, and at that size a
- * Truchet arc stops being a woven line and becomes a big soft loop — organic, which is the
+ * Truchet arc stops being a woven line and becomes a big soft loop: organic, which is the
  * wrong register next to Swiss type. Finer tiles read as the precise, drawn-by-a-machine
  * pattern this is meant to be. */
 const COLS = 20;
@@ -39,7 +39,7 @@ const ROWS = 5;
 /**
  * FNV-1a, 32-bit.
  *
- * Not for security — for a stable, well-mixed number from a short string. Stability is the
+ * Not for security, but for a stable, well-mixed number from a short string. Stability is the
  * requirement that rules out `Math.random` and anything else stateful: the same screen has to
  * draw the same picture on every render, in every browser, after every deploy.
  *
@@ -55,7 +55,7 @@ export function hashSeed(input: string): number {
   return h >>> 0;
 }
 
-/** mulberry32 — a tiny, well-distributed PRNG. Seeded once per cover, so the sequence (and
+/** mulberry32, a tiny, well-distributed PRNG. Seeded once per cover, so the sequence (and
  * therefore the picture) is a pure function of the name. */
 export function seededRandom(seed: number): () => number {
   let a = seed >>> 0;
@@ -74,7 +74,7 @@ export function seededRandom(seed: number): () => number {
  * A CLOSED list of podoba tokens, not a hue rotation: the point is a page that looks like it
  * belongs to this product, and a free hue would put colours in the chrome that exist nowhere
  * else in it. Every entry is mid-toned, which is what lets one alpha work on both the white
- * and the near-black ground — the very light tokens (`accent-mint`) vanish on white and the
+ * and the near-black ground: the very light tokens (`accent-mint`) vanish on white and the
  * very dark one (`accent-blue`) vanishes on the dark theme, so neither is in here.
  */
 export const COVER_ACCENTS: readonly string[] = [
@@ -105,7 +105,7 @@ function tilePath(col: number, row: number, flipped: boolean): string {
 /**
  * The cover for one screen, seeded by its name.
  *
- * Absolutely positioned to fill its (relative, `overflow-hidden`) parent — it is a
+ * Absolutely positioned to fill its (relative, `overflow-hidden`) parent, since it is a
  * background, and giving it its own box would make the header's height depend on the art
  * rather than on the type in it.
  *
@@ -125,7 +125,7 @@ export function CoverArt({ seed }: { seed: string }): ReactElement {
   for (let row = 0; row < ROWS; row++) {
     for (let col = 0; col < COLS; col++) tiles.push(tilePath(col, row, rand() > 0.5));
   }
-  // A few filled nodes where arcs meet — the one place the accent appears at full strength,
+  // A few filled nodes where arcs meet: the one place the accent appears at full strength,
   // and what stops a page's identity from being carried by geometry alone (two names can land
   // on similar-looking fields; they will not also land on the same colour).
   const dots = Array.from({ length: 5 }, () => ({

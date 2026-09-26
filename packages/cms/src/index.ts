@@ -1,13 +1,13 @@
-// @pramen/cms — a Drupal-Paragraphs-style block/page builder, built as an ordinary
+// @pramen/cms: a Drupal-Paragraphs-style block/page builder, built as an ordinary
 // pramen app fragment (schema + handlers + ACL + tasks). Nothing here is a new runtime
-// primitive: it composes the ones pramen already ships — `t.json()` for block field
+// primitive. It composes the ones pramen already ships: `t.json()` for block field
 // payloads, `t.fileRef()`+R2 for media, relations for page↔block traversal, the ACL for
 // editor RBAC, and `ctx.tasks` (the transactional outbox) for scheduled publish/unpublish.
 //
 // Model (borrowed from WollyCMS / Drupal Paragraphs):
-//   - a BLOCK TYPE is a schema — a slug + a recursive field schema (data-driven, so a
+//   - a BLOCK TYPE is a schema: a slug + a recursive field schema (data-driven, so a
 //     webmaster adds a type with no deploy);
-//   - a BLOCK is an instance — content matching a type's field schema (optionally reusable);
+//   - a BLOCK is an instance: content matching a type's field schema (optionally reusable);
 //   - a PAGE has a content type, which declares named REGIONS (each with an allow-list of
 //     block types) and optional DEFAULT BLOCKS;
 //   - a PAGE_BLOCK places a block into a page's region at a position, optionally as a
@@ -15,7 +15,7 @@
 //
 // Publishing writes a fully-assembled JSON snapshot into a revision; the public content
 // API serves that snapshot (fast, and it never exposes unpublished block rows directly).
-// Rendering stays the frontend's job — see `@pramen/cms/react` (BlockRenderer).
+// Rendering stays the frontend's job. See `@pramen/cms/react` (BlockRenderer).
 //
 // Usage:
 //   import { cmsSchema, cmsHandlers, cmsPolicies, cmsTasks } from "@pramen/cms";
@@ -82,7 +82,7 @@ export interface FieldDefinition {
      * (`2026-08-20T12:00:00.000Z`), where the `datetime` control writes the picker's
      * naive local string (`2026-08-20T14:00`). Both land in the same TEXT column and
      * both pass validation, yet they sort and range-compare lexicographically against
-     * each other as if hours apart — so converting an existing `datetime` field to
+     * each other as if hours apart, so converting an existing `datetime` field to
      * `publish` needs a backfill of the stored values, not just a type change.
      *
      * A collection has no page-style publish workflow, so this is how a row goes live.
@@ -94,7 +94,7 @@ export interface FieldDefinition {
      *
      * That, and not `{ publishedAt: { isNull: false } }`, is the real access boundary.
      * `isNull: false` matches a FUTURE timestamp too, so a row the editor scheduled for
-     * next week would be anonymously readable the moment it was saved — the scheduling
+     * next week would be anonymously readable the moment it was saved. The scheduling
      * affordance would be a UI label over no enforcement at all.
      */
     | "publish"
@@ -102,7 +102,7 @@ export interface FieldDefinition {
      * A URL segment, derived from another field as you type.
      *
      * Set `from` to the field it follows (usually the title). The editor keeps them in
-     * sync only while the slug is untouched — once it has been edited, or on a row that
+     * sync only while the slug is untouched. Once it has been edited, or on a row that
      * already has one, it stops following, because silently rewriting a slug changes a
      * live URL and breaks every link to it.
      *
@@ -112,13 +112,13 @@ export interface FieldDefinition {
     | "media"
     | "select"
     /**
-     * A pointer to a record that is NOT this row — another pramen row, or a record in a
+     * A pointer to a record that is NOT this row: another pramen row, or a record in a
      * system the CMS does not own. Stored as an OPAQUE id (a string), so the same field
      * links a `cms_pages` row, a collection row and an external CRM record alike.
      *
      * `optionsFrom` on a `select` is most of this already, and stays the ergonomic case for
      * a short closed list: it fetches `{ value, label }[]` ONCE and renders a `<select>`.
-     * What it cannot do is scale — no search term, no paging, and no way to render the
+     * What it cannot do is scale: no search term, no paging, and no way to render the
      * label of a value whose record is not in the first (only) page. Twenty campaigns are
      * fine; a thousand records are a dropdown nobody can use and a stored id that renders
      * as a uuid.
@@ -130,19 +130,19 @@ export interface FieldDefinition {
      *
      * and returning `{ items: ReferenceOption[]; hasMore?: boolean }` either way. The
      * second shape is what makes an already-stored value renderable without fetching the
-     * whole set — the reason this is a field type and not a wider `select`.
+     * whole set, the reason this is a field type and not a wider `select`.
      */
     | "reference"
     | "repeater"
     | "group";
   /**
-   * Help text under the control — what the field MEANS, when it applies, what leaving it
+   * Help text under the control: what the field MEANS, when it applies, what leaving it
    * empty does. Optional, and worth writing exactly when the label alone leaves a real
    * question open: an "Address" that is only used for an event with no venue attached, a
    * "Time to" that applies to every day of a range rather than the last one.
    *
    * The alternative is a comment beside the field's declaration in the app's source, where
-   * the person filling the field in will never see it — which is where this kind of note
+   * the person filling the field in will never see it, which is where this kind of note
    * had nowhere else to go before.
    *
    * One or two sentences. It is announced via `aria-describedby`, so a paragraph here is a
@@ -151,22 +151,22 @@ export interface FieldDefinition {
   description?: string;
   required?: boolean;
   default?: unknown;
-  /** repeater/group only — the nested fields. */
+  /** repeater/group only: the nested fields. */
   fields?: FieldDefinition[];
-  /** repeater only — item count bounds. */
+  /** repeater only: item count bounds. */
   min?: number;
   max?: number;
   /** select only. */
   options?: string[];
-  /** select only — fetch options at edit time from a query handler of this name (returns
+  /** select only: fetch options at edit time from a query handler of this name (returns
    * `{ value, label }[]`), e.g. a live list of campaigns. Takes precedence over `options`. */
   optionsFrom?: string;
-  /** slug only — the sibling field this one is derived from (e.g. `"title"`). */
+  /** slug only: the sibling field this one is derived from (e.g. `"title"`). */
   from?: string;
-  /** reference only — the query handler that resolves this reference. See the `reference`
+  /** reference only: the query handler that resolves this reference. See the `reference`
    * type above for the two request shapes it must answer. */
   referenceFrom?: string;
-  /** reference only — store a LIST of ids rather than one. A multiple reference is a
+  /** reference only: store a LIST of ids rather than one. A multiple reference is a
    * `t.json()` column (an array), a single one is `t.text()`; `validateCollections`
    * enforces the difference, because storing an array in a TEXT column is a raw driver
    * error on the first write and nothing earlier. */
@@ -174,7 +174,7 @@ export interface FieldDefinition {
 }
 
 /** One option a `reference` field's `referenceFrom` handler returns. `hint` is secondary
- * text (a date, an owner, a status) shown under the label — a picker over a thousand
+ * text (a date, an owner, a status) shown under the label: a picker over a thousand
  * records usually needs more than a name to tell two rows apart. */
 export interface ReferenceOption {
   value: string;
@@ -190,7 +190,7 @@ export interface ReferenceResult {
 }
 
 /** A named region on a content type; `allowedTypes` (block-type slugs) restricts what
- * may be placed there — `null`/omitted means any. */
+ * may be placed there. `null`/omitted means any. */
 export interface RegionDefinition {
   name: string;
   label?: string;
@@ -208,18 +208,18 @@ export interface DefaultBlockDefinition {
 //
 // The data-driven half stores block field schemas as JSON rows (webmasters add types with
 // no deploy). For DEVELOPER-authored blocks, `defineBlockType(slug, fields as const)` gives
-// compile-time field typing with NO build step — a rendered block's `fields` is inferred from
+// compile-time field typing with NO build step: a rendered block's `fields` is inferred from
 // the schema, exactly like `typeof app.handlers` types the RPC client. (A `pramen cms codegen`
 // command that emits these types from DB-stored schemas is future work.)
 
 /**
- * A rich-text document — the editor's structured JSON (a ProseMirror/TipTap doc tree).
+ * A rich-text document: the editor's structured JSON (a ProseMirror/TipTap doc tree).
  *
  * **Not an HTML string.** HTML never enters storage: the write path validates this tree
  * against a node/mark allow-list (`normalizeRichText`) and the render side maps node types
  * to components, so there is no `set:html` / `dangerouslySetInnerHTML` anywhere in the
  * chain and nothing to scrub. The one attribute that can still carry script is a `link`
- * mark's `href`, so that one IS checked — see `isSafeHref`.
+ * mark's `href`, so that one IS checked. See `isSafeHref`.
  */
 export interface RichTextDoc {
   type: "doc";
@@ -236,7 +236,7 @@ export interface RichTextNode {
   attrs?: Record<string, JsonValue>;
 }
 
-/** An inline mark on a text node — bold, link, highlight, … */
+/** An inline mark on a text node: bold, link, highlight, … */
 export interface RichTextMark {
   type: string;
   attrs?: Record<string, JsonValue>;
@@ -300,7 +300,7 @@ export function defineBlockType<S extends string, F extends readonly FieldDefini
 ): BlockTypeDef<S, F> {
   // A PURE constructor: it returns exactly what it was given, so `fieldsSchema` really is
   // `F` and `BlockFieldsOf<typeof def>` describes the array that will be stored. Validation
-  // deliberately does NOT live here — it lives in `cmsBootstrap`, the thing that writes.
+  // deliberately does NOT live here: it lives in `cmsBootstrap`, the thing that writes.
   // `BlockTypeDef` is a structural interface, so an object literal, a `.map` or a codegen
   // step reaches the store without passing through this function at all; checking here would
   // have guarded the convenient path and left the sink open. Canonicalizing here was worse
@@ -319,7 +319,7 @@ export type BlockFieldsOf<D extends BlockTypeDef> = InferBlockFields<D["fieldsSc
 // that hard-depends on a fixed shape (e.g. an Astro site whose build fails unless an
 // `article` type with certain fields exists) wants them CODE-DEFINED and auto-applied. These
 // helpers let you declare types in code and converge them into the store on boot via pramen's
-// `app.bootstrap` — so a fresh / reprovisioned database has them without a manual
+// `app.bootstrap`, so a fresh / reprovisioned database has them without a manual
 // createContentType/createBlockType call.
 
 /**
@@ -411,7 +411,7 @@ export function defineContentType(
     labels?: EntryLabels;
   },
 ): ContentTypeDef {
-  // Pure, for the same reason as `defineBlockType` — `cmsBootstrap` validates.
+  // Pure, for the same reason as `defineBlockType`: `cmsBootstrap` validates.
   return { slug, name: opts.name ?? slug, description: opts.description, fields: opts.fields, regions: opts.regions, defaultBlocks: opts.defaultBlocks, labels: opts.labels };
 }
 
@@ -426,7 +426,7 @@ interface ReconcileDb {
 
 const sameJson = (a: unknown, b: unknown): boolean => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 
-/** The default `owner` — see {@link cmsBootstrap}. */
+/** The default `owner`. See {@link cmsBootstrap}. */
 export const CMS_BOOTSTRAP_OWNER = "cms";
 
 /**
@@ -436,13 +436,13 @@ export const CMS_BOOTSTRAP_OWNER = "cms";
  * optional conveniences: `BlockTypeDef`/`ContentTypeDef` are exported STRUCTURAL interfaces,
  * so an object literal, a `.map` over a config file or a codegen step reaches `upsertBySlug`
  * without passing through either helper. Checking in the helper guarded the convenient path
- * and left the sink open — and the row it wrote was then locked `managedBy`, so an invalid
+ * and left the sink open, and the row it wrote was then locked `managedBy`, so an invalid
  * schema could never be repaired through the product. `cmsBootstrap(defs)` is the one call
  * every code-defined type goes through.
  *
  * Held to the SAME rules the editor's `createBlockType`/`createContentType` enforce
  * (`normalizeFieldSchema`, `normalizeRegions`, `normalizeDefaultBlocks`), because the
- * alternative is a code-declared type storing a schema the builder then refuses to save —
+ * alternative is a code-declared type storing a schema the builder then refuses to save,
  * the only surface reporting the problem being the one that cannot fix it.
  *
  * EVERY problem is reported together, not just the first: this throws at app construction
@@ -465,7 +465,7 @@ function validateCmsDefinitions(
       const slug = assertRegistryKey(bt.slug, "block type slug");
       // Last-wins on a repeated slug is how two feature modules both exporting a `cta` block
       // type converge to whichever import order won, with nothing said about it.
-      if (btSeen.has(slug)) throw new BadRequest(`declared twice — the second declaration would silently overwrite the first`);
+      if (btSeen.has(slug)) throw new BadRequest(`declared twice: the second declaration would silently overwrite the first`);
       btSeen.add(slug);
       blockTypes.push({
         name: assertLabel(bt.name ?? slug, "block type name"),
@@ -485,10 +485,10 @@ function validateCmsDefinitions(
   for (const ct of defs.contentTypes ?? []) {
     try {
       // The slug FIRST: it is what every other message names, and validating regions ahead
-      // of it produced an error that never mentioned the type whose slug was also wrong —
+      // of it produced an error that never mentioned the type whose slug was also wrong.
       // fix the regions, redeploy, meet the second failure.
       const slug = assertRegistryKey(ct.slug, "content type slug");
-      if (ctSeen.has(slug)) throw new BadRequest(`declared twice — the second declaration would silently overwrite the first`);
+      if (ctSeen.has(slug)) throw new BadRequest(`declared twice: the second declaration would silently overwrite the first`);
       ctSeen.add(slug);
       const regions = normalizeRegions(ct.regions);
       contentTypes.push({
@@ -512,9 +512,9 @@ function validateCmsDefinitions(
 }
 
 /** Insert `values` if no row has this `slug`, else patch only the columns that drifted
- * (never `id`/`slug`/`createdAt`). Idempotent — an identical definition is a no-op.
+ * (never `id`/`slug`/`createdAt`). Idempotent: an identical definition is a no-op.
  *
- * Returns false, having written NOTHING, when the existing row belongs to someone else —
+ * Returns false, having written NOTHING, when the existing row belongs to someone else:
  * an editor-authored type (`managedBy` null) or another reconciler's. Adopting it was a
  * silent takeover: name and schema replaced by the code literal, and then the row locked, so
  * the editor could not even put back what it had just lost. `createBlockType` refuses this
@@ -538,17 +538,17 @@ async function upsertBySlug(db: ReconcileDb, table: string, owner: string, value
 
 /** Release the rows THIS owner wrote and no longer declares.
  *
- * A type dropped from the repo keeps its row — pages are still built out of it — but nothing
+ * A type dropped from the repo keeps its row (pages are still built out of it), but nothing
  * converges it any more, so leaving it read-only in the builder would be a lock with nothing
  * behind it, next to a note pointing at code that no longer mentions it.
  *
  * Scoped to `managedBy = owner`, which is what makes `cmsBootstrap` composable: a sweep
  * cannot otherwise tell "not mine" from "no longer declared", so two reconcilers in one
  * `app.bootstrap` released each other's rows on every boot and half the types silently fell
- * back to editable. A table the call says nothing about (`blockTypes` absent — the KEY, not
+ * back to editable. A table the call says nothing about (`blockTypes` absent, the KEY, not
  * an empty array) is left alone rather than swept. */
 async function releaseUndeclared(db: ReconcileDb, table: string, owner: string, declared: ReadonlySet<string>): Promise<void> {
-  // `select` because this runs on the boot critical path — inside `blockConcurrencyWhile` on
+  // `select` because this runs on the boot critical path: inside `blockConcurrencyWhile` on
   // a DO's first fetch, and at every isolate init on D1 where each statement is a round trip.
   // Without it the read pulls and JSON-parses every row's whole field schema to look at two
   // columns (the GitHub #22 shape).
@@ -568,13 +568,13 @@ async function releaseUndeclared(db: ReconcileDb, table: string, owner: string, 
  * code-declared types with no manual createContentType/createBlockType call.
  *
  * Every row it writes is stamped `managedBy: owner`, which makes the editor show it
- * read-only — convergence and an editor pointed at the same rows are otherwise a silent
+ * read-only: convergence and an editor pointed at the same rows are otherwise a silent
  * data-loss pair (GitHub #48). A type that drops out of the declaration is released back to
  * the editor; a row this owner did not write is never touched, so a second reconciler (a
  * package shipping its own block types, say) composes as long as it passes its own `owner`.
  *
  * The definitions are validated HERE, when the app is constructed, and every problem is
- * reported at once — see {@link validateCmsDefinitions}. */
+ * reported at once. See {@link validateCmsDefinitions}. */
 export function cmsBootstrap(
   defs: { blockTypes?: readonly BlockTypeDef[]; contentTypes?: readonly ContentTypeDef[] },
   opts: { owner?: string } = {},
@@ -584,7 +584,7 @@ export function cmsBootstrap(
   // Presence of the KEY, not truthiness of the array: `blockTypes: []` is "I declare none",
   // which must sweep, while an absent key is "I say nothing about block types", which must
   // not. Truthiness read `[]` as the latter four lines after `?? []` read it as the former,
-  // and the difference was invisible at the call site — `features.flatMap(f => f.blockTypes)`
+  // and the difference was invisible at the call site: `features.flatMap(f => f.blockTypes)`
   // on an empty list silently unlocked every code-defined type in every tenant.
   const sweepBlockTypes = "blockTypes" in defs;
   const sweepContentTypes = "contentTypes" in defs;
@@ -599,7 +599,7 @@ export function cmsBootstrap(
     const reconcile = async (table: string, values: Record<string, unknown>): Promise<void> => {
       try {
         if (!(await upsertBySlug(sys, table, owner, values))) {
-          console.warn(`@pramen/cms: ${table}.${String(values.slug)} already exists and is not owned by '${owner}' — leaving it alone (code-defined types cannot take over a row someone else authored)`);
+          console.warn(`@pramen/cms: ${table}.${String(values.slug)} already exists and is not owned by '${owner}', leaving it alone (code-defined types cannot take over a row someone else authored)`);
         }
       } catch (e) {
         console.error(`@pramen/cms: failed to reconcile ${table}.${String(values.slug)}:`, e);
@@ -641,7 +641,7 @@ function tsTypeOf(f: FieldDefinition): string {
       return "boolean";
     case "media":
       return "ResolvedMedia | null";
-    // An opaque id — the record it points at may not be ours to type.
+    // An opaque id: the record it points at may not be ours to type.
     case "reference":
       return f.multiple ? "string[]" : "string";
     case "group":
@@ -683,7 +683,7 @@ export function generateBlockTypes(blockTypes: Array<{ slug: string; fieldsSchem
   for (const bt of blockTypes) {
     const name = pascal(bt.slug);
     // Unicode-aware: `úvodní-blok` -> `úvodníBlok` IS a legal TypeScript identifier, and an
-    // ASCII-only test rejected it — aborting codegen for the WHOLE tenant over a slug that
+    // ASCII-only test rejected it, aborting codegen for the WHOLE tenant over a slug that
     // works, with no fix short of renaming production data.
     if (!/^[\p{ID_Start}$_][\p{ID_Continue}$]*$/u.test(name)) bad.push(`${bt.slug} (-> '${name}', not an identifier)`);
     else if (seen.has(name)) bad.push(`${bt.slug} (-> '${name}', collides with '${seen.get(name)}')`);
@@ -701,14 +701,14 @@ export function generateBlockTypes(blockTypes: Array<{ slug: string; fieldsSchem
   const registry = blockTypes.map((bt) => `  ${JSON.stringify(bt.slug)}: ${pascal(bt.slug)}Fields;`).join("\n");
   // Import ONLY what the emitted interfaces reference: every tsconfig in this repo sets
   // `noUnusedLocals`, so an unconditional import is a guaranteed TS6192 build break in the
-  // consumer's own project — for a file they are told not to edit.
+  // consumer's own project, for a file they are told not to edit.
   //
   // Walk the SCHEMA rather than regexing the rendered text: field names are printed into
   // the output, so a field literally named `RichText` matched a `\bRichText\b` scan and
   // produced the unused import this exists to avoid.
   const used = referencedHelperTypes(blockTypes.flatMap((bt) => (Array.isArray(bt.fieldsSchema) ? bt.fieldsSchema : [])));
   const importLine = used.length ? `import type { ${used.join(", ")} } from "@pramen/cms";\n\n` : "";
-  return `// AUTO-GENERATED by @pramen/cms — do not edit.\n${importLine}${interfaces}\n\nexport interface BlockFieldsBySlug {\n${registry}\n}\n`;
+  return `// AUTO-GENERATED by @pramen/cms. Do not edit.\n${importLine}${interfaces}\n\nexport interface BlockFieldsBySlug {\n${registry}\n}\n`;
 }
 
 // --- schema fragment: spread into your defineSchema so the tables migrate --------
@@ -732,7 +732,7 @@ export type MenuItemKind = "custom" | "page" | "term" | "collection";
 
 /** One entry in a menu tree. */
 export interface MenuItem {
-  /** Stable within the menu — the editor's list key and the only handle a reorder has. */
+  /** Stable within the menu: the editor's list key and the only handle a reorder has. */
   id: string;
   label: string;
   /** Defaults to `"custom"` (a literal `url`). */
@@ -757,20 +757,20 @@ export interface Menu {
 }
 
 /** How deep a menu tree may nest. Menus are stored as one document, so without a cap a
- * client could post a tree deep enough to blow the stack in the resolver — and no real
+ * client could post a tree deep enough to blow the stack in the resolver, and no real
  * navigation is more than three levels anyway. */
 export const MAX_MENU_DEPTH = 5;
 
 /** How many items one menu may hold, at every level combined.
  *
  * Depth alone is not a bound: a FLAT list of 800 `page` items is legal under
- * `MAX_MENU_DEPTH` and turns every anonymous `getMenu` — the read on every page render of
- * the site — into a single `WHERE id IN (?×800)`, which the read engine emits with no
+ * `MAX_MENU_DEPTH` and turns every anonymous `getMenu` (the read on every page render of
+ * the site) into a single `WHERE id IN (?×800)`, which the read engine emits with no
  * chunking. Every other read added alongside this one is bounded (`MAX_TERMS`,
  * `clampLimit`); this one was not, and it is the one on the hot path. */
 export const MAX_MENU_ITEMS = 200;
 
-/** A classification vocabulary — `category`, `tag`, `region`, whatever the site sorts by. */
+/** A classification vocabulary: `category`, `tag`, `region`, whatever the site sorts by. */
 export interface Taxonomy {
   id: string;
   slug: string;
@@ -794,13 +794,13 @@ export interface Term {
   children?: Term[];
 }
 
-/** How deep a term hierarchy may nest — the same argument as {@link MAX_MENU_DEPTH}, except
+/** How deep a term hierarchy may nest. The same argument as {@link MAX_MENU_DEPTH}, except
  * here the tree is rows and the risk is a parent CYCLE, which `assertTermParent` refuses. */
 export const MAX_TERM_DEPTH = 5;
 
 /** What a widget renders. `component` is the escape hatch: the CMS stores an id + props and
  * the front end maps the id to one of its own components, exactly as `BlockRenderer` maps a
- * block type slug — so a widget area can hold something the CMS has no idea how to draw. */
+ * block type slug, so a widget area can hold something the CMS has no idea how to draw. */
 export type WidgetType = "content" | "menu" | "component";
 
 /** One widget in a widget area. */
@@ -861,7 +861,7 @@ export const cmsSchema = {
     // silently at the next cold start when `upsertBySlug` patched the column back to the
     // literal in `app.ts`. So it is set by the reconciler, refused by `updateBlockType` /
     // `updateContentType`, and rendered read-only in the builder. Cleared again when the
-    // definition leaves the repo — a lock with nothing behind it is worse than no lock.
+    // definition leaves the repo: a lock with nothing behind it is worse than no lock.
     //
     // An OWNER id rather than a boolean because `app.bootstrap` is a composable array. With
     // a flag, two `cmsBootstrap` calls each released the other's rows on every boot: the
@@ -897,10 +897,10 @@ export const cmsSchema = {
       // on the D1 store that scan is paid over RPC. Relation columns are never auto-indexed
       // (index DDL comes only from `unique()`/`indexed()` and composite uniques), and the
       // `["slug","locale"]` composite is leftmost-`slug` so it cannot serve this predicate.
-      // The `createdAt` sort of the narrowed set remains — single-column indexes only.
+      // The `createdAt` sort of the narrowed set remains: single-column indexes only.
       typeId: indexed(notNull(t.uuid())),
       title: notNull(t.text()),
-      // A slug is unique PER LOCALE (`/en/about` + `/cs/about`) — enforced by the entity's
+      // A slug is unique PER LOCALE (`/en/about` + `/cs/about`), enforced by the entity's
       // composite `unique: [["slug","locale"]]` (below). createPage/updatePage/createTranslation
       // also pre-check so the caller gets a clean 409 before hitting the constraint; the index
       // also speeds slug lookups.
@@ -914,10 +914,10 @@ export const cmsSchema = {
       publishedAt: t.text(),
       scheduledAt: t.text(),
       unpublishAt: t.text(),
-      // The revision the public content API serves — set on publish. A direct pointer
+      // The revision the public content API serves, set on publish. A direct pointer
       // (not "latest by timestamp") so selection is deterministic even when two publishes
       // land in the same instant. `expr.now()` carries milliseconds now, which narrows the
-      // window without closing it — a pointer has no window at all.
+      // window without closing it: a pointer has no window at all.
       currentRevisionId: t.uuid(),
       // Soft delete: the epoch-ISO instant the page was trashed, NULL while it is live.
       // Every read scope AND-merges `deletedAt IS NULL` (see cmsPolicies), so a trashed
@@ -933,7 +933,7 @@ export const cmsSchema = {
       ogDescription: t.text(),
       ogImage: t.uuid(), // a cms_media id, resolved to a URL at assemble time
       structuredData: t.json(), // JSON-LD, emitted as-is into <head>
-      // Optimistic concurrency — see cms_blocks.version.
+      // Optimistic concurrency, see cms_blocks.version.
       version: defaultTo(t.int(), 1),
       createdAt: defaultTo(t.text(), expr.now()),
       updatedAt: defaultTo(t.text(), expr.now()),
@@ -980,7 +980,7 @@ export const cmsSchema = {
   ),
 
   // Append-only audit trail of workflow transitions (who moved a page between states,
-  // when, with an optional note). In the DEFAULT partition — the transition handlers write
+  // when, with an optional note). In the DEFAULT partition: the transition handlers write
   // it synchronously (transactional with the state change, and they hold the actor from
   // ctx.identity); a handler can't write across a partition boundary, so an isolated
   // audit partition isn't reachable from here.
@@ -1002,7 +1002,7 @@ export const cmsSchema = {
   // because a collection's PK may be a uuid or a textId.
   //
   // A revision holds the row's state BEFORE the write that created it, projected to the
-  // collection's declared fields — so restoring one is a plain reversal, and a snapshot
+  // collection's declared fields, so restoring one is a plain reversal, and a snapshot
   // taken before a field was dropped from `fields` cannot resurrect that column (restore
   // replays through the same write whitelist).
   cms_collection_revisions: Entity((t) => ({
@@ -1012,12 +1012,12 @@ export const cmsSchema = {
     // A monotonic per-row counter, and the ONLY ordering key. Timestamps cannot do this
     // job even at millisecond resolution: a collection revision is written on EVERY edit,
     // and two writes land in the same millisecond often enough to be reproducible. Ordering
-    // then falls to a uuid tiebreak, which is deterministic but NOT insertion order — so
+    // then falls to a uuid tiebreak, which is deterministic but NOT insertion order, so
     // "restore the previous version" could pick the wrong snapshot. (`expr.now()` was also
     // second-resolution when this was written, which made the same point louder.)
     //
     // The read-then-increment in `snapshotRow` is serialized by the DO's single writer. On
-    // the D1 store it is NOT — `D1Driver.transaction` is a no-op (D1 has no interactive
+    // the D1 store it is NOT: `D1Driver.transaction` is a no-op (D1 has no interactive
     // transactions), so two concurrent updates in different isolates can read the same MAX.
     // The composite unique below is what makes that a visible failure instead of a silent
     // duplicate that quietly restores the ordering ambiguity this column exists to remove.
@@ -1026,8 +1026,8 @@ export const cmsSchema = {
     note: t.text(),
     actor: t.text(),
     // NO expr.now() default: `snapshotRow` is the only writer and stamps it. That is now a
-    // consistency choice rather than a precision one — `expr.now()` carries milliseconds
-    // too — but `revision` above is what actually orders these rows, and a column no
+    // consistency choice rather than a precision one (`expr.now()` carries milliseconds
+    // too), but `revision` above is what actually orders these rows, and a column no
     // writer but `snapshotRow` touches cannot drift from it.
     createdAt: t.text(),
   }), undefined, { unique: [["collection", "rowId", "revision"]] }),
@@ -1039,40 +1039,40 @@ export const cmsSchema = {
   // not by a page's regions.
 
   // A named navigation menu. `items` is a nested `MenuItem[]` document rather than a rows
-  // table, because a menu is edited and read WHOLE — every read is `getMenu("primary")`,
+  // table, because a menu is edited and read WHOLE: every read is `getMenu("primary")`,
   // and every write is "here is the new tree". Rows would buy per-item queries nobody makes
   // and cost a recursive assemble on the one read that matters. The tree is depth-capped on
   // write (`MAX_MENU_DEPTH`), which is the constraint a rows table would have got for free.
   cms_menus: Entity((t) => ({
     id: primaryKey(generated(t.uuid())),
-    // The key `getMenu(name)` resolves — stable, referenced from layout code, and so NOT
+    // The key `getMenu(name)` resolves: stable, referenced from layout code, and so NOT
     // renameable through `updateMenu` (the label is what an editor retitles).
     name: unique(notNull(t.text())),
     label: notNull(t.text()),
     items: t.json(), // MenuItem[]
     // Optimistic concurrency, as on cms_pages/cms_blocks. It matters MORE here, not less:
     // `updateMenu` writes the whole `items` document, so two editors on one menu meant the
-    // second silently replaced the first's entire tree — where a page edit at least
+    // second silently replaced the first's entire tree, where a page edit at least
     // conflicts per field.
     version: defaultTo(t.int(), 1),
     createdAt: defaultTo(t.text(), expr.now()),
     updatedAt: defaultTo(t.text(), expr.now()),
   })),
 
-  // A URL redirect. Needed the moment a slug changes on a live site — which the `slug`
+  // A URL redirect. Needed the moment a slug changes on a live site, which the `slug`
   // field's own docs already flag ("silently rewriting a slug changes a live URL and breaks
   // every link to it").
   //
   // `fromPath`/`toPath`, not `from`/`to`: `from` is a SQL keyword, and while the dialect
   // quotes every identifier, a column named `from` also collides with the `find({ from })`
-  // query key — a `where: { from: ... }` reads as a table reference to anyone skimming.
+  // query key: a `where: { from: ... }` reads as a table reference to anyone skimming.
   cms_redirects: Entity((t) => ({
     id: primaryKey(generated(t.uuid())),
     // Unique because resolution is an exact lookup: two rows for one path is a coin flip
     // over which redirect a visitor gets, and the DB is the only place that can refuse it.
     fromPath: unique(notNull(t.text())),
     toPath: notNull(t.text()),
-    // 301 (permanent) or 302 (temporary). INT, and constrained on write — a redirect status
+    // 301 (permanent) or 302 (temporary). INT, and constrained on write: a redirect status
     // is not free-form, and a typo here is a broken response, not a broken page.
     status: defaultTo(t.int(), 301),
     // Off-switch that keeps the row. A redirect is usually disabled to TEST whether it is
@@ -1082,13 +1082,13 @@ export const cmsSchema = {
     createdAt: defaultTo(t.text(), expr.now()),
     updatedAt: defaultTo(t.text(), expr.now()),
   })),
-  // NOTE: deliberately no hit counter. Counting would make `resolveRedirect` — the one
-  // handler anonymous traffic calls on every 404 — a WRITE, which is an unauthenticated
+  // NOTE: deliberately no hit counter. Counting would make `resolveRedirect` (the one
+  // handler anonymous traffic calls on every 404) a WRITE, which is an unauthenticated
   // row mutation on the hot path and, on the DO, a transaction per miss. Redirect usage
   // belongs in the edge's own logs.
 
   // A classification vocabulary: `category` (hierarchical) and `tag` (flat) are just two
-  // rows here, which is why there is no built-in of either — a deployment declares what it
+  // rows here, which is why there is no built-in of either: a deployment declares what it
   // classifies by, the same way it declares its content types.
   cms_taxonomies: Entity((t) => ({
     id: primaryKey(generated(t.uuid())),
@@ -1097,9 +1097,9 @@ export const cmsSchema = {
     pluralLabel: t.text(),
     description: t.text(),
     // Hierarchical vocabularies allow `parentId` on their terms; flat ones reject it on
-    // write. Enforced in the handler, not the schema — one term table serves both.
+    // write. Enforced in the handler, not the schema: one term table serves both.
     hierarchical: defaultTo(t.bool(), false),
-    // What this vocabulary classifies — a subset of `TAXONOMY_TARGETS`. NULL means EVERYTHING,
+    // What this vocabulary classifies: a subset of `TAXONOMY_TARGETS`. NULL means EVERYTHING,
     // which is both the backward-compatible reading for rows written before this column and a
     // legitimate authored value ("Topics classifies whatever there is"). Without it a site with
     // "Categories" for articles and tags for images offers both on both, so a photo can be
@@ -1108,7 +1108,7 @@ export const cmsSchema = {
     //
     // A `t.json()` array rather than two booleans: the set of things a CMS classifies grows
     // (collections are the obvious next one), and a column per target would need a migration
-    // each time. It is not queryable — JSON in a TEXT cell — but nothing pages by taxonomy:
+    // each time. It is not queryable (JSON in a TEXT cell), but nothing pages by taxonomy:
     // `listTaxonomies` reads them all and narrows in memory.
     appliesTo: t.json(),
     createdAt: defaultTo(t.text(), expr.now()),
@@ -1124,7 +1124,7 @@ export const cmsSchema = {
       // Self-referential, and a REAL FK: deleting a parent term must not leave children
       // pointing at a row that is gone (the front end would render an orphan branch that
       // no listing can reach). `setNull` promotes them to the top level instead, which is
-      // the only non-destructive answer — `cascade` would silently delete a subtree.
+      // the only non-destructive answer: `cascade` would silently delete a subtree.
       parentId: t.uuid(),
       position: defaultTo(t.int(), 0),
       createdAt: defaultTo(t.text(), expr.now()),
@@ -1135,12 +1135,12 @@ export const cmsSchema = {
       pages: r.hasMany("cms_page_terms", "termId"),
       media: r.hasMany("cms_media_terms", "termId"),
     }),
-    // A slug identifies a term WITHIN its vocabulary — `/category/news` and `/tag/news`
+    // A slug identifies a term WITHIN its vocabulary: `/category/news` and `/tag/news`
     // are two different terms, and both are legitimate.
     { unique: [["taxonomyId", "slug"]] },
   ),
 
-  // The term-assignment junction — an EXPLICIT entity, which is what `manyToMany` means
+  // The term-assignment junction: an EXPLICIT entity, which is what `manyToMany` means
   // here: `ctx.db.insert("cms_page_terms", …)` links, `delete` unlinks, and `where`
   // traverses it as a nested subquery. No synthetic table, no write API to learn.
   cms_page_terms: Entity(
@@ -1160,7 +1160,7 @@ export const cmsSchema = {
 
   // The same junction for media. A SECOND table rather than one polymorphic
   // `cms_object_terms(objectType, objectId, termId)`: a polymorphic key cannot carry a real
-  // foreign key, and the FKs are what does the work here — purging a media row or deleting a
+  // foreign key, and the FKs are what does the work here: purging a media row or deleting a
   // term takes its assignments with it, with no handler remembering to. A `where` traversal
   // also needs a typed column to join on; `objectId` would have to be filtered by a
   // discriminator the read engine has no way to require, so one forgotten `objectType`
@@ -1180,7 +1180,7 @@ export const cmsSchema = {
     { unique: [["mediaId", "termId"]] },
   ),
 
-  // A named template region an admin fills without touching code — the sidebar, the footer
+  // A named template region an admin fills without touching code: the sidebar, the footer
   // column, the pre-footer strip.
   //
   // Kept as its own entity rather than a page-less `cms_blocks` region, which was the
@@ -1195,7 +1195,7 @@ export const cmsSchema = {
     label: notNull(t.text()),
     description: t.text(),
     widgets: t.json(), // Widget[]
-    // Same argument as cms_menus.version — `updateWidgetArea` replaces the whole list.
+    // Same argument as cms_menus.version: `updateWidgetArea` replaces the whole list.
     version: defaultTo(t.int(), 1),
     createdAt: defaultTo(t.text(), expr.now()),
     updatedAt: defaultTo(t.text(), expr.now()),
@@ -1208,14 +1208,14 @@ export const cmsSchema = {
       id: primaryKey(generated(t.uuid())),
       file: t.fileRef(),
       // The three fields the library SORTS and FILTERS by, projected out of `file` into real
-      // columns. `file` is a `t.fileRef()` — JSON in a TEXT cell — so its `filename`,
+      // columns. `file` is a `t.fileRef()` (JSON in a TEXT cell), so its `filename`,
       // `contentType` and `size` are invisible to `orderBy` and `where`, and sorting a library
       // after the page has been fetched sorts one page, which is not sorting.
       //
       // A duplicate, deliberately, and the cost is named: they are written where a media row is
       // CREATED and nowhere else (`updateMedia` never touches the file), so there is one writer
       // and `file` stays the source of truth for serving. SQLite generated columns would remove
-      // the duplication outright — `GENERATED ALWAYS AS (json_extract(file,'$.filename'))` — but
+      // the duplication outright, `GENERATED ALWAYS AS (json_extract(file,'$.filename'))`, but
       // the schema DSL has no way to declare one, and `generated()` here means something else
       // entirely (auto-mint a uuid on insert).
       //
@@ -1226,13 +1226,13 @@ export const cmsSchema = {
       size: t.int(),
       alt: t.text(),
       // Soft delete, as on cms_pages. The R2 OBJECT is deliberately kept while a media row
-      // is trashed — deleting the bytes would make restore a lie. `purgeMedia` drops both.
+      // is trashed: deleting the bytes would make restore a lie. `purgeMedia` drops both.
       deletedAt: indexed(t.text()),
       createdAt: defaultTo(t.text(), expr.now()),
     }),
     (r) => ({
       // Media is classified by the SAME vocabularies pages are, through the same `cms_terms`
-      // table — a deployment that declares "Topics" gets to tag a photo with one without
+      // table: a deployment that declares "Topics" gets to tag a photo with one without
       // declaring it twice, and the terms screen stays the one place a vocabulary is edited.
       //
       // The traversal is what makes tagging worth having: `where: { terms: { id } }` compiles
@@ -1247,7 +1247,7 @@ export const cmsSchema = {
 //
 // A CLOSED vocabulary on the server, not a column name and a direction from the client. The
 // two inputs compile straight into `ORDER BY` and `WHERE`, so letting a caller name the column
-// would hand it the ability to order by — and therefore probe — any column on the table,
+// would hand it the ability to order by (and therefore probe) any column on the table,
 // `alt` and `deletedAt` included. Six sorts and five kinds is what the screen offers.
 
 /** How a media list may be ordered. */
@@ -1264,18 +1264,18 @@ const MEDIA_SORTS: Record<MediaSort, { column: string; dir: "asc" | "desc" }> = 
   smallest: { column: "size", dir: "asc" },
 };
 
-/** The coarse type buckets the library filters by — the first segment of a MIME type, which
+/** The coarse type buckets the library filters by: the first segment of a MIME type, which
  * is the distinction someone browsing a library actually makes ("show me the images"). */
 export const MEDIA_KINDS = ["image", "video", "audio", "document", "other"] as const;
 export type MediaKind = (typeof MEDIA_KINDS)[number];
 
 /** MIME prefixes for the buckets that have one. `document` is a LIST rather than a prefix
- * because the useful documents share no MIME family — a PDF is `application/pdf` and a Word
+ * because the useful documents share no MIME family: a PDF is `application/pdf` and a Word
  * file is `application/vnd.openxmlformats-…`. */
 const DOCUMENT_PREFIXES = ["application/pdf", "text/", "application/msword", "application/vnd."] as const;
 
 /** Trim and cap a search needle. Capped because it lands in a `LIKE` pattern: the engine
- * escapes `%` and `_` for us, so this is not an injection guard — it is a bound on work a
+ * escapes `%` and `_` for us, so this is not an injection guard: it is a bound on work a
  * caller can ask the database to do per row. */
 function mediaQuery(raw: unknown): string | undefined {
   const q = typeof raw === "string" ? raw.trim().slice(0, 120) : "";
@@ -1294,12 +1294,12 @@ function mediaSearchWhere(q: string): WhereClause<typeof cmsSchema, "cms_media">
  *
  * `other` is the interesting one: it is defined as NOT any of the buckets that have a
  * definition, so a file type nobody anticipated still has exactly one home rather than
- * disappearing from every filter. A row whose `contentType` is NULL — uploaded before the
- * projection columns existed and never backfilled — lands there too, which is the honest
+ * disappearing from every filter. A row whose `contentType` is NULL (uploaded before the
+ * projection columns existed and never backfilled) lands there too, which is the honest
  * place for it.
  *
  * That NULL case needs its OWN clause, and did not have one. SQL is three-valued: against a
- * NULL column every `LIKE` is NULL, so the `OR` is NULL and `NOT NULL` is NULL — which is not
+ * NULL column every `LIKE` is NULL, so the `OR` is NULL and `NOT NULL` is NULL, which is not
  * TRUE, so the row is excluded. `other` therefore matched everything except the rows it
  * documents as belonging there, and a legacy row was invisible under ALL FIVE chips, with only
  * "clear the filter" to find it and nothing on screen saying why. Exactly the deployment that
@@ -1325,7 +1325,7 @@ export type TaxonomyTarget = (typeof TAXONOMY_TARGETS)[number];
  *
  * The permissive readings all collapse to TRUE, deliberately: NULL (never narrowed, or written
  * before the column existed), a non-array, an array of things that are not targets. A stored
- * value nobody can interpret must not silently stop a vocabulary from working — the failure
+ * value nobody can interpret must not silently stop a vocabulary from working: the failure
  * would be a taxonomy that has quietly vanished from every panel, with the row still there. */
 export function taxonomyApplies(row: { appliesTo?: unknown }, target: TaxonomyTarget): boolean {
   const list = row.appliesTo;
@@ -1336,7 +1336,7 @@ export function taxonomyApplies(row: { appliesTo?: unknown }, target: TaxonomyTa
 
 /** Parse an `appliesTo` input. `undefined` stays undefined (the field was not sent); `null`
  * clears the narrowing back to "everything". An unknown target is a 400 rather than a silent
- * drop — dropping it would store a NARROWER set than the caller asked for, which is the one
+ * drop: dropping it would store a NARROWER set than the caller asked for, which is the one
  * direction that loses assignments. */
 function parseAppliesTo(raw: unknown): TaxonomyTarget[] | null | undefined {
   if (raw === undefined) return undefined;
@@ -1350,7 +1350,7 @@ function parseAppliesTo(raw: unknown): TaxonomyTarget[] | null | undefined {
     if (!out.includes(v as TaxonomyTarget)) out.push(v as TaxonomyTarget);
   }
   // A vocabulary that classifies nothing is not a narrowing, it is a vocabulary nobody can
-  // reach — and it reads identically to NULL in storage, which means the opposite.
+  // reach, and it reads identically to NULL in storage, which means the opposite.
   if (out.length === 0) throw new BadRequest("appliesTo must name at least one of " + TAXONOMY_TARGETS.join(", "));
   return out;
 }
@@ -1360,7 +1360,7 @@ function parseAppliesTo(raw: unknown): TaxonomyTarget[] | null | undefined {
  * The write side, not just the UI. Hiding a vocabulary from a panel without changing what the
  * server accepts is the `hideI18n` mistake this package already retired once: the control
  * disappears, the request does not, and `appliesTo` becomes a hint rather than a rule. It also
- * has to be here for the assignments the panel never made — a script, a migration, an older
+ * has to be here for the assignments the panel never made: a script, a migration, an older
  * editor build that has not learned the capability.
  *
  * Reads the terms' taxonomies through `ctx.db`, so an unreadable vocabulary refuses the
@@ -1375,7 +1375,7 @@ async function assertTermsApplyTo(db: CmsDb, termIds: readonly string[], target:
   if (bad[0]) throw new BadRequest(`vocabulary '${String(bad[0].slug)}' does not apply to ${target}`);
 }
 
-/** Block Kit — custom admin pages, described as JSON and rendered by the editor. See
+/** Block Kit: custom admin pages, described as JSON and rendered by the editor. See
  * `./blockkit`. Re-exported so a host imports `adminPage` beside `collection`. */
 export {
   adminPage,
@@ -1403,7 +1403,7 @@ export type {
   AdminText,
 } from "./blockkit";
 
-/** Custom admin PANELS — a project's own React screen inside the editor's chrome, for the
+/** Custom admin PANELS: a project's own React screen inside the editor's chrome, for the
  * screens a server-driven vocabulary cannot carry. See `./panel`. */
 export { adminPanel, isAdminPanel } from "./panel";
 export type { AdminPanelDef } from "./panel";
@@ -1412,7 +1412,7 @@ export type { AdminPanelDef } from "./panel";
  * Columns this package wrote in the pre-ISO space form that the SCHEMA cannot identify.
  *
  * `isoTimestampBackfill()` finds every column whose DEFAULT is `expr.now()` on its own.
- * `cms_pages.publishedAt` has no default at all — `doPublish` stamped it from handler code,
+ * `cms_pages.publishedAt` has no default at all: `doPublish` stamped it from handler code,
  * in the same space form, to stay comparable with the `updatedAt` written beside it. There
  * is nothing on that column to find, so it is named here.
  *
@@ -1423,7 +1423,7 @@ export type { AdminPanelDef } from "./panel";
  * migrations: [isoTimestampBackfill({ extraColumns: CMS_LEGACY_TIMESTAMP_COLUMNS })]
  * ```
  *
- * Costs nothing on a store that was not — the UPDATE matches no rows.
+ * Costs nothing on a store that was not: the UPDATE matches no rows.
  */
 export const CMS_LEGACY_TIMESTAMP_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   cms_pages: ["publishedAt"],
@@ -1433,29 +1433,29 @@ export const CMS_LEGACY_TIMESTAMP_COLUMNS: Readonly<Record<string, readonly stri
 
 export interface ValidateOpts {
   /** Enforce `required` fields (reject when missing). Default true. Editor-facing draft
-   * writes (addBlock/updateBlock/createPage) pass `false` — a DRAFT block may be incomplete;
+   * writes (addBlock/updateBlock/createPage) pass `false`: a DRAFT block may be incomplete;
    * required is only mandatory when publishing. Type checks always run. */
   requireRequired?: boolean;
   /** The row's CURRENTLY STORED field values. A legacy HTML-string `richtext` value is
-   * tolerated only when it is byte-identical to the stored one — i.e. the caller echoed
+   * tolerated only when it is byte-identical to the stored one, i.e. the caller echoed
    * back a pre-Portable-Text value it never authored (the editor autosaves the whole bag).
    * Anything else is rejected.
    *
    * This must NOT be a plain boolean. The `xss` sanitizer is gone, and `normalizeFields`
    * passes a tolerated string through untouched, so a blanket "allow strings" would let
-   * any caller store arbitrary unsanitized HTML — which every consumer still on the
+   * any caller store arbitrary unsanitized HTML, which every consumer still on the
    * pre-migration `set:html` contract would then execute. */
   legacyBaseline?: FieldValues;
 }
 
 /** Validate a block/page's `fields` payload against a field schema, throwing a 400 on
  * the first violation. Recursive (repeater/group). Lenient on unknown field types. */
-/** A calendar date, `YYYY-MM-DD` (what an <input type="date"> emits) — must also parse. */
+/** A calendar date, `YYYY-MM-DD` (what an <input type="date"> emits), and must also parse. */
 function isDateString(v: string): boolean {
   return /^\d{4}-\d{2}-\d{2}$/.test(v) && Number.isFinite(Date.parse(v));
 }
 /** A URL segment: lowercase a-z/0-9 groups joined by single hyphens, capped like the editor
- * control caps it. Normalization lives in the editor, but the editor is not the only writer —
+ * control caps it. Normalization lives in the editor, but the editor is not the only writer:
  * a script or another client posting "Hello World/../x" would otherwise land it in a route. */
 function isSlugString(v: string): boolean {
   return v.length <= 80 && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(v);
@@ -1495,7 +1495,7 @@ export function validateFields(schema: FieldDefinition[] | undefined | null, val
         break;
       case "richtext":
         // A document tree, never a string. A legacy HTML value is REJECTED rather than
-        // silently normalized to an empty doc — a 400 names the migration; a blank field
+        // silently normalized to an empty doc: a 400 names the migration; a blank field
         // would look like the content simply vanished. Except where the bag carries stored
         // data the caller never sent (see `legacyBaseline`).
         if (typeof v === "string") {
@@ -1522,13 +1522,13 @@ export function validateFields(schema: FieldDefinition[] | undefined | null, val
         if (typeof v !== "string" || !isDateTimeString(v)) throw new BadRequest(`field '${at}' must be a date-time (ISO 8601)`);
         break;
       case "media": {
-        // Media ids are uuids (strings) — reject numbers so the value always resolves
+        // Media ids are uuids (strings). Reject numbers so the value always resolves
         // (collectMediaIds/resolveMediaFields only handle string ids).
         if (typeof v === "string") break;
         // Except where the bag carries stored data the caller never sent (see
         // `legacyBaseline`). The editor autosaves the WHOLE fields bag, so a block whose
-        // media column already holds a non-id — a seeded page, an import, a value round-
-        // tripped out of the public read API — sends it back along with an edit to some
+        // media column already holds a non-id (a seeded page, an import, a value round-
+        // tripped out of the public read API) sends it back along with an edit to some
         // other field. Rejecting it makes that block permanently UNSAVEABLE, and blames a
         // field the editor never touched; the only way out is to notice that a media field
         // showing a perfectly good url is the culprit and clear it.
@@ -1543,7 +1543,7 @@ export function validateFields(schema: FieldDefinition[] | undefined | null, val
       // An OPAQUE id: the record may live in another table, or in a system we do not own,
       // so there is nothing to check it against here beyond its shape. The picker's
       // `referenceFrom` handler is the authority on which ids exist, and it runs under the
-      // caller's own ACL — so validating against a list fetched here would be both a second
+        // caller's own ACL, so validating against a list fetched here would be both a second
       // round trip and a weaker check than the one the storing handler already makes.
       case "reference":
         if (def.multiple) {
@@ -1556,7 +1556,7 @@ export function validateFields(schema: FieldDefinition[] | undefined | null, val
       case "group": {
         // The baseline MUST descend. Stopping at the top level meant a pre-migration
         // richtext value nested in a group was rejected on every write that echoed the
-        // stored bag back — and placeBlock, which merges the block's OWN stored fields,
+        // stored bag back, and placeBlock, which merges the block's OWN stored fields,
         // could not place such a block at all. No editor can fix that: none ever mounted it.
         const nested = opts.legacyBaseline?.[def.name];
         validateFields(def.fields, v, at, {
@@ -1570,7 +1570,7 @@ export function validateFields(schema: FieldDefinition[] | undefined | null, val
         if (def.min != null && v.length < def.min) throw new BadRequest(`field '${at}' needs at least ${def.min} item(s)`);
         if (def.max != null && v.length > def.max) throw new BadRequest(`field '${at}' allows at most ${def.max} item(s)`);
         {
-          // Per-item baseline, positionally — a repeater item that kept its slot keeps its
+          // Per-item baseline, positionally: a repeater item that kept its slot keeps its
           // stored value, so an untouched legacy value inside one still validates.
           const base = opts.legacyBaseline?.[def.name];
           const baseItems = Array.isArray(base) ? base : [];
@@ -1585,7 +1585,7 @@ export function validateFields(schema: FieldDefinition[] | undefined | null, val
         break;
       }
       default:
-        break; // unknown type — don't block
+        break; // unknown type, don't block
     }
   }
 }
@@ -1597,13 +1597,13 @@ export function validateFields(schema: FieldDefinition[] | undefined | null, val
 // It did not exist while the only way to create a block type was a developer writing
 // `defineBlockType(...)` in the repo, where tsc is the check. Now that the editor authors
 // types (GitHub #9), `fieldsSchema` arrives from a browser as free JSON into a `t.json()`
-// column — and a malformed one is not caught anywhere downstream: `FieldForm` renders
+// column, and a malformed one is not caught anywhere downstream: `FieldForm` renders
 // `null` for an unknown type, `validateFields` skips it ("lenient on unknown field types"),
 // and the block silently loses that field's content on every save. A duplicate `name` is
 // worse: two controls write the same key, so one of them can never be saved at all.
 
 /** Every field type the runtime knows. Exported because the editor's type-builder offers
- * exactly this list — one definition, so a type added here appears there without a second
+ * exactly this list: one definition, so a type added here appears there without a second
  * edit, and a type removed here cannot be authored. */
 export const FIELD_TYPES: readonly FieldDefinition["type"][] = [
   "text", "textarea", "richtext", "url", "number", "boolean", "date", "datetime",
@@ -1626,14 +1626,14 @@ const FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
  * same kind of thing: a field name is emitted as a TS property by `generateBlockTypes`, so
  * it must be an identifier, while a region name is only ever an object key on the assembled
  * page (`regions["main-content"]`). Held to `FIELD_NAME` it rejected hyphenated names that
- * pre-date this validation and are stored today — which would have made every future save
+ * pre-date this validation and are stored today, which would have made every future save
  * of such a content type fail, with the only fix being a rename that orphans its
  * placements. */
 const REGION_NAME = /^[A-Za-z_][A-Za-z0-9_-]*$/;
 
 /**
  * Validate and canonicalize an authored `FieldDefinition[]`, throwing a 400 on the first
- * problem. Returns the CLEANED schema — each field rebuilt from the keys its type actually
+ * problem. Returns the CLEANED schema: each field rebuilt from the keys its type actually
  * uses, so a `select`'s stale `options` cannot ride along on a field someone switched to
  * `text` and reappear if they switch back.
  */
@@ -1649,9 +1649,9 @@ export function validateFieldSchema(raw: unknown, path = "fieldsSchema", depth =
     if (!FIELD_NAME.test(name)) {
       throw new BadRequest(`${at}.name must be a field name (a letter or underscore, then letters/digits/underscores), got ${JSON.stringify(o.name)}`);
     }
-    // Siblings only — a nested `group` legitimately reuses a name from the outer level,
+    // Siblings only: a nested `group` legitimately reuses a name from the outer level,
     // because it writes into its own bag.
-    if (seen.has(name)) throw new BadRequest(`${path} declares '${name}' twice — two controls would write the same key and one could never be saved`);
+    if (seen.has(name)) throw new BadRequest(`${path} declares '${name}' twice: two controls would write the same key and one could never be saved`);
     seen.add(name);
     const type = o.type as FieldDefinition["type"];
     if (!FIELD_TYPES.includes(type)) {
@@ -1660,7 +1660,7 @@ export function validateFieldSchema(raw: unknown, path = "fieldsSchema", depth =
     const f: FieldDefinition = { name, type };
     if (typeof o.label === "string" && o.label.trim() !== "") f.label = o.label.trim();
     // Same treatment as `label`, and it has to be HERE: this function rebuilds every entry
-    // from a whitelist, so a key it does not name is dropped without a word — an authored
+    // from a whitelist, so a key it does not name is dropped without a word: an authored
     // description would round-trip through `createContentType` and come back gone.
     if (typeof o.description === "string" && o.description.trim() !== "") f.description = o.description.trim();
     if (o.required === true) f.required = true;
@@ -1706,7 +1706,7 @@ export function validateFieldSchema(raw: unknown, path = "fieldsSchema", depth =
 /** Resolve `slug` cross-references inside one schema, now that every sibling is known: a
  * `slug` field's `from` must name a field that exists AT THE SAME LEVEL (the editor reads
  * it out of the sibling bag) and holds text. Separate pass because forward references are
- * legitimate — a slug may precede the title it follows. */
+ * legitimate: a slug may precede the title it follows. */
 export function checkSlugSources(schema: readonly FieldDefinition[], path = "fieldsSchema"): void {
   const byName = new Map(schema.map((f) => [f.name, f]));
   schema.forEach((f, i) => {
@@ -1714,7 +1714,7 @@ export function checkSlugSources(schema: readonly FieldDefinition[], path = "fie
       const src = byName.get(f.from);
       if (!src) throw new BadRequest(`${path}[${i}] derives from '${f.from}', which is not a field alongside it`);
       if (!["text", "textarea", "select", "url"].includes(src.type)) {
-        throw new BadRequest(`${path}[${i}] derives from '${f.from}', which is a '${src.type}' — a slug can only follow a text field`);
+        throw new BadRequest(`${path}[${i}] derives from '${f.from}', which is a '${src.type}': a slug can only follow a text field`);
       }
     }
     if (f.fields) checkSlugSources(f.fields, `${path}[${i}].fields`);
@@ -1734,7 +1734,7 @@ export function normalizeFieldSchema(raw: unknown, path = "fieldsSchema"): Field
  * A region NAME is the key `addBlock({ region })` resolves and the key of the assembled
  * `regions` object a front end reads, so it is held to the same shape as a field name. An
  * `allowedTypes` entry is a block-type SLUG; it is not checked against the block types that
- * exist, on purpose — a content type declaring a region for a block type that has not been
+ * exist, on purpose: a content type declaring a region for a block type that has not been
  * created yet is an ordinary order of work, and `assertRegionAllows` is what enforces the
  * list at placement time.
  */
@@ -1745,7 +1745,7 @@ export function normalizeRegions(raw: unknown): RegionDefinition[] {
     const o = asObj(entry) as Record<string, unknown>;
     const name = typeof o.name === "string" ? o.name.trim() : "";
     if (!REGION_NAME.test(name)) throw new BadRequest(`regions[${i}].name must be a region name (a letter or underscore, then letters/digits/hyphens/underscores), got ${JSON.stringify(o.name)}`);
-    if (seen.has(name)) throw new BadRequest(`regions declares '${name}' twice — the assembled page is keyed by region name, so one would overwrite the other`);
+    if (seen.has(name)) throw new BadRequest(`regions declares '${name}' twice: the assembled page is keyed by region name, so one would overwrite the other`);
     seen.add(name);
     const region: RegionDefinition = { name };
     if (typeof o.label === "string" && o.label.trim() !== "") region.label = o.label.trim();
@@ -1763,7 +1763,7 @@ export function normalizeRegions(raw: unknown): RegionDefinition[] {
 }
 
 /** Validate a content type's `defaultBlocks` against its own regions. A default block that
- * names a region the type does not declare is created into nowhere — `createPage` would
+ * names a region the type does not declare is created into nowhere: `createPage` would
  * place it under a key no renderer reads. */
 export function normalizeDefaultBlocks(raw: unknown, regions: readonly RegionDefinition[]): DefaultBlockDefinition[] {
   if (raw == null) return [];
@@ -1785,16 +1785,16 @@ export function normalizeDefaultBlocks(raw: unknown, regions: readonly RegionDef
   });
 }
 
-// --- rich text: the structural allow-list (server-side — the real XSS boundary) ---
+// --- rich text: the structural allow-list (server-side, the real XSS boundary) ---
 //
-// A `richtext` value is a document TREE, so there is no HTML to scrub — the boundary is
+// A `richtext` value is a document TREE, so there is no HTML to scrub: the boundary is
 // STRUCTURAL: an unknown node or mark type is dropped, only the attributes declared for a
 // type survive, an attribute value must be a JSON primitive, and a `link` href must pass a
-// scheme allow-list. Client-side checks are not a boundary — a caller can POST any value
-// straight to these handlers — so this runs on write, like the HTML sanitizer it replaces.
+// scheme allow-list. Client-side checks are not a boundary (a caller can POST any value
+// straight to these handlers), so this runs on write, like the HTML sanitizer it replaces.
 //
 // Everything here is SYNCHRONOUS and pure. That still matters: normalization runs inside
-// the DO's storage.transaction(), where async stream I/O (e.g. HTMLRewriter) deadlocks —
+// the DO's storage.transaction(), where async stream I/O (e.g. HTMLRewriter) deadlocks,
 // the same constraint that once ruled out a DOM-based sanitizer.
 
 /** The node/mark vocabulary a `richtext` value may use. A node entry maps a node type to
@@ -1804,20 +1804,20 @@ export interface RichTextSchema {
   marks: Record<string, readonly string[]>;
   /** Highest heading level accepted; anything above is CLAMPED to it, not dropped.
    * Defaults to `MAX_HEADING_LEVEL` (3, the shipped editor's StarterKit config). Raise it
-   * if your editor is configured for more — this is the widening the docs promise. */
+   * if your editor is configured for more: this is the widening the docs promise. */
   maxHeadingLevel?: number;
 }
 
 /** What the shipped editor can actually produce (TipTap StarterKit + Highlight + TaskList,
  * as configured by @podoba/react's BlockEditor). Pass your own to `normalizeFields` if your
- * editor adds extensions — a node type absent from the schema is dropped on write. */
+ * editor adds extensions: a node type absent from the schema is dropped on write. */
 /** Highest heading level the shipped editor is configured for (StarterKit levels [1,2,3]). */
 export const MAX_HEADING_LEVEL = 3;
 
 export const DEFAULT_RICH_TEXT_SCHEMA: RichTextSchema = {
   nodes: {
     // NOTE: no `doc`. normalizeRichText builds the root itself and never looks it up, so
-    // an entry here would only ever authorize a NESTED doc — which TipTap cannot render
+    // an entry here would only ever authorize a NESTED doc, which TipTap cannot render
     // (Document declares no renderHTML), blanking the field in the editor while the site
     // renderers still showed the subtree. The first keystroke then saved the blank over it.
     paragraph: [],
@@ -1848,11 +1848,11 @@ export const DEFAULT_RICH_TEXT_SCHEMA: RichTextSchema = {
 // runtime without dragging this file (and the whole server SDK) into a browser bundle.
 export { isSafeHref, normalizeHref } from "./href";
 
-/** Keep only the declared attributes, and only those holding a JSON primitive — an object
+/** Keep only the declared attributes, and only those holding a JSON primitive: an object
  * or array in an attr is never something the editor emits, so it is smuggled payload. */
 /** Look a type up in an allow-list WITHOUT walking the prototype chain. A plain-object
  * index resolves `constructor` / `toString` / `valueOf` to inherited members, which are
- * truthy — so `{ type: "constructor" }` passed the gate and was stored, and its "allowed
+ * truthy, so `{ type: "constructor" }` passed the gate and was stored, and its "allowed
  * attributes" became the `Object` function (length 1, not iterable), throwing a TypeError
  * inside the DO's storage.transaction(). Both renderers and TipTap then choke on the
  * stored node, which bricks the row. */
@@ -1869,7 +1869,7 @@ function normalizeAttrs(attrs: unknown, allowed: readonly string[], maxHeading: 
     if (v === undefined) continue;
     if (v !== null && typeof v !== "string" && typeof v !== "number" && typeof v !== "boolean") continue;
     // CLAMP, don't drop. Dropping `level` left the node level-less, and TipTap's Heading
-    // declares `level: { default: 1 }` — so an imported h4 still opened as h1 and the next
+    // declares `level: { default: 1 }`, so an imported h4 still opened as h1 and the next
     // autosave still persisted h1, while the renderers fell back to h2. Same silent
     // mutation the narrowing was meant to stop, plus an editor/site mismatch.
     if (name === "level") {
@@ -1883,7 +1883,7 @@ function normalizeAttrs(attrs: unknown, allowed: readonly string[], maxHeading: 
 }
 
 /** Drop unknown marks and any `link` whose href fails the scheme allow-list (dropping the
- * whole mark, not just the href — an anchor with no destination is worse than plain text). */
+ * whole mark, not just the href: an anchor with no destination is worse than plain text). */
 function normalizeMarks(marks: unknown, schema: RichTextSchema): RichTextMark[] | undefined {
   if (!Array.isArray(marks)) return undefined;
   const out: RichTextMark[] = [];
@@ -1919,7 +1919,7 @@ function normalizeNode(raw: unknown, schema: RichTextSchema, depth = 0): RichTex
 
   const out: RichTextNode = { type: node.type };
   if (node.type === "text") {
-    // A text node with no string — or an EMPTY one — is not text. ProseMirror forbids an
+    // A text node with no string (or an EMPTY one) is not text. ProseMirror forbids an
     // empty text node outright (`schema.text("")` throws "Empty text nodes are not
     // allowed"), and the editor builds its document inside a useState initializer, so a
     // stored `{type:"text",text:""}` would throw during render and take the edit UI down
@@ -1948,7 +1948,7 @@ function normalizeNodes(nodes: readonly unknown[], schema: RichTextSchema, depth
 }
 
 /** Normalize a rich-text value to a document the renderers can trust. A value that is not
- * a doc at all yields an empty doc — `validateFields` rejects those first, so in handler
+ * a doc at all yields an empty doc: `validateFields` rejects those first, so in handler
  * flow this only ever sees a doc; the fallback is for direct callers. */
 export function normalizeRichText(value: unknown, schema: RichTextSchema = DEFAULT_RICH_TEXT_SCHEMA): RichTextDoc {
   if (!value || typeof value !== "object" || Array.isArray(value)) return { type: "doc", content: [] };
@@ -1959,7 +1959,7 @@ export function normalizeRichText(value: unknown, schema: RichTextSchema = DEFAU
 /** The block-level node types that end a line when flattening to plain text. */
 const RT_BLOCK_TYPES = new Set(["paragraph", "heading", "listItem", "taskItem", "blockquote", "codeBlock", "horizontalRule"]);
 
-/** Flatten a rich-text document to plain text — for excerpts, meta descriptions, and search
+/** Flatten a rich-text document to plain text, for excerpts, meta descriptions, and search
  * indexing, which want the words without the structure. */
 export function richTextToPlainText(value: RichTextDoc | null | undefined): string {
   const parts: string[] = [];
@@ -2002,11 +2002,11 @@ export function normalizeFields(
 // --- assembled-page shape (the content-API result + revision snapshot) --------
 
 export interface RenderedBlock {
-  /** The block's optimistic-concurrency token — pass back as `expectedVersion`. */
+  /** The block's optimistic-concurrency token: pass back as `expectedVersion`. */
   version: number;
-  /** The placement id (cms_page_blocks) — stable per position; used for reorder/remove. */
+  /** The placement id (cms_page_blocks): stable per position; used for reorder/remove. */
   id: string;
-  /** The underlying block instance id (cms_blocks) — used to edit the block's content. */
+  /** The underlying block instance id (cms_blocks), used to edit the block's content. */
   block_id: string;
   block_type: string;
   title: string | null;
@@ -2037,7 +2037,7 @@ export interface AssembledPage {
     slug: string;
     status: string;
     locale: string;
-    /** The page's content-type slug (e.g. "article", "page") — lets a frontend route/render
+    /** The page's content-type slug (e.g. "article", "page"), which lets a frontend route/render
      * by type. `null` if the type row is missing. */
     contentType: string | null;
     translationGroupId: string | null;
@@ -2048,12 +2048,12 @@ export interface AssembledPage {
     metaTitle: string | null;
     metaDescription: string | null;
     seo: PageSeo;
-    /** Optimistic-concurrency token — pass back as `expectedVersion` on a write. */
+    /** Optimistic-concurrency token: pass back as `expectedVersion` on a write. */
     version: number;
   };
   regions: Record<string, RenderedBlock[]>;
   /** True when this is a live draft assembled behind a preview grant, rather than the
-   * published snapshot — so a frontend can render a "you are viewing a draft" banner. */
+   * published snapshot, so a frontend can render a "you are viewing a draft" banner. */
   isPreview?: boolean;
 }
 
@@ -2064,7 +2064,7 @@ export interface AssembledPage {
  * assemble time, and `group`/`repeater` fields nest further bags. */
 export type FieldValue = JsonValue | ResolvedMedia | RichTextDoc | FieldValues | FieldValue[];
 
-/** A block / collection / page `fields` bag — field name -> authored value. */
+/** A block / collection / page `fields` bag: field name -> authored value. */
 export interface FieldValues {
   [field: string]: FieldValue;
 }
@@ -2146,7 +2146,7 @@ function resolveMediaFields(
 }
 
 // --- structural view of the ACL'd Db (this package can't import the app's schema
-// type, so it addresses tables by name — same ctx.db at runtime; ACL still applies). --
+// type, so it addresses tables by name, same ctx.db at runtime; ACL still applies). --
 
 interface OrderBy {
   column: string;
@@ -2174,7 +2174,7 @@ const cdb = (ctx: HandlerContext): CmsDb => ctx.db as unknown as CmsDb;
 const notFound = (what: string) => new PramenError(`${what} not found`, 404, "not_found");
 const asObj = (v: unknown): FieldValues => (v && typeof v === "object" ? (v as FieldValues) : {});
 /**
- * An ISO-8601 UTC instant — the ONE format every timestamp this package writes by hand is
+ * An ISO-8601 UTC instant: the ONE format every timestamp this package writes by hand is
  * in, so it compares correctly against `$now()` and against the `expr.now()` column
  * defaults beside it.
  *
@@ -2182,7 +2182,7 @@ const asObj = (v: unknown): FieldValues => (v && typeof v === "object" ? (v as F
  * page-workflow stamps (`updatedAt`, `publishedAt`) matched THAT to stay lexically
  * comparable with their own column default, while collection managed timestamps minted ISO
  * to stay comparable with `$now()`. One column could not satisfy both, and the split was
- * the honest way to live with it — a trap documented at length on the `publish` field.
+ * the honest way to live with it: a trap documented at length on the `publish` field.
  *
  * `expr.now()` is ISO now, so the two requirements are the same requirement and there is
  * one helper. Existing rows written in the old shape are rewritten by
@@ -2196,7 +2196,7 @@ const nowStamp = isoStamp;
 /** Does the caller hold one of these roles?
  *
  * Delegates to `authorizeHandler`, which is what the dispatcher uses to enforce a handler's
- * own `auth` — so "may call this handler" and "counts as an editor here" cannot answer
+ * own `auth`, so "may call this handler" and "counts as an editor here" cannot answer
  * differently. The local copy took `roles` OR `role`, where the framework takes the UNION,
  * so an identity carrying both saw only one of them. */
 const isEditor = (ctx: HandlerContext, roles: readonly string[]): boolean =>
@@ -2288,7 +2288,7 @@ async function resolveMediaId(db: CmsDb, id: unknown): Promise<ResolvedMedia | n
  * The message NAMES the fields, and uses their labels rather than their storage keys: the
  * person reading it is looking at a form, and "startsAt" is not what the form calls it.
  *
- * A page whose content type has vanished is left alone rather than blocked — the type is
+ * A page whose content type has vanished is left alone rather than blocked: the type is
  * gone, so there is no schema to be measured against, and refusing to publish would strand
  * the page with no way to fix it.
  */
@@ -2320,7 +2320,7 @@ export async function assertPublishable(db: CmsDb, page: Record<string, unknown>
  *
  * REQUIRED FIELDS ARE ENFORCED HERE, and only here.
  *
- * Every draft write — createPage, updatePage, addBlock, updateBlock — passes
+ * Every draft write (createPage, updatePage, addBlock, updateBlock) passes
  * `requireRequired: false`, deliberately: a draft in progress is allowed to be incomplete,
  * and a form that refuses to save until every field is filled is a form you cannot leave.
  * `ValidateOpts` has said "required is only mandatory when publishing" since it was written.
@@ -2329,14 +2329,14 @@ export async function assertPublishable(db: CmsDb, page: Record<string, unknown>
  *
  * What that cost, in the deployment that found it: an event content type whose `startsAt` is
  * required, an editor who published one without a date, and a live page at its own URL that
- * appeared in no listing anywhere — because the front end drops an event it cannot place on
+ * appeared in no listing anywhere, because the front end drops an event it cannot place on
  * a calendar. Published, reachable, and invisible, with nothing said to anyone.
  *
  * So the gate belongs at the moment the content becomes public, which is this function: the
  * one road every route to `published` goes down (manual, review-approved, and scheduled
  * alike). A page that cannot satisfy its own schema does not go live.
  *
- * Type checks are not repeated here — the draft writes already ran them, and a stored value
+ * Type checks are not repeated here: the draft writes already ran them, and a stored value
  * cannot have changed type without going through one of them. */
 async function doPublish(db: CmsDb, page: Record<string, unknown>, actor: string | null, note?: string, clearSchedule = false): Promise<Record<string, unknown> | undefined> {
   const now = nowStamp();
@@ -2411,7 +2411,7 @@ async function assertRegionAllows(db: CmsDb, page: Record<string, unknown>, regi
   const def = regions.find((r) => r.name === region);
   if (!def) throw new BadRequest(`region '${region}' is not defined on this page's content type`);
   // A non-empty allowedTypes restricts; null/undefined OR an empty array means "any type"
-  // (matching the editor, which treats `[]` as unrestricted — otherwise the region is unusable).
+  // (matching the editor, which treats `[]` as unrestricted; otherwise the region is unusable).
   if (def.allowedTypes && def.allowedTypes.length && !def.allowedTypes.includes(blockTypeSlug)) {
     throw new BadRequest(`block type '${blockTypeSlug}' is not allowed in region '${region}'`);
   }
@@ -2421,7 +2421,7 @@ async function assertRegionAllows(db: CmsDb, page: Record<string, unknown>, regi
 
 // --- page preview links (signed capability urls) -----------------------------
 //
-// Preview used to be a ROLE check, so previewing a draft required an editor account —
+// Preview used to be a ROLE check, so previewing a draft required an editor account,
 // which excludes the person preview actually exists for: the stakeholder reviewing copy
 // before it ships. A preview link is instead a signed, self-expiring CAPABILITY: it names
 // ONE page, carries its own expiry, and is verified in the Worker before any read happens.
@@ -2434,12 +2434,12 @@ async function assertRegionAllows(db: CmsDb, page: Record<string, unknown>, regi
 // --- site furniture: normalization + resolution helpers ----------------------
 //
 // All of this runs on the WRITE path. A menu, a term tree and a widget list are documents
-// the client posts whole, so "the editor wouldn't send that" is not a boundary — every one
+// the client posts whole, so "the editor wouldn't send that" is not a boundary: every one
 // of these shapes is reachable with a curl.
 
 const MENU_ITEM_KINDS: readonly MenuItemKind[] = ["custom", "page", "term", "collection"];
 
-/** A stable machine key — the string `getMenu(name)` / `getWidgetArea(name)` resolves, and
+/** A stable machine key: the string `getMenu(name)` / `getWidgetArea(name)` resolves, and
  * a taxonomy's URL segment. Same rule as a page slug, and for the same reason: it lands in
  * a route. */
 function assertKey(v: unknown, what: string): string {
@@ -2448,7 +2448,7 @@ function assertKey(v: unknown, what: string): string {
   return s;
 }
 
-/** A REGISTRY key — a block type's slug. Looser than {@link assertKey} by one character:
+/** A REGISTRY key: a block type's slug. Looser than {@link assertKey} by one character:
  * underscores are admitted, because a block-type slug is not a URL segment. It is the key a
  * front end maps to a component (`{ rich_text: RichText }`), and `rich_text` is the
  * convention every existing schema and the shipped example already use. */
@@ -2471,14 +2471,14 @@ function assertRegistryKey(v: unknown, what: string): string {
  *
  * The caller MUST have read `managedBy` explicitly (`select`), not taken it off a wide read.
  * Reads are column-projected against the caller's policy, so under a read policy with a
- * `fields` list the column is simply absent — and a guard written as "absent means editable"
+ * `fields` list the column is simply absent, and a guard written as "absent means editable"
  * disarms itself for exactly the deployments that restrict fields. `select` fails CLOSED
  * instead: an unreadable column is a 403 before this runs. */
 export function assertNotManaged(row: Record<string, unknown>, what: string, defineFn: string): void {
-  if (!("managedBy" in row)) throw new Error(`assertNotManaged: 'managedBy' was not selected for ${what} — the guard would fail open`);
+  if (!("managedBy" in row)) throw new Error(`assertNotManaged: 'managedBy' was not selected for ${what}: the guard would fail open`);
   if (row.managedBy == null) return;
   throw new Conflict(
-    `${what} '${String(row.slug)}' is defined in code (cmsBootstrap owner '${String(row.managedBy)}') — edit its ` +
+    `${what} '${String(row.slug)}' is defined in code (cmsBootstrap owner '${String(row.managedBy)}'). Edit its ` +
       `${defineFn}(...) declaration and redeploy. A change saved here would be reverted on the next boot.`,
   );
 }
@@ -2488,9 +2488,9 @@ export function assertNotManaged(row: Record<string, unknown>, what: string, def
  * `referenceFrom`).
  *
  * Shape-checked rather than merely non-empty, because the editor interpolates it straight
- * into a request path — `fetch(\`${base}/rpc/${name}\`)`. `"../admin/data"` normalizes to
+ * into a request path: `fetch(\`${base}/rpc/${name}\`)`. `"../admin/data"` normalizes to
  * `/admin/data`, so a stored string an EDITOR authored became an arbitrary same-origin
- * authenticated POST fired by whoever opened the block — including an admin, whose token
+ * authenticated POST fired by whoever opened the block, including an admin, whose token
  * passes the `/admin/*` gate the editor role cannot. A handler name is an identifier;
  * nothing that can traverse a path is one.
  */
@@ -2521,7 +2521,7 @@ function readJsonColumn(value: unknown): unknown {
 /** Whether one content type's default blocks or region allow-lists name this block type.
  *
  * Every level is shape-checked rather than assumed: these columns are `t.json()`, so the ORM
- * writes them well-formed, but this scan meets whatever is in the table — including rows
+ * writes them well-formed, but this scan meets whatever is in the table, including rows
  * written before the column existed in this shape. */
 function referencesBlockType(type: Record<string, unknown>, slug: string): boolean {
   const defaults = readJsonColumn(type.defaultBlocks);
@@ -2575,7 +2575,7 @@ async function deleteCmsType(db: CmsDb, kind: "content" | "block", id: string): 
   try {
     if (!await db.delete(table, id)) throw notFound(`${kind} type`);
   } catch (e) {
-    // A concurrent D1 insert can land after the pre-check, and the FK is what catches it —
+    // A concurrent D1 insert can land after the pre-check, and the FK is what catches it,
     // on a store where the FK actually landed. Adding a constraint over orphaned data is
     // SKIPPED and reported rather than applied (the migration contract), so an upgraded store
     // that already held a block pointing at a removed type has no FK on `cms_blocks`, and on
@@ -2591,8 +2591,8 @@ async function deleteCmsType(db: CmsDb, kind: "content" | "block", id: string): 
  * A menu item's `ref` for a non-`custom` kind.
  *
  * `menuHref` interpolates this into a path, so a ref starting with `/` produced
- * `//evil.example/` — protocol-relative, off-origin, in the site's primary nav on every
- * page — while the sibling `custom` branch three lines away ran the same string through
+ * `//evil.example/` (protocol-relative, off-origin, in the site's primary nav on every
+ * page) while the sibling `custom` branch three lines away ran the same string through
  * `isSafeHref`. A reference is an id or a slug: no slashes, no scheme, no dots.
  */
 function assertRef(v: unknown, label: string, kind: MenuItemKind): string {
@@ -2623,7 +2623,7 @@ function normalizeMenuItems(raw: unknown, depth = 0, budget = { left: MAX_MENU_I
   }
   if (depth >= MAX_MENU_DEPTH) throw new BadRequest(`menu items may nest at most ${MAX_MENU_DEPTH} levels deep`);
   return raw.map((entry, i) => {
-    // Counted across the WHOLE tree, not per level — the budget is threaded through the
+    // Counted across the WHOLE tree, not per level: the budget is threaded through the
     // recursion for that reason.
     if (--budget.left < 0) throw new BadRequest(`a menu may hold at most ${MAX_MENU_ITEMS} items`);
     const o = asObj(entry) as Record<string, unknown>;
@@ -2638,7 +2638,7 @@ function normalizeMenuItems(raw: unknown, depth = 0, budget = { left: MAX_MENU_I
     if (kind === "custom") {
       // The SAME allow-list a rich-text link mark goes through. A menu is rendered into an
       // `<a href>` on every page of the site, so `javascript:` here is exactly the hole
-      // `isSafeHref` exists to close — and the editor is not the only writer.
+      // `isSafeHref` exists to close, and the editor is not the only writer.
       const url = normalizeHref(typeof o.url === "string" ? o.url : "");
       if (!isSafeHref(url)) throw new BadRequest(`menu item '${label}' needs a valid url (http(s), mailto:, tel:, a rooted path, or #anchor)`);
       item.url = url;
@@ -2686,7 +2686,7 @@ export const REDIRECT_STATUSES: readonly number[] = [301, 302, 307, 308];
  *
  * Canonicalized rather than merely validated, because matching is an exact string lookup
  * against a UNIQUE column. `"/old"` and `"/old/"` are the same URL to a visitor and two
- * rows here, so the second one is dead the moment the first exists — and which one wins is
+ * rows here, so the second one is dead the moment the first exists, and which one wins is
  * whichever the editor happened to type. Trailing slash off (except the root), fragment
  * and query dropped, percent-encoding left exactly as written (the parser's, and the
  * request's, canonical form).
@@ -2700,7 +2700,7 @@ export function normalizeRedirectPath(raw: unknown): string {
   const trimmed = path.length > 1 ? path.replace(/\/+$/, "") || "/" : "/";
   // PERCENT-ENCODED, through the same parser the request goes through. A visitor's path
   // reaches `resolveRedirect` as `url.pathname`, which the WHATWG parser has already
-  // encoded — so an editor typing `/o-nás` stored a string that the exact-match lookup
+  // encoded, so an editor typing `/o-nás` stored a string that the exact-match lookup
   // could never be handed, and the redirect silently never fired. On precisely the
   // non-English sites where slug changes are most common. Idempotent: an already-encoded
   // path parses back to itself.
@@ -2712,14 +2712,14 @@ export function normalizeRedirectPath(raw: unknown): string {
 }
 
 /**
- * Is this redirect a loop — does its destination resolve back to its own source?
+ * Is this redirect a loop: does its destination resolve back to its own source?
  *
  * Compared through `normalizeRedirectPath` on BOTH sides, which a raw `from === to` did
- * not do: `from: "/old", to: "/old/"` differ as strings, so the guard passed — and then a
+ * not do: `from: "/old", to: "/old/"` differ as strings, so the guard passed, and then a
  * visitor hitting `/old` was sent to `/old/`, whose 404 handler canonicalizes the trailing
  * slash back to `/old` and matches the same row. An infinite redirect, from the one pair
  * the guard exists to catch. (A test here even asserted this pair was fine, on the reading
- * that a trailing-slash redirect is a normal canonicalization — true in general, and not
+ * that a trailing-slash redirect is a normal canonicalization, true in general, and not
  * true when the lookup canonicalizes the slash away again.)
  *
  * An absolute destination is never a loop with a rooted source: it names an origin, and
@@ -2735,7 +2735,7 @@ function isSelfRedirect(fromPath: string, toPath: string): boolean {
 }
 
 /** A redirect's destination: a rooted path or an absolute http(s) url. `mailto:`/`tel:` are
- * refused — they are not somewhere a `Location` header can send a page request. */
+ * refused: they are not somewhere a `Location` header can send a page request. */
 function normalizeRedirectTarget(raw: unknown): string {
   const s = typeof raw === "string" ? normalizeHref(raw) : "";
   const ok = /^https?:\/\//i.test(s) || (s.startsWith("/") && !s.startsWith("//") && !s.startsWith("/\\"));
@@ -2747,7 +2747,7 @@ function normalizeRedirectTarget(raw: unknown): string {
  *
  * A term whose `parentId` names a row that is not in `rows` is treated as a ROOT rather
  * than dropped. That is the case where a parent was deleted mid-read (the FK sets children
- * to NULL, but a snapshot taken across the two states can see the old value) — and a term
+ * to NULL, but a snapshot taken across the two states can see the old value), and a term
  * that vanishes from a vocabulary listing is a worse answer than one that shows up a level
  * too high.
  */
@@ -2774,7 +2774,7 @@ function buildTermTree(rows: readonly Term[]): Term[] {
 const WIDGET_TYPES: readonly WidgetType[] = ["content", "menu", "component"];
 
 /** A list limit from client input, clamped to what `listPages` already allows. Absent or
- * unusable falls back to the default rather than to "unbounded" — a request with no limit
+ * unusable falls back to the default rather than to "unbounded": a request with no limit
  * on a store reached over RPC is the shape that made lists hang (GitHub #22). */
 function clampLimit(v: unknown): number {
   const n = typeof v === "number" && Number.isFinite(v) ? Math.floor(v) : PAGE_LIST_LIMIT;
@@ -2783,8 +2783,8 @@ function clampLimit(v: unknown): number {
 
 /** The most terms one vocabulary (or one page) may carry in a single read.
  *
- * A vocabulary is read WHOLE by `listTerms`/`getTermTree` — a tree cannot be paged without
- * either losing branches or fetching ancestors separately — so the cap is what keeps that
+ * A vocabulary is read WHOLE by `listTerms`/`getTermTree` (a tree cannot be paged without
+ * either losing branches or fetching ancestors separately), so the cap is what keeps that
  * read bounded. Tags are the case that grows without anyone deciding to grow it. */
 const MAX_TERMS = 1000;
 
@@ -2829,8 +2829,8 @@ async function taxonomyBySlug(db: CmsDb, slug: string): Promise<{ id: string; hi
 
 /**
  * Check a proposed `parentId` for a term: it exists, it is in the SAME vocabulary, the
- * vocabulary is hierarchical, the tree stays inside {@link MAX_TERM_DEPTH}, and — for an
- * update — the new parent is not the term itself or one of its own descendants.
+ * vocabulary is hierarchical, the tree stays inside {@link MAX_TERM_DEPTH}, and (for an
+ * update) the new parent is not the term itself or one of its own descendants.
  *
  * The cycle check is the one that matters. `ON DELETE SET NULL` keeps the FK honest but
  * says nothing about shape, so `A.parent = B; B.parent = A` is two perfectly legal writes
@@ -2839,7 +2839,7 @@ async function taxonomyBySlug(db: CmsDb, slug: string): Promise<{ id: string; hi
  */
 async function assertTermParent(db: CmsDb, tax: { id: string; hierarchical: boolean }, parentId: string | null, termId: string | null): Promise<void> {
   if (parentId === null) return;
-  if (!tax.hierarchical) throw new BadRequest("this vocabulary is flat — its terms cannot have a parent");
+  if (!tax.hierarchical) throw new BadRequest("this vocabulary is flat: its terms cannot have a parent");
   if (termId !== null && parentId === termId) throw new BadRequest("a term cannot be its own parent");
   // How many levels the MOVED term itself occupies. A leaf is 1; a term with children takes
   // its subtree with it, and a cap that ignored that admitted a 5-level tree grafted under a
@@ -2847,7 +2847,7 @@ async function assertTermParent(db: CmsDb, tax: { id: string; hierarchical: bool
   const moving = termId === null ? 1 : await subtreeHeight(db, tax.id, termId);
   let cursor: string | null = parentId;
   // `depth` counts ANCESTORS walked. The moved term sits at `ancestors + moving` levels, and
-  // that is what the cap governs — counting ancestors alone admitted one level too many
+  // that is what the cap governs: counting ancestors alone admitted one level too many
   // (a chain of 5 put the new term at level 6 under a cap of 5).
   for (let depth = 0; cursor !== null; depth++) {
     // About to walk ancestor number `depth + 1`. The moved term would then sit at
@@ -2900,7 +2900,7 @@ async function subtreeHeight(db: CmsDb, taxonomyId: string, rootId: string): Pro
  * Rebuilt field by field for the same reason a menu tree is: `widgets` is a `t.json()`
  * column handed straight to a layout, so whatever the client posts is what renders.
  * A `content` widget's rich text goes through the SAME `normalizeRichText` allow-list every
- * block field does — this is a second write path into the same renderer, and it must not be
+ * block field does. This is a second write path into the same renderer, and it must not be
  * a weaker one.
  */
 function normalizeWidgets(raw: unknown, rtSchema: RichTextSchema): Widget[] {
@@ -2922,7 +2922,7 @@ function normalizeWidgets(raw: unknown, rtSchema: RichTextSchema): Widget[] {
       const id = typeof o.componentId === "string" ? o.componentId.trim() : "";
       if (!id) throw new BadRequest(`widget [${i}] is a component widget and needs a componentId`);
       w.componentId = id;
-      // Props are opaque to the CMS — the front end's component owns their meaning — but
+      // Props are opaque to the CMS (the front end's component owns their meaning), but
       // they must be a JSON OBJECT, not a bare array or scalar that a spread would silently
       // turn into indexed props.
       if (o.componentProps !== undefined) {
@@ -2939,7 +2939,7 @@ function normalizeWidgets(raw: unknown, rtSchema: RichTextSchema): Widget[] {
 /** What a preview link authorizes: one page, in one tenant, until `exp`. */
 export interface PreviewToken {
   /** tenant */ t: string;
-  /** page id — the grant is scoped to this ONE page, never "all drafts" */ p: string;
+  /** page id: the grant is scoped to this ONE page, never "all drafts" */ p: string;
   /** expiry (epoch seconds) */ exp: number;
 }
 
@@ -2955,12 +2955,12 @@ export function previewSecret(env: EnvBag): string | undefined {
 const previewUnconfigured = () =>
   new PramenError("page preview is not configured (set a strong PREVIEW_SECRET, FILES_SECRET or AUTH_SECRET)", 503, "unavailable");
 
-/** The viewer roles for a given handler config — `editorRoles ∪ reviewerRoles`, computed
+/** The viewer roles for a given handler config: `editorRoles ∪ reviewerRoles`, computed
  * exactly as `createCmsHandlers` computes them.
  *
  * Exported so `cmsRoutes()` cannot drift from `createCmsHandlers()`: pass the SAME options
  * object to both. Configuring the two independently was how the preview route ended up
- * presenting an identity neither the handler gate nor the ACL accepted — and a partial
+ * presenting an identity neither the handler gate nor the ACL accepted, and a partial
  * customization still worked, so the failure appeared only for the app that had most
  * carefully renamed its roles. */
 export function viewerRolesOf(opts: CmsHandlerOpts = {}): string[] {
@@ -2977,7 +2977,7 @@ export const PREVIEW_PATH = "/cms/preview";
  * a link pasted into a public channel stops working the same afternoon. */
 export const DEFAULT_PREVIEW_TTL_SECONDS = 3600;
 
-/** `listPages` page size when the caller names none — the historical cap, kept so a client
+/** `listPages` page size when the caller names none: the historical cap, kept so a client
  * that never learned to paginate sees exactly what it always did. */
 export const PAGE_LIST_LIMIT = 100;
 /** …and the ceiling on what a caller may ask for. A list screen pages; nobody needs the
@@ -2992,15 +2992,15 @@ export interface CmsHandlerOpts {
   mediaMaxSize?: number;
   /** The locales this deployment publishes in, most-preferred first. Default `["en"]`.
    *
-   * DECLARED, not inferred. The editor renders its i18n surface — the Translations panel,
-   * the Locale field, the per-row locale column — only when there is more than one, and
+   * DECLARED, not inferred. The editor renders its i18n surface (the Translations panel,
+   * the Locale field, the per-row locale column) only when there is more than one, and
    * `listCmsCapabilities` is how it finds out. Inferring "is this site multilingual?" from
    * the locales PRESENT IN DATA cannot work: the only way to create a second locale is
    * `createTranslation`, which the editor exposes from inside the very panel that would
    * stay hidden, so a monolingual site could never become multilingual.
    *
    * The first entry is the default stamped on a page created without one, which is why
-   * `defaultLocale` is derived from this rather than configured beside it — two options
+   * `defaultLocale` is derived from this rather than configured beside it: two options
    * that can disagree about the same fact is how a Czech-only site ends up stamping "en". */
   locales?: readonly string[];
   /** Roles permitted to approve/reject a page in review and publish (the editorial gate).
@@ -3009,19 +3009,19 @@ export interface CmsHandlerOpts {
   /** Preview-link lifetime in seconds. Default 3600 (1 hour). */
   previewTtlSeconds?: number;
   /** The node/mark vocabulary accepted on write. Defaults to `DEFAULT_RICH_TEXT_SCHEMA`
-   * (what the shipped editor produces). Widen it if your editor adds TipTap extensions —
+   * (what the shipped editor produces). Widen it if your editor adds TipTap extensions:
    * a node type absent from the schema is DROPPED on write, not rejected. */
   richTextSchema?: RichTextSchema;
   /** Map a resolved menu reference to a site path. The CMS is headless, so it cannot know
-   * how a deployment routes — this is the same seam `sitemapXml`'s `pageUrl` is.
+   * how a deployment routes. This is the same seam `sitemapXml`'s `pageUrl` is.
    *
    * Defaults: a page is `/${slug}` on a monolingual deployment and `/${locale}/${slug}`
    * once `locales` declares more than one; a term is `/${taxonomy}/${term}`; a collection
-   * is `/${slug}/`. Override it and `getMenu` follows — which is the point of storing a
+   * is `/${slug}/`. Override it and `getMenu` follows, which is the point of storing a
    * REFERENCE rather than the href an editor typed: change the routing, not the menu. */
   menuHref?: (target: MenuHrefTarget) => string;
   /**
-   * Top-level slugs this deployment's front end has already spoken for — its own routes.
+   * Top-level slugs this deployment's front end has already spoken for: its own routes.
    *
    * A headless CMS cannot see the routing table in front of it, so it will happily let an
    * editor publish a page on a slug the site never asks it about. The page then reports
@@ -3035,7 +3035,7 @@ export interface CmsHandlerOpts {
    * reserved in every locale a site serves it in.
    *
    * Deliberately NOT inferred from anything: the CMS has no way to enumerate a front end's
-   * routes, and a guess that is 90% right is worse than an empty list — it would refuse
+   * routes, and a guess that is 90% right is worse than an empty list: it would refuse
    * slugs that are perfectly free.
    */
   reservedSlugs?: readonly string[];
@@ -3044,14 +3044,14 @@ export interface CmsHandlerOpts {
    * areas and redirects. Default `true`.
    *
    * These four surfaces are the only part of the CMS whose output NOTHING in the CMS
-   * consumes — a menu means something because a layout asks for it, a redirect because the
+   * consumes: a menu means something because a layout asks for it, a redirect because the
    * edge honours it. When the front end does neither, the editor is offering four sections
    * that write to a table nobody reads: no error, no clue, just work that quietly never
    * happens. That is worse than the feature being absent.
    *
    * `false` clears `siteFurniture` in `listCmsCapabilities`, which drops the Site nav
-   * section and the page editor's Terms tab. The handlers stay registered — turning them
-   * off is a UI statement about this deployment, not a change to the API surface — so an
+   * section and the page editor's Terms tab. The handlers stay registered (turning them
+   * off is a UI statement about this deployment, not a change to the API surface), so an
    * app that grows a menu-rendering layout later flips one flag.
    */
   siteFurniture?: boolean;
@@ -3105,7 +3105,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
   /** Mark a table changed after a RAW `exec` write.
    *
    * `Db.exec` is the one write path that does not record `touched`, so the DO never
-   * broadcasts and every live subscriber keeps showing the pre-write state — a restored
+   * broadcasts and every live subscriber keeps showing the pre-write state: a restored
    * page stays missing from an open page list, a purged one stays present. `deletePage`
    * goes through the ORM and DOES broadcast, so the staleness was asymmetric and read
    * like a lost write. */
@@ -3116,12 +3116,12 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
 
   // --- optimistic concurrency ------------------------------------------------
   //
-  // On the DO — the default store — a read-then-write inside one mutation is atomic: the
+  // On the DO (the default store) a read-then-write inside one mutation is atomic: the
   // Durable Object is a single writer and DoSqliteDriver.exec is synchronous. The EDITORS
   // are not serialized, though: two people on the same page means last save wins, silently,
   // with no signal to the loser. Passing back the `version` you read turns that into a 409.
   //
-  // CAVEAT — the D1 store has no interactive transaction (D1Driver.transaction is a
+  // CAVEAT: the D1 store has no interactive transaction (D1Driver.transaction is a
   // pass-through), so two requests in the same millisecond can both read and both write.
   // The guard still catches the human-scale editor race; it is not a hard mutex there.
   //
@@ -3132,14 +3132,14 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     // read version 7 gets a permanent unresolvable 409, and an unguarded save then LOWERS
     // the stored version, so a genuinely stale write is accepted later.
     if (typeof row.version !== "number") {
-      // Log the actionable detail, return a generic 500 — PramenError's message goes to the
+      // Log the actionable detail, return a generic 500: PramenError's message goes to the
       // caller verbatim, so naming the column would leak the schema and ACL shape.
-      console.error(`pramen/cms: ${label} has no readable version — grant read on the \`version\` column`);
+      console.error(`pramen/cms: ${label} has no readable version. Grant read on the \`version\` column`);
       throw new Error("version unavailable");
     }
     const current = row.version;
     if (expected !== undefined && expected !== current) {
-      throw new Conflict(`${label} was changed by someone else (you have version ${expected}, current is ${current}) — reload and reapply your edit`);
+      throw new Conflict(`${label} was changed by someone else (you have version ${expected}, current is ${current}). Reload and reapply your edit`);
     }
     return current + 1;
   };
@@ -3160,12 +3160,12 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
 
   // (slug, locale) uniqueness is enforced here because pramen's unique() is single-column.
   //
-  // Slugs are global across content types — the constraint is (slug, locale), NOT
-  // (slug, locale, typeId) — so the colliding page is very often one the caller cannot see:
+  // Slugs are global across content types: the constraint is (slug, locale), NOT
+  // (slug, locale, typeId), so the colliding page is very often one the caller cannot see:
   // the editor lists ONE type per tab, and "already exists" naming only slug + locale leaves
   // them staring at a list that visibly contains no such row. Both messages name the owning
   // type, the way the trash variant already named the trash.
-  /** Refuse a slug the front end has already spoken for — see `reservedSlugs`.
+  /** Refuse a slug the front end has already spoken for. See `reservedSlugs`.
    *
    * Separate from `assertSlugFree`, and called only where a slug is being CHOSEN (create,
    * rename, translate). `restore` re-asserts a trashed page's own existing slug, and a page
@@ -3175,7 +3175,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     if (reservedSlugs.size === 0) return;
     if (!reservedSlugs.has(slug.trim().toLowerCase())) return;
     throw new BadRequest(
-      `slug '${slug}' is a route this site serves itself — a page there would publish successfully and never be reachable`,
+      `slug '${slug}' is a route this site serves itself: a page there would publish successfully and never be reachable`,
     );
   };
 
@@ -3192,9 +3192,9 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       // DB constraint, not advisory). Say so, rather than leave the caller hunting for a
       // page they cannot see.
       if (rows[0].deletedAt != null) {
-        throw new BadRequest(`slug '${slug}' is held by a page in the trash for locale '${locale}'${under} — restore or purge it first`);
+        throw new BadRequest(`slug '${slug}' is held by a page in the trash for locale '${locale}'${under}. Restore or purge it first`);
       }
-      throw new BadRequest(`slug '${slug}' already exists for locale '${locale}'${under} — slugs are unique across all content types`);
+      throw new BadRequest(`slug '${slug}' already exists for locale '${locale}'${under}: slugs are unique across all content types`);
     }
   };
 
@@ -3203,7 +3203,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
      *
      * Shared by `getMenu` and `getWidgetArea` rather than inlined in the first: a `menu`
      * widget embeds a menu, and returning its RAW items there skipped every rule this
-     * function exists to apply — a `page` item came back with no `url` at all (the layout
+     * function exists to apply: a `page` item came back with no `url` at all (the layout
      * renders `href=undefined`) and an UNPUBLISHED page's label and id were served to
      * anonymous callers, which is precisely what the drop below prevents on the other path.
      */
@@ -3212,7 +3212,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
 
       // Two lookups for the whole tree, not one per item. Both go through `ctx.db`, so the
       // caller's own read scope applies: for an anonymous visitor that is the public policy
-      // (published, not trashed), which is precisely the filter a menu needs — a link to a
+      // (published, not trashed), which is precisely the filter a menu needs: a link to a
       // page that has been unpublished must not render.
       const pageIds = new Set<string>();
       const termIds = new Set<string>();
@@ -3256,7 +3256,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
           }
           // The MINTED url goes through the same allow-list the `custom` branch enforces on
           // write. A reference is interpolated into a path (`/${slug}/`), and a `ref` that
-          // began with a slash produced `//evil.example/` — protocol-relative, off-origin,
+          // began with a slash produced `//evil.example/`: protocol-relative, off-origin,
           // in the site's primary nav on every page. `assertRef` refuses that shape on
           // write; this is the second half, because `menuHref` is host-supplied and a
           // deployment's own mapping can build an unsafe href out of a safe ref.
@@ -3314,7 +3314,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       const db = cdb(ctx);
       // The same pre-check `createBlockType` and every `create*` in this file already do.
       // It was the one create handler without it, so a duplicate slug surfaced as a raw
-      // `UNIQUE constraint failed` with no status — a 500. Newly likely: an editor just told
+      // `UNIQUE constraint failed` with no status, a 500. Newly likely: an editor just told
       // a content type is code-defined and read-only will try to recreate it under that slug.
       const clash = await db.find({ from: "cms_content_types", where: { slug: input.slug }, select: ["id"], limit: 1 });
       if (clash[0]) throw new Conflict(`content type '${input.slug}' already exists`);
@@ -3333,14 +3333,14 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
         if (typeof o.name !== "string" || typeof o.slug !== "string") throw new BadRequest("name and slug are required");
         // Non-EMPTY, not merely a string: a content type's slug is a URL segment in the
         // editor (`/types/:slug`) and the key `listPages({ contentType })` resolves. An
-        // empty one builds `/types/` — a path the router drops the empty segment from, so
+        // empty one builds `/types/`, a path the router drops the empty segment from, so
         // the type gets a tab that cannot be reached and a list that cannot be addressed.
         if (o.name.trim() === "") throw new BadRequest("name must not be empty");
         const regions = normalizeRegions(o.regions);
         return {
           name: o.name.trim(),
-          // The SAME rule a block-type slug follows. They were split — block types admitted
-          // `_`, content types did not — for no reason that survives inspection: both are
+          // The SAME rule a block-type slug follows. They were split (block types admitted
+          // `_`, content types did not) for no reason that survives inspection: both are
           // registry keys, and an underscore is as legal in the `/types/:slug` segment as it
           // is anywhere else in a URL. The example itself ships `seeded_doc`.
           slug: assertRegistryKey(o.slug, "content type slug"),
@@ -3399,7 +3399,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
         if (k in input) patch[k] = (input as Record<string, unknown>)[k];
       }
       // A `defaultBlocks` patch that does NOT also send regions is checked here against the
-      // STORED ones — the input parser has no row to read, and a default block placed into a
+      // STORED ones: the input parser has no row to read, and a default block placed into a
       // region the type does not declare is created into a key no renderer looks at.
       if (patch.defaultBlocks !== undefined && patch.regions === undefined) {
         patch.defaultBlocks = normalizeDefaultBlocks(patch.defaultBlocks, (Array.isArray(row.regions) ? row.regions : []) as RegionDefinition[]);
@@ -3416,7 +3416,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
         if (o.regions !== undefined) out.regions = normalizeRegions(o.regions);
         if (o.fieldsSchema !== undefined) out.fieldsSchema = normalizeFieldSchema(o.fieldsSchema);
         if (o.labels !== undefined) out.labels = normalizeEntryLabels(o.labels);
-        // Checked against the regions being SAVED where the same call sends both — patching
+        // Checked against the regions being SAVED where the same call sends both, patching
         // only `defaultBlocks` cannot see the stored regions from an input parser, and the
         // handler re-checks below.
         if (out.defaultBlocks !== undefined && out.regions !== undefined) {
@@ -3438,10 +3438,10 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     // ---- site furniture: menus ----------------------------------------------
     //
     // A menu is read WHOLE (`getMenu("primary")` on every page render) and written whole.
-    // The public read RESOLVES references — that is what makes a `page` item follow its
+    // The public read RESOLVES references: that is what makes a `page` item follow its
     // page's slug instead of freezing the href an editor typed once.
 
-    /** One menu, references resolved to hrefs. PUBLIC — a menu is site chrome.
+    /** One menu, references resolved to hrefs. PUBLIC: a menu is site chrome.
      *
      * Returns `null` for an unknown name rather than 404ing, because a layout asking for a
      * menu it has not created yet is the normal state of a site being built, and a thrown
@@ -3455,7 +3455,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       input: (raw): { name: string } => ({ name: assertKey(asObj(raw).name, "menu name") }),
     }),
 
-    /** Every menu, RAW (references unresolved) — the editor's list.
+    /** Every menu, RAW (references unresolved): the editor's list.
      *
      * Capped like every other list here. A site-furniture table is small by nature, which is
      * an argument for the cap being generous, not for its absence: an unbounded SELECT of a
@@ -3466,7 +3466,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     createMenu: mutation(async (ctx, input: { name: string; label: string; items?: MenuItem[] }) => {
       const db = cdb(ctx);
       // A clean 409, as every sibling create handler gives. Without it a taken key surfaced
-      // as the UNIQUE constraint's own 500 — and the e2e only asserts "not 200", so it
+      // as the UNIQUE constraint's own 500, and the e2e only asserts "not 200", so it
       // could not tell the two apart.
       const clash = await db.find({ from: "cms_menus", where: { name: input.name }, select: ["id"], limit: 1 });
       if (clash[0]) throw new Conflict(`menu '${input.name}' already exists`);
@@ -3480,7 +3480,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     }),
 
     /** Patch a menu found by `id` or `name`. `name` is the key layout code resolves and is
-     * NOT mutable — retitling is what `label` is for. */
+     * NOT mutable: retitling is what `label` is for. */
     updateMenu: mutation(async (ctx, input: { id?: string; name?: string; label?: string; items?: MenuItem[]; expectedVersion?: number }) => {
       const db = cdb(ctx);
       const rows = await db.find({ from: "cms_menus", where: input.id ? { id: input.id } : { name: input.name }, limit: 1 });
@@ -3605,13 +3605,13 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     // `parentId` on its terms; a flat one refuses it rather than storing something no
     // listing renders.
 
-    /** Every vocabulary, or just the ones that classify `target`. PUBLIC — like content
+    /** Every vocabulary, or just the ones that classify `target`. PUBLIC: like content
      * types, a taxonomy's slug is structural (it is a URL segment) and a front end routes on
      * it.
      *
      * Narrowed HERE rather than in each caller, so the page panel, the media panel and the
      * write-side guard cannot disagree about what a vocabulary applies to. In memory, because
-     * `appliesTo` is a `t.json()` column that `where` cannot see into — which costs nothing:
+     * `appliesTo` is a `t.json()` column that `where` cannot see into, which costs nothing:
      * this handler already reads every taxonomy, and nothing pages by them.
      *
      * No `target` means EVERY vocabulary, which is what the Taxonomies screen needs: the one
@@ -3645,7 +3645,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
         description: input.description ?? null,
         hierarchical: input.hierarchical ?? false,
         // Unsent means EVERY target, which is what a vocabulary created before this existed
-        // means too — one reading of NULL, so an old row and a new one behave alike.
+        // means too: one reading of NULL, so an old row and a new one behave alike.
         appliesTo: input.appliesTo ?? null,
       });
     }, {
@@ -3664,18 +3664,18 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     }),
 
     /** Patch a vocabulary. `slug` is a URL segment and the key `listTerms` resolves, so it
-     * is not mutable — the same rule content types and block types already follow.
+     * is not mutable: the same rule content types and block types already follow.
      *
      * Turning `hierarchical` OFF is refused while any term still has a parent. Allowing it
      * would leave a stored hierarchy that no reader renders and no writer can clear, and
      * flattening the terms silently is a destructive edit behind a checkbox.
      *
      * NARROWING `appliesTo` is refused on exactly the same grounds, and it is the same bug:
-     * dropping a target this vocabulary is already used for would strand those assignments —
+     * dropping a target this vocabulary is already used for would strand those assignments:
      * still stored, still returned by `listPageTerms`/`listMediaTerms`, but invisible in the
      * panel that could remove them, because the panel only renders vocabularies that apply.
      * Unassign them first; then the narrowing is a settings change rather than a silent
-     * orphaning. WIDENING is always fine — it strands nothing. */
+     * orphaning. WIDENING is always fine: it strands nothing. */
     updateTaxonomy: mutation(async (ctx, input: { id: string; label?: string; pluralLabel?: string | null; description?: string | null; hierarchical?: boolean; appliesTo?: TaxonomyTarget[] | null }) => {
       const db = cdb(ctx);
       const rows = await db.find({ from: "cms_taxonomies", where: { id: input.id }, limit: 1 });
@@ -3683,7 +3683,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       if (!row) throw notFound("taxonomy");
       if (input.hierarchical === false && row.hierarchical) {
         const nested = await db.find({ from: "cms_terms", where: { taxonomyId: input.id, parentId: { isNull: false } }, select: ["id"], limit: 1 });
-        if (nested[0]) throw new BadRequest("this vocabulary still has nested terms — move them to the top level before making it flat");
+        if (nested[0]) throw new BadRequest("this vocabulary still has nested terms. Move them to the top level before making it flat");
       }
       if (input.appliesTo !== undefined && input.appliesTo !== null) {
         const next = input.appliesTo;
@@ -3692,7 +3692,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
           if (next.includes(target) || !taxonomyApplies(row, target)) continue;
           const junction = target === "page" ? "cms_page_terms" : "cms_media_terms";
           const used = await db.find({ from: junction, where: { term: { taxonomyId: input.id } }, select: ["id"], limit: 1 });
-          if (used[0]) throw new BadRequest(`this vocabulary is still assigned to ${target === "page" ? "pages" : "media"} — remove those assignments before narrowing it`);
+          if (used[0]) throw new BadRequest(`this vocabulary is still assigned to ${target === "page" ? "pages" : "media"}. Remove those assignments before narrowing it`);
         }
       }
       const patch: Record<string, unknown> = {};
@@ -3716,7 +3716,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       },
     }),
 
-    /** Delete a vocabulary. Its terms go with it, and their page assignments with those —
+    /** Delete a vocabulary. Its terms go with it, and their page assignments with those:
      * both by real `ON DELETE CASCADE`, so the cleanup is the DB's and cannot be half-done
      * by a handler that threw between two writes. */
     deleteTaxonomy: mutation(async (ctx, input: { id: string }) => {
@@ -3825,7 +3825,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     }),
 
     /** Delete a term. Children are promoted to the top level (`ON DELETE SET NULL`) and
-     * page assignments are removed (`ON DELETE CASCADE`) — see `cms_terms.parentId`. */
+     * page assignments are removed (`ON DELETE CASCADE`). See `cms_terms.parentId`. */
     deleteTerm: mutation(async (ctx, input: { id: string }) => {
       const ok = await cdb(ctx).delete("cms_terms", input.id);
       if (!ok) throw notFound("term");
@@ -3843,8 +3843,8 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     listPageTerms: query(async (ctx, input: { pageId: string }): Promise<Term[]> => {
       const db = cdb(ctx);
       // Read the PAGE first, through `ctx.db`, so the caller's own page scope decides
-      // whether this answers at all. Without it the handler never touched `cms_pages` — and
-      // the public grants on the junction and on terms are unscoped `allow()` — so anyone
+      // whether this answers at all. Without it the handler never touched `cms_pages`, and
+      // the public grants on the junction and on terms are unscoped `allow()`, so anyone
       // holding a page id could read a draft or trashed page's classification, and the
       // non-empty answer confirmed the page exists. `listPagesByTerm` was already safe for
       // the opposite reason: it traverses `where: { terms: … }`, so the page scope
@@ -3877,7 +3877,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       const wanted = new Set(input.termIds);
       if (wanted.size > 0) {
         // Every id must be a real term. Without this the junction happily stores a dangling
-        // uuid — the FK would catch it, but as a driver error with no HTTP status.
+        // uuid: the FK would catch it, but as a driver error with no HTTP status.
         const found = await db.find({ from: "cms_terms", where: { id: { in: [...wanted] } }, select: ["id"], limit: wanted.size });
         if (found.length !== wanted.size) throw new BadRequest("one or more termIds are not terms");
         await assertTermsApplyTo(db, [...wanted], "page");
@@ -3905,7 +3905,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     /** Published pages carrying a term. PUBLIC.
      *
      * A relation traversal (`where: { terms: { id } }`), so the page read scope is
-     * AND-merged as it is anywhere else — traversal cannot widen access, and an anonymous
+     * AND-merged as it is anywhere else: traversal cannot widen access, and an anonymous
      * caller sees published pages only. */
     listPagesByTerm: query(async (ctx, input: { taxonomy: string; term: string; limit?: number; offset?: number }) => {
       const db = cdb(ctx);
@@ -3949,7 +3949,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       const widgets = Array.isArray(row.widgets) ? (row.widgets as Widget[]) : [];
       // Resolved inline so a layout renders a whole sidebar from ONE call. A menu widget
       // that names a menu which no longer exists keeps `menu: null` rather than being
-      // dropped — unlike a menu ITEM, an empty widget is a visible hole an editor can see
+      // dropped: unlike a menu ITEM, an empty widget is a visible hole an editor can see
       // and fix, where a silently missing one is not.
       const names = [...new Set(widgets.filter((w) => w.type === "menu" && w.menuName).map((w) => w.menuName!))];
       const menus = new Map<string, Menu>();
@@ -3957,7 +3957,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
         const found = await db.find({ from: "cms_menus", where: { name: { in: names } }, limit: names.length });
         // RESOLVED, exactly as `getMenu` returns it. Embedding the raw row here served an
         // unpublished page's label and id to anonymous callers and handed the layout an
-        // item with no `url` — the two things the resolver exists to prevent, skipped
+        // item with no `url`: the two things the resolver exists to prevent, skipped
         // because this path had its own one-line copy of "read the menu".
         for (const m of found) menus.set(String(m.name), await resolveMenuRow(db, m));
       }
@@ -4063,7 +4063,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
         filename: input.ref.filename,
         uploadedAt: Date.now(),
       };
-      // The projection columns go in beside `file`, from the SAME resolved values — never
+      // The projection columns go in beside `file`, from the SAME resolved values, never
       // from `input`, which is the client's claim about a blob it has just uploaded.
       return cdb(ctx).insert("cms_media", {
         file,
@@ -4093,13 +4093,13 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     listMedia: query((ctx, input: { limit?: number; offset?: number; sort?: MediaSort; kind?: MediaKind; q?: string; term?: string }) => {
       const limit = Math.min(Math.max(Math.trunc(Number(input?.limit ?? 50)) || 50, 1), 200);
       const offset = Math.max(Math.trunc(Number(input?.offset ?? 0)) || 0, 0);
-      // The narrowings AND together — a search inside a type filter inside a tag is all
+      // The narrowings AND together: a search inside a type filter inside a tag is all
       // three. Built as a list so none has to know whether the others are present.
       const clauses = [
         mediaKindWhere(input?.kind),
         input?.q ? mediaSearchWhere(input.q) : undefined,
         // A relation traversal, compiled to a subquery through `cms_media_terms`. Filtering
-        // by term therefore costs the same page of rows as filtering by kind — the whole
+        // by term therefore costs the same page of rows as filtering by kind, the whole
         // reason the assignments are a junction rather than a JSON array on the media row.
         input?.term ? { terms: { id: input.term } } : undefined,
       ].filter(
@@ -4110,7 +4110,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     }, {
       ...viewer,
       // Parsed, not cast: `sort` names an ORDER BY and `kind` a WHERE, and both arrive from a
-      // browser. Anything unrecognised falls back to the default rather than erroring — a
+      // browser. Anything unrecognised falls back to the default rather than erroring: a
       // stale bookmark carrying a sort this build dropped should show the library, not a 400.
       input: (raw): { limit?: number; offset?: number; sort?: MediaSort; kind?: MediaKind; q?: string; term?: string } => {
         const o = asObj(raw);
@@ -4143,7 +4143,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     }),
 
     /** Mint a signed, short-lived url that DOWNLOADS a media file rather than displaying
-     * it — `Content-Disposition: attachment`, with the original filename restored.
+     * it, using `Content-Disposition: attachment`, with the original filename restored.
      *
      * `/media/<key>` already serves the bytes, and it serves them INLINE: a browser shows a
      * PDF, plays a video, renders an image, and saves the file under its opaque storage key
@@ -4151,7 +4151,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
      * only way to get the file back out under the name it was uploaded with.
      *
      * The row is read through `ctx.db` FIRST, and the url is minted from what that read
-     * returns — never from a key the caller supplied. Knowing a key is not authorization,
+     * returns, never from a key the caller supplied. Knowing a key is not authorization,
      * and the read is what applies the public scope (a trashed file is `deletedAt`-filtered
      * out, so this 404s for it exactly as `getMedia` does).
      *
@@ -4191,7 +4191,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     /** A media asset's assigned terms.
      *
      * The media row is read FIRST, through `ctx.db`, so the caller's own scope decides
-     * whether this answers — the junction and `cms_terms` are granted unscoped, so without
+     * whether this answers: the junction and `cms_terms` are granted unscoped, so without
      * it anyone holding an id could read a TRASHED file's tags and the non-empty answer
      * would confirm the file exists. Same rule as `listPageTerms`, for the same reason. */
     listMediaTerms: query(async (ctx, input: { mediaId: string }): Promise<Term[]> => {
@@ -4212,7 +4212,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       },
     }),
 
-    /** Replace a media asset's term assignments wholesale — set semantics, like
+    /** Replace a media asset's term assignments wholesale: set semantics, like
      * `setPageTerms`, and for the same reason: the panel holds the whole selection, and two
      * calls each patching one end of it race into a state neither asked for. */
     setMediaTerms: mutation(async (ctx, input: { mediaId: string; termIds: string[] }) => {
@@ -4245,12 +4245,12 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       },
     }),
 
-    /** Trash a media row. The R2 OBJECT IS KEPT — deleting the bytes here would make
+    /** Trash a media row. The R2 OBJECT IS KEPT: deleting the bytes here would make
      * `restoreMedia` a lie, and a block still referencing the id would render a dead url
-     * with no way back. `purgeMedia` is what drops both — and `listTrash` is how you find
+     * with no way back. `purgeMedia` is what drops both, and `listTrash` is how you find
      * the id again, since every ACL-scoped read hides it from here on.
      *
-     * (Automatic orphan sweeping — media no longer referenced by any block — is still
+     * (Automatic orphan sweeping of media no longer referenced by any block is still
      * future work; refs live inside opaque block JSON.) */
     deleteMedia: mutation(async (ctx, input: { id: string }) => {
       const db = cdb(ctx);
@@ -4277,13 +4277,13 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       return { ok: true as const };
     }, { ...editor, ...mediaIdInput }),
 
-    /** Permanently remove trashed media — the row AND the R2 object. Reviewer-gated and
+    /** Permanently remove trashed media: the row AND the R2 object. Reviewer-gated and
      * irreversible; the blob is gone. */
     purgeMedia: mutation(async (ctx, input: { id: string }) => {
       const db = cdb(ctx);
       const rows = await db.exec("SELECT id, file FROM cms_media WHERE id = ? AND deletedAt IS NOT NULL LIMIT 1", input.id);
       const media = rows[0];
-      if (!media) throw notFound("trashed media"); // purging live media is refused — trash it first
+      if (!media) throw notFound("trashed media"); // purging live media is refused, trash it first
       // `file` comes back raw from exec (the object↔JSON codec sits on the ORM path, not
       // this one), so parse it before reaching for the key.
       const file = typeof media.file === "string" ? (JSON.parse(media.file) as { key?: string }) : asObj(media.file);
@@ -4304,7 +4304,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
      * Nothing new is exposed. `cmsPolicies().public` already grants anonymous read of
      * `cms_content_types` ("slugs/names are structural, not sensitive"), and
      * `listPublishedPages` already returns the content-type slug of every published page.
-     * The projection is deliberately narrow — slug and name only, never the regions or
+     * The projection is deliberately narrow: slug and name only, never the regions or
      * field schema, which describe the editing surface rather than the published site. */
     listPublicContentTypes: query(async (ctx) => {
       const rows = await cdb(ctx).find({ from: "cms_content_types", orderBy: { column: "name" } });
@@ -4326,15 +4326,15 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     // ---- pages ----
     /** List pages, newest first. Viewer-gated: the rows are FULL page records (schedule
      * timestamps, revision pointer, the whole `fields` bag, every SEO column), which is the
-     * editing surface, not the published one — `listPublishedPages` is this file's deliberate
+     * editing surface, not the published one. `listPublishedPages` is this file's deliberate
      * public projection and stays narrow.
      *
-     * `contentType` (a content-type SLUG) narrows the list to one type — what an editor that
+     * `contentType` (a content-type SLUG) narrows the list to one type, what an editor that
      * gives each type its own tab needs, and the only way to stay correct once a deployment
      * has more than `limit` entries in total: filtering the full list client-side would
      * silently drop the tail of every type. Omitted ⇒ all types, the historical behaviour. An
      * unknown slug returns nothing rather than everything, so a typo can never read as "here
-     * is the whole CMS" — and neither can an EMPTY one, which is why the check below is
+     * is the whole CMS", and neither can an EMPTY one, which is why the check below is
      * `=== undefined` and not a falsy test.
      *
      * `limit`/`offset` page the list. Without them the caller cannot tell a full first page
@@ -4363,7 +4363,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
         // The parsed value is what the ACL sees (`dispatch` hands it to `Db` for `$input()`
         // resolution), so this SPREADS the raw object rather than rebuilding one from the
         // keys it knows: a host scoping cms_pages with `$input("someKey")` had its marker
-        // resolving against `{}` — the scope collapsing to nothing — the moment this handler
+        // resolving against `{}` (the scope collapsing to nothing) the moment this handler
         // grew a parser.
         input: (raw): { contentType?: string; limit?: number; offset?: number; select?: string[] } => {
           const o = asObj(raw);
@@ -4396,7 +4396,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
      * `contentType` / `locale` narrow the list HERE, for the same reason `listPages` does:
      * the result is capped, so a caller filtering it afterwards is filtering an already
      * truncated list and loses the tail of every type. `@pramen/cms-astro`'s `collections:
-     * "auto"` builds one collection per content type, each calling this — un-narrowed, all
+     * "auto"` builds one collection per content type, each calling this: un-narrowed, all
      * of them fetch the same 5000 rows and everything past the cap vanishes from the built
      * site with a green build. An unknown slug returns nothing, never everything. */
     listPublishedPages: query(async (ctx, input: { contentType?: string; locale?: string }) => {
@@ -4412,7 +4412,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       const slugById = new Map(types.map((t) => [String(t.id), String(t.slug)]));
       return rows.map((r) => ({ slug: String(r.slug), locale: String(r.locale ?? "en"), contentType: slugById.get(String(r.typeId)) ?? null, updatedAt: String(r.updatedAt ?? r.createdAt ?? "") }));
     }, {
-      // Spreads the raw object for the same reason `listPages` does — the parsed value is
+      // Spreads the raw object for the same reason `listPages` does: the parsed value is
       // what `$input()` policy markers resolve against.
       input: (raw): { contentType?: string; locale?: string } => {
         const o = asObj(raw);
@@ -4449,7 +4449,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       },
     }),
 
-    /** Edit a page's own attributes — title, slug, locale, and content-type-level `fields`
+    /** Edit a page's own attributes: title, slug, locale, and content-type-level `fields`
      * (the structured data of a non-block content type, e.g. a "Lecture" with date/speaker).
      * Blocks are edited via addBlock/updateBlock; SEO via updatePageSeo; this covers the
      * page record itself, which was previously only settable at createPage. A slug/locale
@@ -4473,7 +4473,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       if (input.fields !== undefined) {
         const ctRows = await db.find({ from: "cms_content_types", where: { id: page.typeId }, limit: 1 });
         const schema = ctRows[0]?.fieldsSchema as FieldDefinition[] | undefined;
-        // Same whole-bag autosave as updateBlock — tolerate a stored legacy value.
+        // Same whole-bag autosave as updateBlock: tolerate a stored legacy value.
         validateFields(schema, input.fields, "page.fields", { requireRequired: false, legacyBaseline: asObj(page.fields) as FieldValues });
         patch.fields = normalizeFields(schema, input.fields, rtSchema);
       }
@@ -4516,8 +4516,8 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
 
       const defaults = (ct.defaultBlocks as DefaultBlockDefinition[] | undefined) ?? [];
       for (const d of defaults) {
-        // A default block must pass the SAME guards as addBlock — a known type, an
-        // allowed region, and schema-valid fields — or the page would be scaffolded with
+        // A default block must pass the SAME guards as addBlock (a known type, an
+        // allowed region, and schema-valid fields) or the page would be scaffolded with
         // an invalid/disallowed block that later renders on the published snapshot. A
         // misconfigured default is skipped with a warning rather than aborting the page.
         try {
@@ -4547,7 +4547,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     }),
 
     /** Create a translation of an existing page: a new page in `locale` sharing the
-     * source's translationGroupId (and content type). Content starts empty — the editor
+     * source's translationGroupId (and content type). Content starts empty: the editor
      * fills in the translated blocks. Slug defaults to the source's (allowed in a new locale). */
     createTranslation: mutation(async (ctx, input: { pageId: string; locale: string; title?: string; slug?: string }) => {
       const db = cdb(ctx);
@@ -4555,7 +4555,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       const src = rows[0];
       if (!src) throw notFound("page");
       if (String(src.locale) === input.locale) throw new BadRequest("page is already in that locale");
-      // A legacy page (migrated in before this column existed) has a NULL group — a NULL
+      // A legacy page (migrated in before this column existed) has a NULL group, and a NULL
       // match would collapse ALL legacy pages together. Backfill the source with its own
       // group first, so this translation joins only it.
       let group = src.translationGroupId;
@@ -4566,7 +4566,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       // Raw exec, like assertSlugFree: a check-then-act uniqueness guard must see TRASHED
       // rows too. Through ctx.db the read scope hides them, so trashing a `cs` translation
       // let a second one be created, and restoring the first left two live `cs` pages in
-      // one group — two <link rel="alternate" hreflang="cs"> on every sibling.
+      // one group: two <link rel="alternate" hreflang="cs"> on every sibling.
       const existing = await db.exec(
         "SELECT id, deletedAt FROM cms_pages WHERE translationGroupId = ? AND locale = ? LIMIT 1",
         group,
@@ -4575,7 +4575,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       if (existing[0]) {
         throw new BadRequest(
           existing[0].deletedAt != null
-            ? `a '${input.locale}' translation exists in the trash — restore or purge it first`
+            ? `a '${input.locale}' translation exists in the trash. Restore or purge it first`
             : `a '${input.locale}' translation already exists`,
         );
       }
@@ -4607,7 +4607,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       const self = rows[0];
       if (!self) throw notFound("page");
       const proj = (r: Record<string, unknown>) => ({ id: String(r.id), locale: String(r.locale ?? "en"), slug: String(r.slug), title: String(r.title), status: String(r.status) });
-      // A NULL group (legacy page) matches all legacy pages — guard it and return just self.
+      // A NULL group (legacy page) matches all legacy pages, so guard it and return just self.
       if (typeof self.translationGroupId !== "string" || !self.translationGroupId) return [proj(self)];
       const group = await db.find({ from: "cms_pages", where: { translationGroupId: self.translationGroupId } });
       return group.map(proj);
@@ -4620,7 +4620,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       },
     }),
 
-    /** What this deployment supports, for an editor to render against — the pages-side
+    /** What this deployment supports, for an editor to render against: the pages-side
      * counterpart to `listCollections`' `supports: [...]`.
      *
      * The editor asks the SERVER what exists rather than being told by its own /config.js:
@@ -4631,7 +4631,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
      * content type its own tab and its own list: an OLDER server ignores the `contentType`
      * argument entirely and answers with the pooled list, so an editor that assumed the
      * feature would render N tabs all showing every type's pages under a heading claiming
-     * otherwise — and "New page" from any of them would stamp that tab's type. Declared, not
+     * otherwise, and "New page" from any of them would stamp that tab's type. Declared, not
      * inferred: fail closed on the pooled list rather than open on N lying ones. */
     listCmsCapabilities: query((ctx) => ({
       locales,
@@ -4642,13 +4642,13 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       // no menu/redirect/taxonomy/widget handlers at all, and a nav section whose every
       // screen 404s is worse than one that is absent. Fails closed by being absent there.
       // Declared by the deployment (`siteFurniture`), not by the fact that the handlers
-      // exist. They always exist — spreading `cmsHandlers` brings all of them — so "the
+      // exist. They always exist (spreading `cmsHandlers` brings all of them) so "the
       // server can do this" was never the question the editor needed answered. The question
       // is whether the FRONT END renders any of it, and only the app knows that.
       siteFurniture,
       // Whether `managedBy` means anything on this server. Declared for the same reason as
       // its neighbours: `@pramen/cms-editor` is a separate package with no dependency on
-      // `@pramen/cms`, so a newer editor CAN run against an older server — where every row
+      // `@pramen/cms`, so a newer editor CAN run against an older server, where every row
       // reports no owner, nothing renders read-only, the save succeeds, and it is reverted at
       // the next cold start. That is GitHub #48 in the deployment that upgraded the editor to
       // fix it. Absent ⇒ the editor treats no type as code-defined, which is correct there.
@@ -4657,16 +4657,16 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       // Media carries taxonomy terms, and `listMedia` understands `term`. Declared for the
       // usual reason: an older server has neither handler, so the detail panel's Tags
       // section would 404 on open and the library's tag filter would send an argument that
-      // is ignored — a filter that visibly does nothing. Absent ⇒ neither is drawn.
+      // is ignored: a filter that visibly does nothing. Absent ⇒ neither is drawn.
       mediaTerms: true as const,
       // `signMediaDownload` exists. Same reason again: an older server has no such handler,
-      // so a Download button would be one that always errors — and unlike a filter that
+      // so a Download button would be one that always errors, and unlike a filter that
       // quietly does nothing, this one is pressed deliberately, with an expectation.
       // Absent ⇒ the detail panel offers Preview (a plain link to /media/<key>, which every
       // version has) and no Download.
       mediaDownload: true as const,
       // PER-CALLER, unlike everything else here. `viewer` is `editorRoles ∪ reviewerRoles`,
-      // so a reviewer-only session reaches this handler and every read handler — but every
+      // so a reviewer-only session reaches this handler and every read handler, but every
       // WRITE is `editorRoles`. Without this the editor renders the authoring surfaces
       // (Types, Menus, Redirects, …) for a reviewer and each one 403s on its first save.
       // The editor cannot work it out for itself: it knows the caller's roles from `me` but
@@ -4674,11 +4674,11 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       canEdit: isEditor(ctx, editorRoles),
     }), viewer),
 
-    /** Distinct locales present across all pages. NOTE: a DATA query — what is in the
-     * store — not configuration. `listCmsCapabilities().locales` is what the deployment
+    /** Distinct locales present across all pages. NOTE: a DATA query, what is in the
+     * store, not configuration. `listCmsCapabilities().locales` is what the deployment
      * declares; these two differ while a locale is declared but not yet authored. */
     listLocales: query(async (ctx) => {
-      // Raw exec bypasses the ACL, so the trash filter has to be written out by hand —
+      // Raw exec bypasses the ACL, so the trash filter has to be written out by hand:
       // otherwise the editor's locale switcher offers a locale with zero live pages.
       const rows = await cdb(ctx).exec("SELECT DISTINCT locale FROM cms_pages WHERE deletedAt IS NULL ORDER BY locale");
       return rows.map((r) => String(r.locale ?? "en"));
@@ -4726,7 +4726,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
 
     /** Place an EXISTING (typically reusable) block into a page region as a SHARED
      * placement, with optional per-placement `overrides` merged over the block's fields at
-     * read time. This is the "edit once, appear on many pages" workflow — the same block id
+     * read time. This is the "edit once, appear on many pages" workflow: the same block id
      * can be placed on several pages; editing it updates them all, while `overrides` let one
      * placement diverge. The merged (base + overrides) result is validated against the
      * block type's field schema. */
@@ -4770,7 +4770,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       },
     }),
 
-    /** Fetch a block's RAW content (media fields as ids, not resolved) — for editing. */
+    /** Fetch a block's RAW content (media fields as ids, not resolved), for editing. */
     getBlock: query(async (ctx, input: { blockId: string }) => {
       const rows = await cdb(ctx).find({ from: "cms_blocks", where: { id: input.blockId }, limit: 1 });
       return rows[0] ?? null;
@@ -4816,7 +4816,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     }),
 
     /** Reorder a region: `order` is the page_block ids in their new order. It must cover
-     * EXACTLY the region's current placements (same set, no dups) — otherwise a partial or
+     * EXACTLY the region's current placements (same set, no dups). Otherwise a partial or
      * stale list would leave untouched placements colliding at a shared position. */
     reorderRegion: mutation(async (ctx, input: { pageId: string; region: string; order: string[] }) => {
       const db = cdb(ctx);
@@ -4959,7 +4959,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       return { ok: true, page: updated };
     }, {
       // Reviewer-gated: publishing makes content live, so it requires the same authority as
-      // `approve` — an editor can't bypass review by calling publishPage directly. (Editors
+      // `approve`: an editor can't bypass review by calling publishPage directly. (Editors
       // author + submitForReview; reviewers approve/publish.)
       ...reviewer,
       input: (raw): { pageId: string; note?: string } => {
@@ -4995,7 +4995,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
      * Outbox tasks can't be recalled, so cancellation/rescheduling is handled by INTENT
      * TOKENS: the page stores the scheduled times (`scheduledAt`/`unpublishAt`, ISO), and
      * each task carries the token it was enqueued for. At fire time the task acts ONLY if
-     * its token still equals the page's current token — so rescheduling (new token),
+     * its token still equals the page's current token, so rescheduling (new token),
      * manual publish/unpublish (token cleared), and duplicate deliveries all make a stale
      * task a no-op. `unpublishAt` must be after `publishAt`. */
     schedulePage: mutation(async (ctx, input: { pageId: string; publishAt: number; unpublishAt?: number }) => {
@@ -5012,7 +5012,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       }
       return { ok: true, publishInMs: Math.max(0, input.publishAt - now) };
     }, {
-      // Reviewer-gated like publishPage — a scheduled publish is still a publish.
+      // Reviewer-gated like publishPage: a scheduled publish is still a publish.
       ...reviewer,
       input: (raw): { pageId: string; publishAt: number; unpublishAt?: number } => {
         const o = asObj(raw);
@@ -5026,11 +5026,11 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     }),
 
     // ---- public content API ----
-    /** Mint a signed, self-expiring preview link for one page. Editor-gated to MINT —
+    /** Mint a signed, self-expiring preview link for one page. Editor-gated to MINT:
      * anyone holding the resulting link can redeem it, which is the point. */
     signPagePreview: query(async (ctx, input: { pageId: string; expiresIn?: number }) => {
       const secret = previewSecret(ctx.env);
-      if (!secret) throw previewUnconfigured(); // fail closed — never mint a forgeable link
+      if (!secret) throw previewUnconfigured(); // fail closed: never mint a forgeable link
       // This used to refuse on the D1 store: redemption goes through `ctx.callPrivileged`,
       // which only forwarded to a DO, so a link minted on D1 would have 404'd forever while
       // the editor reported success. `callPrivileged` now dispatches locally in the Worker
@@ -5045,18 +5045,18 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
 
       const ttl = Math.max(60, Math.min(input.expiresIn ?? previewTtl, 30 * 24 * 3600));
       const exp = Math.floor(Date.now() / 1000) + ttl;
-      // Server-resolved, never caller-supplied — so the tenant inside the signature
+      // Server-resolved, never caller-supplied, so the tenant inside the signature
       // cannot be steered by whoever asks for the link.
       const tenant = ctx.tenant;
       const token = await signToken<PreviewToken>({ t: tenant, p: String(page.id), exp }, secret);
-      // RELATIVE, like signed file urls — the client resolves it against the CMS origin.
+      // RELATIVE, like signed file urls: the client resolves it against the CMS origin.
       return { url: `${PREVIEW_PATH}?token=${encodeURIComponent(token)}`, token, expiresAt: exp * 1000 };
     }, {
       ...editor,
       input: (raw): { pageId: string; expiresIn?: number } => {
         const o = asObj(raw);
         // Unvalidated, a non-string pageId reached the query compiler and surfaced as a
-        // 500, and a string expiresIn made exp NaN — minting a link that always 403s,
+        // 500, and a string expiresIn made exp NaN, minting a link that always 403s,
         // with nothing anywhere to explain why.
         if (typeof o.pageId !== "string" || o.pageId === "") throw new BadRequest("pageId is required");
         if (o.expiresIn !== undefined && (typeof o.expiresIn !== "number" || !Number.isFinite(o.expiresIn))) {
@@ -5066,7 +5066,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       },
     }),
 
-    /** Assemble a page's LIVE draft by id. Not the redemption endpoint — that is the public
+    /** Assemble a page's LIVE draft by id. Not the redemption endpoint: that is the public
      * `GET /cms/preview` route, which verifies the token and then calls this privileged.
      * Role-gated so it is not an anonymous back door on the /rpc surface. */
     getPagePreview: query(async (ctx, input: { pageId: string }) => {
@@ -5093,21 +5093,21 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     // --- trash: soft delete, restore, purge ---------------------------------
     //
     // A page had NO delete handler at all before this: once created it could only be
-    // unpublished, never removed. Delete is therefore introduced already soft — the row
+    // unpublished, never removed. Delete is therefore introduced already soft: the row
     // stays, `deletedAt` is stamped, and the ACL's read scope hides it everywhere.
     //
     // A trashed page KEEPS ITS SLUG. `(slug, locale)` is a DB unique constraint, so the
-    // alternatives were mangling the stored slug on delete or dropping the constraint —
+    // alternatives were mangling the stored slug on delete or dropping the constraint,
     // both worse than telling the caller plainly that the slug is in the trash. Purging
     // frees it.
 
     deletePage: mutation(async (ctx, input: { pageId: string }) => {
       const db = cdb(ctx);
       const rows = await db.find({ from: "cms_pages", where: { id: input.pageId }, limit: 1 });
-      if (!rows[0]) throw notFound("page"); // already trashed reads as absent — the scope hides it
+      if (!rows[0]) throw notFound("page"); // already trashed reads as absent: the scope hides it
       const now = new Date().toISOString();
       // Clear the schedule. The publish/unpublish tasks run on the SYSTEM task context,
-      // where the ACL is bypassed entirely — so the `deletedAt IS NULL` read scope does
+      // where the ACL is bypassed entirely, so the `deletedAt IS NULL` read scope does
       // NOT protect them, and a page trashed before its scheduled time was republished,
       // publicly live, with a fresh revision and nobody pressing publish. Clearing the
       // timestamps makes the tasks' existing intent-token check reject both for free.
@@ -5116,16 +5116,16 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       return { ok: true as const, deletedAt: now };
     }, { ...editor, ...pageIdInput }),
 
-    /** What is currently in the trash — pages AND media. Read with `ctx.db.exec` because
+    /** What is currently in the trash: pages AND media. Read with `ctx.db.exec` because
      * the ACL read scope hides exactly these rows: that is the scope doing its job, not a
      * hole to patch.
      *
-     * Media has to be listed here or it becomes UNREACHABLE the moment it is trashed —
+     * Media has to be listed here or it becomes UNREACHABLE the moment it is trashed:
      * `listMedia`/`getMedia` are ACL-scoped, so neither `restoreMedia` nor `purgeMedia`
      * could ever be called with its id again, while `/media/<key>` kept serving the bytes
      * (that route streams from R2 with no DB lookup at all). */
     listTrash: query(async (ctx, input: { limit?: number }) => {
-      // Truncate like listMedia/listPageAudit — a fractional LIMIT reaches SQLite and 500s,
+      // Truncate like listMedia/listPageAudit: a fractional LIMIT reaches SQLite and 500s,
       // and any client computing `total / pages` sends one.
       const limit = Math.min(Math.max(Math.trunc(Number(input.limit)) || 50, 1), 200);
       const db = cdb(ctx);
@@ -5137,7 +5137,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
         "SELECT id, alt, file, deletedAt FROM cms_media WHERE deletedAt IS NOT NULL ORDER BY deletedAt DESC LIMIT ?",
         limit,
       );
-      // The fileRef object<->JSON codec sits on the ORM path, not raw exec — parse here or
+      // The fileRef object<->JSON codec sits on the ORM path, not raw exec, so parse here or
       // a trash UI reusing the media card renders `/media/undefined`.
       const media = rawMedia.map((m) => ({ ...m, file: typeof m.file === "string" ? (JSON.parse(m.file) as JsonValue) : m.file }));
       return { pages, media };
@@ -5160,7 +5160,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       markChanged(db, "cms_pages");
       await writeAudit(db, { pageId: input.pageId, action: "restore", from: "trashed", to: String(page.status ?? ""), actor: actorOf(ctx) });
       // deletePage had to clear any schedule (the publish task runs SYSTEM-scoped, outside
-      // the read scope). Restore cannot know what it was, so SAY so — otherwise a promo
+      // the read scope). Restore cannot know what it was, so SAY so: otherwise a promo
       // page due to auto-unpublish comes back live forever with nothing in the audit trail.
       return { ok: true as const, scheduleCleared: page.scheduledAt != null || page.unpublishAt != null };
     }, { ...editor, ...pageIdInput }),
@@ -5170,7 +5170,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     purgePage: mutation(async (ctx, input: { pageId: string }) => {
       const db = cdb(ctx);
       const rows = await db.exec("SELECT id FROM cms_pages WHERE id = ? AND deletedAt IS NOT NULL LIMIT 1", input.pageId);
-      if (!rows[0]) throw notFound("trashed page"); // purging a LIVE page is refused — trash it first
+      if (!rows[0]) throw notFound("trashed page"); // purging a LIVE page is refused, trash it first
       // Placements, revisions and audit rows are logical relations (no FK cascade), so
       // clear them explicitly or they outlive the page as orphans.
       //
@@ -5197,7 +5197,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
 
     getPage: query(async (ctx, input: { slug: string; locale?: string; preview?: boolean }) => {
       const db = cdb(ctx);
-      // Preview is an editor capability — gate it before the lookup so a non-editor gets a
+      // Preview is an editor capability: gate it before the lookup so a non-editor gets a
       // clear 403 (rather than a 404 that merely reflects the published-only read scope).
       if (input.preview && !isEditor(ctx, viewerRoles)) throw new Forbidden("preview requires an editor or reviewer role");
       const locale = input.locale ?? defaultLocale;
@@ -5211,7 +5211,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
         return live;
       }
       // Public path: serve the page's current published revision snapshot (selected by the
-      // page's `currentRevisionId` pointer — deterministic, unlike ordering by a
+      // page's `currentRevisionId` pointer: deterministic, unlike ordering by a
       // second-precision timestamp). We do NOT assemble live here: anonymous has no read
       // grant on the block tables (only pages + revisions), so a page without a current
       // revision returns its meta with empty regions rather than a spurious 403. In
@@ -5225,11 +5225,11 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
           // published pages, so this query is in-policy on the public path.
           snap.page.translations = await siblingTranslations(db, page);
           // Back-compat: a snapshot baked before `seo`/`translationGroupId` existed lacks
-          // those keys, but AssembledPage now types them as present — backfill from the live
+          // those keys, but AssembledPage now types them as present, so backfill from the live
           // page row so a frontend head template never hits `page.seo` === undefined.
           if (!snap.page.seo) snap.page.seo = pageMeta(page).seo;
           // `version` from the LIVE row, never the snapshot: a snapshot is baked at publish
-          // time, so a client echoing it would 409 forever after the first draft edit — and
+          // time, so a client echoing it would 409 forever after the first draft edit, and
           // a pre-`version` snapshot has none at all, which (typed `number`) silently drops
           // out of the request body and reverts to the last-write-wins this feature removes.
           snap.page.version = typeof page.version === "number" ? page.version : 1;
@@ -5273,18 +5273,18 @@ export function cmsPolicies(opts: CmsPolicyOpts = {}): { public: Policy[]; edito
   // `cms_collection_revisions` is deliberately NOT here: it is append-only, and this loop
   // grants update AND delete. Spreading both fragments (which every wiring in the README
   // does) would otherwise hand every editor the ability to rewrite or purge history through
-  // any app handler, silently overriding the read+create grant `collectionPolicies` emits —
+  // any app handler, silently overriding the read+create grant `collectionPolicies` emits:
   // duplicate policies on the same (role, entity, action) OR-merge, so the wider one wins.
   // The collection half owns that table's grant; see `collectionPolicies`.
   const tables = [
     "cms_content_types", "cms_block_types", "cms_blocks", "cms_pages", "cms_page_blocks", "cms_page_revisions", "cms_media", "cms_audit",
-    // Site furniture. Full CRUD for an editor, like every other cms_ table — the per-handler
+    // Site furniture. Full CRUD for an editor, like every other cms_ table. The per-handler
     // `auth` gate is what separates editor from reviewer; this is the row scope.
     "cms_menus", "cms_redirects", "cms_taxonomies", "cms_terms", "cms_page_terms", "cms_media_terms", "cms_widget_areas",
   ] as const;
   // Soft-deleted rows are filtered in the ACL, not in each handler. A read scope is
   // AND-merged into every `ctx.db` read, so one policy hides a trashed row from the public
-  // API, the editor, relation traversals and eager-loads at once — where a per-handler
+  // API, the editor, relation traversals and eager-loads at once, where a per-handler
   // `where` would have to be remembered at ~40 call sites and would be wrong the first
   // time someone forgot. The trash itself is read with `ctx.db.exec` (below), which is the
   // documented raw escape hatch and deliberately outside this scope.
@@ -5294,7 +5294,7 @@ export function cmsPolicies(opts: CmsPolicyOpts = {}): { public: Policy[]; edito
   for (const table of tables) {
     for (const action of ["read", "create", "update", "delete"] as const) {
       // UPDATE is scoped as well as READ. Handlers that read the row first already 404 on
-      // a trashed page, but `updatePageSeo`/`updateMedia` patched blind — so an editor with
+      // a trashed page, but `updatePageSeo`/`updateMedia` patched blind, so an editor with
       // a stale tab could mutate a page a colleague had just trashed, and the write echo
       // handed back the whole hidden row. Scoping the grant covers every future write
       // handler too, rather than relying on each one remembering to read first.
@@ -5313,9 +5313,9 @@ export function cmsPolicies(opts: CmsPolicyOpts = {}): { public: Policy[]; edito
       // getPage reads the latest revision snapshot. Scope the grant by the revision's
       // PAGE being currently published (a relation-traversal where, compiled to a
       // subquery), so a revision of a later-unpublished/archived page is never publicly
-      // readable — least-privilege even for a future revision-listing handler.
+      // readable: least-privilege even for a future revision-listing handler.
       // `deletedAt` as well as `status`: getPage 404s on the page lookup first today, so
-      // this is defense in depth — but a revision snapshot is a BAKED copy of the page's
+      // this is defense in depth, but a revision snapshot is a BAKED copy of the page's
       // content, and a future revision-listing handler reading it directly would otherwise
       // serve a trashed page's body.
       policy(`${p}:public:revisions:read`, "cms_page_revisions", "read", { where: { page: { status: "published", deletedAt: { isNull: true } } } }),
@@ -5324,7 +5324,7 @@ export function cmsPolicies(opts: CmsPolicyOpts = {}): { public: Policy[]; edito
       // --- site furniture ---
       // A menu is site chrome, rendered on every page. `getMenu` resolves its page
       // references THROUGH `ctx.db`, so the public page scope above is what decides whether
-      // a link to an unpublished page renders — the menu grant does not widen it.
+      // a link to an unpublished page renders: the menu grant does not widen it.
       policy(`${p}:public:menus:read`, "cms_menus", "read", allow()),
       // Only ENABLED redirects. `resolveRedirect` also filters, but the scope is the real
       // boundary: a disabled redirect is one an editor has deliberately taken out of
@@ -5332,7 +5332,7 @@ export function cmsPolicies(opts: CmsPolicyOpts = {}): { public: Policy[]; edito
       policy(`${p}:public:redirects:read`, "cms_redirects", "read", { where: { enabled: true } }),
       // Taxonomies and terms are structural (they are URL segments a front end routes on),
       // exactly like content-type slugs. The junction is granted too, because
-      // `where: { terms: … }` on a page compiles to a subquery THROUGH it — without the
+      // `where: { terms: … }` on a page compiles to a subquery THROUGH it: without the
       // grant the traversal matches nothing and "pages in this category" is silently empty.
       policy(`${p}:public:taxonomies:read`, "cms_taxonomies", "read", allow()),
       policy(`${p}:public:terms:read`, "cms_terms", "read", allow()),
@@ -5353,18 +5353,18 @@ export function cmsPolicies(opts: CmsPolicyOpts = {}): { public: Policy[]; edito
 // regions of blocks). A COLLECTION is the generic escape hatch: it points the editor at
 // one of YOUR OWN pramen entities (spread into defineSchema alongside cmsSchema) and
 // describes how to edit it with the SAME field DSL that blocks use. So "Lectures" is a
-// first-class, queryable entity — real columns, relations, cell-ACL — that also gets a
+// first-class, queryable entity (real columns, relations, cell-ACL) that also gets a
 // list + form UI, without being bent into a cms_pages row.
 //
 // Column-mapped: each scalar FieldDefinition.name is a real column on the entity; a
 // repeater/group/richtext field maps to a t.json() column (the object↔JSON codec at the
-// Db chokepoint stores it transparently). `richtext` belongs with the latter group — its
+// Db chokepoint stores it transparently). `richtext` belongs with the latter group: its
 // value is a document tree, and a TEXT column would bind the object raw and be rejected. The generic handlers dispatch through a registry
 // keyed by `slug`, so `collection`/`entity` can never be spoofed to reach an arbitrary
-// table, and writes are whitelisted to declared fields — the client can't set columns the
+// table, and writes are whitelisted to declared fields: the client can't set columns the
 // collection didn't declare (e.g. a `roles` or `passwordHash` column on the entity).
 
-/** Nav positions for the editor's built-in sections — see `./nav`. Re-exported here so a
+/** Nav positions for the editor's built-in sections. See `./nav`. Re-exported here so a
  * host writing `app.ts` imports it from the same place as `collection()`. It LIVES in a leaf
  * module because `blockkit.ts` needs it too and must not depend on this one. */
 export { NAV_ORDER } from "./nav";
@@ -5374,7 +5374,7 @@ export { NAV_ORDER } from "./nav";
  * halves live here: the runtime facts (entity, idField, validation via `fields`) and the
  * UI facts (labels, list columns, ordering). Mirror of {@link ContentTypeDef}. */
 export interface CollectionDef {
-  /** The pramen entity (table) this collection edits — one of your own entities, spread
+  /** The pramen entity (table) this collection edits: one of your own entities, spread
    * into `defineSchema` next to `cmsSchema`. The handler registry keys off `slug`, then
    * reads this; it is never taken from client input. */
   readonly entity: string;
@@ -5390,7 +5390,7 @@ export interface CollectionDef {
   readonly labels?: EntryLabels;
   /** Optional nav icon (emoji or short string). */
   readonly icon?: string;
-  /** The edit-form schema — the same DSL as blocks. Each scalar field is a real column
+  /** The edit-form schema: the same DSL as blocks. Each scalar field is a real column
    * on `entity`; repeater/group map to a `t.json()` column. Also the WRITE WHITELIST:
    * only these field names are ever written to the entity. */
   readonly fields: readonly FieldDefinition[];
@@ -5404,15 +5404,15 @@ export interface CollectionDef {
   readonly orderBy?: { column: string; dir?: "asc" | "desc" };
   /** Where this collection sits in the editor's primary nav. Lower comes first; ties keep
    * declaration order. Defaults to `NAV_ORDER.collections`, which is between Pages and
-   * Media — where collections have always rendered.
+   * Media, where collections have always rendered.
    *
    * The point is not cosmetic. Before this the only extension seam was `extraNav`, which
-   * renders dead LAST and (by default, and for good reason) opens a new tab — so a
+   * renders dead LAST and (by default, and for good reason) opens a new tab, so a
    * project-specific section could only ever be a separate app bolted onto the end of the
    * admin. A section that belongs beside Pages can now say so. See {@link NAV_ORDER} for
    * the built-in positions to place against. */
   readonly navOrder?: number;
-  /** Workflow features this collection opts into — see {@link CollectionFeature}. Each is
+  /** Workflow features this collection opts into. See {@link CollectionFeature}. Each is
    * backed by MANAGED COLUMNS on `entity` that the CMS writes and `fields` may not declare.
    * Validated against your schema at `createCollectionHandlers` time (which is why that call
    * needs `{ schema }` once this is set). Absent = a plain CRUD collection, as before. */
@@ -5438,7 +5438,7 @@ export function collection(slug: string, opts: Omit<CollectionDef, "slug">): Col
 /** The client-facing subset of a collection the editor fetches via `listCollections` to
  * build its nav + generic list/edit views (no per-collection editor code, no rebuild to
  * add one). Excludes the server-only `entity` (the editor addresses a collection by `slug`
- * only, never by table name); `idField` IS included — it's just the PK column name, which
+ * only, never by table name); `idField` IS included: it's just the PK column name, which
  * the editor needs to read a row's id from a list result. */
 export interface CollectionMeta {
   slug: string;
@@ -5447,7 +5447,7 @@ export interface CollectionMeta {
   /** See {@link CollectionDef.labels}; `null` when the collection declares none. */
   labels: EntryLabels | null;
   icon?: string;
-  /** Nav position — see {@link CollectionDef.navOrder}. Always present in the meta (the
+  /** Nav position. See {@link CollectionDef.navOrder}. Always present in the meta (the
    * default is filled here) so the editor sorts one list of numbers rather than deciding
    * per entry whether a default applies. */
   navOrder: number;
@@ -5456,7 +5456,7 @@ export interface CollectionMeta {
   titleField: string;
   idField: string;
   orderBy?: { column: string; dir?: "asc" | "desc" };
-  /** Workflow features enabled — the editor uses this to decide which affordances to show
+  /** Workflow features enabled: the editor uses this to decide which affordances to show
    * (a Publish button, a schedule picker, a revisions tab). Empty = plain CRUD. */
   supports: readonly CollectionFeature[];
 }
@@ -5488,7 +5488,7 @@ function collectionMeta(c: CollectionDef): CollectionMeta {
 // columns, the CMS owns their values.
 //
 // That ownership is the whole difference from the `publish` FIELD type this replaces. A
-// `publish` field is an ordinary entry in `fields`, and `fields` is the write whitelist —
+// `publish` field is an ordinary entry in `fields`, and `fields` is the write whitelist,
 // so "is this row live?" was a value the client sent in the `values` bag, and the access
 // boundary was whatever the client last wrote. A managed column is never in the whitelist
 // (declaring one as a field is a boot error, see `validateCollections`), so only
@@ -5501,26 +5501,26 @@ function collectionMeta(c: CollectionDef): CollectionMeta {
 // It used to be worth saying that this is NOT the shape `expr.now()` writes. It is now:
 // `expr.now()` emits the same ISO form, so a managed column and an `expr.now()` default
 // beside it are finally comparable, and `nowStamp` is an alias for `isoStamp` rather than a
-// second format. What still holds is the reason for minting in one place — the trap
+// second format. What still holds is the reason for minting in one place: the trap
 // documented on the `publish` field, where two controls wrote different formats into one
 // TEXT column and both passed validation.
 
 /** A workflow feature a collection can opt into.
  *
- * - `drafts` — a managed `status` column (`draft` | `published`) plus `collectionPublish` /
+ * - `drafts`: a managed `status` column (`draft` | `published`) plus `collectionPublish` /
  *   `collectionUnpublish`. Pair with `collectionPublicPolicies` so anonymous reads see
  *   published rows only.
  *
- *   This gates VISIBILITY, not content. A collection is column-mapped — the public reads the
- *   entity's own columns — so there is nowhere to stage an unpublished VERSION of a live
+ *   This gates VISIBILITY, not content. A collection is column-mapped (the public reads the
+ *   entity's own columns) so there is nowhere to stage an unpublished VERSION of a live
  *   row: an edit (or a revision restore) on a published row is live immediately. That is the
  *   one place collections do not reach page parity, where `getPage` serves a baked revision
  *   snapshot. Unpublish first if an edit needs review.
- * - `scheduling` — managed `publishedAt` / `scheduledAt` / `unpublishAt`, `collectionSchedule`,
+ * - `scheduling`: managed `publishedAt` / `scheduledAt` / `unpublishAt`, `collectionSchedule`,
  *   and the deferred tasks from `createCollectionTasks`. Needs `drafts`.
- * - `revisions` — a snapshot of the row's prior state on every write, in
+ * - `revisions`: a snapshot of the row's prior state on every write, in
  *   `cms_collection_revisions`, with `collectionListRevisions` / `collectionRestoreRevision`.
- * - `preview` — signed, single-row preview links (`signCollectionPreview`), redeemed at
+ * - `preview`: signed, single-row preview links (`signCollectionPreview`), redeemed at
  *   `COLLECTION_PREVIEW_PATH` by the route `cmsRoutes()` serves. Needs `drafts`. It shows
  *   the row's CURRENT state to whoever holds the link, which for a DRAFT is the unpublished
  *   content and for a published row is what the public already sees (see `drafts` above:
@@ -5539,7 +5539,7 @@ export const COLLECTION_FEATURE_COLUMNS: Readonly<Record<CollectionFeature, read
 };
 
 /** Features that mean nothing on their own. Scheduling moves a row between draft and
- * published; preview shows the unpublished version — both presuppose `drafts`. */
+ * published; preview shows the unpublished version. Both presuppose `drafts`. */
 const COLLECTION_FEATURE_REQUIRES: Readonly<Partial<Record<CollectionFeature, CollectionFeature>>> = {
   scheduling: "drafts",
   preview: "drafts",
@@ -5561,10 +5561,10 @@ const MAX_COLLECTION_LIST_LIMIT = 500;
 /** The epoch-ms range a schedule may name: 1970-01-01 up to (not including) year 10000.
  *
  * `Number.isFinite` is NOT a sufficient bound, in two directions. Above `8.64e15` (the max
- * `Date`) `toISOString()` throws a `RangeError` INSIDE the mutation — an opaque 500 for the
+ * `Date`) `toISOString()` throws a `RangeError` INSIDE the mutation: an opaque 500 for the
  * common client slip of sending epoch microseconds. And from year 10000 up, `toISOString()`
  * mints an EXPANDED-year string (`"+010000-01-01T00:00:00.000Z"`) whose leading `+` sorts
- * BEFORE every ordinary timestamp — inverting every lexicographic comparison this feature
+ * BEFORE every ordinary timestamp, inverting every lexicographic comparison this feature
  * rests on, so a takedown 8000 years out reads as already passed and a publish instant in
  * the far future reads as due. One range check closes both. */
 const MIN_SCHEDULE_MS = 0;
@@ -5574,7 +5574,7 @@ const epochInput = (name: string, v: unknown): number => {
   if (typeof v !== "number" || !Number.isFinite(v)) throw new BadRequest(`${name} must be a finite epoch ms`);
   if (!Number.isInteger(v)) throw new BadRequest(`${name} must be a whole number of epoch ms`);
   if (v < MIN_SCHEDULE_MS || v > MAX_SCHEDULE_MS) {
-    throw new BadRequest(`${name} must be an epoch ms between ${MIN_SCHEDULE_MS} and ${MAX_SCHEDULE_MS} (1970 … 9999) — got ${v}`);
+    throw new BadRequest(`${name} must be an epoch ms between ${MIN_SCHEDULE_MS} and ${MAX_SCHEDULE_MS} (1970 … 9999), got ${v}`);
   }
   return v;
 };
@@ -5582,7 +5582,7 @@ const epochInput = (name: string, v: unknown): number => {
 /** The column types a declared field can be stored in. A collection field is COLUMN-MAPPED,
  * so the entity's column type has to match what the field writes: a `richtext`/`group`/
  * `repeater` value is a document (`t.json()`), the rest are scalars. Getting this wrong is
- * not a type error anywhere — it surfaces as a raw driver message on the first write
+ * not a type error anywhere: it surfaces as a raw driver message on the first write
  * ("Binding expected string, TypedArray, …"), which is why it is checked at boot. */
 const COLLECTION_FIELD_COLUMN_TYPES: Readonly<Record<FieldDefinition["type"], readonly FieldType[]>> = {
   text: ["text", "uuid"],
@@ -5598,7 +5598,7 @@ const COLLECTION_FIELD_COLUMN_TYPES: Readonly<Record<FieldDefinition["type"], re
   media: ["text", "uuid"],
   select: ["text"],
   // A SINGLE reference is one opaque id in a TEXT column. `multiple: true` stores an array
-  // and needs `t.json()` — `referenceColumnTypes` below is what actually decides, because
+  // and needs `t.json()`: `referenceColumnTypes` below is what actually decides, because
   // this table is keyed by type alone and a reference is the one type whose storage depends
   // on a second flag.
   reference: ["text", "uuid"],
@@ -5619,30 +5619,30 @@ function fieldColumnTypes(f: FieldDefinition): readonly FieldType[] | undefined 
  * field.
  *
  * Called by `createCollectionHandlers`. The point is that a misconfiguration surfaces when
- * the Worker starts, naming the collection and the column — not as a 500 the first time an
+ * the Worker starts, naming the collection and the column, not as a 500 the first time an
  * editor presses Publish, months later, on the one collection nobody exercised.
  *
  * `schema` is REQUIRED. Every check here reads the target entity, so a registry validated
- * without one is not validated at all — and the failures it catches (a field name typo, a
+ * without one is not validated at all, and the failures it catches (a field name typo, a
  * richtext field over a TEXT column, a non-PK idField) are exactly as fatal on a collection
  * that declares no `supports` as on one that declares all four. */
 export function validateCollections(collections: readonly CollectionDef[], schema?: SchemaDef): void {
   const seen = new Set<string>();
   const byEntity = new Map<string, string>();
   for (const c of collections) {
-    if (seen.has(c.slug)) throw new Error(`pramen/cms: duplicate collection slug '${c.slug}' — slugs are the handler registry's key`);
+    if (seen.has(c.slug)) throw new Error(`pramen/cms: duplicate collection slug '${c.slug}': slugs are the handler registry's key`);
     seen.add(c.slug);
     // ONE collection per entity. The ACL keys policies by (role, entity, action) and
-    // OR-merges the matches — the policy NAME is not part of the key — so a second
+    // OR-merges the matches (the policy NAME is not part of the key) so a second
     // collection over the same entity does not add a second, separate view: it WIDENS the
     // first one's read scope. Two `collectionPublicPolicies` grants over one entity collapse
     // to the loosest of the two, which is how a `drafts`-only collection silently removes
     // the `publishedAt <= $now()` and `unpublishAt > $now()` clauses from a `scheduling`
-    // sibling — publishing a row a year early and defeating its scheduled takedown.
+    // sibling, publishing a row a year early and defeating its scheduled takedown.
     const first = byEntity.get(c.entity);
     if (first) {
       throw new Error(
-        `pramen/cms: collections '${first}' and '${c.slug}' both target entity '${c.entity}' — the ACL OR-merges policies on the same (role, entity, action), so a second collection widens the first one's read scope instead of adding a separate view. Register one collection per entity.`,
+        `pramen/cms: collections '${first}' and '${c.slug}' both target entity '${c.entity}': the ACL OR-merges policies on the same (role, entity, action), so a second collection widens the first one's read scope instead of adding a separate view. Register one collection per entity.`,
       );
     }
     byEntity.set(c.entity, c.slug);
@@ -5662,7 +5662,7 @@ export function validateCollections(collections: readonly CollectionDef[], schem
       }
       const needs = COLLECTION_FEATURE_REQUIRES[f];
       if (needs && !set.has(needs)) {
-        throw new Error(`pramen/cms: collection '${c.slug}' declares '${f}', which needs '${needs}' — add it to \`supports\``);
+        throw new Error(`pramen/cms: collection '${c.slug}' declares '${f}', which needs '${needs}'. Add it to \`supports\``);
       }
     }
     const entity = schema[c.entity];
@@ -5671,12 +5671,12 @@ export function validateCollections(collections: readonly CollectionDef[], schem
     // EVERY collection handler dispatches to the default partition's DO: none of them
     // declares a `partition`, and `/rpc` routes by the handler's. An entity parked in
     // another partition therefore boots clean and then 400s on every single call
-    // (`assertInPartition`), and a preview link 404s forever — `callPrivileged` has no
+    // (`assertInPartition`), and a preview link 404s forever: `callPrivileged` has no
     // partition to pass either. Name it here instead.
     const entityPartition = partitionOf(schema, c.entity);
     if (entityPartition !== DEFAULT_PARTITION) {
       throw new Error(
-        `pramen/cms: collection '${c.slug}' targets entity '${c.entity}' in partition '${entityPartition}', but the collection handlers are dispatched to the '${DEFAULT_PARTITION}' partition — every call would fail. Keep a collection's entity in the default partition.`,
+        `pramen/cms: collection '${c.slug}' targets entity '${c.entity}' in partition '${entityPartition}', but the collection handlers are dispatched to the '${DEFAULT_PARTITION}' partition, so every call would fail. Keep a collection's entity in the default partition.`,
       );
     }
     const idField = c.idField ?? "id";
@@ -5684,13 +5684,13 @@ export function validateCollections(collections: readonly CollectionDef[], schem
       throw new Error(`pramen/cms: collection '${c.slug}' has idField '${idField}', which is not a column on '${c.entity}'`);
     }
     // …and it must be the PRIMARY KEY, not merely a column. Reads key on `idField`, but
-    // `db.update`/`db.delete` key on the entity's actual PK — so a non-PK idField loads a
+    // `db.update`/`db.delete` key on the entity's actual PK, so a non-PK idField loads a
     // row fine and then writes nothing, surfacing as a 404 on a row the same handler just
     // read. Exactly the misconfiguration this validator exists to name.
     const pk = Object.entries(columns).find(([, f]) => f.primaryKey)?.[0] ?? "id";
     if (idField !== pk) {
       throw new Error(
-        `pramen/cms: collection '${c.slug}' has idField '${idField}', but '${c.entity}' has primary key '${pk}' — writes key on the PK, so they would silently match no row`,
+        `pramen/cms: collection '${c.slug}' has idField '${idField}', but '${c.entity}' has primary key '${pk}': writes key on the PK, so they would silently match no row`,
       );
     }
     // Declared fields ARE columns on the entity (that is what "column-mapped" means), so a
@@ -5701,19 +5701,19 @@ export function validateCollections(collections: readonly CollectionDef[], schem
       const col = columns[f.name];
       if (!col) {
         throw new Error(
-          `pramen/cms: collection '${c.slug}' declares a field '${f.name}', which is not a column on '${c.entity}' — a collection field is column-mapped, so every declared field needs its own column`,
+          `pramen/cms: collection '${c.slug}' declares a field '${f.name}', which is not a column on '${c.entity}': a collection field is column-mapped, so every declared field needs its own column`,
         );
       }
       const allowed = fieldColumnTypes(f);
       if (allowed && !allowed.includes(col.type)) {
         const want = allowed.map((t) => `t.${t === "integer" ? "int" : t === "boolean" ? "bool" : t}()`).join(" or ");
         throw new Error(
-          `pramen/cms: collection '${c.slug}' declares '${f.name}' as '${f.type}', which is stored as ${allowed.join("/")}, but '${c.entity}.${f.name}' is ${col.type} — declare it as ${want}`,
+          `pramen/cms: collection '${c.slug}' declares '${f.name}' as '${f.type}', which is stored as ${allowed.join("/")}, but '${c.entity}.${f.name}' is ${col.type}. Declare it as ${want}`,
         );
       }
       if (col.hidden) {
         throw new Error(
-          `pramen/cms: collection '${c.slug}' declares '${f.name}' as an editable field, but '${c.entity}.${f.name}' is hidden() — a hidden column is stripped from every read, so the editor would show it empty and overwrite it on every save`,
+          `pramen/cms: collection '${c.slug}' declares '${f.name}' as an editable field, but '${c.entity}.${f.name}' is hidden(): a hidden column is stripped from every read, so the editor would show it empty and overwrite it on every save`,
         );
       }
     }
@@ -5723,7 +5723,7 @@ export function validateCollections(collections: readonly CollectionDef[], schem
     // with no error anywhere.
     if (c.orderBy && !(c.orderBy.column in columns)) {
       throw new Error(
-        `pramen/cms: collection '${c.slug}' orders by '${c.orderBy.column}', which is not a column on '${c.entity}' — SQLite would resolve the quoted name to a constant and sort every row equal`,
+        `pramen/cms: collection '${c.slug}' orders by '${c.orderBy.column}', which is not a column on '${c.entity}': SQLite would resolve the quoted name to a constant and sort every row equal`,
       );
     }
     const declared = new Set(c.fields.map((f) => f.name));
@@ -5732,7 +5732,7 @@ export function validateCollections(collections: readonly CollectionDef[], schem
         const column = columns[col];
         if (!column) {
           throw new Error(
-            `pramen/cms: collection '${c.slug}' declares '${f}', which manages a \`${col}\` column on '${c.entity}' — add \`${col}: t.text()\` to the entity`,
+            `pramen/cms: collection '${c.slug}' declares '${f}', which manages a \`${col}\` column on '${c.entity}'. Add \`${col}: t.text()\` to the entity`,
           );
         }
         // NAME alone is not enough. The CMS writes these columns as TEXT (an ISO-8601
@@ -5746,17 +5746,17 @@ export function validateCollections(collections: readonly CollectionDef[], schem
         //     repair and hiding the state from the editor.
         if (column.type !== "text") {
           throw new Error(
-            `pramen/cms: collection '${c.slug}' declares '${f}', which manages \`${c.entity}.${col}\` as TEXT, but it is ${column.type} — declare it as \`${col}: t.text()\` (a non-TEXT column compares wrong against $now() and would never match the published scope)`,
+            `pramen/cms: collection '${c.slug}' declares '${f}', which manages \`${c.entity}.${col}\` as TEXT, but it is ${column.type}. Declare it as \`${col}: t.text()\` (a non-TEXT column compares wrong against $now() and would never match the published scope)`,
           );
         }
         if (column.notNull) {
           throw new Error(
-            `pramen/cms: collection '${c.slug}' declares '${f}', which manages \`${c.entity}.${col}\`, but the column is notNull() — the CMS seeds and clears it with NULL, so every write would fail. Drop notNull() (a defaultTo() is fine).`,
+            `pramen/cms: collection '${c.slug}' declares '${f}', which manages \`${c.entity}.${col}\`, but the column is notNull(): the CMS seeds and clears it with NULL, so every write would fail. Drop notNull() (a defaultTo() is fine).`,
           );
         }
         if (column.hidden) {
           throw new Error(
-            `pramen/cms: collection '${c.slug}' declares '${f}', which manages \`${c.entity}.${col}\`, but the column is hidden() — the CMS reads it back to decide the row's state, so it must be projectable`,
+            `pramen/cms: collection '${c.slug}' declares '${f}', which manages \`${c.entity}.${col}\`, but the column is hidden(): the CMS reads it back to decide the row's state, so it must be projectable`,
           );
         }
         // `fields` IS the write whitelist. A `status` entry there would let any editor send
@@ -5764,7 +5764,7 @@ export function validateCollections(collections: readonly CollectionDef[], schem
         // handler entirely, leaving the gate as decoration over a client-set column.
         if (declared.has(col)) {
           throw new Error(
-            `pramen/cms: collection '${c.slug}' declares \`${col}\` as an editable field, but '${f}' manages that column — remove it from \`fields\` (it would be a client-writable publish gate)`,
+            `pramen/cms: collection '${c.slug}' declares \`${col}\` as an editable field, but '${f}' manages that column. Remove it from \`fields\` (it would be a client-writable publish gate)`,
           );
         }
       }
@@ -5772,7 +5772,7 @@ export function validateCollections(collections: readonly CollectionDef[], schem
     if (set.has("revisions")) {
       if (!schema[COLLECTION_REVISIONS_TABLE]) {
         throw new Error(
-          `pramen/cms: collection '${c.slug}' declares 'revisions', which needs the \`${COLLECTION_REVISIONS_TABLE}\` table — spread \`cmsSchema\` into defineSchema`,
+          `pramen/cms: collection '${c.slug}' declares 'revisions', which needs the \`${COLLECTION_REVISIONS_TABLE}\` table. Spread \`cmsSchema\` into defineSchema`,
         );
       }
       // A DO cannot write across a partition boundary, so a collection entity parked in its
@@ -5782,7 +5782,7 @@ export function validateCollections(collections: readonly CollectionDef[], schem
       const revPartition = partitionOf(schema, COLLECTION_REVISIONS_TABLE);
       if (entityPartition !== revPartition) {
         throw new Error(
-          `pramen/cms: collection '${c.slug}' declares 'revisions', but '${c.entity}' is in partition '${entityPartition}' while \`${COLLECTION_REVISIONS_TABLE}\` is in '${revPartition}' — a write cannot cross partitions, so keep the entity in '${revPartition}'`,
+          `pramen/cms: collection '${c.slug}' declares 'revisions', but '${c.entity}' is in partition '${entityPartition}' while \`${COLLECTION_REVISIONS_TABLE}\` is in '${revPartition}': a write cannot cross partitions, so keep the entity in '${revPartition}'`,
         );
       }
     }
@@ -5793,7 +5793,7 @@ export function validateCollections(collections: readonly CollectionDef[], schem
 export interface CollectionPreviewToken {
   /** tenant */ t: string;
   /** collection slug */ c: string;
-  /** row id — the grant is scoped to this ONE row, never "all drafts" */ r: string;
+  /** row id: the grant is scoped to this ONE row, never "all drafts" */ r: string;
   /** expiry (epoch seconds) */ exp: number;
 }
 
@@ -5808,8 +5808,8 @@ export const TASK_COLLECTION_UNPUBLISH = "cms:collection:unpublish";
 /** Options for `createCollectionHandlers`. */
 export interface CollectionHandlerOpts extends CmsHandlerOpts {
   /** Your app's schema (the object you pass to `defineSchema`). REQUIRED: the whole registry
-   * is checked against it at boot by `validateCollections` — managed columns, declared
-   * field ↔ column types, the idField/PK pairing, `orderBy`, the partition — so a
+   * is checked against it at boot by `validateCollections` (managed columns, declared
+   * field ↔ column types, the idField/PK pairing, `orderBy`, the partition) so a
    * misconfiguration is a startup error naming the collection and the column rather than a
    * 500 (or a silent wrong answer) on the first call. */
   schema?: SchemaDef;
@@ -5824,7 +5824,7 @@ export interface CollectionHandlerOpts extends CmsHandlerOpts {
  * `collectionCreate` / `collectionUpdate` / `collectionDelete`, all gated by `editorRoles`
  * (a fast 403 before the body) AND the row ACL (they go through `ctx.db`, so
  * `collectionPolicies` scopes them too). The `collection` param is resolved through the
- * registry — an unknown slug is a 400, never a raw table reference. */
+ * registry: an unknown slug is a 400, never a raw table reference. */
 export function createCollectionHandlers(collections: readonly CollectionDef[], opts: CollectionHandlerOpts = {}) {
   // Boot check, before a single handler is built: unknown/incoherent features and missing
   // managed columns throw here rather than 500ing on the first publish.
@@ -5832,7 +5832,7 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
   const collectionRtSchema = opts.richTextSchema ?? DEFAULT_RICH_TEXT_SCHEMA;
   const editor = { auth: opts.editorRoles ?? ["editor", "admin"] };
   // Preview redemption presents editorRoles ∪ reviewerRoles (see `viewerRolesOf`), so the
-  // handler the route calls has to accept that set — gating it to `editor` alone would 403
+  // handler the route calls has to accept that set: gating it to `editor` alone would 403
   // every preview link for a reviewer-only identity. Same wiring as `getPagePreview`.
   const viewer = { auth: viewerRolesOf(opts) };
   const previewTtl = opts.previewTtlSeconds ?? DEFAULT_PREVIEW_TTL_SECONDS;
@@ -5856,19 +5856,19 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
   const has = (c: CollectionDef, f: CollectionFeature): boolean => (c.supports ?? []).includes(f);
   const columnsOf = (c: CollectionDef): Record<string, FieldDef> => ((opts.schema?.[c.entity]?.fields ?? {}) as Record<string, FieldDef>);
   /** The list ordering, resolved ONCE against the entity. The documented default is
-   * `createdAt desc`, but that column is not guaranteed to exist — and an ORDER BY over a
+   * `createdAt desc`, but that column is not guaranteed to exist, and an ORDER BY over a
    * missing column does not fail: the dialect quotes the name, SQLite resolves the unknown
    * quoted identifier to a string CONSTANT, every row sorts equal, and the list comes back
    * in arbitrary storage order. Fall back to the PK, which always exists, so the order is at
    * least stable and paging is coherent. (A DECLARED `orderBy` over a missing column is a
-   * boot error — see `validateCollections`.) */
+   * boot error, see `validateCollections`.) */
   const orderByOf = (c: CollectionDef): { column: string; dir: "asc" | "desc" } => {
     if (c.orderBy) return { column: c.orderBy.column, dir: c.orderBy.dir ?? "desc" };
     return { column: "createdAt" in columnsOf(c) ? "createdAt" : idOf(c), dir: "desc" };
   };
   const orderBys = new Map(collections.map((c) => [c.slug, orderByOf(c)] as const));
   /** 400 (not 500) when a caller invokes a workflow handler on a collection that never
-   * opted into it — the handlers exist for every collection, the features do not. */
+   * opted into it: the handlers exist for every collection, the features do not. */
   const needs = (c: CollectionDef, f: CollectionFeature): void => {
     if (!has(c, f)) throw new BadRequest(`collection '${c.slug}' does not support '${f}' (add it to \`supports\`)`);
   };
@@ -5881,13 +5881,13 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
   /** Read a row's DECLARED FIELD columns unprojected, for the revision snapshot.
    *
    * `ctx.db.exec` is the documented raw escape hatch: it bypasses the row/field ACL, and it
-   * also bypasses the `Db` chokepoint's cell codec — so a json-backed column comes back as
+   * also bypasses the `Db` chokepoint's cell codec, so a json-backed column comes back as
    * the stored TEXT and a boolean as 0/1. Both are decoded here from the entity's own column
    * types (checked against the field types at boot), so a snapshot holds exactly what
    * `db.find` would have returned for an unrestricted caller.
    *
    * Falls back to the ACL-projected row if the raw read comes back empty (a substrate quirk
-   * or a row deleted concurrently) — a partial snapshot beats no snapshot. */
+   * or a row deleted concurrently): a partial snapshot beats no snapshot. */
   const rawFieldValues = async (db: CmsDb, c: CollectionDef, rowId: string, projected: Record<string, unknown>): Promise<Record<string, unknown>> => {
     const columns = columnsOf(c);
     const names = c.fields.map((f) => f.name).filter((n) => n in columns);
@@ -5911,7 +5911,7 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
         try {
           values[name] = JSON.parse(v) as unknown;
         } catch {
-          values[name] = v; // not JSON after all — keep the literal rather than losing it
+          values[name] = v; // not JSON after all, so keep the literal rather than losing it
         }
       } else if (type === "boolean") values[name] = typeof v === "boolean" ? v : v !== 0 && v !== 0n;
       else values[name] = v;
@@ -5920,14 +5920,14 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
   };
   /** Snapshot a row's CURRENT (pre-write) state into `cms_collection_revisions`, so a
    * revision always reads as "what it was before this edit" and restoring one is a plain
-   * reversal. Declared fields only — the snapshot is replayed through the same write
+   * reversal. Declared fields only: the snapshot is replayed through the same write
    * whitelist on restore, so it can never carry a column the collection doesn't own.
    * No-op unless the collection supports `revisions`. */
   const snapshotRow = async (db: CmsDb, c: CollectionDef, row: Record<string, unknown>, ctx: HandlerContext, note: string): Promise<void> => {
     if (!has(c, "revisions")) return;
     const rowId = String(row[idOf(c)]);
     // The row handed in came through the ACL, so it is projected to what THIS caller may
-    // read — which would make history a function of who happened to make the edit: an
+    // read, which would make history a function of who happened to make the edit: an
     // editor whose read scope excludes `salary` would silently drop it from the snapshot,
     // and every later "restore to before that edit" would restore an incomplete row.
     // History is an audit record, not a view, so capture the row's REAL pre-state through
@@ -5935,7 +5935,7 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
     // (`collectionListRevisions` projects it back down).
     const values = await rawFieldValues(db, c, rowId, row);
     // Next in this row's sequence. Serialized by the DO's single writer; on D1 the composite
-    // unique on (collection, rowId, revision) is the backstop — see the schema note.
+    // unique on (collection, rowId, revision) is the backstop, see the schema note.
     const [{ next = 1 } = {}] = (await db.exec(
       `SELECT COALESCE(MAX(revision), 0) + 1 AS next FROM ${COLLECTION_REVISIONS_TABLE} WHERE collection = ? AND rowId = ?`,
       c.slug,
@@ -5948,7 +5948,7 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
       snapshot: values,
       note,
       actor: typeof ctx.identity?.userId === "string" ? ctx.identity.userId : null,
-      // Explicit, ms-precision, and the only writer of this column — see the schema note.
+      // Explicit, ms-precision, and the only writer of this column, see the schema note.
       createdAt: isoStamp(),
     });
   };
@@ -5963,7 +5963,7 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
     if (typeof o.collection !== "string" || o.collection === "") throw new BadRequest("collection is required");
     return o.collection;
   };
-  /** `{ collection, values }` — the write handlers. `values` is validated against the field
+  /** `{ collection, values }`: the write handlers. `values` is validated against the field
    * schema downstream (`toColumns`); this only rejects a non-object, so a string or an array
    * cannot reach the field validator as a bag of index keys. */
   const valuesInput = (raw: unknown): { collection: string; values: Record<string, unknown> } => {
@@ -5977,8 +5977,8 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
     values: valuesInput(raw).values,
   });
   /** `{ collection, limit?, offset? }`, both CLAMPED. `find` binds `limit` straight into
-   * `LIMIT ?`, and SQLite reads a negative limit as UNBOUNDED — so `limit: -1` dumps the
-   * whole table over RPC — while a fractional value reaches the driver as-is and 500s. */
+   * `LIMIT ?`, and SQLite reads a negative limit as UNBOUNDED (so `limit: -1` dumps the
+   * whole table over RPC) while a fractional value reaches the driver as-is and 500s. */
   const listInput = (raw: unknown): { collection: string; limit?: number; offset?: number } => {
     const o = asObj(raw);
     const num = (name: string, v: unknown): number | undefined => {
@@ -5995,7 +5995,7 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
     };
   };
   // Validate against the field schema, sanitize richtext, then PROJECT to declared field
-  // names only — the write whitelist. `requireRequired` is off for updates (partial patch);
+  // names only: the write whitelist. `requireRequired` is off for updates (partial patch);
   // on for create. Nothing outside `c.fields` can reach the entity.
   const toColumns = (c: CollectionDef, values: unknown, requireRequired: boolean, legacyBaseline?: FieldValues): Record<string, unknown> => {
     const obj = asObj(values);
@@ -6012,7 +6012,7 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
   };
 
   return {
-    /** The registered collections (defaults filled) — editor discovery. Editor-gated so
+    /** The registered collections (defaults filled), for editor discovery. Editor-gated so
      * the collection schemas aren't exposed to anonymous callers. */
     listCollections: query((): CollectionMeta[] => metas, editor),
 
@@ -6037,7 +6037,7 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
       const values = toColumns(c, input.values, true);
       // Seed the managed columns explicitly rather than leaning on a column default: the
       // entity belongs to the app, which may have declared `status` with no default (or a
-      // NOT NULL one). A new row always starts as a draft — publishing is a separate,
+      // NOT NULL one). A new row always starts as a draft: publishing is a separate,
       // separately-gated act.
       if (has(c, "drafts")) values.status = COLLECTION_DRAFT;
       if (has(c, "scheduling")) {
@@ -6054,7 +6054,7 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
       // Read the current row first: the editor autosaves the WHOLE values bag, so a
       // pre-Portable-Text richtext value rides along with an unrelated edit. It is
       // tolerated only when byte-identical to what is stored (see `legacyBaseline`).
-      // A policy may grant `update` without `read` on the entity — that worked before this
+      // A policy may grant `update` without `read` on the entity, and that worked before this
       // pre-read existed, so it must not start 403ing. No baseline simply means a legacy
       // string is rejected, which is the strict default.
       let current: FieldValues | undefined;
@@ -6064,13 +6064,13 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
         current = undefined;
       }
       // Validate + whitelist the patch BEFORE snapshotting. `toColumns` throws on an invalid
-      // patch, and on the DO that rollback is free (the mutation is one transaction) — but
+      // patch, and on the DO that rollback is free (the mutation is one transaction), but
       // `D1Driver.transaction` is a no-op, so snapshotting first meant a REJECTED edit still
       // committed a revision on D1: a phantom entry recording no change, and a burnt value
       // in the per-row `revision` counter.
       const patch = toColumns(c, input.values, false, current);
       // `current` is undefined only when the pre-read above was denied (an
-      // update-without-read grant), in which case there is nothing to snapshot — the
+      // update-without-read grant), in which case there is nothing to snapshot: the
       // revision is skipped rather than written empty.
       if (current) await snapshotRow(db, c, current as Record<string, unknown>, ctx, "edit");
       const updated = await db.update(c.entity, input.id, patch);
@@ -6084,13 +6084,13 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
       const ok = await db.delete(c.entity, input.id);
       if (!ok) throw notFound(c.label);
       // PURGE the row's revisions. Keeping them looks like free history, but a collection PK
-      // can be a caller-chosen textId — recreating a row with the same id would inherit the
+      // can be a caller-chosen textId: recreating a row with the same id would inherit the
       // dead row's history, and `collectionRestoreRevision`'s scope check (collection +
       // rowId) would happily write the deleted row's content over the new one. It also
       // bounds the table: a collection has no trash, so nothing else ever collects these.
       //
       // Atomic with the delete on the DO (the mutation runs in storage.transaction). NOT on
-      // the D1 store, where `transaction` is a no-op — a failure in between leaves orphan
+      // the D1 store, where `transaction` is a no-op: a failure in between leaves orphan
       // revisions, which is exactly the inheritance above. Rare, and recoverable by
       // deleting the recreated row, but it is not a guarantee on that substrate.
       if (has(c, "revisions")) {
@@ -6102,7 +6102,7 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
     // ---- drafts -------------------------------------------------------------
 
     /** Move a row live. With `scheduling` this also stamps `publishedAt` (the column the
-     * public read scope compares against `$now()`) and clears `scheduledAt` — which makes
+     * public read scope compares against `$now()`) and clears `scheduledAt`, which makes
      * any pending scheduled-publish task a no-op, since its intent token no longer matches.
      * A pending scheduled UNPUBLISH is deliberately left standing: publishing early does not
      * cancel a planned takedown. */
@@ -6112,7 +6112,7 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
       const db = cdb(ctx);
       const row = await loadRow(db, c, input.id);
       // Deliberately NOT snapshotted. A revision records CONTENT, and publishing changes
-      // none — the managed columns are excluded from `fields` by design, so a "publish"
+      // none: the managed columns are excluded from `fields` by design, so a "publish"
       // revision was byte-identical to the edit before it, and restoring it wrote only the
       // declared fields and left the row live. That reads as a broken button; an entry that
       // cannot be restored is worse than no entry.
@@ -6125,8 +6125,8 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
         // human holding publish rights, which is why it resolves differently from the
         // scheduled-publish task: that one converges to the state the schedule implies (a
         // passed takedown wins, and the row lands down), while here the editor is saying
-        // "live, now" about a takedown that has already been served. A future one stands —
-        // publishing early does not cancel a planned removal — but a spent one is not
+        // "live, now" about a takedown that has already been served. A future one stands
+        // (publishing early does not cancel a planned removal) but a spent one is not
         // "pending" at all, and since the public scope now enforces
         // `unpublishAt IS NULL OR unpublishAt > $now()`, leaving it would make this very
         // publish a no-op: the editor gets back `status: "published"` and the row stays
@@ -6140,14 +6140,14 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
     }, { ...editor, input: rowInput }),
 
     /** Take a row back to draft, clearing every schedule. Both tokens are cleared, so a
-     * pending publish AND a pending unpublish both become no-ops — unpublishing is an
+     * pending publish AND a pending unpublish both become no-ops: unpublishing is an
      * explicit "this is not live and nothing is queued to change that". */
     collectionUnpublish: mutation(async (ctx, input: { collection: string; id: string }) => {
       const c = def(input.collection);
       needs(c, "drafts");
       const db = cdb(ctx);
       await loadRow(db, c, input.id);
-      const patch: Record<string, unknown> = { status: COLLECTION_DRAFT }; // not snapshotted — see collectionPublish
+      const patch: Record<string, unknown> = { status: COLLECTION_DRAFT }; // not snapshotted, see collectionPublish
       if (has(c, "scheduling")) {
         patch.publishedAt = null;
         patch.scheduledAt = null;
@@ -6164,7 +6164,7 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
      * including the INTENT TOKEN: the row stores the scheduled instants
      * (`scheduledAt`/`unpublishAt`, ISO), the enqueued task carries a copy, and the task
      * runs only if the two still match. A reschedule overwrites the token, a manual
-     * publish/unpublish clears it, and a duplicate delivery finds it already cleared — so a
+     * publish/unpublish clears it, and a duplicate delivery finds it already cleared, so a
      * superseded or cancelled schedule is a silent no-op rather than a surprise publish.
      *
      * The tasks are enqueued in THIS mutation's transaction (the outbox is transactional),
@@ -6181,7 +6181,7 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
       // call, which is not the invariant that matters: the documented way to move a publish
       // date is `collectionSchedule({ publishAt })` with `unpublishAt` omitted, and an
       // omitted takedown is left standing. Without this check a reschedule could push the
-      // publish PAST a pending takedown — the takedown then fires first (clearing itself),
+      // publish PAST a pending takedown: the takedown then fires first (clearing itself),
       // the publish fires after it against nothing, and the row is public with no takedown
       // left and no repair path. Compare against the takedown that will actually be in
       // effect: the one being written, or the one already stored.
@@ -6195,12 +6195,12 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
             : null;
       if (effectiveUnpublish !== null && effectiveUnpublish <= publishToken) {
         throw new BadRequest(
-          `publishAt (${publishToken}) is at or after the scheduled takedown (${effectiveUnpublish}) — move or cancel the takedown too (pass \`unpublishAt\`, or \`unpublishAt: null\` to cancel it)`,
+          `publishAt (${publishToken}) is at or after the scheduled takedown (${effectiveUnpublish}). Move or cancel the takedown too (pass \`unpublishAt\`, or \`unpublishAt: null\` to cancel it)`,
         );
       }
       // PATCH semantics on the takedown: an ABSENT `unpublishAt` leaves an existing one
       // alone. Writing null unconditionally meant that merely moving the publish date
-      // revoked a scheduled removal — and silently, since clearing the column also
+      // revoked a scheduled removal, and silently, since clearing the column also
       // neutralizes the already-enqueued task through the intent-token check. Pass
       // `unpublishAt: null` to cancel one deliberately.
       const hasUnpublish = input.unpublishAt !== undefined;
@@ -6209,7 +6209,7 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
       if (hasUnpublish) patch.unpublishAt = unpublishToken;
       // `loadRow` above goes through the READ scope; this goes through the UPDATE scope,
       // which can be narrower. Without the check a role that may read but not update the row
-      // got `{ ok: true }` and two enqueued tasks over a write that never landed — the tasks
+      // got `{ ok: true }` and two enqueued tasks over a write that never landed, and the tasks
       // then found `scheduledAt` still null, mismatched their intent token, and no-op'd. A
       // confirmed schedule that silently never fires. Every sibling handler checks this.
       const updated = await db.update(c.entity, input.id, patch);
@@ -6232,7 +6232,7 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
       input: (raw): { collection: string; id: string; publishAt: number; unpublishAt?: number | null } => {
         const o = asObj(raw);
         const base = rowInput(raw);
-        // Range-checked, not merely finite — see `epochInput`. An out-of-range value would
+        // Range-checked, not merely finite, see `epochInput`. An out-of-range value would
         // otherwise either throw a RangeError inside the transaction (an opaque 500) or
         // mint an expanded-year ISO string that compares backwards forever.
         const publishAt = epochInput("publishAt", o.publishAt);
@@ -6263,13 +6263,13 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
       const revs = await db.find({
         from: COLLECTION_REVISIONS_TABLE,
         where: { collection: c.slug, rowId: input.id },
-        // By the monotonic counter, never by a timestamp — see the `revision` column.
+        // By the monotonic counter, never by a timestamp, see the `revision` column.
         orderBy: { column: "revision", dir: "desc" },
         limit: input.limit ?? 50,
       });
       // Project every snapshot to the fields THIS caller may read on the collection's own
       // entity. The row check above is a ROW-level gate, and `collectionPolicies` grants the
-      // shared revisions table a flat allow() — so without this a caller holding a
+      // shared revisions table a flat allow(), so without this a caller holding a
       // FIELD-restricted read policy (`fields: ["id", "title", "status"]`) reads back the
       // columns that policy withholds, in full, out of the snapshot JSON. History must not
       // be a way around the field scope that governs the row itself.
@@ -6284,7 +6284,7 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
         const o = asObj(raw);
         if (o.limit !== undefined && (typeof o.limit !== "number" || !Number.isFinite(o.limit))) throw new BadRequest("limit must be a number");
         // CLAMPED, not just validated: `find` binds this straight into `LIMIT ?`, and SQLite
-        // reads a negative limit as UNBOUNDED — so `limit: -1` would dump a row's entire
+        // reads a negative limit as UNBOUNDED, so `limit: -1` would dump a row's entire
         // history. A fractional value would reach the driver as-is.
         const limit = o.limit === undefined ? undefined : Math.max(1, Math.min(Math.floor(o.limit as number), 200));
         return { ...rowInput(raw), limit };
@@ -6300,19 +6300,19 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
       const revs = await db.find({ from: COLLECTION_REVISIONS_TABLE, where: { id: input.revisionId }, limit: 1 });
       const rev = revs[0];
       // Scope the revision to THIS collection AND row. A revision id is otherwise a global
-      // handle into a table shared by every collection, so an id from another row — or
-      // another collection entirely — would write a foreign snapshot over this row.
+      // handle into a table shared by every collection, so an id from another row (or
+      // another collection entirely) would write a foreign snapshot over this row.
       if (!rev || String(rev.collection) !== c.slug || String(rev.rowId) !== input.id) throw notFound("revision");
       const current = await loadRow(db, c, input.id);
       // A snapshot is built from an ACL-PROJECTED row, so a caller whose read scope excluded
       // every declared column stored `{}`. `Db.update` returns undefined for a zero-column
-      // patch, which would surface below as "not found" for a row loaded two lines earlier —
+      // patch, which would surface below as "not found" for a row loaded two lines earlier,
       // a misleading 404. Say what is actually wrong instead.
       // Restore exactly the fields this caller can READ, for the same reason
       // `collectionListRevisions` projects them: the snapshot is complete (it was captured
       // through the raw path), and the shared revisions table is granted flat, so replaying
       // it whole would let a field-restricted editor write back columns their own read
-      // policy withholds — restoring a value they cannot see, out of a version they cannot
+      // policy withholds, restoring a value they cannot see, out of a version they cannot
       // read. What you can see is what you can put back.
       const visible = projectSnapshot(rev.snapshot, new Set(Object.keys(current)));
       const restore = toColumns(c, visible, false, current as FieldValues);
@@ -6338,21 +6338,21 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
     // ---- preview ------------------------------------------------------------
 
     /** Mint a signed link that shows ONE row's unpublished state, to whoever holds it.
-     * Mirrors `signPagePreview` — same secret, same TTL clamp, works on both stores, and the
+     * Mirrors `signPagePreview`: same secret, same TTL clamp, works on both stores, and the
      * same rule that the row is read through the ACL FIRST: minting a link is granting
      * access to the row, so a caller who cannot read it must not be able to mint one. */
     signCollectionPreview: query(async (ctx, input: { collection: string; id: string; expiresIn?: number }) => {
       const c = def(input.collection);
       needs(c, "preview");
       const secret = previewSecret(ctx.env);
-      if (!secret) throw previewUnconfigured(); // fail closed — never mint a forgeable link
+      if (!secret) throw previewUnconfigured(); // fail closed: never mint a forgeable link
       const row = await loadRow(cdb(ctx), c, input.id);
       const ttl = Math.max(60, Math.min(input.expiresIn ?? previewTtl, 30 * 24 * 3600));
       const exp = Math.floor(Date.now() / 1000) + ttl;
       // Server-resolved, never caller-supplied, so the tenant inside the signature cannot
       // be steered by whoever asks for the link.
       const token = await signToken<CollectionPreviewToken>({ t: ctx.tenant, c: c.slug, r: String(row[idOf(c)]), exp }, secret);
-      // RELATIVE, like signed file urls — the client resolves it against the CMS origin.
+      // RELATIVE, like signed file urls: the client resolves it against the CMS origin.
       return { url: `${COLLECTION_PREVIEW_PATH}?token=${encodeURIComponent(token)}`, token, expiresAt: exp * 1000 };
     }, {
       ...editor,
@@ -6365,7 +6365,7 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
       },
     }),
 
-    /** Read one row's live (possibly unpublished) state. Not the redemption endpoint — that
+    /** Read one row's live (possibly unpublished) state. Not the redemption endpoint: that
      * is the public `GET /cms/preview/collection` route, which verifies the token and then
      * calls this privileged. Role-gated so it is not an anonymous back door on /rpc. */
     getCollectionPreview: query(async (ctx, input: { collection: string; id: string }) => {
@@ -6387,7 +6387,7 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
  *
  * The generic collection handlers go through `ctx.db`, so without these the row ACL denies
  * them. Your app may already declare its own policies over the entity (e.g. a public read
- * scope) — these only ADD the editor grant the CMS UI needs. */
+ * scope). These only ADD the editor grant the CMS UI needs. */
 export function collectionPolicies(collections: readonly CollectionDef[], opts: CmsPolicyOpts = {}): Policy[] {
   const p = opts.prefix ?? "cms";
   const out: Policy[] = [];
@@ -6397,7 +6397,7 @@ export function collectionPolicies(collections: readonly CollectionDef[], opts: 
     }
   }
   // The revision table is SHARED across collections, so it is not covered by the per-entity
-  // grants above. Granting it here — rather than leaning on `cmsPolicies().editor` — keeps
+  // grants above. Granting it here (rather than leaning on `cmsPolicies().editor`) keeps
   // `revisions` self-contained: an app that registers collections without using the
   // block/page half still gets a working feature instead of a 403 on every write. Read +
   // create only; a revision is append-only, and nothing exposes editing or purging one.
@@ -6414,13 +6414,13 @@ export function collectionPolicies(collections: readonly CollectionDef[], opts: 
  *
  *   role("anonymous", [...cmsPolicies().public, ...collectionPublicPolicies(collections)])
  *
- * This is the access boundary, not a UI filter — it is AND-merged into every `ctx.db` read
+ * This is the access boundary, not a UI filter: it is AND-merged into every `ctx.db` read
  * of the entity, so an unpublished row is invisible to the public API, to relation
  * traversals and to eager-loads alike, without a single query remembering to filter.
  *
  * With `scheduling`, the scope also requires `publishedAt <= $now()`. `status` alone would
  * not be enough the moment anything writes a future `publishedAt`, and `{ publishedAt:
- * { isNull: false } }` — the obvious-looking alternative — matches a FUTURE timestamp too,
+ * { isNull: false } }` (the obvious-looking alternative) matches a FUTURE timestamp too,
  * so a row scheduled for next week would be anonymously readable the moment it was saved.
  * The comparison is lexicographic over TEXT, which is why every managed timestamp is minted
  * as ISO-8601 UTC (`isoStamp`), the same shape `$now()` produces.
@@ -6439,12 +6439,12 @@ export function collectionPublicPolicies(collections: readonly CollectionDef[], 
     // for every visible row) and, with `scheduling`, `publishedAt`.
     //
     // Granting the whole row instead would quietly publish every future column: an
-    // `internalNote` or `reviewerEmail` added to the entity — deliberately NOT a field —
+    // `internalNote` or `reviewerEmail` added to the entity (deliberately NOT a field)
     // would go world-readable the moment a row was published, with nothing at boot or in
     // review to catch it. But excluding `publishedAt` went too far the other way: the
     // single most obvious public query, "newest published first", 403s for anonymous while
     // working for an editor, because a caller may not order by a column it cannot read.
-    // A publication date is public by construction — it is printed on the page. The
+    // A publication date is public by construction: it is printed on the page. The
     // FORWARD-looking columns stay private: `scheduledAt` and `unpublishAt` would leak
     // "this comes down on Friday" to everyone.
     const fields = [c.idField ?? "id", ...c.fields.map((f) => f.name), "status", ...(features.includes("scheduling") ? ["publishedAt"] : [])];
@@ -6454,14 +6454,14 @@ export function collectionPublicPolicies(collections: readonly CollectionDef[], 
             fields,
             where: {
               status: COLLECTION_PUBLISHED,
-              // Both time clauses are OR-groups, so they go in an explicit `AND: [...]` —
+              // Both time clauses are OR-groups, so they go in an explicit `AND: [...]`:
               // two `OR` keys in one object literal would be the same property, and the
               // second would silently REPLACE the first.
               AND: [
                 {
                   // `publishedAt <= $now()` alone silently hides every published row with
-                  // no stamp — a `cmsBootstrap` seed, an import, a row published while the
-                  // collection was still `supports: ["drafts"]` — and does it EN MASSE the
+                  // no stamp (a `cmsBootstrap` seed, an import, a row published while the
+                  // collection was still `supports: ["drafts"]`) and does it EN MASSE the
                   // moment `scheduling` is added to an existing collection, because
                   // `NULL <= '2026-…'` is NULL, not true. NULL here means "published,
                   // instant unknown", never "scheduled for later": `publishedAt` is a
@@ -6476,7 +6476,7 @@ export function collectionPublicPolicies(collections: readonly CollectionDef[], 
                   // A scheduled TAKEDOWN has to be enforced HERE, not only by the task. The
                   // publish side is belt-and-braces (policy + task), but without this clause
                   // an unpublish depends entirely on `createCollectionTasks` being wired and
-                  // the outbox draining — if either fails, a row an editor scheduled to come
+                  // the outbox draining: if either fails, a row an editor scheduled to come
                   // down stays world-readable indefinitely, with no signal. That is the
                   // wrong way round for a takedown, the direction that matters legally.
                   OR: [{ unpublishAt: { isNull: true } }, { unpublishAt: { gt: $now() } }],
@@ -6499,7 +6499,7 @@ export function collectionPublicPolicies(collections: readonly CollectionDef[], 
  * row silently stays a draft. (`cmsTasks` has the same requirement for page scheduling.)
  *
  * They run with a privileged, system-scoped ctx off the write path, and each validates its
- * INTENT TOKEN against the row's current `scheduledAt`/`unpublishAt` before acting — see
+ * INTENT TOKEN against the row's current `scheduledAt`/`unpublishAt` before acting. See
  * `collectionSchedule`. */
 export function createCollectionTasks(collections: readonly CollectionDef[]) {
   const bySlug = new Map(collections.map((c) => [c.slug, c] as const));
@@ -6511,16 +6511,16 @@ export function createCollectionTasks(collections: readonly CollectionDef[]) {
   ): Promise<void> => {
     const { collection, id, token } = asObj(payload) as { collection?: string; id?: string; token?: string };
     if (typeof collection !== "string" || typeof id !== "string") return;
-    // Resolved through the REGISTRY, exactly as the handlers do — the payload's `collection`
+    // Resolved through the REGISTRY, exactly as the handlers do: the payload's `collection`
     // is never used as a table name.
     const c = bySlug.get(collection);
     // A slug the handlers accept but this registry does not know is a WIRING mistake:
     // `createCollectionHandlers(collections)` and `createCollectionTasks(otherList)` built
     // from different arrays. Returning quietly made the drain report `{ succeeded: 1 }`
-    // while the row stayed a draft forever — strictly worse than not registering the tasks
+    // while the row stayed a draft forever, strictly worse than not registering the tasks
     // at all, which dead-letters loudly. Throw so the outbox retries and then dead-letters
     // with the slug in the message.
-    if (!c) throw new Error(`pramen/cms: no collection '${collection}' in createCollectionTasks' registry — pass the SAME collections array to createCollectionHandlers and createCollectionTasks`);
+    if (!c) throw new Error(`pramen/cms: no collection '${collection}' in createCollectionTasks' registry. Pass the SAME collections array to createCollectionHandlers and createCollectionTasks`);
     const db = cdb(ctx);
     const rows = await db.find({ from: c.entity, where: { [c.idField ?? "id"]: id }, limit: 1 });
     const row = rows[0];
@@ -6530,7 +6530,7 @@ export function createCollectionTasks(collections: readonly CollectionDef[]) {
     // this task already ran all make it a no-op.
     //
     // Require a NON-EMPTY token on both sides. Comparing the coalesced strings alone treats
-    // "no token in the payload" and "no schedule on the row" as a MATCH — so a payload
+    // "no token in the payload" and "no schedule on the row" as a MATCH, so a payload
     // without a token (a hand-drained or replayed outbox row) against a row whose
     // `scheduledAt` is null, the normal state right after an unpublish, would publish it
     // unconditionally. The guard should fail closed, not open.
@@ -6546,8 +6546,8 @@ export function createCollectionTasks(collections: readonly CollectionDef[]) {
         // granularity, outbox backoff, a stalled DO alarm), and the two tasks can arrive in
         // either order, so "publish" has to mean "publish IF the takedown has not come yet".
         //
-        // The previous behavior — publish anyway, and null the passed `unpublishAt` to keep
-        // the row visible — destroyed a scheduled takedown outright: the token the unpublish
+        // The previous behavior (publish anyway, and null the passed `unpublishAt` to keep
+        // the row visible) destroyed a scheduled takedown outright: the token the unpublish
         // task compares against was gone, so it no-op'd, and the read scope's
         // `unpublishAt IS NULL OR unpublishAt > $now()` backstop had nothing left to enforce.
         // A row scheduled to come down at noon stayed world-readable forever, silently.
@@ -6562,11 +6562,11 @@ export function createCollectionTasks(collections: readonly CollectionDef[]) {
         return { status: COLLECTION_PUBLISHED, publishedAt: now, scheduledAt: null };
       }),
     [TASK_COLLECTION_UNPUBLISH]: (ctx: HandlerContext, payload: unknown) =>
-      // Clear `scheduledAt` too — the third column `collectionUnpublish` clears and this
+      // Clear `scheduledAt` too: the third column `collectionUnpublish` clears and this
       // task used to leave behind. A pending publish token that survived a takedown is a
       // live re-publish: if the publish task drains after this one (either order is
       // possible) or is retried after a throw, it finds its token still matching and puts
-      // the row back up — with `unpublishAt` now null, permanently and with no repair path.
+      // the row back up, with `unpublishAt` now null, permanently and with no repair path.
       // A schedule always orders publish BEFORE takedown (`collectionSchedule` enforces it
       // against the stored value as well as the submitted one), so any `scheduledAt` still
       // standing at the takedown is spent by definition.
@@ -6581,7 +6581,7 @@ export function createCollectionTasks(collections: readonly CollectionDef[]) {
  *
  * Each task validates its INTENT TOKEN against the page's current `scheduledAt`/`unpublishAt`
  * (set by `schedulePage`, cleared/overwritten by a manual publish/unpublish or a reschedule).
- * A task whose token no longer matches is a no-op — that's how a superseded/cancelled
+ * A task whose token no longer matches is a no-op: that's how a superseded/cancelled
  * schedule, and an at-least-once duplicate delivery, are neutralized (outbox tasks can't be
  * recalled). NOTE on atomicity: unlike the interactive `publishPage` (one mutation
  * transaction), the drain runs a handler WITHOUT a surrounding transaction, so a crash
@@ -6589,7 +6589,7 @@ export function createCollectionTasks(collections: readonly CollectionDef[]) {
  * revision until the next at-least-once redelivery re-runs (the token still matches, so it
  * completes). Acceptable for a scheduled job; the interactive path is atomic. */
 /**
- * The CMS's own data migrations — spread into `app.migrations`.
+ * The CMS's own data migrations, spread into `app.migrations`.
  *
  *     migrations: [...cmsMigrations]
  *
@@ -6597,14 +6597,14 @@ export function createCollectionTasks(collections: readonly CollectionDef[]) {
  * `cmsTasks`), and with the same consequence for forgetting it: nothing breaks loudly. Media
  * rows written before the projection columns existed keep NULL `filename`/`contentType`, so
  * they sort together under a name sort and answer only the `other` type filter. New uploads
- * are unaffected — `createMedia` writes the columns itself.
+ * are unaffected: `createMedia` writes the columns itself.
  */
 export const cmsMigrations: readonly DataMigration[] = [
   {
     // Fill the columns `cms_media` grew for sorting and filtering, out of the `file` JSON that
     // has always held the same three values.
     id: "cms:2026-09-04-media-projection-columns",
-    // `MigrationContext<typeof cmsSchema>` is what types `db` here — the `DataMigration`
+    // `MigrationContext<typeof cmsSchema>` is what types `db` here: the `DataMigration`
     // contract is schema-agnostic, so an unparameterized ctx hands back untyped rows.
     async up({ db, driver }: MigrationContext<typeof cmsSchema>) {
       const d = driver.dialect;
@@ -6622,13 +6622,13 @@ export const cmsMigrations: readonly DataMigration[] = [
       } catch {
         // `json_extract` is a JSON1 function. It is present in D1 and in every ordinary SQLite
         // build, but nothing in this repo has depended on it before and DO SQLite is
-        // Cloudflare's own engine — so a missing function must not brick a tenant's boot,
+        // Cloudflare's own engine, so a missing function must not brick a tenant's boot,
         // which is exactly what a data migration's fail-closed contract would otherwise do.
         // The fallback walks the rows through the ORM, where the fileRef codec has already
         // parsed the same JSON for us. Slower, and bounded by how many media a tenant has.
       }
       // No chunking: this runs inside `blockConcurrencyWhile` on a tenant's first fetch, so a
-      // very large library will stall that one request — which is still the right trade
+      // very large library will stall that one request, which is still the right trade
       // against leaving half the table unsorted forever, since a migration runs ONCE.
       const rows = await db.find({ from: "cms_media", where: { filename: { isNull: true }, contentType: { isNull: true } } });
       for (const row of rows) {
@@ -6722,12 +6722,12 @@ interface CmsRoute {
 }
 
 const previewJson = (status: number, code: string, message: string): Response =>
-  // `{ ok, error, code }` — the shape every other pramen error uses (runtime/errors.ts).
+  // `{ ok, error, code }`: the shape every other pramen error uses (runtime/errors.ts).
   new Response(JSON.stringify({ ok: false, error: message, code }), {
     status,
     headers: { "content-type": "application/json; charset=utf-8", "cache-control": "private, no-store" },
   });
-/** One response for a missing, malformed, forged, or expired token — and for a page that
+/** One response for a missing, malformed, forged, or expired token, and for a page that
  * is not there. Distinguishing them would let a caller probe for valid page ids. */
 const previewDenied = (status = 403, message = "invalid or expired preview link"): Response =>
   previewJson(status, status === 404 ? "not_found" : "forbidden", message);
@@ -6748,7 +6748,7 @@ export function cmsRoutes(
      * outright if you need to.) */
     handlers?: CmsHandlerOpts;
     /** The SAME options you passed to `createCollectionHandlers`, if they differ from
-     * `handlers`. The COLLECTION preview route has its own gate — `getCollectionPreview` is
+     * `handlers`. The COLLECTION preview route has its own gate: `getCollectionPreview` is
      * built by `createCollectionHandlers`, so an app that passes different `editorRoles` /
      * `reviewerRoles` to the two factories would have the route present the page half's
      * roles to a handler gated on the collection half's, and every collection preview link
@@ -6775,7 +6775,7 @@ export function cmsRoutes(
       },
     },
     {
-      // Redeem a preview link. PUBLIC and pre-auth by design — the signature IS the
+      // Redeem a preview link. PUBLIC and pre-auth by design: the signature IS the
       // authorization, so a reviewer with no account can open it. The token is verified
       // BEFORE any read, and it names one page, so a valid signature never widens into
       // "see all drafts". Only then do we reach the DO, privileged.
@@ -6794,8 +6794,8 @@ export function cmsRoutes(
         // The synthetic identity has to satisfy BOTH gates the DO applies: the handler's
         // `auth` (viewerRoles) and the row ACL (whatever role the app granted cmsPolicies
         // to). Hardcoding ["admin"] satisfied neither under the wiring this package's own
-        // README documents — `role("anonymous", …)` + `role("editor", …)`, no admin role
-        // at all — so every preview link 404'd. The e2e only passed because example/app.ts
+        // README documents (`role("anonymous", …)` + `role("editor", …)`, no admin role
+        // at all) so every preview link 404'd. The e2e only passed because example/app.ts
         // happens to define an admin role. Send the configured viewer roles instead.
         const res = await ctx.callPrivileged({
           name: "getPagePreview",
@@ -6821,7 +6821,7 @@ export function cmsRoutes(
       // Redeem a COLLECTION preview link. Same contract as the page preview route above:
       // public and pre-auth by design (the signature IS the authorization, so a reviewer
       // with no account can open it), verified BEFORE any read, and scoped by the signed
-      // payload to one row of one collection — a valid signature never widens into "see
+      // payload to one row of one collection: a valid signature never widens into "see
       // every draft".
       method: "GET",
       path: COLLECTION_PREVIEW_PATH,
@@ -6838,11 +6838,11 @@ export function cmsRoutes(
           name: "getCollectionPreview",
           input: { collection: payload.c, id: payload.r },
           tenant: payload.t, // from the SIGNED payload, never from the query string
-          roles: [...collectionPreviewRoles], // the COLLECTION handlers' gate — see `collectionHandlers`
+          roles: [...collectionPreviewRoles], // the COLLECTION handlers' gate, see `collectionHandlers`
         });
         const body = (await res.json().catch(() => ({}))) as { ok?: boolean; result?: JsonValue; error?: string; code?: string };
         if (body.ok !== true) {
-          // Uniform client-visible response (probe resistance), but LOG the real reason —
+          // Uniform client-visible response (probe resistance), but LOG the real reason:
           // a role or wiring mistake here is otherwise indistinguishable from "not found".
           console.error(`pramen/cms: collection preview redemption failed (${res.status} ${body.code ?? "?"}: ${body.error ?? "no detail"})`);
           return previewDenied(404, "not found");

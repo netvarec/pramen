@@ -1,4 +1,4 @@
-// DDL generation — CREATE TABLE for a new entity and the additive ALTER fragment
+// DDL generation: CREATE TABLE for a new entity and the additive ALTER fragment
 // for a new column. Runs in TS inside the isolate; see runtime/migrate.ts for how
 // these are applied.
 
@@ -38,11 +38,11 @@ export function defaultSqlValue(f: FieldDef): string | null {
 
 /** The ` DEFAULT x` fragment for a column, or "" when it has no default. A raw-SQL
  * `defaultExpr` (e.g. `datetime('now')`) is emitted UNQUOTED; a literal `default` is
- * quote-escaped. UNIQUE/index are NOT inline — they're emitted as separate index
+ * quote-escaped. UNIQUE/index are NOT inline: they're emitted as separate index
  * statements so the same code path serves both CREATE TABLE and ALTER TABLE ADD COLUMN. */
 function defaultSql(f: FieldDef): string {
   // A raw-SQL default is parenthesized: SQLite's column-DEFAULT grammar only takes a
-  // bare literal/keyword, so a function call (e.g. datetime('now')) must be wrapped —
+  // bare literal/keyword, so a function call (e.g. datetime('now')) must be wrapped, as
   // `DEFAULT (datetime('now'))`. Parens are harmless around a keyword too.
   if (f.defaultExpr !== undefined) return ` DEFAULT (${f.defaultExpr})`;
   return f.default !== undefined ? ` DEFAULT ${defaultLiteral(f.default)}` : "";
@@ -58,9 +58,9 @@ function columnSql(name: string, f: FieldDef): string {
 }
 
 /** Table-level FOREIGN KEY clauses for an entity's owning relations. A real FK is emitted
- * ONLY for a `belongsTo`/`oneHasOne` that declares `onDelete` — so FKs are opt-in and
+ * ONLY for a `belongsTo`/`oneHasOne` that declares `onDelete`, so FKs are opt-in and
  * pre-existing logical relations are unaffected (no retroactive constraint on data). `pkOf`
- * resolves the referenced entity's primary-key column. `skip` omits specific FK columns —
+ * resolves the referenced entity's primary-key column. `skip` omits specific FK columns;
  * the migrator uses it to drop an FK whose existing data has orphaned references. */
 export function foreignKeyClauses(
   def: { relations?: RelationDefs },
@@ -130,7 +130,7 @@ export function compositeKey(cols: readonly string[]): string {
 
 /** CREATE [UNIQUE] INDEX statements for a table's unique/index columns (idempotent
  * via IF NOT EXISTS). Unique wins if a column declares both. `skipCols` omits specific
- * columns — the migrator uses it to avoid emitting a UNIQUE index that would throw
+ * columns; the migrator uses it to avoid emitting a UNIQUE index that would throw
  * (duplicate values present on a column that just gained `unique()`); that delta is
  * reported as skipped instead. Entity-level composite uniques (`def.uniques`) are
  * emitted too; `skipUniques` omits specific tuples (keyed by {@link compositeKey}). */

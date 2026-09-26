@@ -1,9 +1,9 @@
-// @pramen/auth — the OIDC authorization-code + PKCE flow.
+// @pramen/auth: the OIDC authorization-code + PKCE flow.
 //
 // Driven against a FAKE provider: a real RS256 key pair via WebCrypto, a discovery document,
 // a JWKS, and a token endpoint, all served through a stubbed `fetch`. That exercises the
-// parts that actually go wrong — signature and nonce verification, PKCE, single-use state,
-// and the account-key rules — without a network or a real IdP.
+// parts that actually go wrong (signature and nonce verification, PKCE, single-use state,
+// and the account-key rules) without a network or a real IdP.
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { createOidcAuth, oidcHandlers, OIDC_SYSTEM_ROLE, OIDC_UPSERT_HANDLER } from "../packages/auth/src/oidc";
@@ -85,7 +85,7 @@ async function startThenCallback(h: ReturnType<typeof harness>, over: { state?: 
   return { authUrl, started, res: await callback!.handler(cb, env(h.KV), over.ctx ?? upsert()) };
 }
 
-describe("createOidcAuth — the authorization request", () => {
+describe("createOidcAuth: the authorization request", () => {
   test("redirects to the provider's authorize endpoint with PKCE S256 and a nonce", async () => {
     const h = harness(); active = h;
     const { authUrl } = await startThenCallback(h);
@@ -99,7 +99,7 @@ describe("createOidcAuth — the authorization request", () => {
   });
 
   // The verifier is what proves this client redeemed the code. It must never leave the
-  // server — the browser carries only the random state key.
+  // server: the browser carries only the random state key.
   test("the PKCE verifier stays server-side; the browser gets only the state key", async () => {
     const h = harness(); active = h;
     // Only the START leg: the callback consumes the stored state, so the verifier has to be
@@ -112,14 +112,14 @@ describe("createOidcAuth — the authorization request", () => {
   });
 });
 
-describe("createOidcAuth — the callback", () => {
+describe("createOidcAuth: the callback", () => {
   test("exchanges the code with the verifier and lands the session in the URL FRAGMENT", async () => {
     const h = harness(); active = h;
     const { res } = await startThenCallback(h);
     expect(res.status).toBe(302);
     const target = new URL(res.headers.get("location")!);
     expect(target.origin + target.pathname).toBe("https://app.example.com/signed-in");
-    // A fragment is never sent to a server — not in logs, not in Referer.
+    // A fragment is never sent to a server: not in logs, not in Referer.
     expect(target.hash).toMatch(/^#token=/);
     expect(target.search).toBe("");
     expect(h.seen.tokenBody?.get("code_verifier")).toBeTruthy();
@@ -139,7 +139,7 @@ describe("createOidcAuth — the callback", () => {
 
   // State is the anti-replay: two tabs racing one code, or a resubmitted callback, must not
   // both proceed.
-  test("state is SINGLE USE — replaying the same callback fails", async () => {
+  test("state is SINGLE USE, so replaying the same callback fails", async () => {
     const h = harness(); active = h;
     const oidc = createOidcAuth(opts);
     const [start, callback] = oidc.routes;
@@ -223,7 +223,7 @@ describe("createOidcAuth — the callback", () => {
 });
 
 describe("the privileged upsert handler", () => {
-  // This test used to assert `auth` was `[]` — the declaration — and so it passed while every
+  // This test used to assert `auth` was `[]` (the declaration) and so it passed while every
   // OIDC sign-in was failing. `callPrivileged` does NOT bypass the handler gate: it sends an
   // ordinary identity through the same `dispatch` check as any other caller, and an empty
   // allow-list is satisfied by nobody, the callback included. So the assertions here run the
@@ -234,7 +234,7 @@ describe("the privileged upsert handler", () => {
     expect(authorizeHandler(authOf(), { roles: [OIDC_SYSTEM_ROLE] })).toBe(true);
   });
 
-  test("no ordinary caller does — an admin included", () => {
+  test("no ordinary caller does, an admin included", () => {
     expect(authorizeHandler(authOf(), { roles: ["admin"] })).toBe(false);
     expect(authorizeHandler(authOf(), { roles: ["user", "editor"] })).toBe(false);
     expect(authorizeHandler(authOf(), null)).toBe(false);
@@ -255,7 +255,7 @@ describe("the privileged upsert handler", () => {
   });
 
   // It reports rather than throws on purpose: `createPramen` runs at the Worker entry's
-  // module scope, so throwing would fail every request in the deployment — and an empty list
+  // module scope, so throwing would fail every request in the deployment, and an empty list
   // is not always a mistake (`@pramen/cms` builds `auth` from a caller's `reviewerRoles`, so
   // `reviewerRoles: []` produces one deliberately).
   test("reporting it does not take the deployment down", () => {
@@ -263,7 +263,7 @@ describe("the privileged upsert handler", () => {
   });
 
   // The gate is only as good as the claim that no issued token carries the role. The token
-  // verifier is what makes that true — see SYSTEM_ROLE_PREFIX.
+  // verifier is what makes that true. See SYSTEM_ROLE_PREFIX.
   test("a system role cannot arrive from outside, so the gate cannot be presented to", () => {
     expect(isSystemRole(OIDC_SYSTEM_ROLE)).toBe(true);
   });
@@ -271,7 +271,7 @@ describe("the privileged upsert handler", () => {
   // And the end of the chain: a sign-in through a `callPrivileged` that enforces the REAL
   // gate instead of waving the call through. Every other callback test here stubs
   // `callPrivileged` to succeed unconditionally, which is precisely how a handler nobody
-  // could reach went unnoticed — the stub was more permissive than dispatch.
+  // could reach went unnoticed: the stub was more permissive than dispatch.
   test("a full callback completes when the upsert is gated exactly as dispatch gates it", async () => {
     const h = harness(); active = h;
     const seen: (string[] | undefined)[] = [];
@@ -310,7 +310,7 @@ describe("the callback is a public, pre-auth endpoint anyone can craft a URL for
     const xss = await hit('<img src=x onerror="alert(1)">');
     expect(xss).not.toContain("<img");
     expect(xss).not.toContain("onerror");
-    expect(xss).toContain("unspecified"); // outside the RFC 6749 vocabulary — not echoed
+    expect(xss).toContain("unspecified"); // outside the RFC 6749 vocabulary, so not echoed
     // A legitimate code still reaches the user, because that is the point of showing it.
     expect(await hit("access_denied")).toContain("access_denied");
     // …and even a conforming-looking value cannot break out of the markup.
@@ -326,7 +326,7 @@ describe("the callback is a public, pre-auth endpoint anyone can craft a URL for
     expect(await res.text()).toContain("did not start in this browser");
   });
 
-  test("a WRONG binder cookie is refused too — presence alone is not enough", async () => {
+  test("a WRONG binder cookie is refused too, because presence alone is not enough", async () => {
     const h = harness(); active = h;
     const { res } = await startThenCallback(h, { cookie: "pramen_oidc=some-other-browsers-binder" });
     expect(res.status).toBe(400);

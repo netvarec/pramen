@@ -101,7 +101,7 @@ describe("migrate", () => {
     db.run("INSERT INTO notes (title, body, views) VALUES ('keep', 'mybody', 7)");
     db.run("INSERT INTO tags (name) VALUES ('x')");
 
-    // Default (no allowDestructive): additive-only — the drop/rename/table-drop is skipped.
+    // Default (no allowDestructive): additive-only, so the drop/rename/table-drop is skipped.
     const r = await migrate(d, v3);
     expect(r.rebuilt).toEqual([]);
     expect(r.droppedTables).toEqual([]);
@@ -143,7 +143,7 @@ describe("migrate", () => {
       "relation 'notes.author' crosses a partition boundary: 'notes' is in partition " +
         "'default' but target 'users' is in 'audit'.",
     );
-    // failed fast — no tables created (not even the bookkeeping meta table).
+    // failed fast, with no tables created (not even the bookkeeping meta table).
     expect(db.query("SELECT name FROM sqlite_master WHERE type = 'table'").all()).toEqual([]);
   });
 
@@ -173,7 +173,7 @@ const tableNames = (db: Database): string[] =>
       .all() as { name: string }[]
   ).map((r) => r.name);
 
-describe("migrate — partition-scoped", () => {
+describe("migrate: partition-scoped", () => {
   // `notes` in the default partition; `audit` (+ `audit_meta`) in the "audit" partition.
   const multi = defineSchema({
     notes: Entity((t) => ({ id: t.id(), title: t.text() })),
@@ -198,7 +198,7 @@ describe("migrate — partition-scoped", () => {
     expect(tableNames(db)).toEqual(["notes"]);
   });
 
-  test("no partition (default) creates every partition's tables — unchanged behavior", async () => {
+  test("no partition (default) creates every partition's tables, which is unchanged behavior", async () => {
     const db = new Database(":memory:");
     const r = await migrate(bunSqliteDriver(db), multi);
     expect(r.created.sort()).toEqual(["audit", "audit_meta", "notes"]);
@@ -310,11 +310,11 @@ describe("migrate — partition-scoped", () => {
 
 // --- modifier reconciliation on an EXISTING column. migrate() now detects and applies
 // (or safely skips) a NOT NULL / DEFAULT / PRIMARY KEY / UNIQUE change on a column that
-// already exists — and, crucially, only records the schema hash when the store fully
+// already exists, and, crucially, only records the schema hash when the store fully
 // matches the schema, so a skipped change keeps showing as drift instead of silently
 // diverging.
 
-describe("migrate — modifier reconciliation", () => {
+describe("migrate: modifier reconciliation", () => {
   test("adding notNull() over NULL rows (no default) is skipped by default; hash unwritten", async () => {
     const db = new Database(":memory:");
     const d = bunSqliteDriver(db);
@@ -347,7 +347,7 @@ describe("migrate — modifier reconciliation", () => {
     expect((await migrate(d, v)).skipped.length).toBeGreaterThan(0); // skipped while NULL present
 
     db.run("UPDATE notes SET code = 'x' WHERE code IS NULL"); // operator fixes the data
-    const fixed = await migrate(d, v); // still gate OFF — now safe (no NULLs)
+    const fixed = await migrate(d, v); // still gate OFF, now safe (no NULLs)
     expect(fixed.rebuilt).toContain("notes");
     expect(fixed.skipped).toEqual([]);
     // NOT NULL is now enforced
@@ -365,7 +365,7 @@ describe("migrate — modifier reconciliation", () => {
     db.run("INSERT INTO notes (status) VALUES ('open')");
 
     const v = defineSchema({ notes: Entity((t) => ({ id: t.id(), status: notNull(defaultTo(t.text(), "pending")) })) });
-    const r = await migrate(d, v); // gate OFF — a default makes it safe
+    const r = await migrate(d, v); // gate OFF, since a default makes it safe
     expect(r.rebuilt).toContain("notes");
     expect(r.skipped).toEqual([]);
     // the NULL row was backfilled from the default; the other row kept its value
@@ -382,7 +382,7 @@ describe("migrate — modifier reconciliation", () => {
     db.run("INSERT INTO notes (id, status) VALUES (2, NULL)");
 
     const v = defineSchema({ notes: Entity((t) => ({ id: t.id(), status: defaultTo(t.text(), "pending") })) });
-    const r = await migrate(d, v); // no gate — a DEFAULT add loses no data
+    const r = await migrate(d, v); // no gate, since a DEFAULT add loses no data
     expect(r.rebuilt).toContain("notes");
     expect(r.skipped).toEqual([]);
     // existing rows preserved verbatim (a DEFAULT only fills omitted future inserts)
@@ -477,11 +477,11 @@ describe("migrate — modifier reconciliation", () => {
     const r = await migrate(d, v); // hash differs (hidden is in the fingerprint) but no store delta
     expect(r.rebuilt).toEqual([]);
     expect(r.skipped).toEqual([]);
-    expect((await migrate(d, v)).changed).toBe(false); // hash was recorded — store already matched
+    expect((await migrate(d, v)).changed).toBe(false); // hash was recorded; store already matched
   });
 });
 
-describe("migrate — partition move", () => {
+describe("migrate: partition move", () => {
   test("an entity moved to another partition is a skipped manual migration; data preserved, hash unwritten", async () => {
     const db = new Database(":memory:");
     const d = bunSqliteDriver(db);
@@ -499,7 +499,7 @@ describe("migrate — partition move", () => {
   });
 });
 
-describe("migrate — composite unique", () => {
+describe("migrate: composite unique", () => {
   const withUnique = defineSchema({
     members: Entity((t) => ({ id: t.id(), orgId: t.text(), userId: t.text() }), undefined, { unique: [["orgId", "userId"]] }),
   });
@@ -511,8 +511,8 @@ describe("migrate — composite unique", () => {
     const db = new Database(":memory:");
     await migrate(bunSqliteDriver(db), withUnique);
     db.run("INSERT INTO members (orgId, userId) VALUES ('o1', 'u1')");
-    db.run("INSERT INTO members (orgId, userId) VALUES ('o1', 'u2')"); // same org, different user — ok
-    db.run("INSERT INTO members (orgId, userId) VALUES ('o2', 'u1')"); // different org, same user — ok
+    db.run("INSERT INTO members (orgId, userId) VALUES ('o1', 'u2')"); // same org, different user: ok
+    db.run("INSERT INTO members (orgId, userId) VALUES ('o2', 'u1')"); // different org, same user: ok
     expect(() => db.run("INSERT INTO members (orgId, userId) VALUES ('o1', 'u1')")).toThrow();
   });
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// @pramen/cms CLI — ships as the `pramen-cms` bin.
+// @pramen/cms CLI: ships as the `pramen-cms` bin.
 //
 //   pramen-cms help
 //   pramen-cms types [--tenant t] [--url u] [--token jwt] [--out path]
@@ -22,7 +22,7 @@ const KNOWN_FLAGS = ["url", "tenant", "token", "out"] as const;
 
 /** Read `--name value` or `--name=value`.
  *
- * Both forms, because `--out=path` silently printed to stdout and exited 0 — a green
+ * Both forms, because `--out=path` silently printed to stdout and exited 0: a green
  * regenerate-and-diff CI with no file written. And a value is required, because `--out`
  * with an empty $OUT did the same, while `--tenant --out x` set the tenant to "--out". */
 function flag(name: string): string | undefined {
@@ -52,10 +52,10 @@ function assertKnownFlags(): void {
 function fail(msg: string): never {
   console.error(`pramen-cms: ${msg}`);
   process.exit(1);
-  throw new Error(msg); // unreachable — process.exit is typed as returning
+  throw new Error(msg); // unreachable, since process.exit is typed as returning
 }
 
-const HELP = `pramen-cms — CLI for @pramen/cms
+const HELP = `pramen-cms: CLI for @pramen/cms
 
 Usage: pramen-cms <command>
 
@@ -63,7 +63,7 @@ Usage: pramen-cms <command>
   types                     generate TS interfaces for a tenant's block types
                             [--tenant t] [--url u] [--token jwt] [--out path]
 
-Block types are DATA — rows a webmaster adds with no deploy — so their shape is only
+Block types are DATA (rows a webmaster adds with no deploy) so their shape is only
 knowable from a running instance. \`types\` reads them from one and emits an interface per
 slug plus a BlockFieldsBySlug registry. With no --out it prints.`;
 
@@ -99,17 +99,17 @@ async function typesCmd(): Promise<void> {
   }
   const rows = body.result!;
   // Refuse rather than write an empty module. A --tenant typo routes to a fresh Durable
-  // Object whose cms_block_types is legitimately empty, so this is the likely cause — and
+  // Object whose cms_block_types is legitimately empty, so this is the likely cause, and
   // exiting 0 after clobbering src/cms.gen.ts would sail through a regenerate-and-diff CI.
   if (rows.length === 0) {
-    fail(`types: tenant '${tenant}' has no block types — refusing to write an empty module (check --tenant/--url)`);
+    fail(`types: tenant '${tenant}' has no block types. Refusing to write an empty module (check --tenant/--url)`);
   }
 
   let out: string;
   try {
     out = generateBlockTypes(rows);
   } catch (e) {
-    // It throws for a slug that is not a distinct valid identifier — a data problem the
+    // It throws for a slug that is not a distinct valid identifier, a data problem the
     // user must fix in the CMS, so name it rather than print a stack trace.
     fail(`types: ${e instanceof Error ? e.message : String(e)}`);
   }
@@ -122,7 +122,7 @@ async function typesCmd(): Promise<void> {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, out!);
   } catch (e) {
-    // Same treatment as the fetch above — an unwritable --out is a CLI error, not a stack.
+    // Same treatment as the fetch above: an unwritable --out is a CLI error, not a stack.
     fail(`types: cannot write ${dest} (${e instanceof Error ? e.message : String(e)})`);
   }
   console.log(`  + ${dest}  (${rows.length} block type${rows.length === 1 ? "" : "s"} from tenant '${tenant}')`);

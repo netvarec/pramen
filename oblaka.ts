@@ -1,4 +1,4 @@
-// oblaka IaC — the source of truth for pramen's Cloudflare topology.
+// oblaka IaC: the source of truth for pramen's Cloudflare topology.
 //
 //   bun run config            generate wrangler.jsonc from this file (local)
 //   bun run deploy            provision resources (oblaka --remote) + ship code (wrangler deploy)
@@ -12,7 +12,7 @@ import { define, D1Database, DurableObject, EmailService, KVNamespace, Queue, R2
 
 // One name to namespace every resource this project owns. Cloudflare resource
 // names are account-global, so set a unique PROJECT per app and all its resources
-// (Worker, DO, KV) get distinct names — many pramen projects coexist in one account.
+// (Worker, DO, KV) get distinct names, so many pramen projects coexist in one account.
 const PROJECT = "pramen";
 
 export default define(({ env }) => {
@@ -23,7 +23,7 @@ export default define(({ env }) => {
       ? {
           AUTH_SECRET: "dev-secret-change-me",
           FILES_SECRET: "dev-files-secret-change-me",
-          // Opt-in JWT claim validation (default OFF — unset). Uncomment to tighten what
+          // Opt-in JWT claim validation (default OFF, unset). Uncomment to tighten what
           // the verifier accepts: reject tokens with no `exp`, and/or pin `aud`/`iss`.
           // AUTH_REQUIRE_EXP: "true",
           // AUTH_AUDIENCE: "pramen",
@@ -41,7 +41,7 @@ export default define(({ env }) => {
           // `${APP_URL}/auth?token=…`). MAIL_FROM is intentionally unset locally;
           // MAIL_CAPTURE opts ctx.mail into the dev inbox (capture to KV) instead of
           // sending. Without MAIL_CAPTURE and MAIL_FROM, ctx.mail FAILS CLOSED (a send
-          // throws) — so a misconfigured prod can't silently stash emails in KV.
+          // throws), so a misconfigured prod can't silently stash emails in KV.
           APP_URL: "http://localhost:8787",
           MAIL_CAPTURE: "true",
           // Seed the demo account `pramen@local` (see `devUserBootstrap` in example/app.ts),
@@ -55,7 +55,7 @@ export default define(({ env }) => {
           // Production email (ctx.mail): set MAIL_FROM to an address on a domain
           // onboarded to Cloudflare Email Sending (`wrangler email sending enable
           // yourdomain.com`); with the EMAIL binding below + MAIL_FROM, ctx.mail sends
-          // for real — no API keys. APP_URL is your frontend origin (magic-link).
+          // for real, with no API keys. APP_URL is your frontend origin (magic-link).
           // MAIL_FROM: "login@yourdomain.com",
           // MAIL_FROM_NAME: "Acme",
           // APP_URL: "https://app.yourdomain.com",
@@ -80,20 +80,20 @@ export default define(({ env }) => {
       // One KV namespace per project. Holds the tenant registry (`tenant:` keys)
       // and handler-facing ctx.kv data (`app:` keys); see packages/server/src/runtime/kv.ts.
       KV: new KVNamespace({ name: `${PROJECT}-kv` }),
-      // D1 database for the "Worker + D1 (no DO)" path — the same engine over D1,
+      // D1 database for the "Worker + D1 (no DO)" path: the same engine over D1,
       // selected per-request via `x-pramen-store: d1`. The DO remains the write path.
       DB: new D1Database({ name: `${PROJECT}-d1` }),
-      // R2 bucket backing file storage — `fileRef` columns + ctx.files + the Worker
+      // R2 bucket backing file storage: `fileRef` columns + ctx.files + the Worker
       // /files/* upload/download route. Bytes live here; the DB holds only metadata.
       FILES: new R2Bucket({ name: `${PROJECT}-files` }),
-      // Cloudflare Email Sending — the transactional-email binding (no API keys).
+      // Cloudflare Email Sending: the transactional-email binding (no API keys).
       // Used by @pramen/auth's magic-link demo (ctx.env.EMAIL.send(...)). The `from`
       // domain must be onboarded: `wrangler email sending enable yourdomain.com`.
       EMAIL: new EmailService(),
-      // Cloudflare Queues — native message queue for ctx.queue. `binding: "both"` makes
+      // Cloudflare Queues: a native message queue for ctx.queue. `binding: "both"` makes
       // this Worker BOTH the producer (env.JOBS, used by ctx.queue.send("JOBS", …)) AND
       // the consumer (createPramen().queue routes the batch to app.queues["pramen-jobs"]).
-      // `ctx.queue` is decoupled, high-throughput fan-out — distinct from ctx.tasks (the
+      // `ctx.queue` is decoupled, high-throughput fan-out, distinct from ctx.tasks (the
       // transactional outbox). Tune batching/retry here; add `deadLetterQueue` for a DLQ.
       JOBS: new Queue({
         name: `${PROJECT}-jobs`,

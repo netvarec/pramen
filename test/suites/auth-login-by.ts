@@ -1,4 +1,4 @@
-// createAuthHandlers({ loginBy }) — logging in with an email instead of the username.
+// createAuthHandlers({ loginBy }): logging in with an email instead of the username.
 //
 // The motivating case: a migration where auth_users.username is an opaque id carried over
 // from the old system, so members know only their email address. Proves the email path

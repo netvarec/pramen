@@ -1,8 +1,8 @@
-// Block Kit — rendering a custom admin page the server described as JSON (GitHub #33).
+// Block Kit: rendering a custom admin page the server described as JSON (GitHub #33).
 //
 // The loop is one round trip per interaction: the editor sends `page_load`, the server
 // answers with blocks, the host renders them, a click or a submit goes back, new blocks come
-// out. No project JavaScript ever runs here — a block is DATA, and every string in it goes
+// out. No project JavaScript ever runs here: a block is DATA, and every string in it goes
 // through React, so there is no markup path to sanitize on this side. The one attribute that
 // is not text (`image.url`) is allow-listed server-side on the way out.
 //
@@ -44,7 +44,7 @@ export function AdminPageView({ api, slug, label, onError }: { api: Api; slug: s
    * Every input on the page, keyed by `action_id`, held HERE rather than per block.
    *
    * A block's inputs used to be local to it, so an interaction carried only the pressed
-   * block's own values — and the shipped `lecture-desk` example is built the way any such
+   * block's own values, and the shipped `lecture-desk` example is built the way any such
    * page is: a search box in one `actions` block, per-row buttons in another. Pressing a
    * row button sent `values: {}`, the page recomputed its filter as empty, and the table
    * came back UNFILTERED while the search box still showed the term. The three row buttons
@@ -71,7 +71,7 @@ export function AdminPageView({ api, slug, label, onError }: { api: Api; slug: s
         setToast(next.toast ?? null);
       } catch (e) {
         // A failed LOAD leaves nothing to render, so it says so here. A failed action leaves
-        // the previous page on screen, which is the right place to be — the banner names
+        // the previous page on screen, which is the right place to be: the banner names
         // what went wrong and nothing was lost.
         setFailed(true);
         onError(String((e as Error).message ?? e));
@@ -131,7 +131,7 @@ export function BlockList({ blocks, values, setValue, disabled, onFire }: { bloc
     <div className="flex flex-col gap-4">
       {/* Keyed by the block's OWN identity where it has one, not by index. `FormBlock`'s
           comment claims a `block_id` key is what re-seeds its inputs from the server's
-          fresh `initial_value`s — and it was right about the requirement and wrong about
+          fresh `initial_value`s, and it was right about the requirement and wrong about
           the code, because this line keyed on `i`. A wizard whose step 2 put a different
           form at the same index kept step 1's `values`: every field rendered empty while
           `missing` blocked submit forever, and a typed `secret_input` survived into a later
@@ -154,7 +154,7 @@ function BlockView({ block, values, setValue, disabled, onFire }: { block: Admin
       return <Heading level={block.level === 3 ? "3" : block.level === 2 ? "2" : "1"} className="font-normal">{block.text}</Heading>;
     case "section":
       // `whitespace-pre-wrap` so a page can lay out a paragraph with line breaks without
-      // needing markup — which is the thing this format deliberately does not have.
+      // needing markup, which is the thing this format deliberately does not have.
       return <p className="max-w-[72ch] whitespace-pre-wrap text-sm text-fg">{block.text}</p>;
     case "context":
       return <p className="max-w-[72ch] text-caption text-fg-subtle">{block.text}</p>;
@@ -193,7 +193,7 @@ function BlockView({ block, values, setValue, disabled, onFire }: { block: Admin
     case "table":
       // The only interactive-capable block that used NOT to get the value bag. A row could
       // show that a venue is hidden and could not offer the switch, so a list of 800 rows
-      // had to be written as 800 `actions` blocks — a table with the table taken out.
+      // had to be written as 800 `actions` blocks: a table with the table taken out.
       return <TableBlock block={block} values={values} setValue={setValue} disabled={disabled} onFire={onFire} />;
     case "image":
       return (
@@ -260,7 +260,7 @@ function TableBlock({ block, values, setValue, disabled, onFire }: { block: Extr
 /** One cell: a value to read, or a control to act with.
  *
  * A cell's element is the SAME `ElementView` an `actions` block renders, on the same page
- * value bag and the same `onFire` — a row's button is not a special kind of button, it is a
+ * value bag and the same `onFire`: a row's button is not a special kind of button, it is a
  * button that happens to sit in a row. What identifies the row is the button's `value`,
  * which is the idiom that already existed ("one `action_id` can serve a row"); an input in a
  * cell has to carry a per-row `action_id` instead, since the bag is keyed by it, and the
@@ -270,7 +270,7 @@ function CellView({ value, blockId, values, setValue, disabled, onFire }: { valu
   return <>{cell(value)}</>;
 }
 
-/** A cell is a value or an element, told apart by shape — the same discrimination the server
+/** A cell is a value or an element, told apart by shape, the same discrimination the server
  * enforces on the way out, so nothing else can be an object by the time it gets here. */
 function isElementCell(v: AdminCell | undefined): v is AdminElement {
   return v !== null && typeof v === "object" && (ADMIN_ELEMENT_TYPES as readonly string[]).includes(v.type);
@@ -286,7 +286,7 @@ function cell(v: AdminCell | undefined): string {
 }
 
 function ActionsBlock({ block, values, setValue, disabled, onFire }: { block: Extract<AdminBlock, { type: "actions" }>; disabled: boolean; onFire: (f: Fired) => void } & ValueBag) {
-  // Inputs read and write the PAGE's value bag, not a local one — see `AdminPageView`.
+  // Inputs read and write the PAGE's value bag, not a local one. See `AdminPageView`.
   // `onFire` attaches the whole bag, so a filter in this block reaches a button in another.
   return (
     <div className="flex flex-wrap items-end gap-3">
@@ -298,7 +298,7 @@ function ActionsBlock({ block, values, setValue, disabled, onFire }: { block: Ex
 }
 
 /**
- * One element — a button that fires, or an input bound to the page's value bag.
+ * One element: a button that fires, or an input bound to the page's value bag.
  *
  * Shared by `actions` and by a table cell so that the two cannot drift: a row's control has
  * to reach the handler with exactly what a toolbar control reaches it with, or "the button
@@ -335,7 +335,7 @@ function FormBlock({ block, values, setValue, disabled, onFire }: { block: Extra
   // cannot keep values the server has since replaced. (The `block_id` key in `BlockList` is
   // still what keeps two forms from sharing a React identity.)
   //
-  // A toggle is never "missing" — false is an answer.
+  // A toggle is never "missing", because false is an answer.
   const missing = block.fields.filter((f) => f.type !== "toggle" && f.required && isEmpty(values[f.action_id]));
   return (
     <form
@@ -363,13 +363,13 @@ const isInput = (el: AdminElement): el is AdminInput => el.type !== "button";
 
 /** Every input on a page, in declaration order, including those in table cells and those
  * nested in `columns` and `accordion`. The page seeds its whole value bag from this on every
- * response — an input the walk misses renders empty however good its `initial_value` was,
+ * response: an input the walk misses renders empty however good its `initial_value` was,
  * and then submits that emptiness. */
 function collectInputs(blocks: readonly AdminBlock[], out: AdminInput[] = []): AdminInput[] {
   for (const b of blocks) {
     if (b.type === "form") out.push(...b.fields);
     else if (b.type === "actions") out.push(...b.elements.filter(isInput));
-    // Only cells a COLUMN names, because only those are rendered — the same set the server
+    // Only cells a COLUMN names, because only those are rendered: the same set the server
     // checks for colliding `action_id`s, so the two halves agree on what is on the page.
     else if (b.type === "table") for (const row of b.rows) for (const c of b.columns) { const v = row[c.key]; if (isElementCell(v) && isInput(v)) out.push(v); }
     else if (b.type === "columns") for (const col of b.columns) collectInputs(col, out);
@@ -388,7 +388,7 @@ export function seedValues(blocks: readonly AdminBlock[]): BlockValues {
 function initialValues(inputs: readonly AdminInput[]): BlockValues {
   const out: BlockValues = {};
   for (const f of inputs) {
-    // A `secret_input` deliberately has no `initial_value` — a stored secret is never echoed
+    // A `secret_input` deliberately has no `initial_value`: a stored secret is never echoed
     // back to the browser, so the field starts empty on every render.
     if (f.type === "toggle") out[f.action_id] = f.initial_value ?? false;
     else if (f.type === "number_input") out[f.action_id] = f.initial_value ?? null;
@@ -414,7 +414,7 @@ function InputView({ input, value, onChange, disabled }: { input: AdminInput; va
    * The page-level `toast` was the only failure surface there was, and it is the wrong one
    * for "25:00 is not a time" or "the end is before the start": it names no field, it is
    * gone in three seconds, and it floats at the top of a form whose sixth input is the
-   * problem. It cannot be worked around from the page either — `form` renders a flat list of
+   * problem. It cannot be worked around from the page either: `form` renders a flat list of
    * inputs, so a page cannot interleave a `context` block to put the message where it
    * belongs.
    *

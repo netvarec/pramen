@@ -1,5 +1,5 @@
-// The D1 store has no Durable Object alarm, so a DELAYED task — a scheduled publish, a
-// retry backoff — runs only when a Cron trigger calls `createPramen().scheduled`. Forgetting
+// The D1 store has no Durable Object alarm, so a DELAYED task (a scheduled publish, a
+// retry backoff) runs only when a Cron trigger calls `createPramen().scheduled`. Forgetting
 // that is silent: the row never goes live and nothing says why. The Worker notices the
 // situation and says so once.
 
@@ -14,7 +14,7 @@ describe("missing-Cron detection on the D1 store", () => {
   });
 
   // A due-now task is drained by the request tail itself, so nothing depends on the cron.
-  test("a task already due needs no cron — the request tail drains it", () => {
+  test("a task already due needs no cron: the request tail drains it", () => {
     expect(shouldWarnMissingCron({ cronSeen: false, warned: false, nextRunAt: now, now })).toBe(false);
     expect(shouldWarnMissingCron({ cronSeen: false, warned: false, nextRunAt: now - 1, now })).toBe(false);
   });
@@ -23,7 +23,7 @@ describe("missing-Cron detection on the D1 store", () => {
     expect(shouldWarnMissingCron({ cronSeen: false, warned: false, nextRunAt: null, now })).toBe(false);
   });
 
-  // Once a Cron drain has actually happened, the question is settled — it exists.
+  // Once a Cron drain has actually happened, the question is settled: it exists.
   test("a cron that has fired silences it permanently", () => {
     expect(shouldWarnMissingCron({ cronSeen: true, warned: false, nextRunAt: now + 60_000, now })).toBe(false);
   });

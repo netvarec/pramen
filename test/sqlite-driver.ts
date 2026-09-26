@@ -1,4 +1,4 @@
-// A Driver backed by bun:sqlite — an async, non-DO substrate used to prove the
+// A Driver backed by bun:sqlite, an async, non-DO substrate used to prove the
 // engine (migrate, Db, ACL) runs unchanged over the Driver seam. Behaves like D1
 // (async, SQLite dialect, no interactive transaction); `batch()` models D1's atomic
 // db.batch(). Foreign keys are enabled to mirror DO/D1's default enforcement.
@@ -23,7 +23,7 @@ export function bunSqliteDriver(db: Database): Driver {
       return fn(); // bun:sqlite autocommits each statement; matches D1's non-atomic transaction()
     },
     async batch(statements: ReadonlyArray<{ sql: string; params: unknown[] }>): Promise<void> {
-      // A real transaction with deferred FK checks — mirrors D1's atomic db.batch(): a
+      // A real transaction with deferred FK checks, mirroring D1's atomic db.batch(): a
       // rebuild's transient FK violations are validated only at the batch commit.
       db.run("BEGIN");
       try {

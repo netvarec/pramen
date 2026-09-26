@@ -7,7 +7,7 @@
 // WHAT IT IS AND IS NOT FOR. It is the second of two collectors. The Worker records a
 // pageview whenever it serves the page; this records one only when no Worker did, and
 // otherwise reports the things a server cannot see. Which case it is in is decided by the
-// HTML the visitor actually received — see `VIEW_META`.
+// HTML the visitor actually received. See `VIEW_META`.
 
 /** The meta tag a server-rendered page carries: `<meta name="pramen-view" content="…">`.
  *
@@ -86,7 +86,7 @@ export function trackerScript(opts: TrackerOptions = {}): string {
     try { navigator.sendBeacon(URL_, JSON.stringify({ events: [payload(kind)] })); } catch (e) {}
   }
 
-  // The pageview goes immediately when nothing else recorded it — waiting for pagehide
+  // The pageview goes immediately when nothing else recorded it: waiting for pagehide
   // would lose every visitor whose browser discards the beacon on a crash or a force-quit,
   // and a pageview that arrives late is worth less than one that arrives.
   if (!serverViewId) send("pageview");

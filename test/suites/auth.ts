@@ -22,7 +22,7 @@ export async function runAuth(base: string): Promise<void> {
 
   // the issued token is accepted by the core verifier (me echoes the identity)
   const me = await call("me", {}, token);
-  assert(me.body.ok && me.body.result?.userId === username, "auth: issued token verifies — me returns the identity");
+  assert(me.body.ok && me.body.result?.userId === username, "auth: issued token verifies, me returns the identity");
   assert(JSON.stringify(me.body.result.roles) === JSON.stringify(["user"]), "auth: token carries the assigned roles");
 
   // and it grants ACL access (the `user` role can read notes)

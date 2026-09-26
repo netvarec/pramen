@@ -3,20 +3,20 @@
 // A panel is a project's own React screen, built as its own bundle and rendered inside the
 // editor's tree. The one thing that has to work for that to be possible is that the panel's
 // `import { useState } from "react"` resolves to the editor's React and not to a second
-// copy — two copies share no hook dispatcher, so the failure is not "slower" or "bigger",
+// copy: two copies share no hook dispatcher, so the failure is not "slower" or "bigger",
 // it is an "invalid hook call" exception on the panel's first render.
 //
 // That mechanism is three parts (the runtime published on a global, a generated shim per
 // specifier, and an import map in the shell wiring the two together), and none of them fails
 // visibly on its own: the shim's export list is generated, so a missing name is a browser
 // link error in someone else's bundle; a shim that reads the wrong key returns `undefined`
-// and blames React. So the test is the whole chain, not the pieces — build a real panel
+// and blames React. So the test is the whole chain, not the pieces: build a real panel
 // bundle with react marked EXTERNAL, resolve those externals through the generated shims,
 // import it with the runtime published, and check that the hook it got is the very function
 // the editor exported.
 //
 // The import map is the one link a Bun test cannot execute (it is an HTML feature). It is
-// stood in for by rewriting the same bare specifiers to the same generated files — which is
+// stood in for by rewriting the same bare specifiers to the same generated files, which is
 // exactly what `adminImportMap` tells the browser to do, and
 // `test/cms-astro-integration.test.ts` pins that it says so.
 
@@ -31,7 +31,7 @@ import { exportableNames, panelShimSource, PANEL_GLOBAL_SHIMS, type ModuleNamesp
 import { PANEL_RUNTIME_GLOBAL, panelRuntime, type PanelRuntimeHost } from "../packages/cms-editor/src/panel-runtime";
 import { getPanel, PANEL_RUNTIME_CONTRACT, registerPanel, resetPanels, type PanelRegistration } from "../packages/cms-editor/src/panels";
 
-/** The namespace behind one shim's runtime key — the same four the editor publishes. */
+/** The namespace behind one shim's runtime key: the same four the editor publishes. */
 function namespaceFor(key: PanelGlobalShim["runtimeKey"]): ModuleNamespace {
   if (key === "react") return react;
   if (key === "reactDom") return reactDom;
@@ -49,7 +49,7 @@ afterAll(async () => {
  * load-bearing rather than tidy: a panel is built where react IS installed (it is the
  * consumer's project), and marking a specifier external only comes up AFTER the bundler has
  * resolved it. From a directory with no `node_modules` above it, Bun cannot resolve the JSX
- * runtime it injects itself and the build fails before externals are consulted — which would
+ * runtime it injects itself and the build fails before externals are consulted, which would
  * make this test a statement about temp directories rather than about the mechanism.
  * `node_modules` is ignored by git and emptied in `afterAll`. */
 const SCRATCH_ROOT = join(import.meta.dir, "..", "node_modules");
@@ -73,17 +73,17 @@ describe("what a shim re-exports", () => {
   });
 
   test("`default` and React's internals are never named", () => {
-    // `default` is a keyword — naming it would emit `export const { default } = m`, which does
-    // not parse — and it has its own `export default` line. `__`-prefixed keys are React's
+    // `default` is a keyword, and naming it would emit `export const { default } = m`, which does
+    // not parse, and it has its own `export default` line. `__`-prefixed keys are React's
     // interop bookkeeping and internals, which are nobody's API.
     expect(exportableNames({ alpha: 1, default: undefined, __esModule: true, __CLIENT_INTERNALS: {} } as ModuleNamespace)).toEqual(["alpha"]);
-    // Not an identifier at all — it could not be destructured.
+    // Not an identifier at all, so it could not be destructured.
     expect(exportableNames({ "not-an-identifier": 1, ok: 2 } as ModuleNamespace)).toEqual(["ok"]);
   });
 
   test("re-export every name the editor's React actually has", () => {
     // The point of generating them. A hand-written list is a copy of React's export table
-    // that drifts silently — and drifts into a browser link error in a consumer's panel, not
+    // that drifts silently, and drifts into a browser link error in a consumer's panel, not
     // into anything this repo would notice.
     const names = exportableNames(react);
     expect(names).toContain("useState");
@@ -96,7 +96,7 @@ describe("what a shim re-exports", () => {
 
   test("the jsx runtime shims carry what the automatic transform emits", () => {
     const names = exportableNames(jsxRuntime);
-    // A panel bundle does not choose these imports — its compiler does. Missing `jsxs` is a
+    // A panel bundle does not choose these imports; its compiler does. Missing `jsxs` is a
     // panel that renders a single child and blank-screens on a list.
     expect(names).toEqual(expect.arrayContaining(["jsx", "jsxs", "Fragment"]));
     // The DEV half is the one that matters most, and it is the least obvious: without it an
@@ -117,7 +117,7 @@ describe("what a shim re-exports", () => {
   test("each shim reads ITS OWN namespace off the runtime", async () => {
     // The link that is invisible if you only check that a panel builds: every shim is
     // generated from one template, so a template that names a fixed key instead of the
-    // shim's own produces four files that all hand out React — and a panel's `createPortal`
+    // shim's own produces four files that all hand out React, and a panel's `createPortal`
     // becomes `undefined`, which reads as a React bug rather than a build one.
     const dir = await writeShims();
     (globalThis as PanelRuntimeHost)[PANEL_RUNTIME_GLOBAL] = panelRuntime();
@@ -133,8 +133,8 @@ describe("what a shim re-exports", () => {
 
   test("a shim hands out the module's exports, not the namespace around them", async () => {
     // Synthetic again, and for the same reason: React's namespace and its `module.exports`
-    // agree, so the unwrap is unobservable against the real thing. Where they DISAGREE — any
-    // other interop, any other bundler — reading the namespace would hand a panel a
+    // agree, so the unwrap is unobservable against the real thing. Where they DISAGREE (any
+    // other interop, any other bundler) reading the namespace would hand a panel a
     // different object than `require` would, and the names written into the file were read
     // off the unwrapped one.
     const dir = await writeShims();
@@ -163,12 +163,12 @@ describe("what a shim re-exports", () => {
 });
 
 describe("a panel bundle built against the editor's React", () => {
-  /** Build a panel the way a consumer does — externals and all — then resolve those externals
+  /** Build a panel the way a consumer does, externals and all, then resolve those externals
    * the way the shell's import map would. */
   async function buildPanel(dir: string, name: string, minify: boolean): Promise<string> {
     const entry = join(dir, `${name}.tsx`);
     // An ordinary React component. Nothing in this source says "panel" except the one
-    // registration call — which is the property that makes an existing screen portable
+    // registration call, which is the property that makes an existing screen portable
     // rather than rewritable.
     await writeFile(
       entry,
@@ -185,7 +185,7 @@ describe("a panel bundle built against the editor's React", () => {
       entrypoints: [entry],
       target: "browser",
       minify,
-      // THE contract a consumer's build has to honour, and the whole of it — taken from the
+      // THE contract a consumer's build has to honour, and the whole of it, taken from the
       // shim set rather than written out, so the docs, the import map and this cannot drift.
       external: PANEL_GLOBAL_SHIMS.map((s) => s.specifier),
     });
@@ -194,7 +194,7 @@ describe("a panel bundle built against the editor's React", () => {
     for (const shim of PANEL_GLOBAL_SHIMS) code = code.replaceAll(`"${shim.specifier}"`, `"${join(dir, shim.file)}"`);
     // The stand-in has to be TOTAL, or this proves nothing: a specifier left bare would
     // resolve from the repo's own node_modules and the panel would quietly link against a
-    // second React — which is the failure the whole mechanism exists to prevent.
+    // second React, which is the failure the whole mechanism exists to prevent.
     for (const shim of PANEL_GLOBAL_SHIMS) expect(code).not.toContain(`"${shim.specifier}"`);
     const out = join(dir, `${name}.js`);
     await writeFile(out, code);
@@ -219,10 +219,10 @@ describe("a panel bundle built against the editor's React", () => {
     resetPanels();
   }, 30_000);
 
-  test("an UNMINIFIED build links too — the jsx-dev-runtime footgun", async () => {
+  test("an UNMINIFIED build links too: the jsx-dev-runtime footgun", async () => {
     // The one that would have shipped broken. A development build emits
-    // `react/jsx-dev-runtime`; unmapped, that is the single bare import that still RESOLVES —
-    // from the consumer's own node_modules — so the panel gets a second React and the first
+    // `react/jsx-dev-runtime`; unmapped, that is the single bare import that still RESOLVES,
+    // from the consumer's own node_modules, so the panel gets a second React and the first
     // hook throws, on exactly the build a developer iterates against.
     resetPanels();
     const dir = await writeShims();
@@ -241,11 +241,11 @@ describe("the published runtime", () => {
     expect(Object.keys(panelRuntime()).sort()).toEqual(["jsxDevRuntime", "jsxRuntime", "react", "reactDom", "registerPanel"]);
   });
 
-  test("does NOT publish the contract number — that would be the answer key", () => {
+  test("does NOT publish the contract number, which would be the answer key", () => {
     // A panel has to state the contract it was BUILT against, and the only statement about
     // the build that survives into a bundle is a literal in its source. Published here, the
     // number would be one property access away from being passed straight back into
-    // `registerPanel`, and the check would be this editor comparing its number to its own —
+    // `registerPanel`, and the check would be this editor comparing its number to its own:
     // green against every editor forever, which is the hole it exists to close.
     expect("contract" in panelRuntime()).toBe(false);
   });
@@ -260,7 +260,7 @@ describe("the published runtime", () => {
 
   test("registerPanel does not leak the registry's test seam", () => {
     // The registry's second parameter is its warning sink. Published by reference it would
-    // become part of the surface a panel bundle could reach — and then part of what this
+    // become part of the surface a panel bundle could reach, and then part of what this
     // package has to keep. So the published function must not BE it, and must not forward a
     // second argument to it.
     resetPanels();

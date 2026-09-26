@@ -1,4 +1,4 @@
-// @pramen/cms-editor — the primary nav, as data (GitHub #44 tier 1).
+// @pramen/cms-editor: the primary nav, as data (GitHub #44 tier 1).
 //
 // The nav used to be a fixed sequence written out in JSX, which is why a project-specific
 // section could not be part of the admin: `extraNav` renders dead LAST and opens a new tab,
@@ -31,7 +31,7 @@ const col = (slug: string, navOrder?: number): CollectionMeta => ({
 /** The nav's keys, in order.
  *
  * The base session cannot author, so the ordering tests below are about POSITION and are
- * not also re-asserting which optional sections exist — those get their own block. */
+ * not also re-asserting which optional sections exist; those get their own block. */
 const nav = (over: Partial<NavInput> = {}) =>
   buildNav({
     collections: [],
@@ -107,12 +107,12 @@ describe("what the nav shows at all", () => {
 
   test("a Block Kit page sits INSIDE the chrome, at a position it chooses", () => {
     // The point of #33/#44 tier 3: before this, a project screen could only be an
-    // `extraNav` link — last in the nav, and opening a new tab.
+    // `extraNav` link, last in the nav, and opening a new tab.
     expect(nav({ adminPages: [{ slug: "dispatch", label: "Dispatch" }] })).toEqual(["pages", "media", "app:dispatch", "settings"]);
     expect(nav({ adminPages: [{ slug: "dispatch", label: "Dispatch", navOrder: NAV_ORDER.pages + 10 }] })).toEqual(["pages", "app:dispatch", "media", "settings"]);
   });
 
-  test("a PANEL is placed exactly like a Block Kit page — same list, same band, same key", () => {
+  test("a PANEL is placed exactly like a Block Kit page: same list, same band, same key", () => {
     // The two kinds differ only in where the rendering happens, so the nav must not be able
     // to tell them apart: they arrive on one `listAdminPages`, keyed `app:<slug>`, and both
     // are already role-filtered server-side. A separate entry shape here would have meant a
@@ -136,7 +136,7 @@ describe("what the nav shows at all", () => {
 
 // --- icons ------------------------------------------------------------------------------
 
-/** The full entry objects, not just the keys — the icon tests are about the payload. */
+/** The full entry objects, not just the keys. The icon tests are about the payload. */
 const entries = (over: Partial<NavInput> = {}) =>
   buildNav({
     collections: [],
@@ -261,7 +261,7 @@ describe("section ids", () => {
   });
 
   test("the ids cover every section the nav can actually produce", () => {
-    // Derived from the same `BANDS` the grouping uses, so this is an identity — asserted
+    // Derived from the same `BANDS` the grouping uses, so this is an identity, asserted
     // because the two would otherwise be free to drift into a group with no id.
     const produced = navSections(
       buildNav({
@@ -280,14 +280,14 @@ describe("section ids", () => {
 });
 
 // A stored preference is not a state. The rail's narrow look is expressed entirely in
-// `md:`-scoped classes, so it exists only at desktop widths — while the choice behind it is
+// `md:`-scoped classes, so it exists only at desktop widths, while the choice behind it is
 // persisted per browser and travels to every viewport that browser opens.
 describe("whether the rail is actually narrowed", () => {
   test("only when the viewport is wide enough for narrowing to mean anything", () => {
     expect(railIsNarrow(true, true)).toBe(true);
     // The bug: a rail narrowed on a laptop came back "narrowed" on a phone, where the classes
     // are inert. The rows kept their labels and full width while the JS gated on the stored
-    // choice removed every group heading — and the hairline that stands in for one at 56px is
+    // choice removed every group heading, and the hairline that stands in for one at 56px is
     // `md:`-only too. One undifferentiated column, with the toggle that would undo it
     // `hidden md:inline-flex`: no way back from that viewport.
     expect(railIsNarrow(true, false)).toBe(false);

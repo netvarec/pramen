@@ -1,4 +1,4 @@
-// Read engine — compiles a structured query into parameterized SQL. The "no
+// Read engine: compiles a structured query into parameterized SQL. The "no
 // hand-written SQL in handler code" property is preserved; the long-term plan is
 // to compile this module to WASM so the hot path leaves JS entirely.
 //
@@ -29,7 +29,7 @@ export type SqlExpr =
   | { t: "cmp"; op: CmpOp; col: string; value: CellValue }
   | { t: "in"; col: string; values: CellValue[]; negate: boolean }
   | { t: "null"; col: string; negate: boolean }
-  // Structured substring match — the needle is escaped and wrapped, so `%`/`_` in the
+  // Structured substring match: the needle is escaped and wrapped, so `%`/`_` in the
   // input match literally (unlike raw `like`, where the caller controls wildcards).
   | { t: "strmatch"; col: string; needle: string; mode: StrMode }
   | { t: "and"; parts: SqlExpr[] }
@@ -115,7 +115,7 @@ export function compileExpr(expr: SqlExpr, dialect: Dialect, params: CellValue[]
       // A comparison against NULL is never TRUE in SQL (=, !=, <, > all yield NULL).
       // Only the dedicated `null` node produces `IS NULL`; a `cmp` with a null operand
       // matches nothing. (`eq()` already routes an equality-to-null to the `null` node,
-      // and the keyset comparator handles null order-keys explicitly — so no legitimate
+      // and the keyset comparator handles null order-keys explicitly, so no legitimate
       // caller reaches here with a null value.)
       if (expr.value === null) return { sql: "0", params };
       params.push(dialect.encode(expr.value));
@@ -243,7 +243,7 @@ export interface QuerySpec {
    * here). When absent, falls back to `SELECT *`. The Db layer computes this from the
    * caller's readable field set (+ the PK / order / relation-join columns the read
    * machinery needs), so wide `json`/`text` and `hidden()` columns don't cross RPC on
-   * the D1 path — instead of `SELECT *` then dropping them in JS. */
+   * the D1 path, instead of `SELECT *` then dropping them in JS. */
   readonly columns?: readonly string[];
 }
 

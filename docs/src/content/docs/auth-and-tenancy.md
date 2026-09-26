@@ -10,7 +10,7 @@ claims pass through. A forged or unsigned request gets no identity (and is denie
 the deny-by-default ACL). The trusted identity is forwarded to the DO, which never
 re-derives it.
 
-The core is **verify-only** — bring your own identity provider (any HS256/JWKS
+The core is **verify-only**: bring your own identity provider (any HS256/JWKS
 issuer). When you don't want a third-party IdP, the optional **`@pramen/auth`**
 package issues tokens the verifier accepts (see [Login with @pramen/auth](#login-with-pramenauth)).
 
@@ -18,13 +18,13 @@ package issues tokens the verifier accepts (see [Login with @pramen/auth](#login
 
 Verification is pluggable via `VerifyStrategy` (`src/auth.ts`), selected from env:
 
-### HS256 — shared secret (default)
+### HS256: shared secret (default)
 
 `HmacStrategy` verifies with the symmetric secret in `AUTH_SECRET` (dev value in
 `wrangler.jsonc`; production via `wrangler secret put AUTH_SECRET`). Good for
 internal services and the test suite.
 
-### RS256 — JWKS
+### RS256 via JWKS
 
 Set `JWKS_URL` to your identity provider's JWKS endpoint (Auth0, Clerk, Cognito, …).
 `JwksStrategy` then verifies tokens asymmetrically against the fetched public keys:
@@ -43,7 +43,7 @@ When `JWKS_URL` is set it takes over from `AUTH_SECRET`.
 ## Login with @pramen/auth
 
 `@pramen/auth` is an **optional** package that issues HS256 tokens the core verifier
-accepts — so an app can have logins without standing up a third-party IdP. Spread its
+accepts, so an app can have logins without standing up a third-party IdP. Spread its
 schema fragment into your schema and its handlers into your handler map:
 
 ```ts
@@ -55,7 +55,7 @@ const handlers = { ...authHandlers, ...yourHandlers };
 
 It needs `AUTH_SECRET` in the environment. The `auth_users` table stores `username`
 (the PK and JWT `sub`), a PBKDF2 `passwordHash` (a [`hidden()`](/docs/schema-and-handlers#hidden-columns)
-column — never returned by a read), `roles`, a mutable unique `email`, and an
+column, never returned by a read), `roles`, a mutable unique `email`, and an
 `active` flag.
 
 - **`signup({ username, password })`** → `{ token, user }`. Roles are assigned
@@ -67,12 +67,12 @@ column — never returned by a read), `roles`, a mutable unique `email`, and an
   roles and `active`, at the configured TTL.
 
 Token lifetime defaults to 1h; set `AUTH_SESSION_TTL_SECONDS` to tune it. Because
-`refreshSession` lets a client renew silently, a short TTL costs nothing in UX — see
+`refreshSession` lets a client renew silently, a short TTL costs nothing in UX. See
 [Sessions & revocation](#sessions-revocation).
 
 ### OIDC (Entra, Auth0/Okta, Google Workspace)
 
-`createOidcAuth()` adds the login flow — authorization code + PKCE — and exchanges it for a
+`createOidcAuth()` adds the login flow (authorization code + PKCE) and exchanges it for a
 **pramen session**, exactly as the magic link does. The IdP proves who you are once; pramen
 owns the session from there, so `refreshSession`, the KV revocation denylist and role-based
 ACL all keep working unchanged.
@@ -98,7 +98,7 @@ export const app = {
 
 The browser hits `/auth/oidc/start`, comes back to `/auth/oidc/callback`, and lands on
 `successRedirect#token=<session>`. The token arrives in the URL **fragment**, which is never
-sent to a server — so it stays out of access logs, proxies and `Referer` headers.
+sent to a server, so it stays out of access logs, proxies and `Referer` headers.
 
 **Where roles come from** is the part that differs per provider, and the part that fails
 quietly if you get it wrong:
@@ -107,7 +107,7 @@ quietly if you get it wrong:
 | --- | --- | --- |
 | Microsoft Entra | top-level `roles` | `mapRoles: (c) => c.roles as string[]` |
 | Auth0 / Okta | a namespaced claim | `mapRoles: (c) => c["https://acme.com/roles"] as string[]` |
-| Google Workspace | **none** | omit `mapRoles` — manage roles in pramen |
+| Google Workspace | **none** | omit `mapRoles` and manage roles in pramen |
 
 With `mapRoles` the IdP is authoritative and its answer overwrites the stored roles on every
 login, including a removal. Without it, roles live on the user's row and a first login gets
@@ -115,7 +115,7 @@ login, including a removal. Without it, roles live on the user's row and a first
 
 **Accounts are keyed on the verified email** by default, so an OIDC login lands on the same
 row as a magic-link or password login for that address. A provider that does not assert
-`email_verified` is refused rather than trusted — otherwise an IdP allowing arbitrary
+`email_verified` is refused rather than trusted, because otherwise an IdP allowing arbitrary
 addresses would be a takeover path into any existing account. Use `accountKey: "sub"` to key
 on the provider's opaque subject (namespaced by issuer) instead; that survives an email
 change but will not link up with accounts created another way.
@@ -123,7 +123,7 @@ change but will not link up with accounts created another way.
 Deactivating a user in pramen still holds: `active = false` blocks the login even though the
 IdP knows nothing about that flag.
 
-**The flow sets one cookie**, `pramen_oidc` — HttpOnly, SameSite=Lax, scoped to the callback
+**The flow sets one cookie**, `pramen_oidc`: HttpOnly, SameSite=Lax, scoped to the callback
 path, cleared when the login completes. It binds the `state` to the browser that started the
 login, which is what stops login CSRF: an attacker holding a valid `state` + `code` from
 their own login can otherwise feed them to a victim's browser and sign that victim in **as
@@ -131,21 +131,21 @@ the attacker**, so everything the victim then writes lands in the attacker's acc
 is the only cookie pramen uses; sessions remain bearer tokens. `Secure` is set on https and
 omitted on plain http, so local dev still completes.
 
-If your frontend **already** holds an IdP token, you do not need any of this — set
+If your frontend **already** holds an IdP token, you do not need any of this. Set
 `JWKS_URL` (plus `AUTH_ISSUER` / `AUTH_AUDIENCE`) and the core verifies it directly. See
 [Verification strategies](#verification-strategies).
 
 ### Magic link (passwordless)
 
 `createMagicLinkAuth({ sendEmail })` adds a one-time, single-use, time-boxed email
-link flow. Transport is **your** choice — you supply `sendEmail`; pramen owns the
+link flow. Transport is **your** choice: you supply `sendEmail`; pramen owns the
 token lifecycle (a 256-bit token stored only as a SHA-256 hash, default 15-min TTL).
 
 ```ts
 import { magicLinkSchema, createMagicLinkAuth } from "@pramen/auth";
 
 const magic = createMagicLinkAuth({
-  // Deliver via ctx.mail — Cloudflare Email Sending when configured (MAIL_FROM + the
+  // Deliver via ctx.mail: Cloudflare Email Sending when configured (MAIL_FROM + the
   // EMAIL binding), captured in dev. See the Deferred Tasks page for ctx.mail.
   sendEmail: async (ctx, { email, token }) => {
     const link = `${ctx.env.APP_URL}/auth?token=${token}`;
@@ -161,24 +161,24 @@ const handlers = { ...authHandlers, ...magic /* … */ };
   token, persists its hash, and calls `sendEmail`.
 - **`loginWithMagicLink({ token })`** → `{ token, user }`. Validates (unexpired,
   unconsumed), consumes single-use, and find-or-creates the user.
-- **`refreshSession()`** — the same handler `authHandlers` exposes, at this factory's
+- **`refreshSession()`**: the same handler `authHandlers` exposes, at this factory's
   configured TTL. Passwordless users renew without a new email round-trip.
 
 Magic-link users are keyed by their **`username`** (their email address *is* their
-username) — login never resolves identity by the mutable `email` column. Declare the
+username), so login never resolves identity by the mutable `email` column. Declare the
 `send_email` binding in `oblaka.ts` (`EmailService`); see
-[Quick start — Workers binding](https://developers.cloudflare.com/email-service/).
+[Quick start: Workers binding](https://developers.cloudflare.com/email-service/).
 
 ### Migrating in existing password hashes
 
-Moving users in from another system means importing hashes that are not PBKDF2 —
+Moving users in from another system means importing hashes that are not PBKDF2:
 bcrypt from Contember or Rails, `pbkdf2_sha256$` from Django, and so on. They cannot be
 converted (that needs the plaintext), so the alternative would be forcing every user to
 reset their password.
 
 Instead, store the foreign hash under its own **scheme prefix** and register a verifier
 for it. Login accepts it, then **upgrades the row to PBKDF2** on the first successful
-sign-in — the one moment the plaintext is in hand:
+sign-in, the one moment the plaintext is in hand:
 
 ```ts
 import bcrypt from "bcryptjs";
@@ -197,7 +197,7 @@ VALUES (?, 'bcrypt$' || ?, '["user"]', ?, ?);
 ```
 
 Nothing else changes. Users log in with their existing passwords, each row converts
-silently as its owner returns, and the scheme drains away — accounts that never come
+silently as its owner returns, and the scheme drains away: accounts that never come
 back simply keep their old hash, which costs nothing.
 
 pramen does **not** bundle a bcrypt implementation. WebCrypto has none, so it would
@@ -206,14 +206,14 @@ The verifier is yours to supply.
 
 Notes:
 
-- **Unregistered schemes fail closed.** An unknown prefix never verifies — same as
+- **Unregistered schemes fail closed.** An unknown prefix never verifies, the same as
   before the hook existed. A verifier that throws is also treated as a failed
   verification, never a 500.
 - **Only successful logins upgrade.** A wrong password, or a deactivated account,
   leaves the row untouched.
 - **Timing.** The not-found path is equalized against PBKDF2. A foreign scheme with a
   different cost profile (bcrypt cost 10 is cheaper than PBKDF2-600k) is
-  distinguishable by timing, which leaks *which scheme a given account uses* — roughly,
+  distinguishable by timing, which leaks *which scheme a given account uses*, roughly
   whether the account predates the migration. Usually acceptable; worth knowing.
 - `resetPassword` and `changePassword` always write PBKDF2, so those paths upgrade too.
 
@@ -221,7 +221,7 @@ Notes:
 
 `createUserHandlers()` + `authPolicies()` add admin + self-service account management
 over `auth_users`, authorized **declaratively by the ACL** (not imperative role
-checks). The handlers are inert until you grant access — spread `authPolicies().admin`
+checks). The handlers are inert until you grant access: spread `authPolicies().admin`
 into your admin role and `.self` into your authenticated-user role:
 
 ```ts
@@ -236,14 +236,14 @@ const acl = [
 ```
 
 - **Admin:** `listUsers`, `setUserRoles`, `setUserActive` (deactivate/reactivate),
-  `deleteUser`. Reads are projected — `passwordHash` is never returned.
+  `deleteUser`. Reads are projected, so `passwordHash` is never returned.
 - **Self:** `changeEmail` (unique, validated), `changePassword`.
 
 `changePassword` follows one rule: **an empty password slot may be filled by the session, a
 filled one only by proving you know it.** An account created by `inviteUser` or a magic-link
 login has no `passwordHash`, so it passes an empty `currentPassword` and gets its FIRST
 password; the response says `firstPassword: true`. An account that already has one still has
-to send the current password, and a wrong or empty one is a 401 — so a stolen session can
+to send the current password, and a wrong or empty one is a 401, so a stolen session can
 never *replace* a credential, only fill a slot that was empty anyway.
 
 Without that first branch, "I signed in with a link and now I want a password" had no answer
@@ -251,13 +251,13 @@ at all: the account was asked for a credential it had never had, and told the on
 was incorrect. The password-RESET flow was the only way through, which is a flow named for a
 problem the user does not have.
 
-Deactivating or deleting a user **revokes their outstanding tokens immediately** — the
+Deactivating or deleting a user **revokes their outstanding tokens immediately**: the
 handlers write a KV denylist entry the Worker enforces. A `setUserRoles` change is
 softer: it lands on the user's next `refreshSession` (or login). Both are covered in
 [Sessions & revocation](#sessions-revocation).
 
 **Custom table.** `createUserHandlers({ table })` points the same handlers at your own
-`auth_users`-shaped table — e.g. one with an extra `tenants` column for multi-tenant
+`auth_users`-shaped table, e.g. one with an extra `tenants` column for multi-tenant
 accounts. Pair it with `authPolicies({ table, prefix, adminReadFields, adminWriteFields })`
 to give the instance unique policy names and to expose/permit the extra columns:
 
@@ -279,20 +279,20 @@ managed by your own handlers.
 
 Tokens are **stateless**: roles and `active` are baked in at login, and the Worker does
 no per-request database lookup. That is what keeps the core verify-only and reads
-cheap — but it means a token outlives a change to the account behind it. pramen closes
+cheap, but it means a token outlives a change to the account behind it. pramen closes
 that gap two ways, still with no session store.
 
 ### Silent refresh
 
 **`refreshSession()`** (authenticated; in both `authHandlers` and
 `createMagicLinkAuth`) re-reads `roles` and `active` for the caller and reissues a
-token — `{ token, user }`, the same shape as `login`. It throws `401` if the account
+token: `{ token, user }`, the same shape as `login`. It throws `401` if the account
 is gone or deactivated, so a refresh can never launder a revoked session into a new,
 longer-lived one.
 
 Refreshing at **~half the TTL** lets you keep `AUTH_SESSION_TTL_SECONDS` short without
 ever logging the user out, which bounds how long a stale role can linger. It also
-works in the granting direction: a new role applies **immediately**, no re-login —
+works in the granting direction: a new role applies **immediately**, with no re-login.
 call it right after a subscription checkout or plan upgrade.
 
 ```ts
@@ -305,14 +305,14 @@ pramen.setToken(token); // also reconnects the live socket under the new identit
 
 For a deactivation, deletion, or credential compromise, waiting out the TTL is not
 good enough. `setUserActive(false)` and `deleteUser` write a **KV denylist** entry
-(`authDenied:<username>`) that the Worker checks immediately after resolving identity —
+(`authDenied:<username>`) that the Worker checks immediately after resolving identity:
 before any handler, and before both the DO and D1 paths, so it covers HTTP and the
 WebSocket upgrade alike. A denied token fails **closed** with `401` (it is *not*
 downgraded to anonymous), so revocation takes effect on the **next request** rather
 than the next login.
 
 The entry carries an `expirationTtl` equal to the session TTL, so it self-expires
-exactly when the last token that could have been outstanding at revocation time does —
+exactly when the last token that could have been outstanding at revocation time does, so
 the denylist only ever holds recently-revoked users and never grows unbounded.
 Reactivating (`setUserActive(true)`) lifts the entry: the key is username-scoped, so a
 stale entry would otherwise lock out even a fresh login.
@@ -326,14 +326,14 @@ import { denySession, allowSession, isSessionDenied } from "@pramen/server";
 await denySession(ctx.kv, username, 3600); // block every token for this user, up to 1h
 ```
 
-> KV is eventually consistent — a denylist write can take up to ~60s to become visible
+> KV is eventually consistent: a denylist write can take up to ~60s to become visible
 > in every region, and the entry TTL is clamped to KV's 60s minimum. Treat it as a kill
 > switch, not a transactional gate. Routine role changes belong on `refreshSession`.
 
 ### Live connections
 
 A WebSocket verifies its token **once, at upgrade**, and the identity is then fixed for
-the life of the socket — so a long-lived or hibernating connection could otherwise
+the life of the socket, so a long-lived or hibernating connection could otherwise
 outlive its TTL indefinitely. The DO therefore re-checks the token's `exp` on every
 message: an expired socket receives an `unauthorized` error frame, is closed with
 **4401**, and stops receiving subscription pushes. The client should re-authenticate
@@ -362,5 +362,5 @@ curl -s -X POST http://localhost:8787/admin/recover \
   -d '{"tenant":"acme","timestamp":1718000000000}'
 ```
 
-> PITR is platform-only — unavailable in local dev (returns 501). pramen arms the
+> PITR is platform-only, unavailable in local dev (returns 501). pramen arms the
 > restore and returns an `undo` bookmark; it completes on the DO's next restart.

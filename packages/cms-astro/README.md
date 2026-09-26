@@ -1,7 +1,7 @@
 # @pramen/cms-astro
 
 Consume a [`@pramen/cms`](../cms) backend from an **Astro** site. Self-contained (no
-`@pramen/server` dependency — it speaks the CMS's public HTTP content API).
+`@pramen/server` dependency: it speaks the CMS's public HTTP content API).
 
 ## The front door: `pramenCms()`
 
@@ -18,12 +18,12 @@ export default defineConfig({
 ```
 
 ```ts
-// src/content.config.ts — once, and never again
+// src/content.config.ts: once, and never again
 export { collections } from "pramen:cms";
 ```
 
 That is the whole wiring. `collections: "auto"` (the default) asks the CMS which content
-types exist and generates one collection per type, named after its slug — so adding a
+types exist and generates one collection per type, named after its slug, so adding a
 content type in the editor takes effect on the next build with no code change. Pass a map
 when you want your own names or a subset: `collections: { clanky: "article" }`.
 
@@ -43,18 +43,18 @@ Types for that module are injected automatically (`pramen-cms.d.ts`), so there i
 hand-written `d.ts` to keep in step.
 
 **Why the one-line re-export?** Astro has no API for an integration to define content
-collections — `astro:config:setup` offers routes, scripts, middleware, renderers and Vite
+collections: `astro:config:setup` offers routes, scripts, middleware, renderers and Vite
 config, and nothing for the content layer. Collections must be exported from
 `src/content.config.ts`. So the integration generates them and you re-export once, instead
 of hand-writing a `defineCollection` per type that has to track rows in the store.
 
 **`"auto"` fails the build if it cannot reach the CMS**, rather than generating nothing.
 Zero collections would otherwise build green and deploy an empty site. Discovery reads
-`listPublicContentTypes`, which is un-gated — no build-time token needed, and nothing new is
+`listPublicContentTypes`, which is un-gated: no build-time token needed, and nothing new is
 exposed (a content type's slug already reaches the public through `listPublishedPages`). If
 your deployment does need auth for reads, pass `backend: { token }`.
 
-`createCmsClient` / `cmsLoader` stay exported and are documented below — the integration is
+`createCmsClient` / `cmsLoader` stay exported and are documented below. The integration is
 the front door, not a replacement. A site that wants to define its own collections by hand
 still can.
 
@@ -76,25 +76,25 @@ something deployed beside it. What that buys, in order of how much time each use
   root-absolute, so it worked at the origin root and nowhere else.
 - **No SPA-fallback rewrite.** `/__admin/pages/:id` is a real server route: a deep
   link or a refresh is served like any other page.
-- **No second hostname for the editor** — it is a route on this site, not a separate
+- **No second hostname for the editor.** It is a route on this site, not a separate
   deploy pointed at a separate domain.
 - **CORS only if the CMS is elsewhere.** Serving the editor here does not move the API: it
   still calls `backend.url`, so a CMS on its own Worker is still cross-origin and still
   needs `CORS_ORIGINS` to allow this site. Co-deploy the CMS into this site's Worker (the
   D1 store needs no `export`, so it can live in an Astro Worker) and `backend.url` becomes
-  same-origin — then there is genuinely no CORS.
+  same-origin, and then there is genuinely no CORS.
 - **Nothing to point it at.** The shell tells the editor which Worker and tenant to call, so
   the first screen asks for an editor/reviewer JWT and nothing else.
 
 The mount path is a constant, not an option: the same value is the injected route pattern
 *and* the prefix handed to the editor's router, so the two cannot drift into a router
-mounted where the server does not serve. `__admin` is a reserved namespace — every ordinary
+mounted where the server does not serve. `__admin` is a reserved namespace: every ordinary
 path stays yours.
 
 It deliberately does **not** name the framework. This is a URL an editor bookmarks and reads
 out loud, so `pramen` has no more business in it than it has in the wordmark (which is what
-`brand` is for). `__` is the settled "the framework serves this" marker — `/_next`,
-`/_nuxt`, `/_astro`, `/__scheduled` — and it is not a dot-segment, which dotfile protection
+`brand` is for). `__` is the settled "the framework serves this" marker (`/_next`,
+`/_nuxt`, `/_astro`, `/__scheduled`), and it is not a dot-segment, which dotfile protection
 in common static hosts, CDNs and proxies would 404 outright.
 
 Pass an object instead of `true` to configure the editor itself (this replaces its old
@@ -109,7 +109,7 @@ pramenCms({
     hidePages: true,                           // collections-only deployments
     layout: "topbar",                          // horizontal nav (Graphic Standard bar); default "sidebar"
     locale: "cs",                              // the editor's language: "en" (default) or "cs"; see below
-    pageHeader: { variant: "flat", accent: "#73e2b2" },  // dress the screen header — see below
+    pageHeader: { variant: "flat", accent: "#73e2b2" },  // dress the screen header, see below
     extraNav: [{ label: "Curation", href: "/curate", target: "_self" }],
     panels: ["/admin/curation.js"],            // YOUR React screens inside the chrome
     previewUrl: "/preview",                    // YOUR page that renders a draft
@@ -147,16 +147,16 @@ unknown locale, key or shape is warned about in the browser console and ignored.
 your own content types and collections are declared with them (`labels` in `@pramen/cms`).
 See "`locale` and `messages`" in the editor's README for the details.
 
-### `pageHeader` — dressing the screen header
+### `pageHeader`: dressing the screen header
 
 The sticky panel carrying the `<h1>` and the primary action, on the editor's own screens.
-Three tokens — the host supplies presentation, the editor keeps owning the text, the action
+Three tokens: the host supplies presentation, the editor keeps owning the text, the action
 and the contrast:
 
 ```ts
 pageHeader: {
   variant: "flat",        // "cover" (default, the seeded artwork) | "flat" (panel, no art) | "bare" (no panel)
-  accent: "#73e2b2",      // the primary action's colour — an OPAQUE hex or rgb() literal
+  accent: "#73e2b2",      // the primary action's colour: an OPAQUE hex or rgb() literal
   titleFont: "Inter, system-ui, sans-serif",
 }
 ```
@@ -165,52 +165,52 @@ pageHeader: {
 label colour on it (whichever of podoba's ink and paper wins on WCAG contrast) and the hover
 shade, so those cannot be got wrong from out here. `var()`, `oklch()` and any colour with
 alpha are refused with a console warning, because neither can be measured. `titleFont`
-applies to the `<h1>` and nothing else, and only declares the family — your site is what
+applies to the `<h1>` and nothing else, and only declares the family: your site is what
 loads it.
 
 It exists so that matching the editor's headers to your product does not mean a stylesheet
-selecting on its internal DOM — a hook that pins itself to markup a release can change, and
+selecting on its internal DOM, a hook that pins itself to markup a release can change, and
 that cannot tell one screen from another or a container from the control inside it. See
 [`@pramen/cms-editor`](https://www.npmjs.com/package/@pramen/cms-editor)'s README for the
 full note.
 
-### `previewUrl` — where a preview link opens
+### `previewUrl`: where a preview link opens
 
 The editor's **Preview link** button mints a signed, self-expiring token for the page. The
-CMS Worker will happily redeem it — and answer with **JSON**, because a headless CMS has the
+CMS Worker will happily redeem it, and answer with **JSON**, because a headless CMS has the
 draft and no idea what it should look like. That is right for a machine and useless for the
 person a preview link is for: a stakeholder with no account, who opens a wall of braces.
 
 Point `previewUrl` at a route of your own and the editor appends `?token=…` to it instead.
 The route redeems the token with `client.getPreview(token)` and renders the draft **through
-the same components the published page uses** — a preview drawn by a second copy of the
+the same components the published page uses**: a preview drawn by a second copy of the
 layout is a preview of the copy. `example/site/src/pages/preview.astro` is a complete one,
 banner and `noindex` included.
 
 This is the same seam as `menuHref` and the sitemap's `pageUrl`: the CMS cannot know how a
-deployment routes, so the deployment says. Leave it unset and nothing changes — the link
+deployment routes, so the deployment says. Leave it unset and nothing changes: the link
 still points at the CMS's own endpoint. **Pages only**: a collection row has no canonical
 URL, so `signCollectionPreview` keeps returning the backend's JSON.
 
-### `panels` — your own React screens inside the chrome
+### `panels`: your own React screens inside the chrome
 
-For the admin screen Block Kit (`adminPage()`) cannot describe — one that needs local
-interaction, a dialog, a redirect — declare an `adminPanel()` in `app.ts` and point this at
+For the admin screen Block Kit (`adminPage()`) cannot describe (one that needs local
+interaction, a dialog, a redirect), declare an `adminPanel()` in `app.ts` and point this at
 the built bundle. The entry stays a server fact (label, position, `roles`, so the role filter
 is the same one Block Kit pages get); the bundle supplies only the component, through
-`globalThis.PRAMEN_CMS_EDITOR_RUNTIME.registerPanel({ slug, contract, render })` — where
+`globalThis.PRAMEN_CMS_EDITOR_RUNTIME.registerPanel({ slug, contract, render })`, where
 `contract` is the panel runtime contract the bundle was built against, a literal the editor
 refuses on mismatch.
 
 Build it with `react`, `react-dom`, `react/jsx-runtime` and `react/jsx-dev-runtime` marked
 **external**: the shell emits an import map that resolves them to the React the editor already
 loaded, because two copies in one page share no hook dispatcher. Each entry here is an ES
-module URL — a path from `public/`, one your build emitted, or an absolute http(s) URL — and
+module URL (a path from `public/`, one your build emitted, or an absolute http(s) URL), and
 the **editor imports it**, so it cannot evaluate before that React is published. The full
 guide is in `docs/cms.md`.
 
 `extraNav` links open in a **new tab** by default, because the editor's catch-all route
-matches every same-origin path — a same-tab click would land on the editor's own 404 instead
+matches every same-origin path: a same-tab click would land on the editor's own 404 instead
 of your tool. Add `target: "_self"` to ask for a same-tab navigation; it is honoured only
 where the router provably will not claim the url:
 
@@ -220,15 +220,15 @@ where the router provably will not claim the url:
 | Same origin, outside the mount (`/curate`) | same tab | new tab |
 | Same origin, inside the mount | new tab | new tab |
 
-Anything else — a relative href that resolves back inside the mount, a `javascript:` url, an
-unparseable one — degrades to a new tab rather than stranding the editor on its 404. A
+Anything else (a relative href that resolves back inside the mount, a `javascript:` url, an
+unparseable one) degrades to a new tab rather than stranding the editor on its 404. A
 same-tab link runs the unsaved-changes guard first, so it cannot silently discard an edit in
 progress.
 
 `@pramen/cms-editor` is an **optional** peer dependency: install it only if you use `admin`.
 Omit the option and no route is injected and nothing is added to the site.
 
-A working site is in [`example/site`](../../example/site) — content collections and the admin
+A working site is in [`example/site`](../../example/site): content collections and the admin
 route, wired in one `pramenCms()` call. It doubles as this package's end-to-end test
 (`test/astro-site.test.ts`).
 
@@ -236,7 +236,7 @@ route, wired in one `pramenCms()` call. It doubles as this package's end-to-end 
 > clearing the stored session, so a path that lands back inside the editor is a loop with
 > nothing to recover from. `?setup=1` always forces the built-in screen.
 
-### `editorAssets` — serve an editor you built yourself
+### `editorAssets`: serve an editor you built yourself
 
 The packaged editor is one self-contained bundle with podoba compiled into it at the version
 `@pramen/cms-editor` pins. That is what makes the mount work with no build config, and it is
@@ -254,7 +254,7 @@ pramenCms({
 
 One directory, not six URLs: `editor.js`, `editor.css` and the four `panel-*.js` shims all
 come from it. They have to agree, because a shim re-exports the export names of the React that
-*its* bundle linked — a packaged shim left beside a host-built editor is a link error inside
+*its* bundle linked: a packaged shim left beside a host-built editor is a link error inside
 somebody's panel, and nothing about the config line says so.
 
 When `editorAssets` is set, packaged editor files do not enter the site's module graph:
@@ -273,16 +273,16 @@ Two consequences worth knowing before you set it:
 
 ## The kit of parts
 
-- **`createCmsClient({ baseUrl })`** — `getPage(slug, locale?)`, `listPublishedPages()`, and
-  `getPreview(token)` to redeem a signed preview link (no session needed — the signature is
+- **`createCmsClient({ baseUrl })`**: `getPage(slug, locale?)`, `listPublishedPages()`, and
+  `getPreview(token)` to redeem a signed preview link (no session needed: the signature is
   the authorization; the result carries `isPreview: true`).
-- **`cmsLoader({ client })`** — an Astro **content-collection loader**. Wire it into a
+- **`cmsLoader({ client })`**: an Astro **content-collection loader**. Wire it into a
   collection and the CMS's published pages become available via `getCollection()` /
-  `getEntry()`, rendered to static HTML at build time (re-run the build — a publish webhook —
+  `getEntry()`, rendered to static HTML at build time (re-run the build, via a publish webhook,
   to refresh). Works with `output: 'static'`; no SSR required.
-- **`BlockRenderer.astro`** — render a page's blocks with your own `.astro` components.
-- **`RichText.astro`** — render a `richtext` field. The value is a document tree, not an
-  HTML string, so it walks into real elements — nothing on this path uses `set:html`.
+- **`BlockRenderer.astro`**: render a page's blocks with your own `.astro` components.
+- **`RichText.astro`**: render a `richtext` field. The value is a document tree, not an
+  HTML string, so it walks into real elements: nothing on this path uses `set:html`.
 
 ```ts
 // src/content.config.ts

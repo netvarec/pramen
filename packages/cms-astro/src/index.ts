@@ -1,27 +1,27 @@
-// @pramen/cms-astro — consume a @pramen/cms backend from a (static or SSR) Astro site.
+// @pramen/cms-astro: consume a @pramen/cms backend from a (static or SSR) Astro site.
 //
-//   - `createCmsClient({ baseUrl })` — fetch the public content API (getPage, listPublishedPages).
-//   - `cmsLoader({ client })` — an Astro **content-collection loader** that pulls published
+//   - `createCmsClient({ baseUrl })`: fetch the public content API (getPage, listPublishedPages).
+//   - `cmsLoader({ client })`: an Astro **content-collection loader** that pulls published
 //     pages at BUILD time, so `defineCollection({ loader: cmsLoader(...) })` makes CMS content
 //     available via `getCollection()` / `getEntry()` and the site renders it as static HTML.
 //     Re-run the build (a publish webhook) to refresh.
 //   - `BlockRenderer.astro` (separate import) renders a page's blocks with your components.
 //
-// Self-contained: no @pramen/server dependency — it just speaks the CMS's HTTP RPC.
+// Self-contained: no @pramen/server dependency. It just speaks the CMS's HTTP RPC.
 
 import type { Loader, LoaderContext } from "astro/loaders";
 
-// The integration — the front door (`pramenCms()`), re-exported so
+// The integration: the front door (`pramenCms()`), re-exported so
 // `import pramenCms from "@pramen/cms-astro"` works. The kit of parts below stays exported:
 // a site that defines its own collections by hand still can.
 export { pramenCms, default } from "./integration.js";
 export type { CmsBackend, CollectionMap, PramenCmsOptions } from "./integration.js";
 
-// The admin mount — the editor served as an injected route on this site (`admin: true`).
+// The admin mount: the editor served as an injected route on this site (`admin: true`).
 export { ADMIN_BASE, ADMIN_ROUTE, adminAssetUrls, adminImportMap } from "./admin.js";
 export type { AdminAssetUrls, AdminOptions, AdminRuntimeConfig } from "./admin.js";
 
-/** Any JSON value — the wire form of everything the CMS stores. */
+/** Any JSON value: the wire form of everything the CMS stores. */
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
 /** A resolved media reference (a `"media"` block field, resolved by the CMS). */
@@ -34,7 +34,7 @@ export interface ResolvedMedia {
   filename: string | null;
 }
 
-/** A rich-text document — the structured JSON a `richtext` field stores. Mirrors
+/** A rich-text document: the structured JSON a `richtext` field stores. Mirrors
  * `RichTextDoc` in @pramen/cms; render it with `RichText.astro`. Never an HTML string:
  * nothing on this path uses `set:html`. */
 export interface RichTextDoc {
@@ -57,7 +57,7 @@ export interface RichTextMark {
   attrs?: Record<string, JsonValue>;
 }
 
-/** Allow-list for a link href: http(s), mailto, tel, or a relative/anchor path — a single
+/** Allow-list for a link href. http(s), mailto, tel, or a relative/anchor path, meaning a single
  * leading slash, and the next character neither `/` nor `\` (both resolve off-site while
  * looking local; the URL parser folds `\` to `/` at path-start).
  *
@@ -79,7 +79,7 @@ export function normalizeHref(raw: string): string {
 
 export interface RenderedBlock {
   id: string;
-  /** Optimistic-concurrency token — pass back as `expectedVersion` on a write. */
+  /** Optimistic-concurrency token: pass back as `expectedVersion` on a write. */
   version: number;
   block_id: string;
   block_type: string;
@@ -103,19 +103,19 @@ export interface AssembledPage {
     metaTitle: string | null;
     metaDescription: string | null;
     seo?: Record<string, unknown>;
-    /** Optimistic-concurrency token — pass back as `expectedVersion` on a write. */
+    /** Optimistic-concurrency token: pass back as `expectedVersion` on a write. */
     version: number;
   };
   regions: Record<string, RenderedBlock[]>;
   /** True when this is a live draft fetched through a preview link, not the published
-   * snapshot — render a "viewing a draft" banner off it. */
+   * snapshot. Render a "viewing a draft" banner off it. */
   isPreview?: boolean;
 }
 
 export interface PublishedPageRef {
   slug: string;
   locale: string;
-  /** Content-type slug — lets a loader filter to one type (see `CmsLoaderOptions.type`). */
+  /** Content-type slug: lets a loader filter to one type (see `CmsLoaderOptions.type`). */
   contentType: string | null;
   updatedAt: string;
 }
@@ -132,7 +132,7 @@ export interface CmsClientOptions {
 export interface CmsClient {
   getPage(slug: string, locale?: string): Promise<AssembledPage | null>;
   /** Redeem a signed preview link. The token names one page and carries its own expiry,
-   * so this needs no session — pass through whatever arrived in the request's query. */
+   * so this needs no session: pass through whatever arrived in the request's query. */
   getPreview(token: string): Promise<AssembledPage | null>;
   /** Published page refs, optionally narrowed to one content type and/or locale. The
    * narrowing is done by the SERVER: the handler caps its result, so filtering the answer
@@ -142,7 +142,7 @@ export interface CmsClient {
    *
    * The half of the redirects manager that makes it a feature rather than a list: the CMS
    * stores the mapping, and something has to serve it. Call this from your 404 path (see
-   * `redirectResponse`), not on every request — a lookup per page view would put a round
+   * `redirectResponse`), not on every request: a lookup per page view would put a round
    * trip in front of every render to answer "no" almost every time. */
   resolveRedirect(path: string): Promise<{ to: string; status: number } | null>;
   /** Absolute URL for a relative CMS path (e.g. a media `/media/...` url). */
@@ -179,7 +179,7 @@ export function createCmsClient(opts: CmsClientOptions): CmsClient {
       // the authorization, so there is no bearer token to send.
       const res = await fetch(`${base}/cms/preview?token=${encodeURIComponent(token)}`);
       if (res.ok) return (await res.json().catch(() => null)) as AssembledPage | null;
-      // 403/404 mean "this link is not valid" — an ordinary not-found for the caller.
+      // 403/404 mean "this link is not valid", an ordinary not-found for the caller.
       // Anything else (notably 503, "preview is not configured") is an operator problem
       // and must not masquerade as a missing page.
       if (res.status === 403 || res.status === 404) return null;
@@ -202,7 +202,7 @@ export interface CmsLoaderOptions {
   /**
    * Map an AssembledPage to the entry `data` stored in the collection. Default flattens the
    * page's own `fields` up to the top level and adds `title/slug/locale/seo/regions/blocks`
-   * (all blocks in document order) — so an Astro schema can read the page's fields directly.
+   * (all blocks in document order), so an Astro schema can read the page's fields directly.
    */
   transform?: (page: AssembledPage) => Record<string, unknown>;
 }
@@ -236,7 +236,7 @@ export function cmsLoader(opts: CmsLoaderOptions): Loader {
       // Narrowed SERVER-side. `listPublishedPages` caps its result, so filtering the answer
       // here would be filtering an already-truncated list: with `collections: "auto"` every
       // generated collection asks for the same capped page of rows and each one silently
-      // loses the tail of its own type — with a green build. The client-side pass below is
+      // loses the tail of its own type, with a green build. The client-side pass below is
       // kept as a belt: a CMS older than the `contentType`/`locale` inputs ignores them and
       // answers with the pooled list, and a collection quietly full of another type's pages
       // is worse than one that is merely short.
@@ -260,7 +260,7 @@ export function cmsLoader(opts: CmsLoaderOptions): Loader {
 /**
  * A `Response` for a request that would otherwise 404, if the CMS has a redirect for it.
  *
- * Returns `null` when there is none, so the caller falls through to its own 404 — this is a
+ * Returns `null` when there is none, so the caller falls through to its own 404. This is a
  * REPAIR for a URL that used to work, not a router.
  *
  * Wire it where your framework handles a miss:
@@ -276,13 +276,13 @@ export function cmsLoader(opts: CmsLoaderOptions): Loader {
  *
  * The destination is re-checked here even though the CMS canonicalized it on write. This
  * function turns a value from the store into a `Location` header, and the write that
- * produced it may predate that validation — a stored `javascript:` or protocol-relative
+ * produced it may predate that validation: a stored `javascript:` or protocol-relative
  * target would otherwise be handed to the browser verbatim.
  */
 export async function redirectResponse(client: CmsClient, url: URL | string): Promise<Response | null> {
   const path = typeof url === "string" ? url : url.pathname;
   // Every failure degrades to "no redirect", because this runs ON THE 404 PATH: a throw
-  // here turns every miss on the site into a 500. And there are several — `//pricing`
+  // here turns every miss on the site into a 500. And there are several: `//pricing`
   // (doubled slash) is refused by the server's own path rule, a backend predating
   // `resolveRedirect` answers 400, and an anonymous role predating the `cms_redirects`
   // grant is denied. None of those is a reason to stop rendering a 404. `getPage` already

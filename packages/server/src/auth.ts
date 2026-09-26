@@ -224,14 +224,14 @@ export class JwksStrategy implements VerifyStrategy {
  * `callPrivileged` from inside the Worker, and are stripped from every verified token.
  *
  * They exist because a handler sometimes has to be reachable by the server and by nobody
- * else — `@pramen/auth`'s OIDC user upsert, `@pramen/analytics`'s event ingest. The obvious
+ * else: `@pramen/auth`'s OIDC user upsert, `@pramen/analytics`'s event ingest. The obvious
  * `auth: []` does not express that (it is satisfied by no one at all, `callPrivileged`
  * included), so such a handler names a private role instead and the privileged caller
  * presents it.
  *
  * That only holds if the role cannot arrive from OUTSIDE, and without this filter it could:
  * `toIdentity` copies the `roles` claim verbatim, and on the verify-only (BYO-IdP) path that
- * claim is written entirely by an external IdP — a directory group named `__oidc_system`
+ * claim is written entirely by an external IdP: a directory group named `__oidc_system`
  * would have been enough. The same reaches a pramen session through OIDC `mapRoles`, which
  * passes the provider's claim straight into the minted token. Stripping at VERIFICATION is
  * what makes the invariant true for every consumer at once, including future ones: after
@@ -255,7 +255,7 @@ function toIdentity(claims: JsonObject): Identity {
   const roles = claimed.filter((r) => typeof r === "string" && !isSystemRole(r));
   const identity: Identity = { roles, userId: (claims.sub ?? claims.userId) as string | undefined };
   // Carry `exp` (a STANDARD claim, so the passthrough loop skips it) so a WebSocket can
-  // re-check expiry per message — its identity is fixed at upgrade and never re-verified.
+  // re-check expiry per message: its identity is fixed at upgrade and never re-verified.
   if (typeof claims.exp === "number") identity.exp = claims.exp;
   for (const [k, v] of Object.entries(claims)) {
     if (!STANDARD_CLAIMS.has(k)) identity[k] = v; // carry custom claims (tier, …)
@@ -272,7 +272,7 @@ export async function resolveIdentity(request: Request, strategy: VerifyStrategy
 
 /** May this identity address the given tenant? Gates `X-Pramen-Tenant` so a caller
  * can't reach (or register) arbitrary tenants. Default policy:
- *  - `main` is the open default tenant: any caller may reach it (anonymous too) —
+ *  - `main` is the open default tenant: any caller may reach it (anonymous too) and
  *    data access is still governed by ACL roles (single-tenant apps live here, and
  *    issued login tokens need no `tenants` claim to use it).
  *  - other tenants: admins → any; everyone else → only tenants in their `tenants`

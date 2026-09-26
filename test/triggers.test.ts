@@ -89,7 +89,7 @@ describe("declarative write-triggers", () => {
   });
 
   // Security: a hidden() column must NEVER reach the trigger payload (hidden = "never
-  // readable via the ORM, even under SYSTEM" — a leak here would ship secrets to a webhook).
+  // readable via the ORM, even under SYSTEM", so a leak here would ship secrets to a webhook).
   test("hidden() columns are stripped from the trigger payload", async () => {
     const secretSchema = defineSchema({
       users: Entity((t) => ({ id: t.textId(), name: t.text(), passwordHash: hidden(t.text()) }), undefined, {

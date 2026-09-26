@@ -3,7 +3,7 @@
 //   bun tools/dev-token.ts            # admin+editor, valid 24h
 //   bun tools/dev-token.ts reviewer   # any roles, space- or comma-separated
 //
-// The example app deliberately seeds no user — `signup` hands out the `user` role, which the
+// The example app deliberately seeds no user: `signup` hands out the `user` role, which the
 // CMS handlers do not accept, so there is nothing to log in AS on a fresh store. The editor's
 // Setup screen asks for a token and nothing else, and the worker verifies it with plain HS256
 // against AUTH_SECRET. So the honest dev answer is to mint one rather than to add a seeded
@@ -19,13 +19,13 @@ const TTL_SECONDS = 24 * 60 * 60;
 const roles = (process.argv.slice(2).join(" ").split(/[\s,]+/).filter(Boolean));
 
 /** The two objects a JWT is made of. Named rather than `unknown`, because they are both
- * written right here — there is no external input in this script to parse. */
+ * written right here, and there is no external input in this script to parse. */
 interface JwtHeader {
   alg: "HS256";
   typ: "JWT";
 }
 interface JwtClaims {
-  /** The JWT subject — what the ACL sees as `$identity("userId")`. */
+  /** The JWT subject, what the ACL sees as `$identity("userId")`. */
   sub: string;
   /** What `cmsPolicies()` and every `auth:` gate match on. */
   roles: string[];

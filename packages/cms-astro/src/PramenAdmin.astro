@@ -4,7 +4,7 @@
  * See `admin.ts` for why this is a route and not an index.html.
  *
  * ONE shell for packaged and host-built editors. Which assets it names is decided by the
- * INTEGRATION, at `astro:config:setup`, and handed over as `pramen:cms/admin-assets` — so a
+ * INTEGRATION, at `astro:config:setup`, and handed over as `pramen:cms/admin-assets`, so a
  * deployment that built its own editor never has the packaged files in Vite's graph at all.
  * Selecting them here instead was the earlier design and leaked both ways: in dev Vite treats
  * an unreferenced `?url` CSS import as a module and injects it, putting the packaged

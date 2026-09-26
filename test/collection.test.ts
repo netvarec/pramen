@@ -1,4 +1,4 @@
-// @pramen/cms collections — the generic "edit an arbitrary pramen entity in the CMS
+// @pramen/cms collections: the generic "edit an arbitrary pramen entity in the CMS
 // editor" API. Drives the handlers built by createCollectionHandlers directly against a
 // real ACL'd Db over bun:sqlite: registry lookup rejects an unknown/spoofed collection,
 // the write whitelist blocks columns the collection didn't declare, field validation
@@ -17,7 +17,7 @@ import { collection, createCollectionHandlers, collectionPolicies } from "../pac
 import type { HandlerContext, JsonValue, Row } from "@pramen/server";
 
 // A user-defined entity edited as a collection. `secret` is hidden() and NOT in the
-// collection's fields — the write whitelist must never let a caller set it.
+// collection's fields, and the write whitelist must never let a caller set it.
 const schema = defineSchema({
   lectures: Entity((t) => ({
     id: primaryKey(generated(t.uuid())),
@@ -46,7 +46,7 @@ const lectures = collection("lectures", {
 
 const H = createCollectionHandlers([lectures], { schema });
 
-// Invoke a handler the way dispatch does — always awaited — so a SYNC throw (registry
+// Invoke a handler the way dispatch does, always awaited, so a SYNC throw (registry
 // lookup, field validation) surfaces as a rejection just like an async one, and both are
 // assertable with `.rejects`. (Calling `.run` bare would let a sync throw escape .rejects.)
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -71,7 +71,7 @@ async function fresh() {
   return driver;
 }
 
-describe("collections — registry + whitelist", () => {
+describe("collections: registry + whitelist", () => {
   test("listCollections returns the meta with defaults filled (no server-only fields)", () => {
     const metas = (H.listCollections.run as (c: HandlerContext | null, i: JsonValue) => Row[])(null, {});
     expect(metas).toHaveLength(1);
@@ -80,7 +80,7 @@ describe("collections — registry + whitelist", () => {
     expect(m.pluralLabel).toBe("Lectures"); // defaulted from label
     expect(m.list).toEqual(["title", "speaker", "date"]);
     expect(m.titleField).toBe("title");
-    expect(m.idField).toBe("id"); // PK column name — the editor reads a row's id from it
+    expect(m.idField).toBe("id"); // PK column name, which the editor reads a row's id from
     expect("entity" in m).toBe(false); // server-only (table name), not leaked
   });
 
@@ -91,7 +91,7 @@ describe("collections — registry + whitelist", () => {
     await expect(run(H.collectionCreate, ctx, { collection: "nope", values: {} })).rejects.toThrow(/unknown collection/);
   });
 
-  test("create whitelists to declared fields — an undeclared column is dropped", async () => {
+  test("create whitelists to declared fields, so an undeclared column is dropped", async () => {
     const driver = await fresh();
     const ctx = systemCtx(driver);
     // secret is a real (hidden) column but NOT in the collection's fields → must be ignored.
@@ -118,7 +118,7 @@ describe("collections — registry + whitelist", () => {
   });
 });
 
-describe("collections — CRUD round-trip", () => {
+describe("collections: CRUD round-trip", () => {
   test("create → get → update → delete over the entity", async () => {
     const driver = await fresh();
     const ctx = systemCtx(driver);
@@ -162,7 +162,7 @@ describe("collections — CRUD round-trip", () => {
   });
 });
 
-describe("collections — the row ACL still applies (handlers go through ctx.db)", () => {
+describe("collections: the row ACL still applies (handlers go through ctx.db)", () => {
   test("an editor granted the entity can CRUD; the collection handler respects the ACL", async () => {
     const driver = await fresh();
     const ctx = editorCtx(driver);

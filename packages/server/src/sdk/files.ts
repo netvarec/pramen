@@ -1,4 +1,4 @@
-// File storage — the portable type surface. The `fileRef` column type and the
+// File storage: the portable type surface. The `fileRef` column type and the
 // `ctx.files` facade handlers use. Pure types (no platform code); the Cloudflare
 // glue (R2 adapter, signing, the Worker /files endpoint) lives in runtime/storage.ts.
 
@@ -44,7 +44,7 @@ export interface Files {
   /** Mint a tenant-scoped key + a signed PUT url for a direct-to-store upload. */
   signUpload(opts: SignUploadOpts): Promise<{ url: string; ref: FileRef }>;
   /** Mint a signed GET url for an existing blob. Call only after an ACL'd read of
-   * the owning row — knowing a key is not, by itself, authorization. */
+   * the owning row: knowing a key is not, by itself, authorization. */
   signDownload(ref: FileRef | string, opts?: SignDownloadOpts): Promise<{ url: string; expiresAt: number }>;
   /** Object-store metadata (size/contentType), or null if the blob is absent. */
   head(key: string): Promise<HeadResult | null>;

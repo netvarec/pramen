@@ -1,4 +1,4 @@
-// @pramen/auth password reset + email verification — the one-time-email-token flows.
+// @pramen/auth password reset + email verification: the one-time-email-token flows.
 // Drives the handlers built by createPasswordReset / createEmailVerification directly
 // against a real system Db over bun:sqlite (the handlers use ctx.db.exec + ctx.tasks, so
 // no ACL/wrangler needed). Covers: enumeration-safety, single-use, expiry, the account
@@ -24,13 +24,13 @@ import {
   verifyPassword,
 } from "../packages/auth/src/index";
 
-// `magicLinkSchema` je tu kvůli `inviteUser` (ten píše do `auth_magic_links`) — účet bez hesla
+// `magicLinkSchema` je tu kvůli `inviteUser` (ten píše do `auth_magic_links`), účet bez hesla
 // se jinak nedá založit tak, jak vzniká v provozu, a test na první heslo by stál na ručním
 // INSERTu, tedy na domněnce o tvaru řádku místo na tom, co ho doopravdy zakládá.
 const schema = defineSchema({ ...authSchema, ...emailTokenSchema, ...magicLinkSchema });
 const reset = createPasswordReset({ sendEmail: async () => {} });
 const verify = createEmailVerification({ sendEmail: async () => {} });
-// Jen kvůli `inviteUser` — účet bez hesla se jinak nedá založit tak, jak vzniká v provozu.
+// Jen kvůli `inviteUser`: účet bez hesla se jinak nedá založit tak, jak vzniká v provozu.
 const magic = createMagicLinkAuth({ sendEmail: async () => {} });
 const SECRET = "test-secret-at-least-16-chars";
 
@@ -197,7 +197,7 @@ describe("email verification", () => {
     await h.run(verify.handlers.requestEmailVerification, h.ctx({ userId: "ada" }));
     const staleToken = h.enqueued[0].payload.token;
     // Simulate a changeEmail after the request (raw update; the real handler also clears
-    // emailVerified — exercised in the e2e suite).
+    // emailVerified, which is exercised in the e2e suite).
     await h.driver.exec("UPDATE auth_users SET email = 'ada2@example.com', emailVerified = NULL WHERE username = 'ada'", []);
     await expect(h.run(verify.handlers.verifyEmail, h.ctx(), { token: staleToken })).rejects.toThrow(/invalid or expired/);
     expect((await h.rawUser("ada")).emailVerified).toBe(null); // never verified the new address
@@ -226,12 +226,12 @@ describe("email verification", () => {
  *
  * Účet z pozvánky nebo magic linku nemá heslo (`inviteUser` i `loginWithMagicLink` nechávají
  * `passwordHash` prázdný). `changePassword` po něm dřív SOUČASNÉ heslo chtěl, takže si ho
- * přihlášený uživatel nemohl nastavit vůbec — dostal „current password is incorrect" o hesle,
+ * přihlášený uživatel nemohl nastavit vůbec: dostal „current password is incorrect" o hesle,
  * které nikdy neexistovalo, a jedinou cestou byl reset e-mailem, tedy tok pojmenovaný podle
  * problému, který nemá.
  *
  * Pravidlo je teď jedno: PRÁZDNOU přihrádku smí zaplnit sezení, OBSAZENOU jen ten, kdo dokáže,
- * že staré heslo zná. Druhá půlka je ta, na které záleží, a je tady doložená vedle první —
+ * že staré heslo zná. Druhá půlka je ta, na které záleží, a je tady doložená vedle první,
  * jinak by se z „umí to i bez hesla" snadno stalo „nechce heslo nikdy".
  */
 describe("první heslo pro účet z magic linku", () => {
@@ -252,7 +252,7 @@ describe("první heslo pro účet z magic linku", () => {
     })) as { ok: boolean; firstPassword: boolean };
     expect(res).toEqual({ ok: true, firstPassword: true });
 
-    // A opravdu se tím účet odemkl — `login` je jediný důkaz, který stojí za řeč.
+    // A opravdu se tím účet odemkl: `login` je jediný důkaz, který stojí za řeč.
     const login = (await h.run(authHandlers.login, h.ctx(), { username: "ada@example.com", password: "correcthorse" })) as {
       token: string;
     };
@@ -288,7 +288,7 @@ describe("první heslo pro účet z magic linku", () => {
   });
 
   test("token na smazaný účet nic nezaloží", async () => {
-    // Dřív spadl do téže větve jako uživatel bez hesla a odmítl se — neškodně. Jakmile se ale
+    // Dřív spadl do téže větve jako uživatel bez hesla a odmítl se, neškodně. Jakmile se ale
     // prázdná přihrádka smí zaplnit, byl by z toho UPDATE bez jediného řádku, který hlásí
     // úspěch: administrace by řekla „heslo nastaveno“ a přihlásit by se nedalo nikdy.
     const h = await harness();

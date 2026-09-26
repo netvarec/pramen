@@ -52,7 +52,7 @@ describe("Db: non-`id` primary keys + hidden columns", () => {
     await db.insert("orgs", { slug: "acme", name: "Acme", secret: "s3cr3t" });
     await db.insert("members", { id: "m1", orgSlug: "acme" });
 
-    // update by the real PK (slug) — previously generated `WHERE id = ?` -> no such column
+    // update by the real PK (slug); previously generated `WHERE id = ?` -> no such column
     const updated = await db.update("orgs", "acme", { name: "Acme Inc" });
     expect(updated?.name).toBe("Acme Inc");
 

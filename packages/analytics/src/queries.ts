@@ -3,7 +3,7 @@
 // Every number the dashboard shows comes from here, and every one of them is assembled the
 // same way: take the days that have been ROLLED UP from `analytics_daily`, compute the rest
 // from raw events, and add them together. The dashboard is therefore correct whether or not
-// the rollup has ever run — which matters, because the rollup is on a cron and the cron is
+// the rollup has ever run, which matters, because the rollup is on a cron and the cron is
 // the part most likely to be missing in a new deployment.
 //
 // RATES ARE NEVER STORED, only counts. A stored bounce RATE cannot be combined across days:
@@ -35,7 +35,7 @@ export interface RangeMetrics {
   pageviews: number;
   sessions: number;
   bounces: number;
-  /** null when nothing in the range was measurable — see `engagedViews`. A zero would be a
+  /** null when nothing in the range was measurable. See `engagedViews`. A zero would be a
    * claim (visitors left instantly); null is the truth (no beacon reported). */
   bounceRate: number | null;
   avgDurationMs: number | null;
@@ -81,7 +81,7 @@ function addInto(target: Counts, key: string | null | undefined, n: number): voi
 }
 
 /** A stored breakdown column, read back. `t.json()` gives whatever was written, so the
- * numbers are re-established here rather than trusted — a breakdown with a string count
+ * numbers are re-established here rather than trusted: a breakdown with a string count
  * would otherwise concatenate its way into a total. */
 function asCounts(v: JsonValue | null | undefined): Counts {
   const out: Counts = {};
@@ -94,7 +94,7 @@ function asCounts(v: JsonValue | null | undefined): Counts {
  *
  * One pass per breakdown rather than per DAY: a range with nothing rolled up would otherwise
  * be four queries times thirty days. Sessions are grouped by `(day, sessionId)` because a
- * session id already encodes its day — the pair is the natural key, and counting the groups
+ * session id already encodes its day, so the pair is the natural key, and counting the groups
  * is how distinct sessions are obtained without a COUNT(DISTINCT) the engine does not have. */
 export async function computeDays(db: AnalyticsDb, days: readonly string[]): Promise<Map<string, DayMetrics>> {
   const out = new Map<string, DayMetrics>();

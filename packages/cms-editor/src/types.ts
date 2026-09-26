@@ -1,13 +1,13 @@
 // Local mirror of the @pramen/cms shapes the editor needs. Kept local (not imported from
 // @pramen/cms) so the editor stays a self-contained browser app with no server-package
-// dependency — it speaks to the CMS purely over HTTP.
+// dependency: it speaks to the CMS purely over HTTP.
 
 import type { TextKey } from "./i18n";
 
-/** Any JSON value — the wire form of everything the CMS stores. */
+/** Any JSON value: the wire form of everything the CMS stores. */
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
-/** A rich-text document — the editor's structured JSON. Mirrors `RichTextDoc` in
+/** A rich-text document: the editor's structured JSON. Mirrors `RichTextDoc` in
  * @pramen/cms; a `richtext` field is this tree, never an HTML string. */
 export interface RichTextDoc {
   type: "doc";
@@ -34,7 +34,7 @@ export interface RichTextMark {
  * `group`/`repeater` fields nest further bags. */
 export type FieldValue = JsonValue | Media | RichTextDoc | FieldValues | FieldValue[];
 
-/** A block / collection / page `fields` bag — field name -> authored value. */
+/** A block / collection / page `fields` bag: field name -> authored value. */
 export interface FieldValues {
   [field: string]: FieldValue;
 }
@@ -54,13 +54,13 @@ export type FieldType =
   | "boolean"
   | "date"
   | "datetime"
-  /** A publication timestamp — rendered as publish-now / schedule / unpublish. */
+  /** A publication timestamp, rendered as publish-now / schedule / unpublish. */
   | "publish"
   /** A URL segment, derived from the field named by `from` while it is untouched. */
   | "slug"
   | "media"
   | "select"
-  /** A pointer to a record that is not this row — a pramen row or an external record.
+  /** A pointer to a record that is not this row: a pramen row or an external record.
    * Stored as an opaque id; resolved through `referenceFrom`. */
   | "reference"
   | "repeater"
@@ -71,13 +71,13 @@ export interface FieldDefinition {
   label?: string;
   type: FieldType;
   /**
-   * Help text under the control — what the field MEANS, when it applies, what leaving it
+   * Help text under the control: what the field MEANS, when it applies, what leaving it
    * empty does. Optional, and worth writing exactly when the label alone leaves a real
    * question open: an "Address" that is only used for an event with no venue attached, a
    * "Time to" that applies to every day of a range rather than the last one.
    *
    * The alternative is a comment beside the field's declaration in the app's source, where
-   * the person filling the field in will never see it — which is where this kind of note
+   * the person filling the field in will never see it, which is where this kind of note
    * had nowhere else to go before.
    *
    * One or two sentences. It is announced via `aria-describedby`, so a paragraph here is a
@@ -108,7 +108,7 @@ export interface FieldDefinition {
 export interface ReferenceOption {
   value: string;
   label: string;
-  /** Secondary text under the label — a date, an owner, a status. A picker over a thousand
+  /** Secondary text under the label: a date, an owner, a status. A picker over a thousand
    * records usually needs more than a name to tell two rows apart. */
   hint?: string;
 }
@@ -143,7 +143,7 @@ export interface BlockType {
    * an editor authored it. The builder renders an owned type read-only: a save would 409, and
    * before it did, it would have been quietly reverted at the next cold start.
    *
-   * Only meaningful when `CmsCapabilities.codeDefinedTypes` is true — an older server sends
+   * Only meaningful when `CmsCapabilities.codeDefinedTypes` is true: an older server sends
    * no owner for any row, which is indistinguishable from "nothing is code-defined". */
   managedBy?: string | null;
 }
@@ -183,7 +183,7 @@ export interface ContentType {
 
 /** A collection: one of the host app's own pramen entities, edited generically via a
  * field schema (mirror of @pramen/cms `CollectionMeta`). Fetched from `listCollections`
- * and used to build the nav + the generic list/edit views. No `entity`/`idField` — those
+ * and used to build the nav + the generic list/edit views. No `entity`/`idField`: those
  * are server-only; the editor addresses a collection purely by `slug`. */
 export interface CollectionMeta {
   slug: string;
@@ -192,7 +192,7 @@ export interface CollectionMeta {
   /** The collection's own wording for its rows. See {@link EntryLabels}. */
   labels?: EntryLabels | null;
   icon?: string;
-  /** Where this collection sits in the primary nav — see {@link NAV_ORDER}. Filled in
+  /** Where this collection sits in the primary nav. See {@link NAV_ORDER}. Filled in
    * server-side, so the editor sorts one list of numbers. Optional here only because an
    * OLDER server does not send it; `NAV_ORDER.collections` is the fallback, which is
    * exactly where collections rendered before the key existed. */
@@ -200,7 +200,7 @@ export interface CollectionMeta {
   fields: FieldDefinition[];
   list: string[];
   titleField: string;
-  /** The entity's PK column name (defaults "id" server-side) — the editor reads a row's id
+  /** The entity's PK column name (defaults "id" server-side). The editor reads a row's id
    * from this to open/save/delete it. */
   idField: string;
   orderBy?: { column: string; dir?: "asc" | "desc" };
@@ -220,11 +220,11 @@ export interface CollectionMeta {
 export interface CmsCapabilities {
   /** Declared locales, most-preferred first. */
   locales: string[];
-  /** The locale a page gets when created without one — `locales[0]`. */
+  /** The locale a page gets when created without one: `locales[0]`. */
   defaultLocale: string;
   /** More than one declared locale. Gates the whole i18n surface. */
   multilingual: boolean;
-  /** The server's `listPages` understands `contentType` — the licence to give each content
+  /** The server's `listPages` understands `contentType`: the licence to give each content
    * type its own tab and its own list. An older server ACCEPTS the argument and ignores it
    * (an unknown input key is passed through, not rejected), answering with the pooled list:
    * without this probe the editor renders N tabs that all show every type's pages under a
@@ -236,7 +236,7 @@ export interface CmsCapabilities {
   siteFurniture: boolean;
   /** The server stamps `managedBy` on the types `cmsBootstrap` declares, and refuses to
    * update one. Declared rather than inferred from the rows: this package has no dependency
-   * on `@pramen/cms`, so a NEWER editor can run against an older server — where every row
+   * on `@pramen/cms`, so a NEWER editor can run against an older server, where every row
    * reports no owner, which reads identically to "no type is code-defined". Trusting the row
    * there means the builder offers a save the server accepts and the next cold start
    * reverts, i.e. GitHub #48 in the deployment that upgraded the editor to fix it. */
@@ -254,7 +254,7 @@ export interface CmsCapabilities {
   /** The server has `listMediaTerms`/`setMediaTerms`, and `listMedia` understands `term`.
    * Declared like `siteFurniture`: on an older server the detail panel's Tags section would
    * 404 the moment a file is opened, and the library's tag filter would send an argument
-   * that is silently ignored — a control that visibly does nothing. */
+   * that is silently ignored, a control that visibly does nothing. */
   mediaTerms: boolean;
   /** The server has `signMediaDownload`. Declared, not assumed: `/media/<key>` serves the
    * bytes on every version (so Preview always works), but getting the file back under its
@@ -264,7 +264,7 @@ export interface CmsCapabilities {
 }
 
 /**
- * Where each built-in section sits in the primary nav — the editor's mirror of
+ * Where each built-in section sits in the primary nav: the editor's mirror of
  * `NAV_ORDER` in @pramen/cms.
  *
  * A mirror, not an import: the editor is a standalone browser app that speaks to the CMS
@@ -302,7 +302,7 @@ export const DEFAULT_CAPABILITIES: CmsCapabilities = {
   // Fails OPEN, unlike its neighbours. An older server sends no `canEdit`, and hiding
   // every authoring control from a real editor is unrecoverable from inside the editor;
   // showing one that 403s is a legible error with a way forward. The server is the
-  // boundary either way — this only decides what is drawn.
+  // boundary either way; this only decides what is drawn.
   canEdit: true,
 };
 
@@ -346,7 +346,7 @@ export interface RenderedBlock {
   title: string | null;
   fields: FieldValues;
   is_shared: boolean;
-  pending?: boolean; // optimistic placeholder — not yet persisted (temp ids, no getBlock)
+  pending?: boolean; // optimistic placeholder, not yet persisted (temp ids, no getBlock)
 }
 
 export interface AssembledPage {
@@ -396,12 +396,12 @@ export interface Menu {
   name: string;
   label: string;
   items?: MenuItem[] | null;
-  /** Optimistic-concurrency counter — send it back as `expectedVersion` so a second
+  /** Optimistic-concurrency counter. Send it back as `expectedVersion` so a second
    * editor's whole-tree overwrite is a 409 rather than a silent replacement. */
   version?: number;
 }
 
-/** Mirror of `MAX_MENU_DEPTH` in @pramen/cms — the editor refuses to nest deeper rather
+/** Mirror of `MAX_MENU_DEPTH` in @pramen/cms. The editor refuses to nest deeper rather
  * than letting a save fail on the server with the tree already reordered on screen. */
 export const MAX_MENU_DEPTH = 5;
 
@@ -426,12 +426,12 @@ export interface Taxonomy {
   pluralLabel?: string | null;
   description?: string | null;
   hierarchical?: boolean;
-  /** What this vocabulary classifies. `null`/absent means EVERYTHING — a vocabulary that was
+  /** What this vocabulary classifies. `null`/absent means EVERYTHING: a vocabulary that was
    * never narrowed, and the reading for a row written before the column existed. */
   appliesTo?: TaxonomyTarget[] | null;
 }
 
-/** Mirror of @pramen/cms `TAXONOMY_TARGETS` — the object types a vocabulary can classify.
+/** Mirror of @pramen/cms `TAXONOMY_TARGETS`: the object types a vocabulary can classify.
  * Mirrored rather than imported for the reason at the top of this file: the editor is a
  * standalone browser app with no server-package dependency. The server is the authority; an
  * unknown value here would just render an unchecked box it refuses to save. */
@@ -506,14 +506,14 @@ export interface AdminButton {
 
 export type AdminElement = AdminButton | AdminInput;
 
-/** Every `AdminElement` tag, as a runtime set — the editor needs it to decide whether a
+/** Every `AdminElement` tag, as a runtime set: the editor needs it to decide whether a
  * table cell draws as text or as a control. Mirrors `@pramen/cms`; the two are asserted
  * equal in `test/cms-editor-mirrors.test.ts`, because a tag missing here renders a live
  * control as `[object Object]`. */
 export const ADMIN_ELEMENT_TYPES = ["button", "text_input", "number_input", "select", "toggle", "secret_input"] as const;
 
 /** What one table cell holds: a value to READ, or an element to ACT with. Told apart by
- * shape — a display value is a primitive, an element is an object. The server refuses any
+ * shape: a display value is a primitive, an element is an object. The server refuses any
  * other object on the way out. */
 export type AdminCell = string | number | boolean | null | AdminElement;
 
@@ -540,14 +540,14 @@ export interface AdminPageResponse {
 
 /** How a registered admin screen draws. Mirror of `ADMIN_PAGE_KINDS` in @pramen/cms.
  *
- * `"blocks"` is Block Kit — the server describes the page as JSON and the editor renders it.
+ * `"blocks"` is Block Kit: the server describes the page as JSON and the editor renders it.
  * `"panel"` is a React component the deployment's own panel bundle registered under the
  * same slug (see `panels.ts`); the server still owns the entry, so the role filter, the
  * label, the icon and the position are the same server facts for both. */
 export const ADMIN_PAGE_KINDS = ["blocks", "panel"] as const;
 export type AdminPageKind = (typeof ADMIN_PAGE_KINDS)[number];
 
-/** A custom admin page, as the editor sees it (from `listAdminPages`) — never the render
+/** A custom admin page, as the editor sees it (from `listAdminPages`): never the render
  * function, and never the role list. A page the caller may not open is simply absent. */
 export interface AdminPageMeta {
   slug: string;
@@ -569,8 +569,8 @@ export function adminPageKind(meta: AdminPageMeta): AdminPageKind {
 // --- media sorting and filtering -----------------------------------------------------------
 //
 // Mirrors of the vocabularies `listMedia` accepts in @pramen/cms. Mirrored rather than
-// imported for the reason at the top of this file — the editor is a standalone browser app
-// with no server-package dependency — and checked against the originals in
+// imported for the reason at the top of this file: the editor is a standalone browser app
+// with no server-package dependency, and checked against the originals in
 // `test/cms-editor-mirrors.test.ts`, because a duplicate nobody verifies is a latent bug with
 // a comment on it.
 //

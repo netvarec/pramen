@@ -9,7 +9,7 @@ export async function runRegistry(base: string): Promise<void> {
   const probe = "registry-probe";
 
   // First touch of a fresh tenant registers it (registration runs before dispatch,
-  // so even a denied call registers — here we use admin).
+  // so even a denied call registers; here we use admin).
   await fetch(`${base}/rpc/listNotes`, {
     method: "POST",
     headers: { "content-type": "application/json", "x-pramen-tenant": probe, authorization: `Bearer ${admin}` },
@@ -43,7 +43,7 @@ export async function runRegistry(base: string): Promise<void> {
   const schemaDenied = await fetch(`${base}/admin/schema?tenant=${probe}`, { headers: { authorization: `Bearer ${reader}` } });
   assert(schemaDenied.status === 403, "non-admin cannot read schema");
 
-  // partition param: &partition=default must address the BARE tenant DO key —
+  // partition param: &partition=default must address the BARE tenant DO key,
   // byte-for-byte the same DO the omitted-partition call hits (back-compat). So the
   // applied-schema hash is identical.
   const schemaDefault = await fetch(`${base}/admin/schema?tenant=${probe}&partition=default`, {

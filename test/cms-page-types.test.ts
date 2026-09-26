@@ -1,4 +1,4 @@
-// @pramen/cms — `listPages` scoped to one content type.
+// @pramen/cms: `listPages` scoped to one content type.
 //
 // A CMS holding two content types (pages AND articles) pooled them into one list: same
 // column, same rows, nothing but the slug to tell a landing page from a news item. The
@@ -28,8 +28,8 @@ const PAGES = [
 
 /** A ctx whose `db.find` answers like the real store and records what was asked.
  *
- * It understands `where: { type: { slug } }` — the relation traversal the handler compiles
- * to — because that is the whole point: the slug is resolved by a subquery, in ONE query,
+ * It understands `where: { type: { slug } }`, the relation traversal the handler compiles
+ * to, because that is the whole point: the slug is resolved by a subquery, in ONE query,
  * rather than by a round trip through `cms_content_types` that also throws for a policy set
  * granting cms_pages but not the types table. */
 function stubCtx() {
@@ -59,7 +59,7 @@ const handler = () => (createCmsHandlers() as unknown as {
 }).listPages;
 
 describe("listPages", () => {
-  test("no filter lists every type — the behaviour every existing deployment has", async () => {
+  test("no filter lists every type, the behaviour every existing deployment has", async () => {
     const { ctx, queries } = stubCtx();
     expect(await handler().run(ctx, {})).toHaveLength(3);
     expect(queries).toHaveLength(1);
@@ -85,7 +85,7 @@ describe("listPages", () => {
 
   // The cap and the ordering are the contract, not an implementation detail: the editor's
   // header reports the row count, and "newest first" is what makes a capped list useful.
-  // Asserted on the FILTERED branch too — that is the branch every per-type tab takes.
+  // Asserted on the FILTERED branch too, since that is the branch every per-type tab takes.
   test("the filtered branch carries the same cap, ordering and projection as the pooled one", async () => {
     const { ctx, queries } = stubCtx();
     await handler().run(ctx, { contentType: "article", select: ["id", "title"] });
@@ -113,9 +113,9 @@ describe("listPages", () => {
   });
 
   // …and an EMPTY slug is an unknown slug, not "no filter". A falsy check here read as
-  // "unfiltered" and handed back every type's pages — the exact inverse of the rule above,
+  // "unfiltered" and handed back every type's pages, the exact inverse of the rule above,
   // and reachable, since a content type's slug is caller-supplied.
-  test("an empty slug matches nothing — it is not a synonym for unfiltered", async () => {
+  test("an empty slug matches nothing, and is not a synonym for unfiltered", async () => {
     const { ctx, queries } = stubCtx();
     expect(await handler().run(ctx, { contentType: "" })).toEqual([]);
     expect(queries[0].where).toEqual({ type: { slug: "" } });
@@ -144,7 +144,7 @@ describe("listPages", () => {
       expect(handler().input(undefined)).toEqual({});
     });
 
-    test("a string passes through — including the empty one, which is a real (unmatchable) slug", () => {
+    test("a string passes through, including the empty one, which is a real (unmatchable) slug", () => {
       expect(handler().input({ contentType: "article" })).toEqual({ contentType: "article" });
       expect(handler().input({ contentType: "" })).toEqual({ contentType: "" });
     });
@@ -152,7 +152,7 @@ describe("listPages", () => {
     // The PARSED value is what the ACL sees: dispatch hands it to `Db` as `input`, which is
     // what `$input("path")` policy markers resolve against. Rebuilding an object from the
     // keys this handler knows silently collapsed any such policy's scope to nothing.
-    test("unrecognised keys survive — policy `$input()` markers resolve against this value", () => {
+    test("unrecognised keys survive, so policy `$input()` markers resolve against this value", () => {
       expect(handler().input({ contentType: "article", capabilityKey: "abc" })).toEqual({ contentType: "article", capabilityKey: "abc" });
       expect(handler().input({ tenantScope: "acme" })).toEqual({ tenantScope: "acme" });
     });

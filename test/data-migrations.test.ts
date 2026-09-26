@@ -1,12 +1,12 @@
-// app.migrations — imperative, ordered, recorded-ONCE data migrations. The half the
+// app.migrations: imperative, ordered, recorded-ONCE data migrations. The half the
 // declarative migrator can't express (backfills, splits, normalizations), and the whole
 // reason it exists is that a transformation is NOT idempotent: running it twice doubles the
-// value. So the interesting properties are all about the ledger — that it records, that it
+// value. So the interesting properties are all about the ledger: that it records, that it
 // skips what it recorded, that it keys per partition, and that it records NOTHING when the
 // migration throws.
 //
 // Runs the runner directly over a bun:sqlite Driver (the same seam both boot paths use).
-// That driver's `transaction()` is a passthrough, exactly like D1Driver's — so these tests
+// That driver's `transaction()` is a passthrough, exactly like D1Driver's, so these tests
 // assert the D1-SHAPED guarantees (work-then-ledger ordering; no ledger row on a throw)
 // rather than pretending a rollback happened. The DO's real transaction only makes the
 // same guarantee stronger. The wiring that calls this after migrate() on boot is covered
@@ -48,7 +48,7 @@ async function freshStore(partition = "default"): Promise<Driver> {
 }
 
 /** A driver whose ledger LISTING reads empty (the ORDER BY query `appliedMigrations` runs),
- * while point lookups still see the truth — the view a racing isolate has after reading the
+ * while point lookups still see the truth: the view a racing isolate has after reading the
  * ledger a moment before someone else wrote to it. */
 function blindListing(driver: Driver): Driver {
   return {
@@ -60,12 +60,12 @@ function blindListing(driver: Driver): Driver {
 const run = (driver: Driver, migrations: readonly DataMigration[], partition?: string) =>
   runDataMigrations(driver, migrations, { partition, makeContext: makeContext(driver) });
 
-describe("data migrations — the runner", () => {
+describe("data migrations: the runner", () => {
   test("runs pending migrations in DECLARATION order", async () => {
     const driver = await freshStore();
     const order: string[] = [];
     const step = (id: string): DataMigration => ({ id, up: () => void order.push(id) });
-    // Declared out of any alphabetical/id order on purpose — the contract is the array's
+    // Declared out of any alphabetical/id order on purpose: the contract is the array's
     // order, since a later migration may depend on an earlier one's output.
     const result = await run(driver, [step("c"), step("a"), step("b")], "default");
     expect(order).toEqual(["c", "a", "b"]);
@@ -92,11 +92,11 @@ describe("data migrations — the runner", () => {
     expect(second.applied).toEqual([]);
     expect(second.skipped).toEqual(["double-n"]);
     const rows = (await driver.exec(`SELECT "n" FROM "counters" WHERE "id" = 'a'`, [])) as { n: number }[];
-    expect(rows[0]!.n).toBe(2); // 2, not 4 — the ledger, not idempotent SQL, is what saved it
+    expect(rows[0]!.n).toBe(2); // 2, not 4: the ledger, not idempotent SQL, is what saved it
   });
 
   test("the same id in two partitions applies once per partition, never cross-skipping", async () => {
-    // Two partitions are two independent DOs (two SQLite stores) — a migration applied in
+    // Two partitions are two independent DOs (two SQLite stores), so a migration applied in
     // one must still be pending in the other, which is why the ledger key is (id, partition).
     const defaultStore = await freshStore("default");
     const auditStore = await freshStore("audit");
@@ -125,15 +125,15 @@ describe("data migrations — the runner", () => {
     const result = await run(driver, [{ id: "audit-only", partition: "audit", up: () => void (ran = true) }], "default");
     expect(ran).toBe(false);
     expect(result.applied).toEqual([]);
-    // Not even the ledger table is created — nothing was selected for this partition.
+    // Not even the ledger table is created: nothing was selected for this partition.
     expect(migrationsForPartition([{ id: "x", partition: "audit", up: () => {} }], "default")).toEqual([]);
   });
 
   test("omitting `partition` (the D1 store) runs EVERY declared migration, recorded under its own", async () => {
-    // D1 is ONE shared database with no partition split — every entity's table lives in it,
+    // D1 is ONE shared database with no partition split: every entity's table lives in it,
     // so a non-default-partition migration is runnable there and would otherwise be dead.
     const driver = bunSqliteDriver(new Database(":memory:"));
-    await migrate(driver, schema); // the whole schema, all partitions — the D1 shape
+    await migrate(driver, schema); // the whole schema, all partitions: the D1 shape
     const ran: string[] = [];
     const result = await run(driver, [
       { id: "d-default", up: () => void ran.push("d-default") },
@@ -155,7 +155,7 @@ describe("data migrations — the runner", () => {
         id: "boom",
         up: async ({ driver: d }) => {
           // Write BEFORE throwing: on a passthrough-transaction substrate (D1, and this
-          // driver) the partial write survives — what must NOT survive is a ledger row
+          // driver) the partial write survives; what must NOT survive is a ledger row
           // claiming the migration is done.
           await d.exec(`INSERT OR REPLACE INTO "counters" ("id", "n") VALUES ('partial', 1)`, []);
           if (explode) throw new Error("backfill blew up");
@@ -166,7 +166,7 @@ describe("data migrations — the runner", () => {
     ];
 
     await expect(run(driver, migrations, "default")).rejects.toThrow(/boom/);
-    expect(ran).toEqual(["first"]); // "after" did NOT run — order is a contract
+    expect(ran).toEqual(["first"]); // "after" did NOT run: order is a contract
     // "boom" claimed its ledger row, then RELEASED it on the throw. On this passthrough
     // driver (and on D1) that compensating delete is the only thing standing between a
     // failed migration and being permanently marked as applied.
@@ -207,7 +207,7 @@ describe("data migrations — the runner", () => {
 
   test("an applied row is skipped without re-running, even if the up-front read missed it", async () => {
     // The pre-read `done` set is only an optimization; the claim is what decides. Blind the
-    // up-front listing (its ORDER BY is the tell) so only the claim can catch the row —
+    // up-front listing (its ORDER BY is the tell) so only the claim can catch the row,
     // exactly what a racing isolate sees when it read the ledger before the other one wrote.
     const driver = await freshStore();
     await ensureMigrationsTable(driver);
@@ -226,7 +226,7 @@ describe("data migrations — the runner", () => {
 
   test("an in-flight row does not read as applied", async () => {
     // `leaseUntil IS NULL` IS the definition of applied. A row a runner is still holding must
-    // read as PENDING — otherwise the admin ledger and the CLI would report a backfill that
+    // read as PENDING, since otherwise the admin ledger and the CLI would report a backfill that
     // is still running (or died mid-run) as done.
     const driver = await freshStore();
     await ensureMigrationsTable(driver);
@@ -237,7 +237,7 @@ describe("data migrations — the runner", () => {
     expect(await appliedMigrations(driver, "default")).toEqual([]);
   });
 
-  test("a LIVE lease is waited out, then FAILS CLOSED — never a concurrent double-run", async () => {
+  test("a LIVE lease is waited out, then FAILS CLOSED, never a concurrent double-run", async () => {
     // The window the lease exists to close: another isolate is mid-backfill. Skipping would
     // serve traffic against half-migrated data and strand the migration if that holder failed.
     const driver = await freshStore();
@@ -257,7 +257,7 @@ describe("data migrations — the runner", () => {
     expect(ran).toBe(false); // the whole point: it did NOT run alongside the holder
   });
 
-  test("an EXPIRED lease is stolen — a holder that died mid-backfill cannot strand it", async () => {
+  test("an EXPIRED lease is stolen, so a holder that died mid-backfill cannot strand it", async () => {
     // No compensating DELETE can cover an isolate evicted mid-run; only the lease expiring can.
     const driver = await freshStore();
     await ensureMigrationsTable(driver);
@@ -275,7 +275,7 @@ describe("data migrations — the runner", () => {
 
   test("a lease that COMPLETES while we wait lets the waiter proceed without re-running", async () => {
     // The good case for waiting: the holder commits, and the waiter carries on knowing the
-    // data IS migrated — rather than either duplicating the work or failing the request.
+    // data IS migrated, rather than either duplicating the work or failing the request.
     const driver = await freshStore();
     await ensureMigrationsTable(driver);
     await driver.exec(
@@ -312,7 +312,7 @@ describe("data migrations — the runner", () => {
   });
 });
 
-describe("validateMigrations — declaration-time invariants", () => {
+describe("validateMigrations: declaration-time invariants", () => {
   const ok: DataMigration = { id: "a", up: () => {} };
 
   test("a valid set does not throw", () => {
@@ -323,7 +323,7 @@ describe("validateMigrations — declaration-time invariants", () => {
     expect(() => validateMigrations(schema, [])).not.toThrow();
   });
 
-  test("a duplicate id throws — ids are the ledger key, globally unique", () => {
+  test("a duplicate id throws, because ids are the ledger key, globally unique", () => {
     expect(() => validateMigrations(schema, [ok, { id: "a", up: () => {} }])).toThrow(/duplicate id "a"/);
     // Even across partitions: an id must identify ONE migration, or a copy-paste silently
     // marks a different one as applied.

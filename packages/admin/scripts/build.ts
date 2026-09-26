@@ -90,5 +90,5 @@ if (watch) {
       return new Response(Bun.file(`${dist}${path}`));
     },
   });
-  console.log("watching src/ — preview on http://localhost:5174");
+  console.log("watching src/, preview on http://localhost:5174");
 }

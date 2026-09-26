@@ -1,4 +1,4 @@
-// ctx.queue — Cloudflare Queues producer facade, the same shape as ctx.mail / ctx.files:
+// ctx.queue: the Cloudflare Queues producer facade, the same shape as ctx.mail / ctx.files:
 // an adapter seam (CloudflareQueueAdapter / MemoryQueueAdapter) behind a thin `Queue`
 // facade, built from the environment. Handlers enqueue onto a native Cloudflare Queue
 // without touching the producer binding directly:
@@ -16,7 +16,7 @@
 //
 // On Cloudflare the transport is the Queues producer binding (declared in oblaka.ts as
 // `new Queue({ binding: "both", ... })`). Off-platform / unconfigured, sending to a queue
-// that isn't bound FAILS CLOSED (throws) rather than silently dropping the message —
+// that isn't bound FAILS CLOSED (throws) rather than silently dropping the message,
 // mirroring how ctx.mail fails closed without a transport.
 
 import type { EnvBag } from "../sdk/handlers";
@@ -33,7 +33,7 @@ export interface QueueSendOptions {
   contentType?: QueueContentType;
 }
 
-/** One message in a `sendBatch` — a body plus its own per-message options. */
+/** One message in a `sendBatch`: a body plus its own per-message options. */
 export interface QueueSendRequest {
   body: unknown;
   delaySeconds?: number;
@@ -54,7 +54,7 @@ export interface QueueProducerBinding {
   sendBatch(messages: Iterable<QueueSendRequest>, options?: QueueBatchOptions): Promise<void>;
 }
 
-/** The transport seam — one per backend (Cloudflare Queues, an in-memory capture, …). */
+/** The transport seam, one per backend (Cloudflare Queues, an in-memory capture, …). */
 export interface QueueAdapter {
   send(queue: string, body: unknown, options?: QueueSendOptions): Promise<void>;
   sendBatch(queue: string, messages: readonly QueueSendRequest[], options?: QueueBatchOptions): Promise<void>;
@@ -92,7 +92,7 @@ function assertQueueName(queue: string): void {
 
 /** Cloudflare Queues transport. Constructed with the producer bindings discovered from
  * the environment, keyed by binding name. Sending to a name with no bound queue throws
- * a clear error (fail-closed) — a missing binding is a config error, not a silent drop. */
+ * a clear error (fail-closed): a missing binding is a config error, not a silent drop. */
 export class CloudflareQueueAdapter implements QueueAdapter {
   constructor(private readonly bindings: Readonly<Record<string, QueueProducerBinding>>) {}
 
@@ -102,7 +102,7 @@ export class CloudflareQueueAdapter implements QueueAdapter {
       const known = Object.keys(this.bindings);
       const avail = known.length ? known.join(", ") : "none";
       throw new Error(
-        `ctx.queue: no queue binding '${queue}' — declare it in oblaka.ts ` +
+        `ctx.queue: no queue binding '${queue}'. Declare it in oblaka.ts ` +
           `(new Queue({ name: '${queue}', binding: 'both' })). Bound queues: ${avail}.`,
       );
     }
@@ -150,7 +150,7 @@ export function discoverQueueBindings(env: EnvBag): Record<string, QueueProducer
 
 /** Build `ctx.queue` from the environment: a Cloudflare adapter over the discovered
  * producer bindings. Sending to an undeclared queue fails closed (the adapter throws).
- * There is no silent capture fallback — declare the `Queue` binding and it exists in
+ * There is no silent capture fallback: declare the `Queue` binding and it exists in
  * dev (lopata) and miniflare too. */
 export function createQueue(env: EnvBag): Queue {
   return new Queue(new CloudflareQueueAdapter(discoverQueueBindings(env)));

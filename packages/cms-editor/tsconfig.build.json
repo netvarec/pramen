@@ -1,6 +1,6 @@
 {
   // `buildEditor` is build-time code that a HOST imports (`@pramen/cms-editor/build`), so it
-  // is API and wants typechecking — but it runs in Bun and reads the filesystem, which the
+  // is API and wants typechecking, but it runs in Bun and reads the filesystem, which the
   // browser config next door deliberately has no types for. Its own config, rather than
   // widening that one: the editor's screens should not be able to reach for `Bun` or
   // `node:fs` and still typecheck.

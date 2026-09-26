@@ -1,7 +1,7 @@
-// The layout primitives every screen shares — and the choice of which chrome wraps them.
+// The layout primitives every screen shares, and the choice of which chrome wraps them.
 //
-// A LEAF module on purpose. These were copied into four files, and the obvious fix — put
-// them in `components.tsx`, which already has them — is not available: `components.tsx`
+// A LEAF module on purpose. These were copied into four files, and the obvious fix (put
+// them in `components.tsx`, which already has them) is not available: `components.tsx`
 // imports from `furniture.tsx` (for `flattenTerms`, used by the page editor's Terms panel),
 // so `furniture.tsx` importing back would be a cycle. Constants and class strings have no
 // dependencies of their own, so they belong below both.
@@ -27,7 +27,7 @@ export const CONTENT = "mx-auto max-w-[var(--pramen-content-max)] px-[var(--pram
 export const WRAP =
   "mx-auto max-w-[var(--pramen-content-max)] px-[var(--pramen-gutter)] pb-[var(--pramen-page-pb)] pt-[var(--pramen-page-pt)]";
 
-/** One row in a list — a card-surfaced strip with the standard inset. */
+/** One row in a list: a card-surfaced strip with the standard inset. */
 export const ROW = "flex items-center gap-3 rounded-[14px] border border-transparent bg-surface-card px-[18px] py-3.5";
 
 /** What a `<button>` that opens something needs on top of its own look: full width and
@@ -55,8 +55,8 @@ export const TILE_BUTTON = "block w-full cursor-pointer text-left outline-none f
 //
 // `"topbar"` is the second: the brand-left / tabs-right bar the Graphic Standard apps use
 // (podoba's `Topbar`, which is the same bar extracted). It is the right chrome when the
-// admin sits INSIDE a product that already wears that bar — a horizontal nav under a
-// vertical one reads as two apps stacked — and for a small deployment whose whole nav fits a
+// admin sits INSIDE a product that already wears that bar (a horizontal nav under a
+// vertical one reads as two apps stacked, and for a small deployment whose whole nav fits a
 // row. `chrome-topbar.tsx` keeps it legible past that size by rendering the first nav
 // section as tabs and folding each later section into a dropdown, rather than reviving the
 // horizontal scroller the sidebar replaced.
@@ -64,7 +64,7 @@ export const TILE_BUTTON = "block w-full cursor-pointer text-left outline-none f
 /** The chrome a deployment wears. */
 export type ChromeLayout = "sidebar" | "topbar";
 
-/** What ships when nothing is configured — the shape every existing deployment already has. */
+/** What ships when nothing is configured: the shape every existing deployment already has. */
 export const DEFAULT_LAYOUT: ChromeLayout = "sidebar";
 
 /** Every value `layout` accepts, for the warning below and for the docs to stay in step. */
@@ -76,7 +76,7 @@ export const CHROME_LAYOUTS: readonly ChromeLayout[] = ["sidebar", "topbar"];
  * A present-but-unrecognised value is WARNED about rather than silently accepted, for the
  * reason `resolveBrand` warns: this config is templated from env vars and hand-edited, so
  * `layout: "top"` or `layout: true` is a plausible slip, and it would otherwise ship the
- * DEFAULT chrome to a deployment that asked for the other one — silently, and only
+ * DEFAULT chrome to a deployment that asked for the other one, silently, and only
  * noticeable by someone who knew what they were expecting to see.
  */
 export function resolveLayout(value: unknown): ChromeLayout {
@@ -84,13 +84,13 @@ export function resolveLayout(value: unknown): ChromeLayout {
   const named = typeof value === "string" ? value.trim() : "";
   if ((CHROME_LAYOUTS as readonly string[]).includes(named)) return named as ChromeLayout;
   console.warn(
-    `pramen/cms-editor: ignoring unusable \`layout\` ${JSON.stringify(value)} — using "${DEFAULT_LAYOUT}". Expected one of ${CHROME_LAYOUTS.map((l) => JSON.stringify(l)).join(", ")}.`,
+    `pramen/cms-editor: ignoring unusable \`layout\` ${JSON.stringify(value)}, using "${DEFAULT_LAYOUT}". Expected one of ${CHROME_LAYOUTS.map((l) => JSON.stringify(l)).join(", ")}.`,
   );
   return DEFAULT_LAYOUT;
 }
 
 /** The global the host's shell writes. Declared structurally rather than reaching for
- * `Window`, so this module needs no DOM lib — and so a test can hand it a plain object. */
+ * `Window`, so this module needs no DOM lib, and so a test can hand it a plain object. */
 export interface LayoutHost {
   PRAMEN_CMS_EDITOR?: { layout?: unknown };
 }
@@ -101,14 +101,14 @@ export function readLayoutConfig(host: LayoutHost | undefined): unknown {
   return host?.PRAMEN_CMS_EDITOR?.layout;
 }
 
-/** The chrome for THIS page load. Read at module load, like `BRAND` — the shell's inline
+/** The chrome for THIS page load. Read at module load, like `BRAND`: the shell's inline
  * script runs ahead of the bundle, so it is already set. */
 export const CHROME_LAYOUT: ChromeLayout = resolveLayout(readLayoutConfig(globalThis as LayoutHost));
 
 // --- the app bar, and what has to clear it -----------------------------------------------
 //
 // ONE number, read by three modules. The bar at the top of the content column is sticky, and
-// the screen header is sticky BELOW it — so the header's offset has to be the bar's height,
+// the screen header is sticky BELOW it, so the header's offset has to be the bar's height,
 // exactly. A magic `44` written out in each is a one-pixel gap or overlap waiting for the
 // next edit.
 //
@@ -116,7 +116,7 @@ export const CHROME_LAYOUT: ChromeLayout = resolveLayout(readLayoutConfig(global
 // a constant: the sidebar's app bar is 44px and the topbar is 77px (podoba's `Topbar` at the
 // height the Graphic Standard apps set it to). Tailwind needs literal class names, so a
 // per-layout class string would mean every sticky call site taking the layout as a prop and
-// picking between two — threading a value through `page-header.tsx` and three levels of the
+// picking between two, threading a value through `page-header.tsx` and three levels of the
 // page editor to express one length.
 //
 // The values live in `app.css`, keyed by `data-pramen-chrome` on the document root (see
@@ -147,7 +147,7 @@ export const APP_BAR_H = "h-[var(--pramen-chrome-h)]";
 export const BELOW_APP_BAR = "top-[var(--pramen-chrome-h)]";
 
 /** The air between the chrome and the first panel of a screen. Applied ONCE, by the chrome,
- * to the column it wraps — not by `page-header.tsx`, so that it belongs to every screen and
+ * to the column it wraps, not by `page-header.tsx`, so that it belongs to every screen and
  * so that it scrolls away rather than staying pinned above a stuck header. */
 export const BELOW_CHROME_PAD = "pt-[var(--pramen-chrome-pad)]";
 
@@ -155,7 +155,7 @@ export const BELOW_CHROME_PAD = "pt-[var(--pramen-chrome-pad)]";
 //
 // Same "one number, several readers" rule as the app bar above, one level deeper. The
 // editor's toolbar is sticky BELOW the chrome, and the inspector column is sticky below
-// THAT — three elements, two of which need to know the height of what is above them.
+// THAT: three elements, two of which need to know the height of what is above them.
 
 /** The page editor's toolbar height. */
 export const PAGE_TOOLBAR_H = "h-14";

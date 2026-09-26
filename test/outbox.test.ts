@@ -1,5 +1,5 @@
 // Unit test for the transactional outbox (deferred tasks) against real SQLite via the
-// Driver seam — the SAME engine the DO and D1 both run, so this pins the substrate-
+// Driver seam, the SAME engine the DO and D1 both run, so this pins the substrate-
 // agnostic core: enqueue → drain → retry/backoff → dead-letter, independent of where
 // the wake-up comes from (DO alarm vs Worker Cron).
 
@@ -68,7 +68,7 @@ describe("outbox (substrate-agnostic deferred tasks)", () => {
     expect(r).toMatchObject({ processed: 1, succeeded: 0, failed: 1 });
   });
 
-  // #1 — the drain reports when the next task is due so the DO can reschedule its alarm
+  // #1: the drain reports when the next task is due so the DO can reschedule its alarm
   // (a backed-off retry would otherwise stall, never re-armed).
   test("drain reports nextRunAt (incl. a backed-off retry's future due time)", async () => {
     const driver = await freshDriver();
@@ -82,7 +82,7 @@ describe("outbox (substrate-agnostic deferred tasks)", () => {
     expect((await drainOutbox(empty, {}, 0)).nextRunAt).toBeNull();
   });
 
-  // #4 — the handler gets a stable id (idempotency key) + 1-based attempt number.
+  // #4: the handler gets a stable id (idempotency key) + 1-based attempt number.
   test("the handler receives a stable task id + attempt number across retries", async () => {
     const driver = await freshDriver();
     await enqueueTask(driver, 0, { kind: "k" });
@@ -100,7 +100,7 @@ describe("outbox (substrate-agnostic deferred tasks)", () => {
     expect(seen[0].id).toBe(seen[1].id); // same row, stable id
   });
 
-  // #3 — concurrency: a fresh claim ('processing') is not re-claimed; a stale one is.
+  // #3, concurrency: a fresh claim ('processing') is not re-claimed; a stale one is.
   test("a fresh claim is skipped; a stale claim is reclaimed (crash recovery)", async () => {
     const driver = await freshDriver();
     await enqueueTask(driver, 0, { kind: "k" });
@@ -116,7 +116,7 @@ describe("outbox (substrate-agnostic deferred tasks)", () => {
     expect(ran).toBe(1);
   });
 
-  // H9 — a 'processing' row stranded by a crashed drainer must fold into nextRunAt so the
+  // H9: a 'processing' row stranded by a crashed drainer must fold into nextRunAt so the
   // DO re-arms its alarm to reclaim it (the alarm is the only DO-path drain trigger; a
   // quiet tenant would otherwise stall forever).
   test("H9: a stranded 'processing' row drives nextRunAt to its stale-reclaim time", async () => {
@@ -140,7 +140,7 @@ describe("outbox (substrate-agnostic deferred tasks)", () => {
     expect(ran).toBe(1);
   });
 
-  test("H9: pending vs stranded-processing — nextRunAt is the EARLIER of the two", async () => {
+  test("H9: pending vs stranded-processing, where nextRunAt is the EARLIER of the two", async () => {
     const driver = await freshDriver();
     // A pending row backed off far into the future (runAt = 500_000).
     await enqueueTask(driver, 0, { kind: "later" });
@@ -154,7 +154,7 @@ describe("outbox (substrate-agnostic deferred tasks)", () => {
     expect(r.nextRunAt).toBe(61_000);
   });
 
-  // M1 — the per-row claimedAt re-stamp: a row's stale clock must restart to wall-clock
+  // M1, the per-row claimedAt re-stamp: a row's stale clock must restart to wall-clock
   // when its own processing begins, so a long batch's tail isn't reclaimed + run twice.
   test("M1: claimedAt is re-stamped to wall-clock immediately before the handler runs", async () => {
     const driver = await freshDriver();
@@ -166,7 +166,7 @@ describe("outbox (substrate-agnostic deferred tasks)", () => {
     const before = Date.now();
     // now=61_000 makes the ancient claim (1000) reclaimable; inside the handler the row's
     // claimedAt must already be the fresh wall-clock stamp (~Date.now()), not 1000 or the
-    // logical `now` — proving the per-row re-stamp fired before dispatch.
+    // logical `now`, which proves the per-row re-stamp fired before dispatch.
     await drainOutbox(
       driver,
       {
@@ -182,7 +182,7 @@ describe("outbox (substrate-agnostic deferred tasks)", () => {
     expect(seenClaimedAt!).toBeGreaterThan(1_000_000_000); // clearly Date.now(), not logical `now`
   });
 
-  // #6 — visibility + pruning.
+  // #6: visibility + pruning.
   test("listTasks surfaces dead-letters (no payload); done rows are pruned after retention", async () => {
     const driver = await freshDriver();
     // a task that dead-letters

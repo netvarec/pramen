@@ -9,7 +9,7 @@ bun run dev                          # the pramen worker, on :8787
 bun run --cwd example/site dev       # this site, on :4321
 ```
 
-Sign in at <http://localhost:4321/admin/sign-in> as **`pramen@local`** / **`pramen-dev`** —
+Sign in at <http://localhost:4321/admin/sign-in> as **`pramen@local`** / **`pramen-dev`**,
 seeded by `devUserBootstrap` in `example/app.ts` on first boot, and only when
 `PRAMEN_DEV_SEED` is set (`oblaka.ts` sets it for the `local` env and nowhere else). The
 password is ten characters rather than the obvious `pramen` because `login` parses its input
@@ -23,7 +23,7 @@ tenant to call, so it does not ask.
 
 ## What it demonstrates
 
-`astro.config.mjs` is the whole wiring — one integration:
+`astro.config.mjs` is the whole wiring, one integration:
 
 ```js
 pramenCms({
@@ -40,18 +40,18 @@ pramenCms({
 - **The editor.** `admin` injects a catch-all route, so the editor is *part of this site*:
   no `dist/` deployed beside it, no SPA-fallback rewrite, no second hostname for it. Its
   `editor.js` / `editor.css` go through this site's bundler like any other import, which is
-  what lets it be served under a prefix at all. The API is still cross-origin here — the
-  worker is on :8787, this site on :4321 — which is why `oblaka.ts` sets `CORS_ORIGINS`.
+  what lets it be served under a prefix at all. The API is still cross-origin here: the
+  worker is on :8787, this site on :4321, which is why `oblaka.ts` sets `CORS_ORIGINS`.
 
 Two deliberate departures from what a real site would do:
 
 - **`collections` is an explicit map**, not the `"auto"` default. Auto-discovery names
-  collections after the content-type slugs it finds in the store — exactly what an example
+  collections after the content-type slugs it finds in the store, exactly what an example
   cannot hard-code, since `getCollection("articles")` has to compile against a known name.
 - **The adapter is `@astrojs/node`**, because that is what this repo's test can boot. A real
   pramen site uses `@astrojs/cloudflare`; nothing about the admin mount is adapter-specific.
   An adapter is needed at all only because the admin route is on-demand (`prerender = false`)
-  — every page of the site itself is static.
+  because every page of the site itself is static.
 
 ## The editor under the Graphic Standard theme
 
@@ -72,7 +72,7 @@ editor keeps the podoba `@pramen/cms-editor` pins.
 ## Type checking
 
 ```bash
-bun run --cwd example/site check     # astro check — needs the backend reachable
+bun run --cwd example/site check     # astro check; needs the backend reachable
 ```
 
 `astro check` is the only thing in this repo that type-checks `.astro` files, and the root
@@ -81,7 +81,7 @@ which runs the content loaders, so it needs a reachable CMS. `test/astro-site.te
 it there instead, where the stub is already up.
 
 `[slug].astro` declares a `Props` interface rather than reading `entry.data` directly. A
-generated collection carries no Zod schema, so `data` is `any` — without that interface every
+generated collection carries no Zod schema, so `data` is `any`. Without that interface every
 read in the template would type-check vacuously, and the check would be theatre.
 
 ## It is also the test

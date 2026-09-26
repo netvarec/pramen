@@ -1,6 +1,6 @@
 // Unit test for the Db table-access guard (runtime/db.ts). When the AclContext carries
 // an active partition (a partition-DO knows which partition it serves), every Db entry
-// point rejects any access to a table that lives in a DIFFERENT partition — a partition
+// point rejects any access to a table that lives in a DIFFERENT partition, since a partition
 // DO only owns its own tables. When the partition is unset (the D1/Worker shared-store
 // path, or a single-partition default DO with no header), the guard is a NO-OP.
 //
@@ -95,7 +95,7 @@ describe("Db partition guard", () => {
     const driver = await driverWithBothPartitions();
     const db = new Db(driver, ctx(undefined), schema);
 
-    // Both tables work — no guard.
+    // Both tables work: no guard.
     await db.insert("notes", { id: "n1", title: "hi" });
     await db.insert("audits", { id: "a1", action: "login" });
     expect(await db.count({ from: "notes" })).toBe(1);

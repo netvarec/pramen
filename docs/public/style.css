@@ -1,11 +1,11 @@
-/* pramen docs — a clean, Stripe-inspired light theme: indigo accent, refined
+/* pramen docs: a clean, Stripe-inspired light theme with an indigo accent, refined
    typography, a three-column layout (nav · content · on-this-page), and
    polished dark code blocks. */
 
 :root {
   --bg: #ffffff;
   --bg-subtle: #f7f9fc;
-  --ink: #1a1f36; /* primary text — Stripe's deep navy ink */
+  --ink: #1a1f36; /* primary text: Stripe's deep navy ink */
   --ink-strong: #0a2540;
   --muted: #697386;
   --faint: #8792a2;
@@ -124,7 +124,7 @@ a:hover { color: var(--accent-dark); }
   font-weight: 500;
 }
 
-/* code blocks — dark navy panel */
+/* code blocks: a dark navy panel */
 .doc pre {
   position: relative;
   background: var(--code-bg);

@@ -1,6 +1,6 @@
 // Error model. Anything that is the *client's* fault carries a status + code and
 // a message safe to return. Everything else is logged server-side and surfaced as
-// a generic 500 — internal messages / stack traces never reach the client.
+// a generic 500; internal messages / stack traces never reach the client.
 
 export class PramenError extends Error {
   constructor(
@@ -19,14 +19,14 @@ export class BadRequest extends PramenError {
   }
 }
 
-/** 401 — the caller is unauthenticated (no/invalid identity). */
+/** 401: the caller is unauthenticated (no/invalid identity). */
 export class Unauthorized extends PramenError {
   constructor(message = "authentication required") {
     super(message, 401, "unauthorized");
   }
 }
 
-/** 403 — authenticated but not permitted. For handler-level checks; the Db
+/** 403: authenticated but not permitted. For handler-level checks; the Db
  * chokepoint raises AclDenied for row/field ACL. */
 export class Forbidden extends PramenError {
   constructor(message = "forbidden") {
@@ -34,7 +34,7 @@ export class Forbidden extends PramenError {
   }
 }
 
-/** 409 — the request conflicts with the current state of the resource. For
+/** 409: the request conflicts with the current state of the resource. For
  * optimistic concurrency (a stale `expectedVersion`) and for uniqueness clashes the
  * caller could resolve by retrying with different input. */
 export class Conflict extends PramenError {

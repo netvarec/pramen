@@ -1,9 +1,9 @@
-// Queue consumer dispatch — the receiving half of ctx.queue. A pramen Worker is the
+// Queue consumer dispatch: the receiving half of ctx.queue. A pramen Worker is the
 // consumer for its declared queues (oblaka `new Queue({ binding: "both", ... })`), so
 // `createPramen(app).queue` is the Cloudflare `queue(batch, env, ctx)` entry. It routes
 // each batch to the matching `app.queues[name]` handler and ACKs/RETRIES per message.
 //
-// A consumer runs in the WORKER, not a Durable Object — a queue message isn't bound to a
+// A consumer runs in the WORKER, not a Durable Object: a queue message isn't bound to a
 // tenant, so there's no direct `ctx.db`. To touch tenant data, carry the tenant in the
 // message body and `ctx.callPrivileged({ name, input, tenant })` into its DO (exactly
 // like a public route). The consumer still gets `ctx.mail` / `ctx.queue` / `ctx.kv` /
@@ -20,7 +20,7 @@ export interface QueueMessage<Body = unknown> {
   readonly id: string;
   readonly timestamp: Date;
   readonly body: Body;
-  /** 1-based delivery attempt — grows on each retry (use it to give up / dead-letter). */
+  /** 1-based delivery attempt, which grows on each retry (use it to give up / dead-letter). */
   readonly attempts: number;
   /** Mark this message handled (won't be redelivered). The framework calls this for you
    * when the handler resolves; call it yourself only for fine-grained control. */
@@ -47,14 +47,14 @@ export interface QueueContext {
   readonly kv: Kv;
   /** Send email (the notification path). */
   readonly mail: Mail;
-  /** Enqueue onto a (possibly different) queue — fan-out / chaining. */
+  /** Enqueue onto a (possibly different) queue, for fan-out / chaining. */
   readonly queue: Queue;
   /** Apply a privileged mutation into a tenant's DO (the consumer has no direct db).
    * The message body should carry the `tenant`. */
   callPrivileged(opts: { name: string; input?: JsonValue; tenant?: string; roles?: string[]; partition?: string }): Promise<Response>;
 }
 
-/** A queue consumer handler — runs once per message. Resolving ACKs the message;
+/** A queue consumer handler, run once per message. Resolving ACKs the message;
  * throwing RETRIES it (subject to the queue's max_retries → dead-letter queue). */
 export type QueueHandler<Body = unknown> = (ctx: QueueContext, message: QueueMessage<Body>) => void | Promise<void>;
 
@@ -64,14 +64,14 @@ export type AppQueueMap = Record<string, QueueHandler>;
 
 /** Resolve the handler for a batch's queue. Queue names are env-prefixed in remote
  * environments (`production-pramen-jobs`) but bare locally (`pramen-jobs`), so match
- * leniently: exact, then the LONGEST `…-<key>` suffix, then — if there's exactly one
- * handler — fall through to it (the common single-queue app). Returns null if nothing
+ * leniently: exact, then the LONGEST `…-<key>` suffix, then, if there's exactly one
+ * handler, fall through to it (the common single-queue app). Returns null if nothing
  * matches.
  *
  * The suffix match must prefer the longest key so `email-jobs` wins over `jobs` for
  * `prod-email-jobs` (a plain `find` was insertion-order dependent and could misroute).
  * We only match a handler key that is a `-`-delimited suffix of the incoming queue name
- * (env prefix stripped) — never the reverse (a handler key ending in `-<queueName>`),
+ * (env prefix stripped) and never the reverse (a handler key ending in `-<queueName>`),
  * which let a shorter queue name grab a longer, unrelated handler. */
 export function routeQueue(queues: AppQueueMap, queueName: string): QueueHandler | null {
   const keys = Object.keys(queues);
@@ -82,12 +82,12 @@ export function routeQueue(queues: AppQueueMap, queueName: string): QueueHandler
   }
   if (best !== null) return queues[best];
   // Single-handler fallback: a lone queue whose env-prefixed name we couldn't suffix-
-  // match. Kept for the common single-queue app, but LOG it — otherwise a dead-letter
+  // match. Kept for the common single-queue app, but LOG it, since otherwise a dead-letter
   // queue (a distinct name) would silently route to the one handler and hide the misroute.
   if (keys.length === 1) {
     console.warn(
       `pramen: routing queue '${queueName}' to the sole handler '${keys[0]}' by fallback ` +
-        `(no exact/suffix match — verify this isn't a dead-letter or foreign queue)`,
+        `(no exact/suffix match; verify this isn't a dead-letter or foreign queue)`,
     );
     return queues[keys[0]];
   }
@@ -100,7 +100,7 @@ export function routeQueue(queues: AppQueueMap, queueName: string): QueueHandler
 export async function dispatchQueueBatch(queues: AppQueueMap, ctx: QueueContext, batch: QueueBatch): Promise<void> {
   const handler = routeQueue(queues, batch.queue);
   if (!handler) {
-    console.error(`pramen: no app.queues handler for queue '${batch.queue}' — retrying batch (declare it in app.queues)`);
+    console.error(`pramen: no app.queues handler for queue '${batch.queue}', retrying batch (declare it in app.queues)`);
     batch.retryAll();
     return;
   }
@@ -110,7 +110,7 @@ export async function dispatchQueueBatch(queues: AppQueueMap, ctx: QueueContext,
         await handler(ctx, message);
         message.ack();
       } catch (err) {
-        console.error(`pramen: queue '${batch.queue}' message ${message.id} failed (attempt ${message.attempts}) — retrying`, err);
+        console.error(`pramen: queue '${batch.queue}' message ${message.id} failed (attempt ${message.attempts}), retrying`, err);
         message.retry();
       }
     }),

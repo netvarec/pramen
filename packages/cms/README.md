@@ -1,7 +1,7 @@
 # @pramen/cms
 
-A **block / page builder** for pramen — Drupal-Paragraphs-style typed content blocks
-arranged in named regions, reusable blocks, scheduled publishing — built **entirely from
+A **block / page builder** for pramen: Drupal-Paragraphs-style typed content blocks
+arranged in named regions, reusable blocks, scheduled publishing, built **entirely from
 pramen primitives**. It is an ordinary app fragment (schema + handlers + ACL + tasks), not
 a new runtime. Inspired by [WollyCMS](https://github.com/wollycms/wollycms) / Drupal
 Paragraphs / Storyblok.
@@ -12,7 +12,7 @@ Paragraphs / Storyblok.
 > a standalone React SPA). Remaining: integration + QA against a real project. See *Limitations*.
 >
 > **Draft vs. publish validation:** editor-facing writes (addBlock/updateBlock/createPage)
-> validate field *types* but treat `required` as advisory — a DRAFT block may be incomplete
+> validate field *types* but treat `required` as advisory: a DRAFT block may be incomplete
 > and filled in later. (Enforcing required *at publish* is a small follow-up.)
 
 ## Typed blocks (hybrid)
@@ -26,7 +26,7 @@ compile-time field typing two ways:
   component with `TypedBlockComponent<typeof hero>` (from `@pramen/cms/react`). Proven by
   `example/cms-inference-check.ts`.
 - **Codegen from DB-stored types:** `generateBlockTypes(blockTypes)` emits a `.ts` module of
-  per-slug field interfaces + a `BlockFieldsBySlug` registry from `cms_block_types` rows —
+  per-slug field interfaces + a `BlockFieldsBySlug` registry from `cms_block_types` rows,
   for webmaster-created types. (A `pramen cms codegen` CLI that fetches the rows over HTTP and
   writes the file is the remaining thin wrapper.)
 
@@ -38,12 +38,12 @@ two tables. So every row it writes is stamped `managedBy: <owner>`:
 
 - `updateBlockType` / `updateContentType` answer **409** for one, naming the `define*` call to
   edit instead. Without that, a save returned 200 and was patched back to the literal in
-  `app.ts` at the next cold start — taking any block content authored against the added field
+  `app.ts` at the next cold start, taking any block content authored against the added field
   with it.
 - The type builder renders an owned type read-only, with a note saying where its definition
   lives, and marks it `code` in the overview lists. Gated on
   `listCmsCapabilities().codeDefinedTypes`, so an editor newer than its server fails closed.
-- Drop a type from the declaration and its row is **released** — it keeps existing, because
+- Drop a type from the declaration and its row is **released**: it keeps existing, because
   pages are built out of it, and becomes editable again.
 - A row this owner did not write is never touched. Adopting an editor-authored type of the
   same slug (replacing its name and schema, then locking it) was the mirror image of the bug
@@ -51,7 +51,7 @@ two tables. So every row it writes is stamped `managedBy: <owner>`:
 
 `blockTypes: []` **declares none**, and so releases everything this owner holds; an absent
 `blockTypes` key says nothing about that table and sweeps nothing. The empty array is the
-in-band way to hand every code-defined type back to the editor — deploy it once before
+in-band way to hand every code-defined type back to the editor. Deploy it once before
 removing the `cmsBootstrap` call, or the rows stay locked with nothing behind them.
 
 Two reconcilers compose as long as they pass distinct owners, which is what lets a package
@@ -70,19 +70,19 @@ why this is an owner id and not a `managed` boolean.)
 #### Definitions are validated where they are written
 
 `cmsBootstrap` validates and canonicalizes every definition it will write, at app
-construction, reporting **all** the problems at once — the same rules the editor's handlers
+construction, reporting **all** the problems at once, the same rules the editor's handlers
 enforce (`normalizeFieldSchema`, `normalizeRegions`, `normalizeDefaultBlocks`), so a
 code-declared type cannot store a schema the builder would then refuse to save.
 
 The check is deliberately *not* in `defineBlockType` / `defineContentType`. Those helpers are
 optional: `BlockTypeDef` and `ContentTypeDef` are ordinary interfaces, so an object literal, a
 `.map` over a config file or a codegen step reaches the store without going near them.
-Guarding the helper guards the convenient path and leaves the sink open — and the row it
+Guarding the helper guards the convenient path and leaves the sink open, and the row it
 writes is then locked, so an invalid schema could not be repaired through the product at all.
 
 They stay **pure constructors** for a second reason: canonicalization rebuilds every field
 entry, so doing it there made the returned array stop matching the `as const` literal
-`BlockFieldsOf<typeof def>` is inferred from — a cast a component would follow into
+`BlockFieldsOf<typeof def>` is inferred from: a cast a component would follow into
 `fields["  title  "] === undefined` with tsc insisting it was fine.
 
 ### How the editor words a type: `labels`
@@ -137,7 +137,7 @@ The type builder exposes **Delete type** when `listCmsCapabilities().typeDeletio
   (JSON-LD). Set via `updatePageSeo({ pageId, … })`; exposed as `page.seo` on the content API.
 - `listPublishedPages` (public) returns published `{ slug, locale, updatedAt }` for sitemaps.
 - `cmsRoutes({ origin?, pageUrl? })` returns turnkey **`GET /sitemap.xml`** + **`/robots.txt`**
-  routes — spread into `app.routes`. Helpers `sitemapXml(entries, opts)` / `robotsTxt(opts)`
+  routes, spread into `app.routes`. Helpers `sitemapXml(entries, opts)` / `robotsTxt(opts)`
   are exported if you want to build them yourself. hreflang alternates ride the content API's
   `page.translations`.
 
@@ -148,7 +148,7 @@ The type builder exposes **Delete type** when `listCmsCapabilities().typeDeletio
   publish), `unpublishPage`, `schedulePage`. Each transition is guarded (e.g. you can only
   approve a page that is in review).
 - **RBAC:** `submitForReview` is gated to `editorRoles`; `approve`/`reject`/`publishPage`/
-  `schedulePage` to `reviewerRoles` (default `["reviewer","admin"]`) — so an editor **can't
+  `schedulePage` to `reviewerRoles` (default `["reviewer","admin"]`), so an editor **can't
   bypass review** by publishing directly. Configure via `createCmsHandlers({ editorRoles, reviewerRoles })`.
 - **Audit trail:** every transition writes a `cms_audit` row (`action`, from/to status,
   `actor` = `identity.userId`, note) synchronously in the same transaction. `listPageAudit({ pageId })`
@@ -171,12 +171,12 @@ The type builder exposes **Delete type** when `listCmsCapabilities().typeDeletio
   the tenant's `media/` prefix); the client PUTs the bytes, then `createMedia({ ref, alt? })`
   confirms the blob is in R2 and persists a `cms_media` row. `listMedia`/`getMedia`/`deleteMedia`
   (deleteMedia also removes the R2 blob) round it out. Editor-gated.
-- **Viewing vs downloading:** `/media/<key>` serves the bytes **inline** and unauthenticated —
+- **Viewing vs downloading:** `/media/<key>` serves the bytes **inline** and unauthenticated:
   that is the preview path, and it is what an `<img src>` points at. It is not a download:
   saving from it writes the file under its opaque storage key. `signMediaDownload({ id })`
   mints a short-lived signed url that answers `Content-Disposition: attachment` with the
   ORIGINAL filename. It reads the row through `ctx.db` first and mints from what that read
-  returns — never from a caller-supplied key — so a trashed file 404s. `viewer`-gated, not
+  returns (never from a caller-supplied key) so a trashed file 404s. `viewer`-gated, not
   editor: the bytes are already public, so gating the filename would protect nothing.
   Declared as `listCmsCapabilities().mediaDownload`, so an editor running against an older
   server offers Preview only rather than a button that always errors.
@@ -190,37 +190,37 @@ The type builder exposes **Delete type** when `listCmsCapabilities().typeDeletio
   `newest`/`oldest`/`name`/`name_desc`/`largest`/`smallest`, and `kind` narrows to
   `image`/`video`/`audio`/`document`/`other`. All three are applied in SQL rather than to the
   page that arrived, so they mean what they say on a library larger than one page. `sort` and
-  `kind` are closed vocabularies — a caller never names a column — and an unrecognised value
+  `kind` are closed vocabularies (a caller never names a column) and an unrecognised value
   falls back to the default instead of erroring.
 
   This is what `cms_media.filename`/`contentType`/`size` are for: `file` is a `fileRef` (JSON in
   a TEXT cell), which `orderBy` and `where` cannot see into, so the three fields the library
   queries by are projected onto indexed columns when a row is created. **Spread `cmsMigrations`
-  into `app.migrations`** to backfill rows written before those columns existed — without it
+  into `app.migrations`** to backfill rows written before those columns existed. Without it
   they keep NULL, sort together under a name sort, and answer only the `other` filter.
 - **Tagging:** files carry taxonomy terms from the same `cms_taxonomies`/`cms_terms` tables pages
-  use, through a `cms_media_terms` junction — one vocabulary, edited in one place, applied to
-  whichever of the two it declares. A vocabulary carries **`appliesTo`** — `["page"]`,
+  use, through a `cms_media_terms` junction: one vocabulary, edited in one place, applied to
+  whichever of the two it declares. A vocabulary carries **`appliesTo`**: `["page"]`,
   `["media"]`, both, or `null` for everything (which is what an un-narrowed one, and every row
   written before the column existed, means). `listTaxonomies({ target })` narrows to it, and
   `setPageTerms`/`setMediaTerms` REFUSE a term from a vocabulary that does not apply, so it is a
   rule rather than a UI hint. Narrowing a vocabulary away from something it is still assigned to
-  is refused too — those assignments would stay stored and stop being reachable from the panel
+  is refused too: those assignments would stay stored and stop being reachable from the panel
   that could remove them. `listMediaTerms({ mediaId })` reads a file's terms and `setMediaTerms({ mediaId, termIds })`
   replaces them wholesale (set semantics, like `setPageTerms`); `listMedia({ term })` filters by
   one, ANDed with `kind` and `q`. The filter is a relation traversal compiled to a subquery, so
   it narrows in SQL like every other option here. Deleting a term takes its assignments with it
-  (a real `ON DELETE CASCADE`), and trashing a file does NOT — only `purgeMedia` does, so a
+  (a real `ON DELETE CASCADE`), and trashing a file does NOT: only `purgeMedia` does, so a
   restored file keeps its tags. Declared to the editor as
   `listCmsCapabilities().mediaTerms`.
 - **Reference from a block:** a `"media"` field stores a `cms_media` id. At assemble/publish time
   the id is resolved (recursively, through group/repeater nesting) to a `ResolvedMedia`
-  `{ id, key, url, alt, contentType, filename }` in the snapshot — so the content API returns a
+  `{ id, key, url, alt, contentType, filename }` in the snapshot, so the content API returns a
   servable URL, never a bare id.
 - **Serving + transforms:** published media is served by the Worker's **public** `GET
   /media/<tenant>/media/<key>` route (immutable-cached, `nosniff`; restricted to `media/`-prefixed
   keys so it can't leak signed-private objects). Put **Cloudflare Image Resizing** in front for
-  on-the-fly resize/format — build URLs with `imageUrl(key, { width, format, origin })`
+  on-the-fly resize/format: build URLs with `imageUrl(key, { width, format, origin })`
   (`/cdn-cgi/image/…`). Image Resizing is a **zone setting** (enable it on the Cloudflare zone),
   not a binding.
 
@@ -228,7 +228,7 @@ The type builder exposes **Delete type** when `listCmsCapabilities().typeDeletio
 
 | Concept | Table | Notes |
 |---|---|---|
-| Block **type** (schema) | `cms_block_types` | slug + a recursive `fieldsSchema` (JSON). Data-driven — add a type with no deploy. |
+| Block **type** (schema) | `cms_block_types` | slug + a recursive `fieldsSchema` (JSON). Data-driven: add a type with no deploy. |
 | Block **instance** | `cms_blocks` | content matching a type's field schema; optionally `isReusable`. |
 | **Content type** | `cms_content_types` | declares a page's `regions` (each with an `allowedTypes` allow-list) + `defaultBlocks`. |
 | **Page** | `cms_pages` | slug, status (draft/published/archived), scheduling, SEO, i18n locale. |
@@ -238,14 +238,14 @@ The type builder exposes **Delete type** when `listCmsCapabilities().typeDeletio
 
 ## Which pramen primitive does the work
 
-Nothing here is bespoke infrastructure — it composes what pramen already ships:
+Nothing here is bespoke infrastructure: it composes what pramen already ships:
 
-- `t.json()` — block/page field payloads, field schemas, overrides, snapshots
-- `t.fileRef()` + R2 + `ctx.files` — media
-- relations (`belongsTo`/`hasMany`) — page ↔ placement ↔ block ↔ type traversal
-- the **ACL** — editor RBAC (`cmsPolicies().editor`) and public read of published pages only (`cmsPolicies().public`)
-- `ctx.tasks` (the transactional outbox) — `schedulePage` enqueues a delayed publish/unpublish
-- live queries (via `@pramen/react`) — a live-updating page/preview for free (single-writer DO)
+- `t.json()`: block/page field payloads, field schemas, overrides, snapshots
+- `t.fileRef()` + R2 + `ctx.files`: media
+- relations (`belongsTo`/`hasMany`): page ↔ placement ↔ block ↔ type traversal
+- the **ACL**: editor RBAC (`cmsPolicies().editor`) and public read of published pages only (`cmsPolicies().public`)
+- `ctx.tasks` (the transactional outbox): `schedulePage` enqueues a delayed publish/unpublish
+- live queries (via `@pramen/react`): a live-updating page/preview for free (single-writer DO)
 
 ## Usage
 
@@ -269,27 +269,27 @@ Editor flow: `createBlockType` → `createContentType` → `createPage` → `add
 ### Preview links
 
 `{ preview: true }` is a **role** check, so it only serves people who have an editor
-account. The person preview actually exists for — the stakeholder reviewing copy before it
-ships — usually has no account at all. For them, mint a signed link:
+account. The person preview actually exists for (the stakeholder reviewing copy before it
+ships) usually has no account at all. For them, mint a signed link:
 
 ```ts
 const { url, expiresAt } = await client.call("signPagePreview", { pageId, expiresIn: 3600 });
 // -> { url: "/cms/preview?token=…", expiresAt }
 ```
 
-Minting is editor-gated; **redeeming needs no session** — the signature is the
+Minting is editor-gated; **redeeming needs no session**: the signature is the
 authorization. Spread `cmsRoutes()` into `app.routes` to serve `GET /cms/preview`, which
 verifies the token in the Worker before any read and returns the live draft with
 `isPreview: true` and `Cache-Control: private, no-store`.
 
-That route answers with **JSON** — this CMS is headless, so it has the draft and no idea what
+That route answers with **JSON**: this CMS is headless, so it has the draft and no idea what
 it should look like. Your site renders it: redeem the same token with `client.getPreview(token)`
 (`@pramen/cms-astro`) from a route of your own, through the same components the published page
 uses, and point the editor's Preview link button at it with `admin.previewUrl`. A working one
 is `example/site/src/pages/preview.astro`.
 
 If you pass custom roles to `createCmsHandlers`, hand `cmsRoutes` the **same options
-object** — it derives the route's identity from them, so the two cannot drift:
+object**: it derives the route's identity from them, so the two cannot drift:
 
 ```ts
 const cms = { editorRoles: ["editor"], reviewerRoles: ["reviewer"] };
@@ -298,7 +298,7 @@ const routes = [...cmsRoutes({ handlers: cms })];
 ```
 
 That identity must also be granted by your ACL. Preview works on **both stores**. It used to
-be DO-only — redemption goes through `ctx.callPrivileged`, which only forwarded to the
+be DO-only: redemption goes through `ctx.callPrivileged`, which only forwarded to the
 Durable Object, so minting on D1 would have handed out a link that 404s forever and
 `signPagePreview` refused instead. `callPrivileged` now dispatches locally in the Worker on
 the D1 store, so the refusal is gone. A browser redeeming a link sends no `x-pramen-store`
@@ -307,7 +307,7 @@ to land on the right store (an embedded topology sets it anyway).
 
 The grant is scoped to **one page** and carries its own expiry (default 1 hour, clamped to
 30 days), so a leaked link is not "see all drafts" and stops working on its own. Signing
-uses `PREVIEW_SECRET`, falling back to `FILES_SECRET` then `AUTH_SECRET` — the same
+uses `PREVIEW_SECRET`, falling back to `FILES_SECRET` then `AUTH_SECRET`, the same
 machinery as signed file urls. With no usable secret (≥16 chars) minting and verification
 both **fail closed** rather than hand out forgeable links.
 
@@ -315,7 +315,7 @@ From an Astro site, `createCmsClient(...).getPreview(token)` redeems one.
 
 ### Typed block fields
 
-A developer-authored block type gets compile-time typing with no build step —
+A developer-authored block type gets compile-time typing with no build step:
 `defineBlockType(slug, fields as const)` plus `BlockFieldsOf<typeof def>`.
 
 Webmaster-authored types are **data** (rows in `cms_block_types`, added with no deploy), so
@@ -325,7 +325,7 @@ they can't be typed at compile time. Read them back out of a running instance in
 bunx pramen-cms types --url https://cms.example.workers.dev --tenant acme --out src/cms.gen.ts
 ```
 
-Run it with **bun** (`bunx`), like the `pramen` bin — both ship extensionless ESM imports
+Run it with **bun** (`bunx`), like the `pramen` bin: both ship extensionless ESM imports
 that plain Node won't resolve. Its own bin rather than a `pramen` subcommand, because
 `@pramen/cms` is optional and the runtime CLI shouldn't carry a command named after it.
 
@@ -336,16 +336,16 @@ a block type.
 ### Trash (soft delete)
 
 `deletePage` and `deleteMedia` are **soft**: the row stays and `deletedAt` is stamped.
-Filtering lives in the ACL, not in each handler — a read scope is AND-merged into every
+Filtering lives in the ACL, not in each handler: a read scope is AND-merged into every
 `ctx.db` read, so one policy hides a trashed row from the public content API, the editor,
 `listPublishedPages`/the sitemap, relation traversals and eager-loads at once.
 
 | Handler | Role | Effect |
 | --- | --- | --- |
-| `deletePage` / `deleteMedia` | editor | stamp `deletedAt` — reversible |
-| `listTrash` | editor / reviewer | what is currently trashed — `{ pages, media }` |
+| `deletePage` / `deleteMedia` | editor | stamp `deletedAt`, reversible |
+| `listTrash` | editor / reviewer | what is currently trashed: `{ pages, media }` |
 | `restorePage` / `restoreMedia` | editor | clear `deletedAt` |
-| `purgePage` / `purgeMedia` | reviewer | permanent — row, placements, revisions, audit, R2 object |
+| `purgePage` / `purgeMedia` | reviewer | permanent: row, placements, revisions, audit, R2 object |
 
 Two caveats about doing it in the ACL:
 
@@ -354,7 +354,7 @@ Two caveats about doing it in the ACL:
   trashed rows become visible again. Scope your own grants with `deletedAt: { isNull: true }`.
 - **The task context bypasses the ACL entirely** (it runs SYSTEM-scoped), so scheduled
   publish/unpublish are not protected by the read scope. `deletePage` clears `scheduledAt`
-  and `unpublishAt` for exactly this reason — without that, a page trashed before its
+  and `unpublishAt` for exactly this reason. Without that, a page trashed before its
   scheduled time came back publicly live.
 
 Two things worth knowing:
@@ -382,18 +382,18 @@ const { page: saved } = await client.call("updatePage", {
 // 409: "this page was changed by someone else (you have version 3, current is 4)"
 ```
 
-The DO is a single writer, so writes already serialize — but *editors* don't. Without this,
+The DO is a single writer, so writes already serialize, but *editors* don't. Without this,
 two people on the same page meant last-save-wins with no signal to the loser.
 
 `expectedVersion` is **optional**: omit it and you get the previous last-write-wins
 behaviour. `updatePage` and `updatePageSeo` share the page's version line, so a body edit
 and an SEO edit conflict with each other; blocks version independently.
 
-Structural operations (`addBlock`, `removeBlock`, `reorderRegion`) are not guarded — they
+Structural operations (`addBlock`, `removeBlock`, `reorderRegion`) are not guarded: they
 are additive and already ordered by the single writer.
 
 `version` is returned on `AssembledPage.page` and on every `RenderedBlock`, so the value to
-echo back comes from the same read that loaded the content — including the public
+echo back comes from the same read that loaded the content, including the public
 (snapshot) path, where it is backfilled from the live row rather than the baked snapshot.
 
 On the **D1 store** (`x-pramen-store: d1`) there is no interactive transaction, so two
@@ -417,7 +417,7 @@ function Page({ slug }: { slug: string }) {
 }
 ```
 
-A `richtext` field is a **document tree**, not an HTML string — render it with
+A `richtext` field is a **document tree**, not an HTML string. Render it with
 `RichTextRenderer`, which walks the tree into real elements (no `dangerouslySetInnerHTML`,
 nothing to sanitize at render time):
 
@@ -433,7 +433,7 @@ descriptions.
 
 Writes are checked against a structural allow-list (`normalizeRichText`): an unknown node
 or mark type is dropped, only declared attributes survive, and a `link` href must pass a
-scheme check — so a hand-crafted payload can't smuggle markup past the editor. Widen or
+scheme check, so a hand-crafted payload can't smuggle markup past the editor. Widen or
 narrow the vocabulary with `createCmsHandlers({ richTextSchema })` (also accepted by
 `createCollectionHandlers`) when your editor adds TipTap extensions.
 
@@ -442,10 +442,10 @@ converts to a document on mount and the ordinary autosave persists it. That conv
 lossy for anything the editor's extension set doesn't model (an `h4` clamps to `h3`;
 `sub`/`sup`/`ins` flatten), so convert deliberately if that matters.
 
-Heading levels are 1–3 by default, matching the shipped editor's StarterKit config — raise
+Heading levels are 1–3 by default, matching the shipped editor's StarterKit config. Raise
 `richTextSchema.maxHeadingLevel` if your editor is configured for more. Out-of-range levels
 are **clamped**, not dropped: a level-less heading would render as `h1` in the editor and
-`h2` on the site — TipTap silently
+`h2` on the site. TipTap silently
 demotes an unknown level on parse, so permitting more meant an imported `h4` opened as `h1`
 and the next autosave persisted that.
 
@@ -456,7 +456,7 @@ script never passed through it, and the renderer is what puts it on a page.
 ### Collection workflow (`supports`)
 
 A **collection** points the editor at one of your own pramen entities. By default it is
-plain CRUD — no notion of published. `supports` opts it into the page-style workflow:
+plain CRUD: no notion of published. `supports` opts it into the page-style workflow:
 
 ```ts
 const talks = collection("talks", {
@@ -470,18 +470,18 @@ const talks = collection("talks", {
 });
 ```
 
-Each feature is backed by **managed columns on your entity** — you declare the columns, the
+Each feature is backed by **managed columns on your entity**: you declare the columns, the
 CMS owns their values:
 
 | Feature | Columns you add | Handlers you get |
 | --- | --- | --- |
 | `drafts` | `status` | `collectionPublish` / `collectionUnpublish` |
 | `scheduling` | `publishedAt`, `scheduledAt`, `unpublishAt` | `collectionSchedule` (needs `drafts`) |
-| `revisions` | — (uses `cms_collection_revisions`) | `collectionListRevisions` / `collectionRestoreRevision` |
-| `preview` | — | `signCollectionPreview` (needs `drafts`) |
+| `revisions` | none (uses `cms_collection_revisions`) | `collectionListRevisions` / `collectionRestoreRevision` |
+| `preview` | none | `signCollectionPreview` (needs `drafts`) |
 
-The editor renders the matching controls on a collection row — Publish / Unpublish, a
-schedule picker, a preview link, and a restorable revision list — driven entirely by
+The editor renders the matching controls on a collection row (Publish / Unpublish, a
+schedule picker, a preview link, and a restorable revision list) driven entirely by
 `supports`, so a plain CRUD collection shows none of them.
 
 ```ts
@@ -496,7 +496,7 @@ talks: Entity((t) => ({
 })),
 ```
 
-Wire all three pieces — the handlers need your `schema`, and **scheduling silently never
+Wire all three pieces: the handlers need your `schema`, and **scheduling silently never
 fires without the tasks**:
 
 ```ts
@@ -505,7 +505,7 @@ const tasks    = { ...cmsTasks,    ...createCollectionTasks(collections) };
 const acl = [
   role("anonymous", [...cmsPolicies().public, ...collectionPublicPolicies(collections)]),
   role("editor",    [...cmsPolicies().editor, ...collectionPolicies(collections)]),
-  // a reviewer previews collection rows, so it needs the collection grants too —
+  // a reviewer previews collection rows, so it needs the collection grants too:
   // `getCollectionPreview` is gated with editorRoles ∪ reviewerRoles:
   role("reviewer",  [...cmsPolicies({ prefix: "cms-rev" }).editor,
                      ...collectionPolicies(collections, { prefix: "cms-rev" })]),
@@ -517,7 +517,7 @@ const acl = [
 
 > **`anonymous` is not "everyone".** pramen assigns that role only to callers with **no
 > verified token**, so granting public reads there alone means a **logged-in** user is
-> denied content a logged-**out** visitor can read — a public list handler returns rows to a
+> denied content a logged-**out** visitor can read: a public list handler returns rows to a
 > guest and 403s for a member. There is no implicit everyone-role: spread the public grants
 > into each role that should have them (distinct `prefix` per role keeps the policy names
 > unique).
@@ -531,25 +531,25 @@ against it at startup, naming the collection and the column, rather than failing
 first call months later. It refuses:
 
 - a managed column that is missing, `notNull()`, `hidden()`, not `t.text()`, or also
-  declared as an editable field — a name check alone left "the CMS owns these values"
+  declared as an editable field: a name check alone left "the CMS owns these values"
   resting on a convention, and every wrong declaration failed *silently* (a `t.json()`
   `status` stores `"\"published\""`, so the row is invisible forever while Publish reports
   success);
 - a declared field that is not a column on the entity, or whose type cannot live in that
-  column (`richtext`/`group`/`repeater` need `t.json()`) — otherwise the first write fails
+  column (`richtext`/`group`/`repeater` need `t.json()`), or the first write fails
   with a raw driver message and no HTTP status;
 - an `idField` that is not the entity's primary key, an `orderBy` over a missing column
-  (SQLite resolves the quoted name to a *constant* and sorts every row equal — no error),
+  (SQLite resolves the quoted name to a *constant* and sorts every row equal, with no error),
   an entity outside the default partition (every handler dispatches there), an unknown
   feature, and `scheduling`/`preview` without `drafts`;
 - **two collections over the same entity.** The ACL keys policies by `(role, entity,
-  action)` and OR-merges them, so a second collection does not add a second view — it
+  action)` and OR-merges them, so a second collection does not add a second view: it
   *widens* the first one's read scope.
 
 All of this now applies to a collection with no `supports` too: it is column-mapped just
 the same.
 
-`collectionPublicPolicies` is the **actual access boundary**, not a UI filter — it is
+`collectionPublicPolicies` is the **actual access boundary**, not a UI filter: it is
 AND-merged into every `ctx.db` read of the entity, so an unpublished row is invisible to
 your public queries, relation traversals and eager-loads alike. With `scheduling` it scopes
 to:
@@ -563,48 +563,48 @@ status = 'published'
 Both time clauses matter. `{ publishedAt: { isNull: false } }` matches a *future* timestamp,
 so a row scheduled for next week would be public the moment it was saved. And the
 `unpublishAt` clause means a scheduled **takedown** is enforced by the read itself, not only
-by the task — if `createCollectionTasks` was never wired or the outbox drain is stuck, the
+by the task: if `createCollectionTasks` was never wired or the outbox drain is stuck, the
 row still stops being readable at its instant. That is the direction where failing open is
 worst.
 
 `publishedAt IS NULL` counts as published: a row seeded by `cmsBootstrap`, imported, or
 published while the collection was still `supports: ["drafts"]` has no stamp, and
-`NULL <= '2026-…'` is NULL — so requiring the comparison alone emptied a whole public site
+`NULL <= '2026-…'` is NULL, so requiring the comparison alone emptied a whole public site
 the moment `scheduling` was added to an existing collection. NULL cannot mean "scheduled for
 later": `publishedAt` is managed (never client-writable) and only ever takes *now* or null,
 while a row awaiting a scheduled publish is `status: 'draft'` with the instant in
 `scheduledAt`.
 
 The grant is restricted to **the declared fields, the id, `status`, and (with `scheduling`)
-`publishedAt`**. An entity column that is not in `fields` — an `internalNote`, a
-`reviewerEmail` — stays private even on a published row, so adding one later doesn't quietly
+`publishedAt`**. An entity column that is not in `fields` (an `internalNote`, a
+`reviewerEmail`) stays private even on a published row, so adding one later doesn't quietly
 publish it. `publishedAt` is in because a caller may not `orderBy` a column it cannot read,
 and "newest published first" is the public query: excluding it 403'd anonymous while working
-for an editor. The forward-looking `scheduledAt` / `unpublishAt` stay out — "this comes down
+for an editor. The forward-looking `scheduledAt` / `unpublishAt` stay out: "this comes down
 on Friday" is not public.
 
-Your public read then stays an ordinary list — see `publicLectures` in `example/app.ts`.
+Your public read then stays an ordinary list, see `publicLectures` in `example/app.ts`.
 
 Managed timestamps are minted as ISO-8601 UTC (`2026-08-20T12:00:00.000Z`) in exactly one
 place, because the scope compares against `$now()` **lexicographically**. This is what
 closes the trap the old `publish` field type carried, where `publish` and `datetime` wrote
 different formats into the same TEXT column and sorted against each other as if hours apart.
 
-Revisions snapshot the row's state **before** each content write — an edit, and a restore
-itself — so a restore is a plain reversal that replays through the same whitelist rather
+Revisions snapshot the row's state **before** each content write (an edit, and a restore
+itself) so a restore is a plain reversal that replays through the same whitelist rather
 than resurrecting a column the collection no longer owns.
 
 The snapshot is taken through the raw path, so **history does not depend on who made the
 edit**: an editor whose read policy withholds a column would otherwise have silently dropped
 it from the snapshot, and every later "restore to before that edit" would restore an
-incomplete row. Reading history is projected the other way — `collectionListRevisions`
+incomplete row. Reading history is projected the other way: `collectionListRevisions`
 narrows each snapshot to the fields *that* caller may read on the entity, and
 `collectionRestoreRevision` writes back exactly that set. Field-level read policies hold
 through history; what you can see is what you can put back.
 Publish and unpublish write **no** revision: they change no content, so the entry would be
 identical to the edit before it and restoring it would do nothing visible.
 
-Ordering is by a monotonic per-row `revision` counter, never a timestamp — a revision is
+Ordering is by a monotonic per-row `revision` counter, never a timestamp: a revision is
 written on every edit, and two writes land in the same millisecond often enough that
 "restore the previous version" would otherwise be a coin flip.
 
@@ -614,7 +614,7 @@ row's content over the new one.
 
 Ordering is backed by a composite `unique` on `(collection, rowId, revision)`. The
 read-then-increment is serialized by the DO's single writer, but **on the D1 store it is
-not** — `D1Driver.transaction` is a no-op, since D1 has no interactive transactions — so the
+not** (`D1Driver.transaction` is a no-op, since D1 has no interactive transactions) so the
 index is what turns a concurrent duplicate into a visible failure instead of a silently
 ambiguous history. For the same reason the delete-and-purge pair is atomic on the DO but not
 on D1.
@@ -622,7 +622,7 @@ on D1.
 ### Locales
 
 A deployment declares the locales it publishes in, and the editor renders its i18n surface
-off that — the Translations panel, the Locale field, the per-row locale column:
+off that: the Translations panel, the Locale field, the per-row locale column:
 
 ```ts
 const handlers = { ...createCmsHandlers({ locales: ["cs", "en"] }), ... };
@@ -631,11 +631,11 @@ const handlers = { ...createCmsHandlers({ locales: ["cs", "en"] }), ... };
 One locale (or none declared) means monolingual: no i18n chrome anywhere, and the editor
 stops sending `locale` on a page save at all, so nothing can blind-overwrite a field it no
 longer shows. The FIRST entry is the locale a page is stamped with when created without
-one — derived, not a second `defaultLocale` option, because two settings that can disagree
+one, derived, not a second `defaultLocale` option, because two settings that can disagree
 about the same fact is how a Czech-only site ends up publishing `en`.
 
 Declared, not inferred from the data: the only way to create a second locale is
-`createTranslation`, which the editor exposes from inside the Translations panel — so a rule
+`createTranslation`, which the editor exposes from inside the Translations panel, so a rule
 like "show i18n once a second locale exists" would mean a monolingual site could never
 become multilingual. `listCmsCapabilities` is what the editor reads; `listLocales` remains a
 DATA query (which locales are actually authored), and the two differ while a locale is
@@ -643,7 +643,7 @@ declared but not yet used.
 
 ### Which store: D1 or the Durable Object
 
-For a CMS behind a site, **D1 is usually the right store** — and it is the only one that
+For a CMS behind a site, **D1 is usually the right store**, and it is the only one that
 lets the CMS live inside an Astro site's own Worker, because D1 is a binding while a
 Durable Object has to be exported from the worker entry.
 
@@ -654,7 +654,7 @@ What you give up, and it is worth knowing before you pick:
   wrote. Single-statement writes are still atomic. The Worker logs a specific error naming
   the handler and how many statements had committed, so a partial write is diagnosable
   rather than looking like an ordinary 500. Where the CMS does several writes in one
-  mutation — a revision plus the row it belongs to, a delete plus its revision purge — the
+  mutation (a revision plus the row it belongs to, a delete plus its revision purge) the
   order is chosen so a failure leaves a benign state, but it is not a rollback.
 - **No live queries.** Those need the Durable Object's socket host. The editor does not use
   them, so this only matters if your own frontend subscribes.
@@ -665,7 +665,7 @@ What you give up, and it is worth knowing before you pick:
   "triggers": { "crons": ["* * * * *"] }
   ```
 
-  Forget it and a scheduled publish simply never fires. The Worker now notices — when a
+  Forget it and a scheduled publish simply never fires. The Worker now notices: when a
   request-tail drain leaves a task queued for the future and no Cron drain has ever run, it
   logs once naming the fix, and stops as soon as a Cron drain is seen.
 - **One shared database, no tenant column.** A non-`main` tenant on D1 is refused unless you
@@ -677,18 +677,18 @@ when tenants must be isolated by construction.
 ## Limitations
 
 - **Block `fields` are opaque JSON**, so pramen's row/cell-level ACL and relational queries
-  don't reach inside a block — access is gated at the page/block level. Fine for content;
+  don't reach inside a block: access is gated at the page/block level. Fine for content;
   note it.
 - **No typed inference for block field data** yet (types are runtime `FieldDefinition[]`). A
   hybrid typed-block layer (inference + codegen) is a planned phase.
-- **Media orphan sweeping is manual** — `deleteMedia` removes a blob explicitly, but media no
+- **Media orphan sweeping is manual.** `deleteMedia` removes a blob explicitly, but media no
   longer referenced by any block isn't auto-collected (refs live inside opaque block JSON).
   Deleting media still used on a published page breaks that page's image until re-publish.
-- **Per-locale slug uniqueness is enforced in handler code**, not the schema — pramen's
+- **Per-locale slug uniqueness is enforced in handler code**, not the schema: pramen's
   `unique()` is single-column only, so `(slug, locale)` can't be a schema constraint. A
   concurrent double-insert of the same `(slug, locale)` could in theory slip past the
   SELECT-then-insert guard (the DO's single-writer makes this effectively safe per tenant).
-- **No draft autosave / optimistic-locking / presence** — the DO's single-writer + live
+- **No draft autosave / optimistic-locking / presence.** The DO's single-writer + live
   queries make these straightforward to add, but they aren't here yet.
 - **Field validation is structural**, not exhaustive (no cross-field rules, no referential
   checks on `media` ids, unknown keys pass through, `default` values aren't applied).
@@ -705,7 +705,7 @@ when tenants must be isolated by construction.
   unreachable through `collectionListRevisions` (it is purged on delete anyway).
 - **`drafts` gates VISIBILITY, not content.** A collection is column-mapped: the public
   reads the entity's own columns, so there is nowhere to stage an unpublished *version* of a
-  live row. An edit to a published row — and a `collectionRestoreRevision` on one — goes
+  live row. An edit to a published row (and a `collectionRestoreRevision` on one) goes
   live immediately, and `preview` on a published row shows what the public already sees.
   This is the one place collections do NOT reach page parity: `getPage` serves a baked
   revision snapshot, which is what lets a page hold unreviewed edits back. Unpublish first
@@ -715,12 +715,12 @@ when tenants must be isolated by construction.
   leaves an existing one standing (so moving a publish date doesn't silently revoke a
   scheduled removal); pass `unpublishAt: null` to cancel one deliberately. The new publish
   instant is checked against the takedown *already stored*, not just one sent in the same
-  call — a reschedule cannot slide the publish past a pending takedown (which would fire
+  call: a reschedule cannot slide the publish past a pending takedown (which would fire
   first, cancel itself, and leave the row public forever).
 - **A schedule converges, in any drain order.** The tasks are at-least-once and can drain
   arbitrarily late. The publish task therefore resolves to the state the schedule implies at
   drain time: if the takedown instant has also passed by then, the row lands **down**, with
-  both tokens spent — it does not publish and discard the takedown. The takedown task
+  both tokens spent: it does not publish and discard the takedown. The takedown task
   likewise clears the pending publish token, so a retried or late publish cannot resurrect
   the row.
 - **An interactive publish is different from the scheduled one**: `collectionPublish` clears
@@ -731,8 +731,8 @@ when tenants must be isolated by construction.
   `scheduledAt` and leaves `status`/`publishedAt` alone (parity with `schedulePage`), so
   scheduling a *published* row means it stays public until the task re-stamps it. Unpublish
   first if you meant "not live until then". Doing this implicitly would be a takedown the
-  editor never asked for, which is why it isn't automatic — but the editor UI should make
+  editor never asked for, which is why it isn't automatic, but the editor UI should make
   the current state obvious.
-- **A collection's `supports` features are per-row, not per-locale** — there is no
+- **A collection's `supports` features are per-row, not per-locale.** There is no
   translation-group equivalent for collections.
 - **Duplicate slugs surface as 500, not 409** (a framework-wide limitation, not CMS-specific).

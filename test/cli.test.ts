@@ -1,4 +1,4 @@
-// Smoke test for the CLI — runs commands via the shell and checks output.
+// Smoke test for the CLI: runs commands via the shell and checks output.
 
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
@@ -46,7 +46,7 @@ describe("pramen cli", () => {
     const { out, code } = run("migrations", "list", "--app", "example/app.ts");
     expect(code).toBe(0);
     const ids = out.trim().split("\n").map((l) => l.split("  ")[0]);
-    // Declaration order, which is also run order — and the list is the sum of what every
+    // Declaration order, which is also run order, and the list is the sum of what every
     // spread-in package declares plus the app's own, which is exactly what the command is
     // for: `@pramen/cms` contributes the media-projection backfill, the framework the
     // ISO-timestamp rewrite, and only the last two are the example's. The framework one
@@ -87,7 +87,7 @@ describe("pramen cli", () => {
       expect(appTs).toContain("allow()");
       // The scaffold deliberately ships no package.json (the CLI tells you to run
       // `bun add @pramen/server` next), so `@pramen/server` would otherwise resolve
-      // only via Bun auto-install — i.e. against the LAST PUBLISHED package, over the
+      // only via Bun auto-install, i.e. against the LAST PUBLISHED package, over the
       // network. That made this test assert on npm rather than on the working tree,
       // and fail outright whenever the auto-install cache was cold. Link the repo's
       // node_modules (where @pramen/server -> packages/server) so it loads THIS
@@ -121,7 +121,7 @@ describe("pramen-cms cli", () => {
   });
 
   test("types fails clearly when it cannot reach an instance", () => {
-    // Port 1 is never a pramen instance — the point is a CLI error naming the bin,
+    // Port 1 is never a pramen instance; the point is a CLI error naming the bin,
     // not an unhandled fetch rejection with a stack trace.
     const { err, code } = runCms("types", "--url", "http://127.0.0.1:1");
     expect(code).not.toBe(0);
@@ -133,7 +133,7 @@ describe("pramen-cms cli", () => {
   });
 
   test("--flag=value is accepted, and an unknown flag is rejected", () => {
-    // `--out=path` matched nothing, so the module printed to stdout and exited 0 — a green
+    // `--out=path` matched nothing, so the module printed to stdout and exited 0: a green
     // regenerate-and-diff CI with no file written. A misspelled flag did the same.
     const eq = runCms("types", "--url=http://127.0.0.1:1");
     expect(eq.code).not.toBe(0);

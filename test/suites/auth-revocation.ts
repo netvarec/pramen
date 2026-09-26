@@ -30,7 +30,7 @@ export async function runRevocation(base: string, wsUrl: string): Promise<void> 
   const me = await call("me", {}, carol);
   assert(me.body.ok && me.body.result?.userId === "rev_carol", "revoke: the refreshed token verifies (me)");
 
-  // requires authentication — an anonymous refresh is refused
+  // requires authentication: an anonymous refresh is refused
   const anonRefresh = await call("refreshSession", {});
   assert(anonRefresh.status === 403, "revoke: refreshSession requires authentication (403 anonymous)");
 
@@ -72,8 +72,8 @@ export async function runRevocation(base: string, wsUrl: string): Promise<void> 
 
   // --- WebSocket: a socket enforces the token's exp per message ----------------
   // Mint an admin token that is valid now but expires in ~3s (the `sign` helper lets the
-  // payload override its default exp). It upgrades fine, subscribes, then — after it has
-  // expired — the next message is rejected 4401 rather than dispatched under a dead token.
+  // payload override its default exp). It upgrades fine, subscribes, then, after it has
+  // expired, the next message is rejected 4401 rather than dispatched under a dead token.
   const shortExp = Math.floor(Date.now() / 1000) + 3;
   const expiring = await sign({ sub: "rev_ws", roles: ["admin"], exp: shortExp });
   const live = wsClient(wsUrl, { authorization: `Bearer ${expiring}`, "x-pramen-tenant": "main" });

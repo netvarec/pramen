@@ -1,6 +1,6 @@
 # pramen
 
-Reactive backend runtime for TypeScript — **on Cloudflare**. Define a schema and
+Reactive backend runtime for TypeScript, **on Cloudflare**. Define a schema and
 handlers; get a complete backend deployed as a Worker + Durable Object, where the
 platform provides the single-writer/storage/replication stack. See
 [DESIGN.md](./DESIGN.md).
@@ -10,11 +10,11 @@ platform provides the single-writer/storage/replication stack. See
 ```bash
 bun install
 bun run dev            # lopata dev (Bun runtime; fast reload + /__dashboard) on http://localhost:8787
-# bun run dev:wrangler # wrangler dev (miniflare) — workerd-parity check before deploy
+# bun run dev:wrangler # wrangler dev (miniflare), workerd-parity check before deploy
 
 # Requests need a signed bearer JWT (deny-by-default; see Auth/ACL below). The
 # token must be authorized for the tenant (here the default "main") via a
-# `tenants` claim — admins may access any tenant.
+# `tenants` claim; admins may access any tenant.
 TOKEN=$(bun -e 'import {token} from "./scripts/jwt"; console.log(await token("alice",["author"],{tenants:["main"]}))')
 
 # create a note
@@ -33,17 +33,17 @@ claims to an Identity (`sub`→userId, `roles`/`role`→roles, custom claims pas
 through). A forged or unsigned request gets no identity. Verification is pluggable
 (`VerifyStrategy` in `packages/server/src/auth.ts`):
 
-- **HS256** (`HmacStrategy`) — shared secret in `AUTH_SECRET` (dev value in
+- **HS256** (`HmacStrategy`): shared secret in `AUTH_SECRET` (dev value in
   `wrangler.jsonc`; production via `wrangler secret put AUTH_SECRET`). The default.
-- **RS256 via JWKS** (`JwksStrategy`) — set `JWKS_URL` to your identity provider's
+- **RS256 via JWKS** (`JwksStrategy`): set `JWKS_URL` to your identity provider's
   JWKS endpoint and tokens are verified asymmetrically against the fetched public
   keys (cached, with `kid` selection and rotation handling). When `JWKS_URL` is
   set it takes over from `AUTH_SECRET`.
 
-The core only *verifies* (bring your own IdP — Clerk/Auth0/WorkOS/Cloudflare Access
+The core only *verifies* (bring your own IdP: Clerk/Auth0/WorkOS/Cloudflare Access
 all work via JWKS). To *issue* logins without a third party, add the optional
 **`@pramen/auth`**: spread `authSchema` into your schema and `authHandlers` into your
-handlers to get `signup`/`login`/`me` — PBKDF2-hashed passwords, returning HS256
+handlers to get `signup`/`login`/`me`: PBKDF2-hashed passwords, returning HS256
 tokens the verifier above accepts (needs `AUTH_SECRET`):
 
 ```ts
@@ -53,10 +53,10 @@ const handlers = { ...authHandlers, /* your handlers */ };
 // client: const { token } = await pramen.call("login", { username, password });
 ```
 
-`@pramen/auth` also provides **passwordless magic-link login** —
+`@pramen/auth` also provides **passwordless magic-link login**,
 `createMagicLinkAuth({ sendEmail })` + `magicLinkSchema`, with a pluggable `sendEmail`
-(wire **Cloudflare Email Sending** via the `send_email` binding, no API keys) — and
-**user management** — `createUserHandlers()` + `authPolicies()` for ACL-gated admin
+(wire **Cloudflare Email Sending** via the `send_email` binding, no API keys), and
+**user management**: `createUserHandlers()` + `authPolicies()` for ACL-gated admin
 (`listUsers`/`setUserRoles`/`setUserActive`/`deleteUser`) and self-service
 (`changeEmail`/`changePassword`), over `auth_users` or your own authSchema-shaped
 table (e.g. with an extra `tenants` column).
@@ -64,7 +64,7 @@ table (e.g. with an extra `tenants` column).
 Sessions stay stateless without giving up revocation: `refreshSession()` reissues a
 token from freshly-read roles (refresh at ~half-TTL to keep the TTL short, or right
 after a checkout to pick up a new role with no re-login), while deactivating or
-deleting a user hits a **KV denylist** the Worker enforces on the very next request —
+deleting a user hits a **KV denylist** the Worker enforces on the very next request,
 HTTP or WebSocket. Live sockets re-check their token's `exp` per message and close
 4401 rather than outliving it. See the
 [Auth & Tenancy docs](docs/src/content/docs/auth-and-tenancy.md).
@@ -93,7 +93,7 @@ policy("manager:read", "notes", "read", { where: { ownerId: { in: $identity("tea
 ```
 
 **Relation traversal in `where`.** A `where` key naming a relation takes a nested
-clause over the related entity — in queries *and* ACL rules — compiled to a subquery
+clause over the related entity, in queries *and* ACL rules, compiled to a subquery
 (`belongsTo` → `fk IN (SELECT pk FROM target …)`, `hasMany` → `pk IN (SELECT fk …)`).
 The related entity's read scope is AND-merged, so traversal can't reveal rows you
 couldn't read directly.
@@ -106,10 +106,10 @@ policy("owner:read", "notes", "read", { where: { owner: { id: $identity("userId"
 ```
 
 **Cell-level (per-row) field ACL.** Beyond the flat `fields` list, a policy can
-grant fields *conditionally per row* — visibility that depends on the row's data,
+grant fields *conditionally per row*: visibility that depends on the row's data,
 not just the (entity, action). Use the declarative `conditionalFields` (a row
 predicate, statically analyzable) or the `fieldsFn` escape hatch for arbitrary
-logic. Conditional grants are **additive** — they only ever add fields to the base.
+logic. Conditional grants are **additive**: they only ever add fields to the base.
 
 ```ts
 // teammate reads every note, but sees `body` only on the notes they own
@@ -127,7 +127,7 @@ another's. A conditionally-visible column can't be aggregated or used in `orderB
 (that would leak its value across rows).
 
 The example roles (`example/app.ts`): `admin` (full access), `author` (own notes
-only — mint a token with `sub` = the owner), `reader` (reads all, no `body`),
+only, so mint a token with `sub` = the owner), `reader` (reads all, no `body`),
 `member` (read unlocked dynamically once you've authored a note). Live
 subscriptions inherit the connecting identity, so pushes respect row-level scope.
 
@@ -140,7 +140,7 @@ author can see `note.owner` (id + name) without being able to list users or see
 their email. Covered by `bun test`.
 
 **Write-side ACL.** A write policy may `set` server-controlled columns (forced,
-overriding client input — e.g. `set: { ownerId: (i) => i?.userId }` so a note's
+overriding client input, e.g. `set: { ownerId: (i) => i?.userId }` so a note's
 owner can't be forged) and `validate` the final values (throw to reject):
 
 ```ts
@@ -168,7 +168,7 @@ bun test    # boots wrangler dev once and runs all e2e suites
 ### Live queries (WebSocket)
 
 Connect to `ws://localhost:8787/live` and subscribe to a query. The server pushes
-fresh results whenever a mutation writes a table the query reads — over HTTP *or*
+fresh results whenever a mutation writes a table the query reads, over HTTP *or*
 over the socket. Single-writer DOs see every write, so invalidation is exact.
 
 ```jsonc
@@ -185,7 +185,7 @@ over the socket. Single-writer DOs see every write, so invalidation is exact.
 ### D1 store (Worker + D1, no DO)
 
 The same schema / ACL / read engine runs over a **D1 database** instead of a Durable
-Object — selected per-request with the header `x-pramen-store: d1`, or made the app
+Object, selected per-request with the header `x-pramen-store: d1`, or made the app
 default with `PRAMEN_STORE=d1` (the header still overrides per-request; `x-pramen-store:
 do` forces the DO). Set the default and you don't sprinkle the header on every client:
 
@@ -198,7 +198,7 @@ do` forces the DO). Set the default and you don't sprinkle the header on every c
 > some adapters' `cloudflare:workers` env proxies (e.g. Astro's) don't surface a `vars`
 > default in-process, so the Worker may not see it. `x-pramen-store: d1` per request is
 > always honored. If a request routes to the DO with no DO bound, you now get a clear
-> `400` ("no Durable Object (PRAMEN) is bound — pin the D1 store…") instead of a crash.
+> `400` ("no Durable Object (PRAMEN) is bound. Pin the D1 store…") instead of a crash.
 
 **Read replicas + read-your-writes (D1 Sessions API).** Each request opens one D1
 **session** (`db.withSession(...)`) and runs all SQL through it. The Worker picks where
@@ -212,15 +212,15 @@ thread the header themselves.
 
 **Cron drain (required for D1 + deferred tasks).** The DO store self-drains via an
 alarm; the D1 store has no alarm, so its task outbox is drained by a **Cron Trigger**
-(`createPramen().scheduled`) — wire `triggers.crons` in `oblaka.ts` (the example does, at
-`* * * * *`) — or manually via `POST /admin/tasks/drain` with `x-pramen-store: d1`.
+(`createPramen().scheduled`): wire `triggers.crons` in `oblaka.ts` (the example does, at
+`* * * * *`), or manually via `POST /admin/tasks/drain` with `x-pramen-store: d1`.
 
 **Limits (intentional).** Live queries are **DO-only** (they need a single writer + a
-socket host) — `/live` errors on the D1 path. And **D1 has no interactive/atomic
+socket host), so `/live` errors on the D1 path. And **D1 has no interactive/atomic
 transactions**: pramen mutations interleave reads + writes + RETURNING + trigger-into-
 outbox inside one `transaction()`, which D1 can't do atomically (no interactive txns;
 `batch()` can't read mid-batch). So on the D1 path each statement auto-commits on its own
-— a single-statement mutation is atomic, but a **multi-statement mutation does NOT roll
+own: a single-statement mutation is atomic, but a **multi-statement mutation does NOT roll
 back on throw** the way it does on a DO. Use the **DO store** when you need atomic
 mutations or live queries.
 
@@ -231,14 +231,14 @@ The runtime is the **`@pramen/server`** package; a project is just `app.ts`,
 
 ```
 oblaka.ts             IaC source of truth -> generates wrangler.jsonc (main -> example/worker.ts)
-packages/server/      @pramen/server — the runtime (publishable)
+packages/server/      @pramen/server, the runtime (publishable)
   src/
     index.ts          authoring entry: re-exports schema/handlers/ACL/files/errors/substrate
     worker-entry.ts   deploy entry ("@pramen/server/worker"): createPramen + the DO (cloudflare:workers)
     pramen.ts         createPramen(app) -> { fetch, PramenDO }
-    worker.ts         makeWorker(app) — verifies JWT, routes to the DO, /files/*, admin
-    durable-object.ts PramenDOBase + pramenDO(app) — in-process SQLite, schema boot, dispatch, live
-    auth.ts           pluggable JWT verification — HS256 + RS256/JWKS (claims -> Identity)
+    worker.ts         makeWorker(app): verifies JWT, routes to the DO, /files/*, admin
+    durable-object.ts PramenDOBase + pramenDO(app): in-process SQLite, schema boot, dispatch, live
+    auth.ts           pluggable JWT verification: HS256 + RS256/JWKS (claims -> Identity)
     sdk/              portable SDK (no platform dep)
       schema.ts        Entity() + defineSchema() + relations (belongsTo/hasMany); fileRef type
       infer.ts         InferRow / WhereInput / InferInsert / InferUpdate / relations
@@ -264,20 +264,20 @@ test/
 
 There are **five** publishable packages: `@pramen/server`, `@pramen/client`,
 `@pramen/react`, `@pramen/auth`, and `@pramen/admin`. The first four build to `dist`
-(JS + `.d.ts`) with `tsc` — `bun run build`. (`@pramen/admin` is a Preact single-page
-admin client built by its own bundler script — note it publishes without an npm entry
+(JS + `.d.ts`) with `tsc`, via `bun run build`. (`@pramen/admin` is a Preact single-page
+admin client built by its own bundler script; note it publishes without an npm entry
 point and the runtime does not serve it; it's currently a scaffold, not wired in.)
 They use **conditional `exports`**: the `development`/`bun`/`workerd` conditions
 resolve to `src`, so in-repo typecheck, tests, dev, and deploy run straight off
 source with no build step (tsconfigs set `customConditions: ["development"]`).
 Published consumers fall through to `default`→`dist` (and `types`→`dist`), so Node
 tooling gets compiled output and correct types. (`src` is also shipped, so a
-consumer bundling with wrangler — the `workerd` condition — gets the source, which
+consumer bundling with wrangler, under the `workerd` condition, gets the source, which
 esbuild bundles directly; every real pramen consumer bundles for Workers anyway.)
 No `publishConfig` field overrides (npm is deprecating those).
 
 **Releasing.** All five packages are versioned in lockstep. Bump + tag in one step,
-then push — the `release` workflow (`.github/workflows/release.yml`) runs typecheck +
+then push. The `release` workflow (`.github/workflows/release.yml`) runs typecheck +
 tests and publishes on the tag (needs an `NPM_TOKEN` repo secret):
 
 ```bash
@@ -289,10 +289,10 @@ git push --follow-tags    # CI publishes @pramen/* to npm
 ## Production config
 
 - Set real secrets: `wrangler secret put AUTH_SECRET` (and `FILES_SECRET` if using
-  files — it must be ≥16 chars, else file storage fails closed). Auth itself fails
+  files; it must be ≥16 chars, else file storage fails closed). Auth itself fails
   closed too: an empty `AUTH_SECRET` rejects every token.
 - Destructive migrations are **off by default**. A drop/rename/type-change is skipped
-  (and logged) unless `PRAMEN_ALLOW_DESTRUCTIVE=true` — so a schema edit can't silently
+  (and logged) unless `PRAMEN_ALLOW_DESTRUCTIVE=true`, so a schema edit can't silently
   drop a column on deploy. Additive changes always apply.
 - CORS is opt-in via `CORS_ORIGINS`; unset = same-origin only.
 - **Multi-project accounts:** oblaka keeps IaC state in one KV blob keyed by
@@ -300,14 +300,14 @@ git push --follow-tags    # CI publishes @pramen/* to npm
   So every project that uses the default sees the *others'* resources as "dangling"
   (and a stray `oblaka --destroy` would delete them). pramen's `deploy`/`plan` pass
   `--state-namespace pramen-iac-state` to isolate it. Pick a **unique namespace per
-  project from the first deploy** — oblaka has no "adopt existing resource by name,"
+  project from the first deploy**: oblaka has no "adopt existing resource by name,"
   so switching namespaces after resources exist conflicts on create. Never run
   `oblaka --destroy` against a shared state namespace.
 
 ## Tests
 
 `bun test` generates the config from `oblaka.ts`, boots a single `wrangler dev`
-against fresh local state, and runs all suites (each on its own tenant) — ACL +
+against fresh local state, and runs all suites (each on its own tenant): ACL +
 write rules + per-identity live queries, dynamic resolvers, relations/nested ACL,
 and live-query row-level invalidation. CI runs typecheck + `bun test` on every
 push/PR (`.github/workflows/ci.yml`); no Cloudflare credentials needed (miniflare).
@@ -315,7 +315,7 @@ push/PR (`.github/workflows/ci.yml`); no Cloudflare credentials needed (miniflar
 ### Typed handlers
 
 `createApp(schema)` returns `query`/`mutation` whose `ctx.db` is fully inferred
-from the schema — table names, `where` columns and value types, row results, and
+from the schema: table names, `where` columns and value types, row results, and
 insert/patch shapes are all checked at compile time.
 
 ```ts
@@ -335,16 +335,16 @@ The handler context is `{ db, kv, files, env, identity, tasks, mail, queue }`. *
 `json`/`fileRef` are stored as TEXT and codec'd to/from the parsed value
 automatically; a `uuid` value is validated on write (rejected with 400 if
 malformed). **Modifiers** wrap a builder and compose: `notNull()`, `unique()`,
-`indexed()`, `defaultTo(v)`, `primaryKey()`, `generated()`, `hidden()` — e.g.
+`indexed()`, `defaultTo(v)`, `primaryKey()`, `generated()`, `hidden()`, e.g.
 `code: unique(t.text())`, `status: defaultTo(t.text(), "pending")` (a defaulted
 column is optional on insert). `hidden()` marks a column never-readable through the
-ORM — stripped from every read projection (find/get, mutation echoes, relation loads,
+ORM: stripped from every read projection (find/get, mutation echoes, relation loads,
 SYSTEM-mode `/admin/data`) even under `allow()`/SYSTEM, while staying writable and
 visible to raw `ctx.db.exec` (for secrets like a password hash). `defaultTo` also accepts a **SQL-expression default**
 via `expr`: `createdAt: defaultTo(t.text(), expr.now())` emits
-`DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))` — the current UTC instant as ISO-8601
+`DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))`: the current UTC instant as ISO-8601
 TEXT, byte-identical to `new Date().toISOString()` and so directly comparable with
-`$now()` — filled by the DB; `expr.raw(sql)` is the escape hatch for any other SQLite
+`$now()`, filled by the DB; `expr.raw(sql)` is the escape hatch for any other SQLite
 default (including `expr.raw("datetime('now')")` for the old `CURRENT_TIMESTAMP` shape).
 
 **UUIDs.** `t.uuid()` is a string column; `generated()` auto-mints a v4 on insert
@@ -366,13 +366,13 @@ await ctx.db.insert("events", { kind: "signup" });
 per tenant (`"default"`); a partition gives a slice of the schema its own
 single-writer DO and storage. Migrations, admin, and the CLI are **per-partition**, and
 relations / `with` eager-loads / transactions **may not cross a partition** (a DO can't
-reach into another's SQLite — rejected at boot). The default partition keeps the bare
+reach into another's SQLite, so this is rejected at boot). The default partition keeps the bare
 `idFromName(tenant)` DO key, so adding partitions to an existing app doesn't move its
 default data.
 
-**Public flows.** An unauthenticated caller is evaluated as the `anonymous` role —
+**Public flows.** An unauthenticated caller is evaluated as the `anonymous` role:
 define it to grant public reads/writes (absent ⇒ deny). A policy `where` can use
-`$input("field")` (alongside `$identity`) for a capability read — authorize a row by
+`$input("field")` (alongside `$identity`) for a capability read, authorizing a row by
 a request-supplied unguessable key, with no enumeration. Signature-authed endpoints
 (e.g. Stripe webhooks) go in `app.routes`, matched before auth:
 
@@ -388,7 +388,7 @@ export const app = {
 };
 ```
 
-**`ctx.env`** is the Worker/DO environment (bindings + vars + secrets) — call
+**`ctx.env`** is the Worker/DO environment (bindings + vars + secrets). Call
 external services straight from a handler:
 
 ```ts
@@ -410,7 +410,7 @@ unset means same-origin only.
 
 Responses are `{ ok: false, error, code }` with a real status: ACL denial → `403
 forbidden`, bad input / unknown handler / failed `validate` → `400 bad_request`.
-Anything unexpected is logged server-side and returned as a generic `500` — stack
+Anything unexpected is logged server-side and returned as a generic `500`: stack
 traces and internal messages never reach the client. A handler may declare an
 `input` validator that parses the raw body and throws to reject:
 
@@ -446,7 +446,7 @@ ctx.db.find({
 });
 ```
 
-For large or changing datasets, prefer **cursor (keyset) pagination** — stable
+For large or changing datasets, prefer **cursor (keyset) pagination**, stable
 under concurrent inserts/deletes. `db.page()` returns `{ items, cursor, hasMore }`;
 pass the previous `cursor` back as `after`. The primary key is auto-appended to
 `orderBy` as a tiebreaker, so the cursor is unambiguous.
@@ -469,7 +469,7 @@ do {
 ### Count & aggregates
 
 `db.count()` and `db.aggregate()` (count/sum/avg/min/max, optional `groupBy`) are
-ACL-scoped — the read `where` is applied, and aggregating a column you can't read
+ACL-scoped: the read `where` is applied, and aggregating a column you can't read
 is denied (counting rows you *can* see is always allowed).
 
 ```ts
@@ -507,13 +507,13 @@ curl -s -X POST http://localhost:8787/admin/recover -H "authorization: Bearer $A
   -H 'content-type: application/json' -d '{"tenant":"acme","timestamp":1718000000000}'
 ```
 
-> PITR is platform-only — unavailable in local dev (`wrangler dev` returns 501).
+> PITR is platform-only, unavailable in local dev (`wrangler dev` returns 501).
 > pramen arms the restore and returns the `undo` bookmark; it completes on the DO's
 > next restart (we don't auto-`abort()`, so the call can return the bookmark).
 
 ### KV (ctx.kv)
 
-Handlers get `ctx.kv` — the project's KV namespace for **global, cross-tenant**
+Handlers get `ctx.kv`, the project's KV namespace for **global, cross-tenant**
 config / feature flags / caches (per-tenant data belongs in `ctx.db`). It's keyed
 under an `app:` prefix so it never collides with pramen-internal keys, and it is
 **not** part of a mutation's transaction.
@@ -526,13 +526,13 @@ setFlag: mutation((ctx, input: { key: string; value: string }) =>
 ```
 
 **Multiple projects in one account:** Cloudflare resource names are account-global,
-so each project sets a unique `PROJECT` in `oblaka.ts` — it names the Worker, the
+so each project sets a unique `PROJECT` in `oblaka.ts`: it names the Worker, the
 DO, and the KV namespace, so projects never collide. Within a project, one KV
 namespace holds both the registry (`tenant:`) and app (`app:`) keys.
 
 ### Deferred tasks (ctx.tasks)
 
-To run a side effect after a write — a **notification email**, a webhook — enqueue a
+To run a side effect after a write (a **notification email**, a webhook) enqueue a
 task instead of calling out inline (which would block the single-writer transaction
 and couldn't be rolled back). `ctx.tasks.enqueue` writes to a transactional outbox **in
 the same transaction** as your data, and `app.tasks` runs it after commit, off the
@@ -551,7 +551,7 @@ const app = {
   tasks: {
     "invite-email": async (ctx, payload, meta) => {
       const { to } = payload as { to: string };
-      await ctx.mail.send({ to, subject: "You're invited", text: "…" }); // ctx.mail — see below
+      await ctx.mail.send({ to, subject: "You're invited", text: "…" }); // ctx.mail, see below
     },
   },
 };
@@ -561,7 +561,7 @@ At-least-once with retry/backoff + dead-letter; handlers get `meta.id` as an
 idempotency key. The DO store **self-drains via an alarm**; the D1 store drains via a
 Cron Trigger (`createPramen().scheduled`) or `POST /admin/tasks/drain`.
 
-**Email** goes through `ctx.mail.send({ to, subject, text/html })` — a facade over an
+**Email** goes through `ctx.mail.send({ to, subject, text/html })`, a facade over an
 adapter seam. `MAILGUN_API_KEY` + `MAILGUN_DOMAIN` + `MAIL_FROM` gives you **Mailgun**
 (add `MAILGUN_API_BASE=https://api.eu.mailgun.net` for an EU account); the `EMAIL`
 binding + `MAIL_FROM` gives you **Cloudflare Email Sending** (no API keys);
@@ -572,7 +572,7 @@ Mailgun wins when both are configured. Cloudflare can only send FROM a domain th
 zone in the same account; Mailgun asks the domain be verified once, then delivers from
 anywhere.
 
-Or declare it once on the entity — a **trigger** auto-enqueues a task on a matching
+Or declare it once on the entity: a **trigger** auto-enqueues a task on a matching
 write (still in the write's transaction), no `ctx.tasks.enqueue` in the handler:
 
 ```ts
@@ -585,7 +585,7 @@ A field-filtered update fires only on an actual value change; `hidden()` columns
 stripped from the payload. See the [Deferred Tasks docs](docs/src/content/docs/tasks.md).
 
 **Native queues (`ctx.queue`).** For decoupled, high-throughput fan-out (rather than an
-in-transaction outbox) there's `ctx.queue` — a facade over **Cloudflare Queues**:
+in-transaction outbox) there's `ctx.queue`, a facade over **Cloudflare Queues**:
 
 ```ts
 await ctx.queue.send("JOBS", { tenant, id });          // produce (by binding name)
@@ -604,7 +604,7 @@ transactional with the write; sending to an undeclared queue **fails closed**.
 
 ### Client (frontend)
 
-`@pramen/client` is a typed client — `call()` is RPC over HTTP, `subscribe()` is a
+`@pramen/client` is a typed client: `call()` is RPC over HTTP, `subscribe()` is a
 live query over a reconnecting WebSocket. It's generic over your server's handler
 map, so calls are fully typed with no runtime dependency on the server (import the
 type only):
@@ -621,7 +621,7 @@ const stop = pramen.subscribe("listNotes", undefined, { onData: (notes) => rende
 
 > **Fronting pramen with a meta-framework?** RPC handlers are matched at the exact path
 > `POST /rpc/<handler>`. A framework that enforces trailing slashes (e.g. Astro's
-> `trailingSlash: 'always'`) will **308-redirect** `/rpc/x` → `/rpc/x/` — and browsers
+> `trailingSlash: 'always'`) will **308-redirect** `/rpc/x` → `/rpc/x/`, and browsers
 > **drop the POST body on the redirect**, so the call silently arrives empty. Set
 > `trailingSlash: 'ignore'` (or `'never'`) for the API routes, or call the canonical
 > path your adapter expects.
@@ -649,7 +649,7 @@ bun run pramen schema status --tenant acme # is a deployed tenant caught up?
 app reads as one block), fetching every partition's applied schema from its DO.
 
 `schema diff` flags each change as additive (no data loss) or **destructive**
-(drop / type change — rebuilds the table, may lose data). On the next DO boot, additive
+(drop / type change, which rebuilds the table and may lose data). On the next DO boot, additive
 changes auto-apply; destructive changes are **skipped unless `PRAMEN_ALLOW_DESTRUCTIVE=true`**
 (the schema hash is then left unwritten so a later opt-in deploy retries). The diff also
 reports modifier changes on an existing column and partition moves, which the boot
@@ -663,18 +663,18 @@ transaction. Two passes:
 
 - **Additive** (no data loss): new tables are created and new columns added
   (`ALTER TABLE ADD COLUMN`, nullable).
-- **Destructive** (opt-in — **off by default**): a column the schema no longer
+- **Destructive** (opt-in, **off by default**): a column the schema no longer
   declares is dropped, a type change is applied, and a table absent from the schema is
-  dropped — all via the standard SQLite table-rebuild (create new, copy, drop, rename),
+  dropped, all via the standard SQLite table-rebuild (create new, copy, drop, rename),
   preserving rows and ids. This pass runs **only when the deploy sets
   `PRAMEN_ALLOW_DESTRUCTIVE=true`** (local dev sets it on). Otherwise each destructive
   change is skipped and logged, and the schema hash is left unwritten so a later opt-in
-  deploy retries — so a schema edit can't silently drop a column. When enabled it **can
+  deploy retries, so a schema edit can't silently drop a column. When enabled it **can
   lose data** on a bad deploy, by design.
 
 A schema hash in `_pramen_meta` skips the work when nothing changed. A **rename**
 can't be inferred from a diff (a removed + added column is ambiguous), so declare
-it with `renamedFrom` — the migrator then copies the old column's data:
+it with `renamedFrom`: the migrator then copies the old column's data:
 
 ```ts
 notes: Entity((t) => ({ id: t.id(), title: t.text(), content: renamedFrom(t.text(), "body") })),
@@ -684,7 +684,7 @@ Without the hint, a rename is applied as drop + add (the old column's data is lo
 
 ## Deploy
 
-Cloudflare topology is declared in **`oblaka.ts`** (the source of truth) — the
+Cloudflare topology is declared in **`oblaka.ts`** (the source of truth): the
 Worker, the `PRAMEN` Durable Object, its SQLite migration, vars, and observability.
 `oblaka` generates `wrangler.jsonc` from it (git-ignored; never edit by hand).
 

@@ -57,7 +57,7 @@ export async function runQuery(base: string): Promise<void> {
   t = await titles({ orderBy: [{ column: "id", dir: "asc" }], offset: 99 });
   assert(t.length === 0, "offset past the end returns no rows");
 
-  // structured string ops — auto-escaped, so the needle's %/_ are literal (unlike raw `like`)
+  // structured string ops: auto-escaped, so the needle's %/_ are literal (unlike raw `like`)
   await mk("50%_off");
   t = await titles({ where: { title: { contains: "lpha" } } });
   assert(t.length === 2 && t.every((x) => x.includes("lpha")), "contains matches a substring");
@@ -67,7 +67,7 @@ export async function runQuery(base: string): Promise<void> {
   assert(t.includes("alpha-1") && t.includes("beta-1") && !t.includes("alpha-2"), "endsWith matches the suffix");
   // the % and _ in the needle are literal, so this only matches "50%_off"
   t = await titles({ where: { title: { contains: "50%_off" } } });
-  assert(t.length === 1 && t[0] === "50%_off", "contains escapes %/_ — literal match, no wildcard");
+  assert(t.length === 1 && t[0] === "50%_off", "contains escapes %/_: literal match, no wildcard");
   t = await titles({ where: { title: { contains: "a_p" } } });
   assert(t.length === 0, "contains treats _ literally (does not match 'alpha')");
 

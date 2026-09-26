@@ -1,8 +1,8 @@
 // Site furniture: menus, redirects, taxonomies and widget areas.
 //
 // The WordPress-parity surface every client project reinvented by hand (GitHub #32). All
-// four are SITE-level rather than page-level — they exist once per deployment and are read
-// by the layout — so none of them lives under Pages, and each gets its own nav entry
+// four are SITE-level rather than page-level: they exist once per deployment and are read
+// by the layout, so none of them lives under Pages, and each gets its own nav entry
 // positioned by `NAV_ORDER`.
 //
 // The screens share a shape: a list with an inline "new" form, and a detail editor for the
@@ -62,7 +62,7 @@ function DetailPending({ failed, onRetry }: { failed: boolean; onRetry: () => vo
 }
 
 /** The site-furniture screens' header. `Head` stays as the local name the four call sites
- * below already use; it is the same component, at the same scale, as every other screen —
+ * below already use; it is the same component, at the same scale, as every other screen.
  * see the note in `page-header.tsx` about why the smaller variant went away. */
 const Head = PageHeader;
 
@@ -174,7 +174,7 @@ function siblingsAt(items: MenuItem[], path: readonly number[]): { list: MenuIte
 }
 
 /** Structural edits, all as "clone the tree, then splice". Cloning is cheap (a menu is tens
- * of items) and it keeps every operation a pure function of the previous tree — which is
+ * of items) and it keeps every operation a pure function of the previous tree, which is
  * what makes undo-by-not-saving work, and what stops a move from mutating an item that a
  * later step in the same handler is still reading. */
 function cloneTree(items: readonly MenuItem[]): MenuItem[] {
@@ -202,12 +202,12 @@ export function MenuEditor({ api, name, collections, onBack, backHref, onDeleted
   const { t } = useI18n();
   const [menu, setMenu] = useState<Menu | null>(null);
   const [items, setItems] = useState<MenuItem[]>([]);
-  // The app bar's trailing crumb — the menu's LABEL once it has loaded, not the `name` key in
+  // The app bar's trailing crumb: the menu's LABEL once it has loaded, not the `name` key in
   // the URL, which is what a layout gets to publish and is not what an editor calls it.
   useCrumb(menu?.label);
   const [label, setLabel] = useState("");
   // The whole tree is edited locally and written only by "Save menu", so leaving the screen
-  // discards it. Nothing prompted before this — `PageEditor` was the only screen that ever
+  // discards it. Nothing prompted before this: `PageEditor` was the only screen that ever
   // registered a guard.
   const [baseline, setBaseline] = useState("");
   useUnsavedGuard(menu !== null && JSON.stringify({ label, items }) !== baseline);
@@ -228,7 +228,7 @@ export function MenuEditor({ api, name, collections, onBack, backHref, onDeleted
   useEffect(() => {
     let live = true;
     // `listMenus` (raw) rather than `getMenu` (resolved): the editor must show what is
-    // STORED — a reference to a page that is currently unpublished is dropped from the
+    // STORED: a reference to a page that is currently unpublished is dropped from the
     // public read, and editing against that view would silently delete those items on save.
     api.listMenus()
       .then((all) => {
@@ -243,7 +243,7 @@ export function MenuEditor({ api, name, collections, onBack, backHref, onDeleted
     api.listPages({ limit: 200 }).then((r) => live && setPages(r)).catch(() => setPages([]));
     api.listTaxonomies()
       .then(async (taxa) => {
-        // One request per vocabulary, in PARALLEL — the picker cannot render until the last
+        // One request per vocabulary, in PARALLEL: the picker cannot render until the last
         // of them lands either way, so serializing them only added latency.
         const trees = await Promise.all(taxa.map(async (t) => [t, await api.getTermTree(t.slug).catch(() => [] as Term[])] as const));
         const all: Array<{ id: string; label: string; taxonomy: string }> = [];
@@ -541,7 +541,7 @@ function AppliesToField({ value, onChange, disabled }: { value: TaxonomyTarget[]
   const toggle = (t: TaxonomyTarget) => {
     const next = (value ?? []).includes(t) ? (value ?? []).filter((x) => x !== t) : [...(value ?? []), t];
     // Unchecking the last one would mean a vocabulary nothing can use, which the server
-    // refuses — so it lands back on "Everything", the nearest thing the person meant.
+    // refuses, so it lands back on "Everything", the nearest thing the person meant.
     onChange(next.length === 0 ? null : next);
   };
   return (
@@ -549,7 +549,7 @@ function AppliesToField({ value, onChange, disabled }: { value: TaxonomyTarget[]
       <span className="text-caption text-fg-subtle">{tr("taxonomies.appliesTo")}</span>
       {/* "Everything" gets its own line rather than sitting in the row as a third peer: a radio
           beside two checkboxes reads as one group with mismatched controls, when it is actually
-          the choice ABOVE them — pick everything, or pick which. */}
+          the choice ABOVE them: pick everything, or pick which. */}
       <div className="mt-1 flex flex-col gap-1">
         <label className="flex items-center gap-2">
           <input type="radio" checked={value === null} disabled={disabled} onChange={() => onChange(null)} />
@@ -588,7 +588,7 @@ export function TaxonomiesView({ api, onOpen, onError, canEdit }: { api: Api; on
   const [slug, setSlug] = useState("");
   const [slugTouched, setSlugTouched] = useState(false);
   const [hierarchical, setHierarchical] = useState(false);
-  // `null` is "everything", which is also what an un-narrowed vocabulary stores — so the
+  // `null` is "everything", which is also what an un-narrowed vocabulary stores, so the
   // default here is the same value the server would have written anyway.
   const [appliesTo, setAppliesTo] = useState<TaxonomyTarget[] | null>(null);
   const [busy, setBusy] = useState(false);
@@ -602,7 +602,7 @@ export function TaxonomiesView({ api, onOpen, onError, canEdit }: { api: Api; on
   const create = async () => {
     setBusy(true);
     try {
-      // On a server that cannot scope a vocabulary, `null` is what it would store anyway —
+      // On a server that cannot scope a vocabulary, `null` is what it would store anyway,
       // so this sends the same value the field's default means rather than a conditional key.
       const created = await api.createTaxonomy({ slug, label, hierarchical, appliesTo: scopable ? appliesTo : null });
       setLabel(""); setSlug(""); setSlugTouched(false); setHierarchical(false); setAppliesTo(null);
@@ -713,8 +713,8 @@ export function TaxonomyEditor({ api, slug, onBack, backHref, onDeleted, onError
     if (label === t.label) return;
     try { await api.updateTerm(t.id, { label }); refreshTerms(); } catch (e) { onError(errText(e)); }
   };
-  /** Saved on change rather than behind a Save button, because a narrowing can be REFUSED —
-   * the server rejects one that would strand existing assignments — and a refusal has to be
+  /** Saved on change rather than behind a Save button, because a narrowing can be REFUSED:
+   * the server rejects one that would strand existing assignments, and a refusal has to be
    * visible while the choice that caused it is still on screen. On refusal the field goes back
    * to what is stored, so it never shows a scope the server did not accept. */
   const setAppliesTo = async (next: TaxonomyTarget[] | null) => {
@@ -1038,7 +1038,7 @@ function WidgetRow({ widget, menus, onChange, onMove, onRemove }: {
  *
  * A structured editor is impossible here: the CMS does not know the component, so it does
  * not know its props. The text is kept in local state and only parsed on change, so a
- * half-typed object does not blow away what was there — the parent never sees an invalid
+ * half-typed object does not blow away what was there: the parent never sees an invalid
  * value, and the error says so instead of the field silently reverting.
  */
 function JsonProps({ value, onChange }: { value: Widget["componentProps"]; onChange: (v: Widget["componentProps"]) => void }) {

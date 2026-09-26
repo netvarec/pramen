@@ -1,4 +1,4 @@
-// DO registry — the source of truth for which `(tenant, partition)` Durable Objects
+// DO registry: the source of truth for which `(tenant, partition)` Durable Objects
 // exist. A `DurableObjectNamespace` has NO list/enumerate API (only idFromName /
 // idFromString / newUniqueId / get), so the platform cannot tell us which DOs were
 // ever instantiated. The only way to "work with all DOs" (migrate, recover, browse)
@@ -6,7 +6,7 @@
 // `ensureRegistered`), and admin ops enumerate via `listDOs`.
 //
 // This file owns the KV key scheme so the Worker and the DO agree on the format. It
-// is deliberately free of `cloudflare:workers` imports — it takes a `KVNamespace`
+// is deliberately free of `cloudflare:workers` imports: it takes a `KVNamespace`
 // param, mirroring runtime/kv.ts.
 //
 // KEY SCHEME (hard backward-compat requirement):
@@ -51,11 +51,11 @@ export function registryKey(tenant: string, partition: string = DEFAULT_PARTITIO
   return partition === DEFAULT_PARTITION ? `${KEY_PREFIX}${tenant}` : `${KEY_PREFIX}${tenant}:${partition}`;
 }
 
-/** Build the Durable Object NAME for a `(tenant, partition)` — the string passed to
+/** Build the Durable Object NAME for a `(tenant, partition)`: the string passed to
  * `idFromName`. This is the same default/non-default rule as `registryKey` but WITHOUT
  * the KV `tenant:` prefix: the DO namespace and the KV registry are distinct keyspaces.
  * Default partition keeps the BARE `tenant` name (byte-for-byte the pre-partition DO
- * name — a hard backward-compat requirement: changing it would orphan existing DOs);
+ * name, a hard backward-compat requirement, since changing it would orphan existing DOs);
  * any other partition is `${tenant}:${partition}`. Keeping it next to `registryKey`
  * keeps routing and the registry derived from one place. */
 export function partitionDoName(tenant: string, partition: string = DEFAULT_PARTITION): string {
@@ -77,9 +77,9 @@ export function parseRegistryKey(key: string): DoRef | null {
 }
 
 /** Enumerate every registered `(tenant, partition)` pair from the registry KV.
- * Paginates over the full listing (cursor / list_complete) — never truncates at the
+ * Paginates over the full listing (cursor / list_complete) and never truncates at the
  * 1000-key page limit. */
-/** The slice of KV that DO enumeration needs — narrower than the whole namespace, so
+/** The slice of KV that DO enumeration needs, narrower than the whole namespace, so
  * callers (and test doubles) only have to provide `list`. */
 export type KvLister = Pick<KVNamespace, "list">;
 

@@ -5,7 +5,7 @@
 
 Optional hardening: make the cross-partition boundary visible to the type system, so
 `with` and relation-traversal `where` on a cross-partition relation don't even
-typecheck — turning Issue 03's runtime/boot error into a compile-time one for typed
+typecheck, turning Issue 03's runtime/boot error into a compile-time one for typed
 callers. Issue 03 remains the source of truth for enforcement; this is ergonomics.
 
 ## Implementation
@@ -15,11 +15,11 @@ callers. Issue 03 remains the source of truth for enforcement; this is ergonomic
   drops relation keys whose target entity's `partition` differs from the source
   entity's `partition`.
 - This requires the `partition` literal to be inferred onto `EntityDef` (Issue 02 adds
-  it as `readonly partition: string` — ensure it's preserved as a literal via `as const`
+  it as `readonly partition: string`; ensure it's preserved as a literal via `as const`
   / the `Entity` signature so the conditional type can compare two string literals).
 - If preserving the partition literal through inference proves disproportionately
   costly (it may, given the depth-bounded recursion already in `WhereClause`), STOP and
-  leave enforcement to Issue 03 — document in `infer.ts` that the partition boundary is
+  leave enforcement to Issue 03, and document in `infer.ts` that the partition boundary is
   enforced at runtime/boot only, and close this issue as "runtime-only by decision".
 
 ## Acceptance criteria
@@ -28,5 +28,5 @@ callers. Issue 03 remains the source of truth for enforcement; this is ergonomic
   type error, with a matching `@ts-expect-error` case added to
   `example/inference-check.ts`; same-partition relations still typecheck.
 - Or: a documented decision in `infer.ts` that this stays runtime-only, with no type
-  regression — `example/inference-check.ts` unchanged and green.
+  regression, so `example/inference-check.ts` is unchanged and green.
 - `bun run typecheck` passes either way.

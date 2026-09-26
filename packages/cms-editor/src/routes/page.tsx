@@ -27,7 +27,7 @@ export default createPage()
       setMissing(false);
       // By id. Resolving it against `listPages` instead meant the editor could not open a row
       // the list had just shown it: that list is capped, and since the editor lists ONE type
-      // per tab it isn't even the same list — 150 newer pages of another type were enough to
+      // per tab it isn't even the same list: 150 newer pages of another type were enough to
       // push an article out of the pooled fetch and turn a click into "Page not found."
       api.getPageById(params.pageId)
         .then((found) => {
@@ -42,7 +42,7 @@ export default createPage()
 
     // Back goes to the list this page actually belongs to. `home` redirects to whichever type
     // sorts FIRST BY NAME on a split deployment, so "← all pages" from an article landed the
-    // editor in some other type's list — with the `replace` overwriting `/`, so Back could not
+    // editor in some other type's list, with the `replace` overwriting `/`, so Back could not
     // undo it either. Falls back to `home` when the type is unknown (not loaded, or gone).
     const ownType = (contentTypes ?? []).find((c) => c.id === page?.typeId);
     const backToList = () => {
@@ -54,7 +54,7 @@ export default createPage()
     const backHref = splitsByType(contentTypes, cms) && ownType ? router.buildPagePath("type", { slug: ownType.slug }) : router.buildPagePath("home");
 
     // The visible set comes from the server (`visibleTabs`), so a deep link to `?tab=i18n`
-    // on a single-locale deployment falls back to settings — and the URL is REWRITTEN to
+    // on a single-locale deployment falls back to settings, and the URL is REWRITTEN to
     // match. Rendering one tab under another tab's address means a refresh, a Back, or a
     // shared link all disagree with what is on screen; `setTab` already replaces without
     // adding a history entry, so reconciling costs nothing.

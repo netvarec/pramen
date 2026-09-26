@@ -8,10 +8,10 @@ import type { FileRef } from "./files";
 
 export type { FileRef } from "./files";
 
-/** Any JSON-serializable value — the type of a `t.json()` column. */
+/** Any JSON-serializable value: the type of a `t.json()` column. */
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
-/** A JSON object — the object arm of `JsonValue`, named so it can be referenced
+/** A JSON object: the object arm of `JsonValue`, named so it can be referenced
  * directly (e.g. an identity's claims, a `t.json()` column's object form). */
 export interface JsonObject {
   [key: string]: JsonValue;
@@ -22,11 +22,11 @@ export interface JsonObject {
 export type SqlValue = string | number | bigint | boolean | null | ArrayBuffer;
 
 /** A decoded column value as handlers see it at the `Db` chokepoint: any JSON value,
- * a `fileRef` column's metadata, or — for an eager-loaded relation — the related
+ * a `fileRef` column's metadata, or, for an eager-loaded relation, the related
  * row(s) grafted onto the parent under the relation name. */
 export type CellValue = SqlValue | JsonValue | FileRef | Row | Row[];
 
-/** A decoded database row — column name -> decoded value. An interface (not a
+/** A decoded database row: column name -> decoded value. An interface (not a
  * `Record` alias) so it can recur through `CellValue` for eager-loaded relations. */
 export interface Row {
   [column: string]: CellValue;
@@ -59,7 +59,7 @@ export type InferRow<F extends EntityFields> = { [K in keyof F]: Cell<F[K]> };
 
 /** A row whose fields may be projected away by field-level (incl. cell-level) ACL:
  * every column optional. The honest type for a handler that reads through a policy
- * which can drop columns per row — `InferRow` over-claims presence by design. */
+ * which can drop columns per row; `InferRow` over-claims presence by design. */
 export type ProjectedRow<F extends EntityFields> = { [K in keyof F]?: Cell<F[K]> };
 
 /** Operators available on a column predicate. String ops (`like`/`contains`/
@@ -94,8 +94,8 @@ export type WhereInput<F extends EntityFields> = {
 // --- partition boundary: runtime-only by decision (Issue 08) ---
 //
 // A relation cannot cross a partition (Durable Object) boundary. That invariant is
-// enforced at runtime/boot by `validateSchema` (sdk/schema.ts) — it throws before
-// migrate if any relation's source and target live in different partitions — and is
+// enforced at runtime/boot by `validateSchema` (sdk/schema.ts): it throws before
+// migrate if any relation's source and target live in different partitions, and is
 // proven end-to-end by the e2e suite (Issue 09).
 //
 // Issue 08 explored ALSO surfacing the boundary at compile time (dropping cross-
@@ -104,7 +104,7 @@ export type WhereInput<F extends EntityFields> = {
 // the entity's `partition` to survive inference as a string LITERAL ("audit" vs
 // "default") so a conditional type can compare two literals. It does NOT: `EntityDef`
 // declares `readonly partition: string` and the `Entity()` factory returns
-// `EntityDef<F, R>` with `opts.partition?: string` — the literal is widened to `string`
+// `EntityDef<F, R>` with `opts.partition?: string`, so the literal is widened to `string`
 // at the factory boundary and is unrecoverable here. Carrying it would mean threading a
 // `P extends string` generic through `EntityDef` / `Entity` / `SchemaDef` and every
 // consumer (FieldsOf, RelationsOf, RelValue, …) in sdk/schema.ts, destabilizing the
@@ -115,7 +115,7 @@ export type WhereInput<F extends EntityFields> = {
 // --- relation-aware where (a relation key takes a nested clause over its target,
 // compiled to a security-scoped subquery). Depth-bounded so the type stays finite
 // under cyclic relations (e.g. user.notes ↔ note.owner). The bound matches the
-// runtime MAX_REL_DEPTH in runtime/acl.ts — keep the two in lockstep. ---
+// runtime MAX_REL_DEPTH in runtime/acl.ts. Keep the two in lockstep. ---
 
 type PrevDepth = [never, 0, 1, 2, 3, 4, 5];
 type RelTargetTable<S extends SchemaDef, R> = R extends { target: infer Tg } ? (Tg extends keyof S ? Tg : never) : never;
@@ -140,7 +140,7 @@ export type WhereClause<S extends SchemaDef, T extends keyof S, D extends number
 export type InferUpdate<F extends EntityFields> = Partial<{ [K in keyof F]: FieldTsType<F[K]> | null }>;
 
 // Insert: a NOT NULL column is required unless it's auto-generated (autoIncrement,
-// or a `generated()` uuid the runtime mints) or has a DEFAULT — a literal (`default`)
+// or a `generated()` uuid the runtime mints) or has a DEFAULT: a literal (`default`)
 // or a SQL expression (`defaultExpr`, e.g. expr.now()), both filled by the DB;
 // everything else is optional.
 type RequiredInsertKeys<F extends EntityFields> = {

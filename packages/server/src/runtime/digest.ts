@@ -3,7 +3,7 @@
 // that doesn't change a given subscription's visible rows produces no push.
 //
 // Re-running the query is cheap (in-process SQLite); the digest gates the
-// expensive part — the network push and the client re-render.
+// expensive part, the network push and the client re-render.
 
 function canonical(v: unknown): string {
   if (v === null || typeof v !== "object") return JSON.stringify(v) ?? "null";

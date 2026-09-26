@@ -1,4 +1,4 @@
-// Unit tests for @pramen/cms's structured rich text (pure — no server boot).
+// Unit tests for @pramen/cms's structured rich text (pure, with no server boot).
 //
 // `richtext` used to be an HTML string scrubbed with js-xss on write. It is now a document
 // tree, and the write-path boundary is a STRUCTURAL allow-list: unknown node/mark types are
@@ -43,7 +43,7 @@ test("normalizeRichText drops unknown marks but keeps the text", () => {
 
 test("normalizeRichText drops a link mark with an unsafe href", () => {
   const unsafe = doc(para(text("click", [{ type: "link", attrs: { href: "javascript:alert(1)" } }])));
-  // The MARK goes, not the text — an anchor with no destination is worse than plain text.
+  // The MARK goes, not the text: an anchor with no destination is worse than plain text.
   expect(normalizeRichText(unsafe).content).toEqual([para(text("click"))] as RichTextDoc["content"]);
 
   const safe = doc(para(text("click", [{ type: "link", attrs: { href: "/about", title: "About" } }])));
@@ -142,7 +142,7 @@ test("isSafeHref rejects protocol-relative urls, backslash variant included", ()
 
 test("an empty text node is dropped, not stored", () => {
   // ProseMirror forbids one outright (`schema.text("")` throws), and the editor builds its
-  // document in a useState initializer — so storing one bricks that row's edit UI.
+  // document in a useState initializer, so storing one bricks that row's edit UI.
   const out = normalizeRichText(doc(para(text(""), text("kept"))));
   expect(out.content).toEqual([para(text("kept"))] as RichTextDoc["content"]);
 });
@@ -165,7 +165,7 @@ test("a custom richTextSchema actually narrows what is stored", () => {
 
 test("the allow-list is not bypassable through the prototype chain", () => {
   // A plain-object index resolves `constructor`/`toString`/`valueOf` to inherited members,
-  // which are truthy — so these passed the gate, were stored, and then crashed both
+  // which are truthy, so these passed the gate, were stored, and then crashed both
   // renderers and the editor. `{type:"constructor",attrs:{}}` additionally threw a
   // TypeError inside the DO's storage.transaction() (a 500, not a 400).
   for (const type of ["constructor", "toString", "valueOf", "hasOwnProperty", "__proto__"]) {
@@ -190,7 +190,7 @@ test("isSafeHref is not bypassable with an embedded tab or newline", () => {
 test("a legacy HTML string is tolerated only when it matches the stored value", () => {
   const schema: FieldDefinition[] = [{ name: "body", type: "richtext" }];
   const stored = { body: "<p>what is already in the row</p>" };
-  // Echoing back exactly what is stored is fine — that is the editor's whole-bag autosave.
+  // Echoing back exactly what is stored is fine: that is the editor's whole-bag autosave.
   expect(() => validateFields(schema, stored, "", { legacyBaseline: stored })).not.toThrow();
   // Anything else is rejected. Without this, the dropped `xss` sanitizer meant any caller
   // could store arbitrary HTML for consumers still rendering with set:html.
@@ -200,7 +200,7 @@ test("a legacy HTML string is tolerated only when it matches the stored value", 
 
 test("normalizeRichText caps recursion instead of blowing the stack", () => {
   // JSON.parse is iterative in V8, so a deeply nested payload reaches the normalizer
-  // intact — and this runs inside the DO's storage.transaction().
+  // intact, and this runs inside the DO's storage.transaction().
   let node: Record<string, unknown> = { type: "text", text: "deep" };
   for (let i = 0; i < MAX_RICH_TEXT_DEPTH + 50; i++) node = { type: "blockquote", content: [node] };
   const out = normalizeRichText({ type: "doc", content: [node] });
@@ -218,7 +218,7 @@ test("a legacy HTML string is kept, not emptied, when it is tolerated", () => {
   const legacy = { body: "<p>stored before the migration</p>" };
   // Default: strict, because the value is new input.
   expect(() => validateFields(schema, legacy)).toThrow(/not an HTML string/);
-  // Normalization must NOT turn a tolerated string into an empty doc — that would delete
+  // Normalization must NOT turn a tolerated string into an empty doc, which would delete
   // the very content the tolerance exists to preserve.
   expect(normalizeFields(schema, legacy).body).toBe("<p>stored before the migration</p>");
 });
@@ -234,7 +234,7 @@ test("richTextToPlainText gives a collapsed block something to show", () => {
 
 test("the legacy baseline descends into group and repeater", () => {
   // Stopping at the top level meant a pre-migration value nested one deep was rejected on
-  // every write that echoed the stored bag back — and placeBlock, which merges the block's
+  // every write that echoed the stored bag back, and placeBlock, which merges the block's
   // OWN stored fields, could not place such a block at all.
   const schema: FieldDefinition[] = [
     { name: "meta", type: "group", fields: [{ name: "note", type: "richtext" }] },
@@ -248,7 +248,7 @@ test("the legacy baseline descends into group and repeater", () => {
 });
 
 test("an out-of-range heading level is clamped, not dropped", () => {
-  // Dropping `level` left the node level-less, and TipTap's Heading defaults to 1 — so the
+  // Dropping `level` left the node level-less, and TipTap's Heading defaults to 1, so the
   // imported h4 still opened as h1 while the renderers fell back to h2.
   const out = normalizeRichText(doc({ type: "heading", attrs: { level: 5 }, content: [text("H")] }));
   expect(out.content?.[0].attrs).toEqual({ level: 3 });
@@ -261,7 +261,7 @@ test("an out-of-range heading level is clamped, not dropped", () => {
 });
 
 test("a nested doc node is dropped", () => {
-  // `doc` in the node list only ever authorized a NESTED doc, which TipTap cannot render —
+  // `doc` in the node list only ever authorized a NESTED doc, which TipTap cannot render:
   // the field opened blank and the first keystroke saved the blank over the content.
   const out = normalizeRichText(doc(para({ type: "doc", content: [para(text("smuggled"))] }, text("kept"))));
   expect(JSON.stringify(out)).not.toContain("smuggled");

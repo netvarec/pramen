@@ -1,17 +1,17 @@
-// @pramen/cms-editor — how a deployment dresses the screen header
+// @pramen/cms-editor: how a deployment dresses the screen header
 // (`window.PRAMEN_CMS_EDITOR.pageHeader`).
 //
 // The seam exists because the only hook a host had was a stylesheet selecting on the header's
 // internal DOM, which pins itself to private structure AND is blind to what it selects: the
 // shipped example turned Media's `+ Upload` into "New + Upload" and put white text on a mint
-// fill at 1.58:1. So the assertions here are not only "the config is read" — the load-bearing
+// fill at 1.58:1. So the assertions here are not only "the config is read": the load-bearing
 // ones are the two the DOM hook could not get right and this API must not be able to:
 //
 //   - the derived label colour on an accent is the higher-contrast of podoba's two inks, and
 //   - a value whose contrast CANNOT be computed (var(), oklch(), alpha) is refused outright.
 //
 // Plus the rule every one of these config modules shares: unconfigured renders exactly as it
-// did before the seam existed, and nothing malformed throws — this is resolved at module load
+// did before the seam existed, and nothing malformed throws, since this is resolved at module load
 // in the entry bundle's import graph, where a throw is a blank page.
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -91,7 +91,7 @@ describe("pageHeader config", () => {
   });
 });
 
-describe("accent — colour the editor must reason about, not pass through", () => {
+describe("accent: colour the editor must reason about, not pass through", () => {
   test("the literals a host can write", () => {
     expect(parseColor("#73e2b2")).toEqual({ r: 0x73, g: 0xe2, b: 0xb2 });
     expect(parseColor("  #FFF  ")).toEqual({ r: 255, g: 255, b: 255 });
@@ -133,7 +133,7 @@ describe("accent — colour the editor must reason about, not pass through", () 
     // …and a dark brand colour takes paper.
     expect(onAccent(parseColor("#0d0d0d")!).color).toBe(paper);
     expect(onAccent(parseColor("#005ff9")!).color).toBe(paper);
-    // Whatever the accent, what we picked is never worse than the alternative — which is the
+    // Whatever the accent, what we picked is never worse than the alternative, which is the
     // property the DOM hook had no way to express.
     for (const accent of ["#73e2b2", "#0d0d0d", "#ffcc6a", "#ff69b4", "#005ff9", "#808080", "#ffffff"]) {
       const rgb = parseColor(accent)!;
@@ -149,12 +149,12 @@ describe("accent — colour the editor must reason about, not pass through", () 
     expect(contrastRatio({ r: 12, g: 34, b: 56 }, { r: 12, g: 34, b: 56 })).toBeCloseTo(1, 6);
     expect(relativeLuminance({ r: 255, g: 255, b: 255 })).toBeCloseTo(1, 6);
     expect(relativeLuminance({ r: 0, g: 0, b: 0 })).toBeCloseTo(0, 6);
-    // Green carries most of the luminance — the coefficient that makes a mid-mint LIGHT and a
+    // Green carries most of the luminance, the coefficient that makes a mid-mint LIGHT and a
     // mid-blue DARK, which is the whole decision above.
     expect(relativeLuminance({ r: 0, g: 255, b: 0 })).toBeGreaterThan(relativeLuminance({ r: 0, g: 0, b: 255 }));
   });
 
-  // podoba's primary hovers from near-black to #333 — "visibly shifted, same button". A fixed
+  // podoba's primary hovers from near-black to #333, "visibly shifted, same button". A fixed
   // direction would take a mint button to a lighter mint nobody can see on the panel.
   test("the hover shade moves away from the accent, in the direction that stays visible", () => {
     const lighten = parseColor(hoverShade(parseColor("#0d0d0d")!))!;
@@ -167,7 +167,7 @@ describe("accent — colour the editor must reason about, not pass through", () 
     expect(hoverShade({ r: 0, g: 0, b: 0 })).toMatch(/^#[0-9a-f]{6}$/);
   });
 
-  // TOKENS, scoped to the header — so the accent reaches whatever control the slot holds, and
+  // TOKENS, scoped to the header, so the accent reaches whatever control the slot holds, and
   // nothing outside the header shifts. The three names are podoba's own, read by the Button's
   // `bg-brand-primary text-fg-inverted hover:bg-neutral-600`.
   test("an accent resolves to the three podoba tokens the primary action reads", () => {
@@ -195,7 +195,7 @@ const render = (style?: Parameters<typeof setPageHeaderStyle>[0]) => {
 afterEach(() => setPageHeaderStyle(undefined));
 
 describe("PageHeader markup", () => {
-  test("unconfigured is the panel, the artwork and the mask — unchanged", () => {
+  test("unconfigured is the panel, the artwork and the mask, unchanged", () => {
     const html = render(undefined);
     expect(html).toContain("rounded-panel border border-border bg-surface-card");
     expect(html).toContain("<svg"); // the seeded cover
@@ -239,7 +239,7 @@ describe("PageHeader markup", () => {
     }
   });
 
-  test("an accent lands as custom properties on the header root — and nowhere else", () => {
+  test("an accent lands as custom properties on the header root, and nowhere else", () => {
     const style = resolvePageHeader({ accent: "#73e2b2" });
     const html = render(style);
     // React writes unknown properties verbatim, so the tokens reach the element as declared.
@@ -247,7 +247,7 @@ describe("PageHeader markup", () => {
     expect(html).toContain(`--color-fg-inverted:${ON_ACCENT_CANDIDATES[0]}`);
     expect(html).toContain("--color-neutral-600:");
     // On the STICKY wrapper, which is the element that encloses both the panel and the
-    // action — one declaration, inherited by whatever control the slot holds.
+    // action: one declaration, inherited by whatever control the slot holds.
     expect(html.indexOf("--color-brand-primary")).toBeLessThan(html.indexOf("<h1"));
     expect(html.match(/--color-brand-primary/g)).toHaveLength(1);
   });

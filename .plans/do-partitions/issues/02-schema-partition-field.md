@@ -1,4 +1,4 @@
-# Issue 02: Schema — `partition` on Entity + `partitionOf` helper
+# Issue 02: Schema, `partition` on Entity + `partitionOf` helper
 
 **Priority:** high
 **Files:** `packages/server/src/sdk/schema.ts`

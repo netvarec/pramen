@@ -1,4 +1,4 @@
-// Handler factories — `query()` and `mutation()`. A query reads; a mutation is
+// Handler factories: `query()` and `mutation()`. A query reads; a mutation is
 // wrapped in BEGIN/COMMIT by the dispatcher and
 // rolls back on throw (see runtime/dispatch.ts).
 
@@ -13,7 +13,7 @@ import type { SchemaDef } from "./schema";
 import type { JsonValue } from "./infer";
 
 /** The Worker/DO environment as an open, read-only bag: Cloudflare bindings (KV, R2,
- * D1, Queues, …) alongside vars and secrets. Deliberately open and opaque — an app
+ * D1, Queues, …) alongside vars and secrets. Deliberately open and opaque: an app
  * declares its own bindings, so the value type cannot be enumerated here; read a value
  * and narrow it at the use site (`ctx.env.STRIPE_SECRET_KEY as string`). */
 export type EnvBag = Readonly<Record<string, unknown>>;
@@ -21,7 +21,7 @@ export type EnvBag = Readonly<Record<string, unknown>>;
 export interface HandlerContext<S extends SchemaDef = SchemaDef> {
   /** Schema-typed repository: find/insert/update/delete inferred from S. */
   readonly db: Db<S>;
-  /** Project KV — global (cross-tenant) config/flags/cache. Not per-tenant
+  /** Project KV: global (cross-tenant) config/flags/cache. Not per-tenant
    * (that's db) and not transactional. */
   readonly kv: Kv;
   /** Per-tenant file storage: mint signed upload/download urls, head/delete blobs.
@@ -32,16 +32,16 @@ export interface HandlerContext<S extends SchemaDef = SchemaDef> {
    * captures instead of sending. Prefer enqueuing the send as a task (see `ctx.tasks`)
    * so it runs off the single-writer write path. */
   readonly mail: Mail;
-  /** The Worker/DO environment — bindings (KV, R2, DB, …) plus vars and secrets
+  /** The Worker/DO environment: bindings (KV, R2, DB, …) plus vars and secrets
    * (AUTH_SECRET, plus anything in wrangler.jsonc / .dev.vars / `wrangler secret`).
-   * Use it to call external services from handlers — Cloudflare bindings (e.g. the
+   * Use it to call external services from handlers: Cloudflare bindings (e.g. the
    * `send_email` binding for Cloudflare Email Sending) or third-party APIs (Stripe, …). Loosely typed;
    * cast a value at the use site, e.g. `ctx.env.STRIPE_SECRET_KEY as string`. */
   readonly env: EnvBag;
   /** Resolved identity for this request (null = anonymous). */
   readonly identity: Identity | null;
   /** The tenant this request is for (the `x-pramen-tenant` value; `"main"` by default).
-   * Server-resolved, never caller-supplied — safe to embed in a signed capability. */
+   * Server-resolved, never caller-supplied, so it is safe to embed in a signed capability. */
   readonly tenant: string;
   /** Which substrate is serving this request: `"do"` (a Durable Object) or `"d1"`. Only
    * the DO path has a stub the Worker can call back into, so a handler minting a
@@ -50,7 +50,7 @@ export interface HandlerContext<S extends SchemaDef = SchemaDef> {
   /** Deferred side-effects (a transactional outbox). `tasks.enqueue` persists a task
    * row in the SAME transaction as a mutation (atomic with the data write); a drainer
    * runs the matching `app.tasks` handler after commit, off the write path, with
-   * retry. For notification email, webhooks, etc. — see `app.tasks`. */
+   * retry. For notification email, webhooks, etc. See `app.tasks`. */
   readonly tasks: Tasks;
   /** Enqueue onto a native Cloudflare Queue: `ctx.queue.send("jobs", body)`. Unlike
    * `ctx.tasks` (a transactional outbox, atomic with the mutation, drained in-process),
@@ -62,19 +62,19 @@ export interface HandlerContext<S extends SchemaDef = SchemaDef> {
 
 /** Context handed to each `app.bootstrap` function. A privileged, SYSTEM-scoped `Db` (ACL
  * bypassed) plus the raw driver, available once schema migration has run on boot. Use it to
- * reconcile CODE-DEFINED reference data — content types, block types, roles, feature flags —
+ * reconcile CODE-DEFINED reference data (content types, block types, roles, feature flags)
  * into the store, so a fresh / reprovisioned database converges to what the repo declares
  * instead of depending on rows someone created by hand. */
 export interface BootstrapContext<S extends SchemaDef = SchemaDef> {
   /** System-scoped Db (ACL bypassed), scoped to `partition`. */
   readonly db: Db<S>;
-  /** Raw driver — for `driver.transaction(...)` or bespoke SQL. */
+  /** Raw driver, for `driver.transaction(...)` or bespoke SQL. */
   readonly driver: Driver;
   readonly schema: S;
   /** The partition being booted. On the DO path bootstrap runs ONLY for the default
    * partition (reference data lives there); on the D1 path it is always the default. */
   readonly partition: string;
-  /** The Worker/DO environment — bindings, vars and secrets, as a handler's `ctx.env` sees
+  /** The Worker/DO environment: bindings, vars and secrets, as a handler's `ctx.env` sees
    * it. Reference data is not always unconditional: a seed that belongs in local dev and
    * nowhere else (a demo account with a known password) has to be able to READ the flag that
    * says which it is, and a boot-time reconciler has no request to carry one. Without this
@@ -83,19 +83,19 @@ export interface BootstrapContext<S extends SchemaDef = SchemaDef> {
 }
 
 /** An idempotent reconcile run once after `migrate()` on each boot (a DO's first fetch, or a
- * Worker/D1 isolate init). It MUST be safe to run repeatedly — upsert by a stable key, never
+ * Worker/D1 isolate init). It MUST be safe to run repeatedly: upsert by a stable key, never
  * blind-insert. A thrown error is logged and swallowed so a broken reconcile can't brick a
  * tenant's boot; it simply retries on the next boot. Set as `app.bootstrap`. */
 export type BootstrapFn = (ctx: BootstrapContext) => void | Promise<void>;
 
 /** Context handed to a data migration's `up()`. Same privileged, SYSTEM-scoped shape as
  * `BootstrapContext` (ACL bypassed, triggers suppressed) but scoped to the migration's
- * own `partition` — each partition-DO runs its own partition's migrations, so `db`/`driver`
+ * own `partition`: each partition-DO runs its own partition's migrations, so `db`/`driver`
  * here address exactly that DO's tables. */
 export interface MigrationContext<S extends SchemaDef = SchemaDef> {
   /** System-scoped Db (ACL bypassed), triggers suppressed, scoped to `partition`. */
   readonly db: Db<S>;
-  /** Raw driver — a bulk `UPDATE`/`INSERT … SELECT` is usually the right tool for a
+  /** Raw driver. A bulk `UPDATE`/`INSERT … SELECT` is usually the right tool for a
    * backfill; going row-by-row through `db` on a large table is what blows the DO's
    * wall-clock budget. */
   readonly driver: Driver;
@@ -104,13 +104,13 @@ export interface MigrationContext<S extends SchemaDef = SchemaDef> {
   readonly partition: string;
 }
 
-/** One imperative, ORDERED, recorded-once transformation of existing DATA — the half a
+/** One imperative, ORDERED, recorded-once transformation of existing DATA: the half a
  * declarative diff cannot express: split a column, backfill the nullable column `ADD COLUMN`
  * just created, rewrite units, normalize a `t.json()` blob after its shape changed.
  *
  * The deliberate inverse of `BootstrapFn` on every axis that matters: it runs ONCE ever
  * (recorded in `_pramen_migrations` keyed by `(id, partition)`), so it need NOT be
- * idempotent — a backfill that would double a value on a second run is exactly what this
+ * idempotent (a backfill that would double a value on a second run is exactly what this
  * exists for; and a throw is NOT swallowed. It fails CLOSED: no ledger row, the boot does
  * not complete, the request fails, and the migration is retried on the tenant's next fetch.
  * Silently marking a half-finished backfill as done is the one outcome worth bricking a
@@ -119,14 +119,14 @@ export interface MigrationContext<S extends SchemaDef = SchemaDef> {
  * Runs after `migrate()` (so the column exists) and before `app.bootstrap`. There are no
  * DOWN migrations. Set as `app.migrations`. */
 export interface DataMigration {
-  /** Stable, unique, never reused — this is the ledger key. Deleting an id from the array
+  /** Stable, unique, never reused: this is the ledger key. Deleting an id from the array
    * does NOT un-apply it; and a cold tenant is unmigrated until touched, so an id can only
    * be pruned once EVERY live tenant reports it applied (`pramen migrations status
    * --all-tenants`). */
   id: string;
   /** Restrict to one partition; default = the default partition. Only that partition's DO
    * runs it (its tables live in no other DO). The D1 store is one shared database with no
-   * partition split, so there every migration runs — still recorded under this key. */
+   * partition split, so there every migration runs, still recorded under this key. */
   partition?: string;
   up(ctx: MigrationContext): void | Promise<void>;
 }
@@ -138,14 +138,14 @@ export interface Tasks {
   enqueue(opts: { kind: string; payload?: unknown; delayMs?: number }): Promise<void>;
 }
 
-/** Idempotency metadata for a task delivery. `id` is stable across retries — record it
+/** Idempotency metadata for a task delivery. `id` is stable across retries, so record it
  * to dedupe the rare duplicate (delivery is at-least-once). `attempts` is 1-based. */
 export interface TaskMeta {
   id: string;
   attempts: number;
 }
 
-/** An app task handler — runs a deferred side effect for one `kind` (e.g. send an
+/** An app task handler: runs a deferred side effect for one `kind` (e.g. send an
  * email via `ctx.env.EMAIL`). Throwing schedules a retry (capped, then dead-lettered).
  * Receives a privileged, system-scoped context plus the task's idempotency `meta`.
  * Register handlers in `app.tasks`. */
@@ -157,38 +157,38 @@ export type HandlerKind = "query" | "mutation";
 
 /** Authorization required to CALL a handler, enforced BEFORE its body runs. This is
  * distinct from the row-level ACL (which gates `ctx.db`): use it to gate handlers that
- * touch `ctx.kv`/`ctx.env`/`ctx.mail`/`ctx.tasks` directly — those bypass the ACL, so an
+ * touch `ctx.kv`/`ctx.env`/`ctx.mail`/`ctx.tasks` directly: those bypass the ACL, so an
  * un-gated such handler is callable by anyone (incl. anonymous) on an open tenant. Forms:
- *   - `"authenticated"` — any non-anonymous caller (identity != null)
- *   - `string[]`        — the caller must hold one of these roles
- *   - `(identity) => boolean` — a custom predicate
+ *   - `"authenticated"`: any non-anonymous caller (identity != null)
+ *   - `string[]`: the caller must hold one of these roles
+ *   - `(identity) => boolean`: a custom predicate
  * Absent ⇒ open (the prior behavior; a `ctx.db` handler is still ACL-gated).
  *
  * `callPrivileged` is NOT exempt: it sends an ordinary identity (`{ roles: ["admin"] }` by
  * default, or whatever `roles` it is given) and `dispatch` runs this same check for it. So
  * a SYSTEM-only handler is one gated on a role no issued token carries, which the privileged
- * caller then presents — NOT `auth: []`, which is satisfied by nobody at all and is refused
+ * caller then presents. NOT `auth: []`, which is satisfied by nobody at all and is refused
  * at boot by {@link validateHandlerAuth}. */
 export type HandlerAuth = "authenticated" | readonly string[] | ((identity: Identity | null) => boolean);
 
 /**
- * Warn about a handler whose `auth` no caller can ever satisfy — an EMPTY role list.
+ * Warn about a handler whose `auth` no caller can ever satisfy: an EMPTY role list.
  *
  * `auth: []` reads as "system-only: unreachable over /rpc, but still reachable from inside
  * the Worker", and it does not mean that. `callPrivileged` does not bypass the gate: it
  * sends an ordinary identity (`{ roles: ["admin"] }` by default) and `dispatch` runs the
  * same check for it as for anyone. `[]` is truthy, so the gate runs, and `[].some(...)` is
- * false for every identity — so the handler is unreachable FULL STOP.
+ * false for every identity, so the handler is unreachable FULL STOP.
  *
  * That is a silent failure worth surfacing: nothing throws at declaration, the handler simply
  * 403s forever, and the caller is usually a pre-auth route that swallows the status into a
- * generic message. `@pramen/auth`'s OIDC sign-in shipped this way — every login failed at the
+ * generic message. `@pramen/auth`'s OIDC sign-in shipped this way: every login failed at the
  * user upsert with "Sign-in could not be completed", and the test asserting the handler's
  * `auth` was `[]` passed the whole time.
  *
  * A WARNING and not a throw, deliberately. `createPramen` runs at the Worker entry's module
- * scope, so a throw here fails EVERY request — `/files/*`, `/media/*`, public routes, the
- * whole site — not merely the handler that is misconfigured. And an empty list is not always
+ * scope, so a throw here fails EVERY request (`/files/*`, `/media/*`, public routes, the
+ * whole site) not merely the handler that is misconfigured. And an empty list is not always
  * a mistake: `@pramen/cms` builds `auth` from its caller's `editorRoles`/`reviewerRoles`, so
  * an app that passes `reviewerRoles: []` to switch the review workflow off produces one on
  * purpose. Taking a deployment down over that is out of all proportion to the defect.
@@ -200,7 +200,7 @@ export function validateHandlerAuth(handlers: HandlerMap | undefined): string[] 
   }
   if (dead.length > 0) {
     console.warn(
-      `pramen: handler(s) ${dead.join(", ")} declare \`auth: []\`, which no caller can satisfy — not even ` +
+      `pramen: handler(s) ${dead.join(", ")} declare \`auth: []\`, which no caller can satisfy, not even ` +
         `callPrivileged, which sends an ordinary identity through the same gate. They will 403 for everyone. ` +
         `If that is deliberate, say so with \`auth: () => false\`. For a SYSTEM-only handler, gate it on a ` +
         `\`__\`-prefixed role (stripped from every verified token, so only the Worker can present it) and have ` +
@@ -241,7 +241,7 @@ export interface HandlerOpts<I> {
   input?: (raw: JsonValue) => I;
   /** DO partition this handler runs in. Absent ⇒ the default partition. */
   partition?: string;
-  /** Authorization to CALL this handler (see HandlerAuth) — gate non-`ctx.db` handlers. */
+  /** Authorization to CALL this handler (see HandlerAuth), to gate non-`ctx.db` handlers. */
   auth?: HandlerAuth;
 }
 

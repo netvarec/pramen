@@ -1,4 +1,4 @@
-// Where the editor is mounted, and which backend it talks to — read off the shell that
+// Where the editor is mounted, and which backend it talks to, read off the shell that
 // served it.
 //
 // The SPA's routes are authored from "/" ("/media", "/pages/:pageId", …), so an editor
@@ -22,17 +22,17 @@ import type { BuzolaNavigateEvent, NavigationAdapter } from "@buzola/router";
  *
  * Rooted, and required to say so: buzola prepends the base path to every href it builds, so
  * anything that is not already an absolute path resolves somewhere unintended. A leading
- * slash is NOT added for a value missing one — that convenience is what turns a pasted
+ * slash is NOT added for a value missing one: that convenience is what turns a pasted
  * `https://host/admin` into `/https://host/admin`, which is a real path and would be
  * mounted. `//cdn.example.com` is rejected for the same reason: protocol-relative, and the
  * natural product of `"/" + prefix` where the prefix already carried a slash.
  *
  * The character set is not a style choice. Every comparison against a mount path in this
- * file — and buzola's own `stripBasePath`, which we cannot change — is a raw `startsWith`
+ * file, and buzola's own `stripBasePath`, which we cannot change, is a raw `startsWith`
  * against a `URL.pathname`, which is percent-ENCODED. Admit a character the parser encodes
  * and the two sides can never match: a mount of `/správa` is compared against
  * `/spr%C3%A1va/...` and EVERY in-prefix url reads as off-prefix. So the admitted set is
- * derived from the parser rather than guessed — `"<>^`{}`, backslash, space and everything
+ * derived from the parser rather than guessed: `"<>^`{}`, backslash, space and everything
  * non-ASCII all encode, and are refused here. */
 const MOUNT_PATH = /^(?:\/[A-Za-z0-9!$%&'()*+,\-.:;=@[\]_|~]+)+$/;
 
@@ -42,7 +42,7 @@ const MOUNT_PATH = /^(?:\/[A-Za-z0-9!$%&'()*+,\-.:;=@[\]_|~]+)+$/;
  *
  * Nothing declared means the root, which is how the editor has always been served. A
  * declared-but-unusable value is WARNED about and falls back to the root rather than
- * routing every link through a stray prefix — the value is server-generated, so if one
+ * routing every link through a stray prefix. The value is server-generated, so if one
  * ever fails this check something upstream is wrong and a green deploy is the worst place
  * to discover it (`brand.ts` warns for the same reason).
  */
@@ -54,7 +54,7 @@ export function resolveBasePath(raw?: string | null): string {
   const canonical = trimmed.replace(/\/+$/, "");
   if (canonical === "") return "";
   if (!MOUNT_PATH.test(canonical)) {
-    console.warn(`pramen/cms-editor: ignoring unusable mount path ${JSON.stringify(trimmed)} — mounting at the origin root.`);
+    console.warn(`pramen/cms-editor: ignoring unusable mount path ${JSON.stringify(trimmed)}, so mounting at the origin root.`);
     return "";
   }
   return canonical;
@@ -66,7 +66,7 @@ export function readBasePath(el: { dataset: DOMStringMap } | null): string {
 }
 
 /**
- * Whether a pathname is INSIDE a mount prefix — the prefix itself, or something below it.
+ * Whether a pathname is INSIDE a mount prefix: the prefix itself, or something below it.
  *
  * Anchored at a segment boundary on purpose. buzola's own `stripBasePath` is a bare
  * `startsWith`, so with a prefix of `/cms` the host's `/cmsmedia` strips to `media` and
@@ -81,13 +81,13 @@ export function isWithinBasePath(pathname: string, basePath: string): boolean {
  * Scope a navigation adapter to one mount prefix.
  *
  * `Router.start()` intercepts every navigation that matches a route, and `_404.tsx`
- * registers the catch-all `/:__notFound+` — so EVERY same-origin path matches. At the
+ * registers the catch-all `/:__notFound+`, so EVERY same-origin path matches. At the
  * origin root that is correct (the editor is the whole origin). Co-hosted under a prefix
  * it is not: a click on the host site's own `/blog` would be cancelled by `event.intercept`
  * and render the editor's "Nothing lives here" while the address bar reads `/blog`.
  *
  * Filtering at the adapter means the router never SEES an off-prefix navigation, so the
- * browser handles it natively — no route table changes, no buzola fork.
+ * browser handles it natively, with no route table changes and no buzola fork.
  */
 export function scopeToBasePath(inner: NavigationAdapter, basePath: string): NavigationAdapter {
   if (!basePath) return inner;
@@ -97,7 +97,7 @@ export function scopeToBasePath(inner: NavigationAdapter, basePath: string): Nav
   const wrappers = new Map<Handler, Handler>();
   // Spread, not a hand-written list of the seven methods. Enumerating them forwards
   // correctly today but only fails safe by luck: tsc catches a newly REQUIRED member of
-  // `NavigationAdapter`, while an OPTIONAL one is silently dropped — and the next planned
+  // `NavigationAdapter`, while an OPTIONAL one is silently dropped, and the next planned
   // buzola bump (past ^0.0.12, for `router.leaveApp`) is exactly where such a member would
   // arrive. Overriding the two listener methods is the whole of what this wrapper does.
   return {
@@ -141,7 +141,7 @@ export function scopeToBasePath(inner: NavigationAdapter, basePath: string): Nav
  * Lives here, not in the layout, for two reasons: these are the same containment rules
  * `scopeToBasePath` enforces and they belong beside them, and a predicate that decides
  * whether a click escapes the SPA has to be testable without a DOM. `documentUrl` is a
- * PARAMETER rather than a read of `window.location` for the same reason — and because it
+ * PARAMETER rather than a read of `window.location` for the same reason, and because it
  * is the one input that must not be guessed:
  *
  *   - Resolve against `location.origin` and a relative href like `"curate"` is judged as
@@ -161,12 +161,12 @@ export function opensInSameTab(href: string, target: string | undefined, basePat
     return false;
   }
   // `new URL` happily parses `javascript:` and `data:`, and their `pathname` is an opaque
-  // string that trivially fails any containment test — so without this they would take the
+  // string that trivially fails any containment test, so without this they would take the
   // same-tab branch and shed the `rel` that used to confine them. A url with no hierarchical
   // path cannot be reasoned about as "inside or outside the mount"; the answer is no.
   if (url.protocol !== "http:" && url.protocol !== "https:") return false;
-  // Cross-origin ALWAYS escapes on its own — the catch-all can only claim same-origin paths
-  // — so it is safe in the same tab whether or not this editor is mounted. That makes an
+  // Cross-origin ALWAYS escapes on its own: the catch-all can only claim same-origin paths
+  //, so it is safe in the same tab whether or not this editor is mounted. That makes an
   // external tool the one configuration that works at the origin root, which is the opposite
   // of what a bare `basePath` check concludes.
   if (url.origin !== docOrigin) return true;
@@ -177,7 +177,7 @@ export function opensInSameTab(href: string, target: string | undefined, basePat
 
 /** The backend the shell declared: which Worker to call, and as which tenant.
  *
- * When present these are NOT read from (or written to) localStorage — the server knows
+ * When present these are NOT read from (or written to) localStorage: the server knows
  * where its own API is, and a stale stored value from an earlier deployment would win
  * forever otherwise. Only the session token is the browser's to remember. */
 export interface DeclaredBackend {

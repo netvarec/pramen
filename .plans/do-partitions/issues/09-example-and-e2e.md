@@ -27,7 +27,7 @@ Cover, against real `wrangler dev`:
 4. **Runtime guard**: addressing an audit table through a default-partition handler/DO
    returns the partition BadRequest (Issue 06).
 5. **Reactivity is partition-local**: an audit-partition mutation does not wake a
-   notes-partition subscription (different DOs — assert no cross push).
+   notes-partition subscription (different DOs, so assert no cross push).
 6. **Admin per-partition**: `/admin/data` and `/admin/schema` with `partition=audit`
    reach the audit DO; without it, the default DO (Issue 07).
 

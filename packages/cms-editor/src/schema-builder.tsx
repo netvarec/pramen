@@ -1,14 +1,14 @@
 // Authoring the SCHEMA behind pages: block types and content types.
 //
 // The editor could author pages and blocks but not the block types and content types those
-// depend on, so a fresh CMS could not be bootstrapped from the editor at all — the empty
+// depend on, so a fresh CMS could not be bootstrapped from the editor at all. The empty
 // state said as much ("Define block types + a content type first (via the API/admin)") and
 // the only way through was to curl `createBlockType` / `createContentType`. The handlers
 // were already there and already editor-gated; this is the surface over them (GitHub #9).
 //
 // It is the INVERSE of `fields.tsx`. That renders a `FieldDefinition[]` as a form to fill
 // in; this edits the `FieldDefinition[]` itself. The two share the type list, so a field
-// type that exists here is one `FieldForm` can render — `FIELD_TYPES` below is the mirror
+// type that exists here is one `FieldForm` can render: `FIELD_TYPES` below is the mirror
 // of the server's own list, which is what keeps that true.
 
 import { Button, Heading, Input, Textarea } from "@podoba/react";
@@ -23,7 +23,7 @@ import { DetailHeader } from "./detail-header";
 import { LoadFailed } from "./list-state";
 import type { BlockType, ContentType, DefaultBlockDefinition, FieldDefinition, FieldType, RegionDefinition } from "./types";
 
-/** Every field type the CMS knows — the editor's mirror of `FIELD_TYPES` in @pramen/cms.
+/** Every field type the CMS knows: the editor's mirror of `FIELD_TYPES` in @pramen/cms.
  *
  * A mirror rather than an import: the editor is a standalone browser app with no
  * server-package dependency. The server validates an authored schema against its own copy
@@ -41,7 +41,7 @@ const MAX_FIELD_DEPTH = 5;
 /** Types that nest a further schema. */
 const NESTING: readonly FieldType[] = ["group", "repeater"];
 
-/** The text-ish types a `slug` may follow — same list the server checks. */
+/** The text-ish types a `slug` may follow, the same list the server checks. */
 const SLUG_SOURCES: readonly FieldType[] = ["text", "textarea", "select", "url"];
 
 /** Each field type's label in the picker. English shows the machine value; the stored value is
@@ -74,7 +74,7 @@ function fieldTypeLabel(type: FieldType): string {
 /** A field name: an object key in a `fields` bag and a property name in generated TS. */
 const FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-/** Turn a label into a usable field name. Not `slugify` — that emits hyphens, which are
+/** Turn a label into a usable field name. Not `slugify`, which emits hyphens, and those are
  * legal in a URL segment and illegal in an object key you can write as `fields.heading`. */
 function fieldNameFrom(label: string): string {
   const parts = label
@@ -97,7 +97,7 @@ function fieldNameFrom(label: string): string {
  *
  * Recursive, mirroring `FieldForm`: a `group`/`repeater` field renders another one of these
  * for its own `fields`. `depth` exists only to stop offering "+ Add field" past the nesting
- * cap the server enforces — a control that always produced a 400 would be worse than none.
+ * cap the server enforces: a control that always produced a 400 would be worse than none.
  */
 export function FieldSchemaEditor({ schema, onChange, depth = 0 }: { schema: FieldDefinition[]; onChange: (s: FieldDefinition[]) => void; depth?: number }) {
   const set = (i: number, f: FieldDefinition) => onChange(schema.map((x, j) => (j === i ? f : x)));
@@ -166,7 +166,7 @@ function FieldRow({ def, siblings, siblingFields, index, count, depth, onChange,
    * Switching a field's TYPE drops the keys the old type owned.
    *
    * Carrying them would store a `select`'s `options` on a field that is now `text`, which
-   * the server strips anyway — but worse, switching back would silently resurrect the old
+   * the server strips anyway, but worse, switching back would silently resurrect the old
    * options after the author thought they were gone. `name`/`label`/`required` are the
    * type-independent half and survive.
    */
@@ -289,13 +289,13 @@ function SelectExtras({ def, patch }: { def: FieldDefinition; patch: (p: Partial
  * The `select` options list, edited as one-per-line text.
  *
  * The text lives in LOCAL state and the parsed array goes upward. Deriving the textarea's
- * value from the parsed array instead — `options.join("\n")` — made the field unusable:
+ * value from the parsed array instead (`options.join("\n")`) made the field unusable:
  * the parse trims and drops empties on every keystroke, so typing a space gave back the
  * same array, the value prop never changed, and React restored the DOM. Space and Enter
  * were erased as typed, which meant no multi-word option and no second option. A `select`
  * could not be authored at all in the builder that introduces it.
  *
- * Re-seeded only when the incoming array is not the one this last emitted — i.e. the form
+ * Re-seeded only when the incoming array is not the one this last emitted, i.e. the form
  * switched to a different field, not our own change coming back around. Same rule the
  * rich-text control uses, for the same reason.
  */
@@ -354,7 +354,7 @@ function SlugExtras({ def, siblingFields, patch }: { def: FieldDefinition; sibli
         <option value="">{t("fieldSchema.slugByHand")}</option>
         {/* Only fields the server will ACCEPT as a source. `SLUG_SOURCES` was declared for
             this check and then used only in the hint below, so the dropdown offered every
-            sibling — including a `number` or a `media` — and picking one made the whole type
+            sibling (including a `number` or a `media`) and picking one made the whole type
             unsavable with an error naming a field the author had just been offered. */}
         {sources.map((f) => <option key={f.name} value={f.name}>{f.label ?? f.name}</option>)}
       </select>
@@ -387,7 +387,7 @@ function RepeaterExtras({ def, patch }: { def: FieldDefinition; patch: (p: Parti
 // A type declared with `defineBlockType` / `defineContentType` and reconciled by
 // `cmsBootstrap` is flagged `managed`, and the builder shows it read-only. Both surfaces
 // listed code-defined and editor-authored types identically before, so the obvious thing to
-// do — open one, add a field, hit Save — returned 200 and was reverted at the next cold
+// do (open one, add a field, hit Save) returned 200 and was reverted at the next cold
 // start, orphaning any content authored against the field (GitHub #48). The server now
 // refuses that write; this is the half that stops an editor walking into it.
 
@@ -404,7 +404,7 @@ function CodeBadge() {
 /** Shown ABOVE a read-only builder, in place of the Save button.
  *
  * Above, not inside: it used to sit within the disabled `<fieldset>`, and `disabled` takes
- * the whole subtree out of the tab order — so a screen-reader user tabbed from "← Types"
+ * the whole subtree out of the tab order, so a screen-reader user tabbed from "← Types"
  * straight past every control and never reached the one paragraph explaining why the screen
  * was empty. It is also what the fieldset's `aria-describedby` points at. */
 function ManagedNotice({ id, what, defineFn, slug, owner }: { id: string; what: string; defineFn: string; slug: string; owner?: string | null }) {
@@ -426,11 +426,11 @@ function ManagedNotice({ id, what, defineFn, slug, owner }: { id: string; what: 
 
 /** The read-only form wrapper. `disabled` on a fieldset disables every native control inside
  * it, so the lock is one attribute rather than a prop threaded through the region / field /
- * default-block editors — none of which would then be able to forget it.
+ * default-block editors, none of which would then be able to forget it.
  *
  * It needs the styling too. podoba's controls render their disabled look from
  * `data-[disabled]`, which react-aria sets from its OWN `isDisabled` prop and never from an
- * ancestor fieldset — so the inert form was pixel-identical to a live one, except for the two
+ * ancestor fieldset, so the inert form was pixel-identical to a live one, except for the two
  * buttons that happen to carry a `:disabled` class and dimmed while their neighbours did not.
  * An editor clicked into Name, typed, and no characters appeared. The wrapper carries the
  * visual state for everything inside it. */
@@ -458,7 +458,7 @@ function ReadOnlyFieldset({ locked, describedBy, label, className, children }: {
 
 export function TypesOverview({ api, codeDefinedTypes, onOpenBlockType, onOpenContentType, onError }: {
   api: Api;
-  /** `listCmsCapabilities().codeDefinedTypes` — see `CmsCapabilities`. False against an older
+  /** `listCmsCapabilities().codeDefinedTypes`. See `CmsCapabilities`. False against an older
    * server, where `managedBy` is absent on every row and means nothing. */
   codeDefinedTypes: boolean;
   onOpenBlockType: (slug: string) => void;
@@ -635,7 +635,7 @@ export function BlockTypeEditor({ api, codeDefinedTypes, typeDeletion, slug, onS
         setBaseline(JSON.stringify(loaded));
       })
       // `missing` as well as the error toast: without it the failed load fell through to an
-      // EDITABLE, un-badged, empty form for what may well be a code-defined type — a screen
+      // EDITABLE, un-badged, empty form for what may well be a code-defined type: a screen
       // asserting the opposite of the truth, whose Save then 400s on a null id.
       .catch((e: Error) => { if (live) setMissing(true); onError(String(e.message ?? e)); })
       .finally(() => { if (live) setLoading(false); });
@@ -652,7 +652,7 @@ export function BlockTypeEditor({ api, codeDefinedTypes, typeDeletion, slug, onS
         // `slug` is deliberately not sent: it is the stable key, and the server ignores it
         // on an update. Sending it would suggest to a reader that renaming works.
         await api.updateBlockType(id!, { name: draft.name, description: draft.description, icon: draft.icon, category: draft.category, fieldsSchema: draft.fieldsSchema });
-        setBaseline(JSON.stringify(draft)); // saved — the guard stands down
+        setBaseline(JSON.stringify(draft)); // saved, so the guard stands down
         setOk(true);
         setTimeout(() => setOk(false), 1200);
       }
@@ -821,7 +821,7 @@ export function ContentTypeEditor({ api, codeDefinedTypes, typeDeletion, slug, o
       const names = [...new Set(orphaned.map((b) => b.region))].join(", ");
       if (!confirm(i18n.tp("contentType.orphanedConfirm", orphaned.length, { names }))) return;
       setDraft((d) => ({ ...d, defaultBlocks: (d.defaultBlocks ?? []).filter((b) => regions.some((r) => r.name === b.region)) }));
-      return; // The author saves again against the cleaned draft — nothing is dropped unseen.
+      return; // The author saves again against the cleaned draft; nothing is dropped unseen.
     }
     setBusy(true);
     try {
@@ -898,7 +898,7 @@ export function ContentTypeEditor({ api, codeDefinedTypes, typeDeletion, slug, o
             blockTypes={blockTypes}
             onChange={(next) => setDraft((d) => ({ ...d, regions: next }))}
             // Pruning happens on REMOVE only, never on an arbitrary change. It used to run
-            // on every `onChange` — and the region-name input fires that per keystroke, so
+            // on every `onChange`, and the region-name input fires that per keystroke, so
             // typing the first character of a rename made every default block in that region
             // point at a name that no longer existed and deleted them all. They never came
             // back when the rename finished, and saving persisted the loss with no warning.
@@ -1038,7 +1038,7 @@ function DefaultBlocksEditor({ blocks, regions, blockTypes, onChange }: {
                 onChange={(e) => {
                   const region = e.target.value;
                   // Moving to a region whose allow-list excludes the current block type
-                  // would be refused on save, so the type is re-picked here — the author's
+                  // would be refused on save, so the type is re-picked here: the author's
                   // intent is "this region", not "this pair".
                   const still = allowedIn(region).some((bt) => bt.slug === b.blockTypeSlug);
                   set(i, { ...b, region, blockTypeSlug: still ? b.blockTypeSlug : allowedIn(region)[0]?.slug ?? "" });

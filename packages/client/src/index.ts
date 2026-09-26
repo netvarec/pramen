@@ -1,4 +1,4 @@
-// @pramen/client — a typed client for a pramen backend.
+// @pramen/client: a typed client for a pramen backend.
 //
 //   import type { app } from "../../server/app";       // type-only (erased)
 //   const client = createClient<typeof app.handlers>({ url, token, tenant });
@@ -48,11 +48,11 @@ export interface SubHandlers<T> {
   onData: (result: T) => void;
   /** Called when the server rejects THIS subscription (a `{type:"error"}` frame). */
   onError?: (err: { error: string; code: string }) => void;
-  /** Called when the underlying live connection itself fails — no WebSocket
+  /** Called when the underlying live connection itself fails: no WebSocket
    * implementation is available, or the socket has closed and stayed down past
    * `maxReconnectAttempts`. Distinct from `onError` (a per-subscription server error):
    * this is a transport-level failure that affects every sub on the connection.
-   * Optional and additive — omitting it preserves the prior (silent) behavior for
+   * Optional and additive, so omitting it preserves the prior (silent) behavior for
    * existing callers. */
   onConnectionError?: (err: { error: string; code: string }) => void;
 }
@@ -95,7 +95,7 @@ export function createClient<Api = Record<string, never>>(opts: ClientOptions): 
   const doFetch = opts.fetchImpl ?? globalThis.fetch.bind(globalThis);
   const WS = opts.WebSocketImpl ?? (globalThis as { WebSocket?: typeof WebSocket }).WebSocket;
   // Normalize the base url: strip any trailing slash so `${base}/rpc/...` can't become
-  // `//rpc/...` (which the Worker serves as a plain-text help page — a 200 that isn't an
+  // `//rpc/...` (which the Worker serves as a plain-text help page: a 200 that isn't an
   // envelope, silently resolving `call()` to undefined for every RPC).
   const baseUrl = opts.url.replace(/\/+$/, "");
   const maxReconnectAttempts = opts.maxReconnectAttempts ?? 8;
@@ -129,7 +129,7 @@ export function createClient<Api = Record<string, never>>(opts: ClientOptions): 
       body: JSON.stringify(input ?? {}),
     });
     // Capture the D1 read-your-writes bookmark (D1 store only; absent on the DO path).
-    // Keep the MAXIMUM bookmark seen — D1 session bookmarks are lexicographically
+    // Keep the MAXIMUM bookmark seen: D1 session bookmarks are lexicographically
     // ordered, so a slower earlier response arriving after a mutation must not clobber a
     // newer one and regress read-your-writes.
     const bookmark = res.headers.get("x-pramen-d1-bookmark");
@@ -162,7 +162,7 @@ export function createClient<Api = Record<string, never>>(opts: ClientOptions): 
   function ensureSocket(): void {
     if (closed || ws || subs.size === 0) return;
     if (!WS) {
-      // No WebSocket implementation in this environment — the subscription can never
+      // No WebSocket implementation in this environment, so the subscription can never
       // fire. Surface it instead of returning silently (the old hang-forever behavior).
       reportConnectionError("no WebSocket implementation available", "no_websocket");
       return;
@@ -214,7 +214,7 @@ export function createClient<Api = Record<string, never>>(opts: ClientOptions): 
   function scheduleReconnect(): void {
     if (closed || reconnectTimer || subs.size === 0) return;
     if (reconnectAttempts >= maxReconnectAttempts) {
-      // Give up rather than reconnect forever at the 10s cap — a rejected upgrade (e.g.
+      // Give up rather than reconnect forever at the 10s cap: a rejected upgrade (e.g.
       // auth 403) would otherwise spin silently behind a permanent spinner.
       reportConnectionError(`live connection failed after ${reconnectAttempts} attempts`, "connection_failed");
       return;

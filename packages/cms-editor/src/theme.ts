@@ -1,7 +1,7 @@
 // The chrome's light/dark choice, as a store rather than a component's state.
 //
 // It used to be a `useState` inside `_layout.tsx`, which was fine while the layout was the
-// only reader. It is not the only reader any more: a panel (a project's own React screen —
+// only reader. It is not the only reader any more: a panel (a project's own React screen;
 // see `panels.ts`) is handed the theme, and it is rendered through `<Outlet />` under that
 // same layout. Threading it down as a prop would mean every route the layout renders had to
 // carry a value only one of them wants; a second `useState` would mean two sources of truth
@@ -10,7 +10,7 @@
 // A store instead: one value, one place that writes the DOM attribute and localStorage, and
 // a `useSyncExternalStore` hook for anyone who wants to re-render on a change. It is also
 // what lets `main.tsx` apply the stored theme BEFORE the first paint, which the layout's
-// effect could not do — an editor left in dark mode used to flash white on every load.
+// effect could not do: an editor left in dark mode used to flash white on every load.
 
 import { useSyncExternalStore } from "react";
 
@@ -35,7 +35,7 @@ function stored(): Theme {
 }
 
 /** Put the choice where podoba can see it. The tokens flip under `[data-theme="dark"]` on
- * the document root — there are no `dark:` variants to toggle — so this one attribute is the
+ * the document root (there are no `dark:` variants to toggle) so this one attribute is the
  * whole of "apply the theme". */
 function apply(theme: Theme): void {
   if (typeof document !== "undefined") document.documentElement.dataset.theme = theme;
@@ -73,7 +73,7 @@ export function useTheme(): Theme {
   return useSyncExternalStore(subscribeTheme, getTheme, getTheme);
 }
 
-/** Drop every listener and return to the default. Tests only — the store is module state. */
+/** Drop every listener and return to the default. Tests only, since the store is module state. */
 export function resetTheme(): void {
   listeners.clear();
   current = "light";

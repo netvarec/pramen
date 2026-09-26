@@ -4,8 +4,8 @@ name: docs
 #   - push to main   -> production deploy (https://pramen-docs.pages.dev)
 #   - pull request   -> preview deploy (a per-branch *.pramen-docs.pages.dev url)
 # Only runs when docs/ (or this workflow) changes. Requires two repo secrets:
-#   CLOUDFLARE_API_TOKEN   — a token with the "Cloudflare Pages: Edit" permission
-#   CLOUDFLARE_ACCOUNT_ID  — the target account id
+#   CLOUDFLARE_API_TOKEN   a token with the "Cloudflare Pages: Edit" permission
+#   CLOUDFLARE_ACCOUNT_ID  the target account id
 on:
   push:
     branches: [main]
@@ -20,7 +20,7 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    # Skip on PRs from forks — they can't see the secrets, so the deploy would fail.
+    # Skip on PRs from forks: they can't see the secrets, so the deploy would fail.
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -33,12 +33,12 @@ jobs:
       - name: Build (pletivo -> docs/dist)
         working-directory: docs
         run: bun install --frozen-lockfile && bun run build
-      # First run only: create the Pages project. Idempotent — tolerated if it exists.
+      # First run only: create the Pages project. Idempotent, and tolerated if it exists.
       - name: Ensure Pages project exists
         continue-on-error: true
         run: bunx wrangler@4 pages project create pramen-docs --production-branch=main
       # The branch name (untrusted on PRs) is passed via env and referenced as a
-      # quoted shell variable — never interpolated into the command string — so a
+      # quoted shell variable, never interpolated into the command string, so a
       # crafted branch name can't inject into the deploy step.
       - name: Deploy to Cloudflare Pages
         env:

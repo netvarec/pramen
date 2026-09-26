@@ -1,17 +1,17 @@
 ---
 // One page per published article, prerendered. The markup lives in `Article.astro`, shared
-// with `preview.astro` — a preview rendered by a second copy of the layout is a preview of
+// with `preview.astro`: a preview rendered by a second copy of the layout is a preview of
 // the copy.
 import type { RenderedBlock } from "@pramen/cms-astro";
 import { getCollection } from "astro:content";
 import Article from "../components/Article.astro";
 
-/** What this site expects a published article to look like — the default `cmsLoader`
+/** What this site expects a published article to look like. The default `cmsLoader`
  * transform flattens the page's own fields to the top level and adds these.
  *
  * Worth writing down: a generated collection has no Zod schema, so `entry.data` is `any`
  * and every read below would otherwise go unchecked. Declaring `Props` is what gives
- * `astro check` something to verify. It is a claim about the content, not a guarantee —
+ * `astro check` something to verify. It is a claim about the content, not a guarantee;
  * enforcement would mean a schema on the collection. */
 interface ArticleData {
   title: string;

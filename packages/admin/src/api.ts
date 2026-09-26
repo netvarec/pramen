@@ -49,7 +49,7 @@ async function call<T>(cfg: Config, path: string, init?: RequestInit): Promise<T
     res = await fetch(`${base}${path}`, { ...init, headers });
   } catch (e) {
     throw new ApiError(
-      `network error reaching ${base} — is pramen running and is CORS_ORIGINS set?`,
+      `network error reaching ${base}. Is pramen running and is CORS_ORIGINS set?`,
       "network",
       0,
     );
@@ -65,7 +65,7 @@ async function call<T>(cfg: Config, path: string, init?: RequestInit): Promise<T
   if (!res.ok || !body || body.ok === false) {
     const code = body?.code ?? String(res.status);
     let message = body?.error ?? `request failed (${res.status})`;
-    if (res.status === 403) message = `not an admin token — ${message}`;
+    if (res.status === 403) message = `not an admin token: ${message}`;
     throw new ApiError(message, code, res.status);
   }
   return body.result as T;
@@ -81,18 +81,18 @@ interface TenantRef {
 
 /** Tenant names out of whatever `GET /tenants` answered with.
  *
- * The server returns `{tenant, partition}[]` — one entry per registered Durable Object,
+ * The server returns `{tenant, partition}[]`, one entry per registered Durable Object,
  * so a tenant with several partitions appears more than once. This call was typed
  * `string[]` and the result fed straight into `<SelectItem>`, which put an OBJECT where
  * React expected a child: it threw during render and blanked the entire dashboard for
  * anyone whose deployment had even one tenant.
  *
  * Deduped, because the picker chooses a tenant and every partition of a tenant is the
- * same choice here — the admin always talks to the default partition. Sorted so the
+ * same choice here, since the admin always talks to the default partition. Sorted so the
  * order does not drift with KV listing order.
  *
  * A plain `string[]` is tolerated too. The admin is a client you point at arbitrary
- * deployments — a freshly built bundle against a long-running Worker, say — so the
+ * deployments (a freshly built bundle against a long-running Worker, say) so the
  * server on the other end is not necessarily the version that produced this parser.
  */
 export function tenantNames(result: unknown): string[] {

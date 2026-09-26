@@ -1,12 +1,12 @@
-// SharedBoot — a once-per-isolate boot that many invocations await, made safe to share.
+// SharedBoot: a once-per-isolate boot that many invocations await, made safe to share.
 //
 // The D1 store boots in the Worker: migrate → data migrations → outbox table → bootstrap,
 // run by whichever request arrives first in a fresh isolate and memoized as ONE promise the
 // rest await (running it per request would re-diff the schema on every call). That memo
 // is the bug behind GitHub #51, and the reason is a Workers runtime rule, not pramen code:
-// async work belongs to the INVOCATION that started it. When that invocation ends — the
+// async work belongs to the INVOCATION that started it. When that invocation ends (the
 // caller gives up and disconnects, which is exactly what a proxy with a 15 s ceiling does
-// to the legitimately slow first request after a deploy carrying a table rebuild — its
+// to the legitimately slow first request after a deploy carrying a table rebuild) its
 // pending I/O is canceled, and a promise chained on canceled I/O never settles. Not
 // rejected: never settles. So the `.catch` that was meant to clear the memo never runs,
 // and every later fetch in that isolate awaits a promise that cannot resolve, for as long
@@ -23,12 +23,12 @@
 //     be orphaned.
 //  2. AWAITERS never trust a shared boot unconditionally. The boot reports PROGRESS (every
 //     statement the driver runs), and a boot that has made none for `staleMs` while still
-//     unsettled is treated as orphaned: the next awaiter — arriving, or one already waiting
-//     — starts a fresh boot in its own invocation and awaits that instead. An isolate can
+//     unsettled is treated as orphaned: the next awaiter, arriving, or one already waiting,
+//     starts a fresh boot in its own invocation and awaits that instead. An isolate can
 //     therefore be wedged for at most `staleMs`, never for its lifetime. Every step of the
 //     boot tolerates a second runner (that is the cross-isolate reality on D1 already: the
 //     migration ledger is lease-claimed, migrate is a diff, bootstrap is an upsert), so a
-//     false positive costs a redundant boot, not correctness — which is why the threshold is
+//     false positive costs a redundant boot, not correctness, which is why the threshold is
 //     measured from the last STATEMENT and not from the boot's start: a boot that is slow
 //     but alive keeps making progress.
 //
@@ -52,7 +52,7 @@ interface BootRecord {
   done: boolean;
 }
 
-/** The boot body. Call `progress()` whenever the boot does observable work — see
+/** The boot body. Call `progress()` whenever the boot does observable work. See
  * `observeDriver` for the standard way to get that for free. */
 export type BootFn = (progress: () => void) => Promise<void>;
 
@@ -69,11 +69,11 @@ export class SharedBoot {
    * `run` is only invoked when THIS call has to start a boot. `keepAlive` is the calling
    * invocation's lifetime extender (`ctx.waitUntil`); it is handed the boot's promise so
    * the boot survives the caller disconnecting. A rejected boot rejects every awaiter and
-   * clears the memo, so the next call retries — fail closed, as before. */
+   * clears the memo, so the next call retries, failing closed, as before. */
   async ensure(run: BootFn, keepAlive?: (p: Promise<unknown>) => void): Promise<void> {
     let boot = this.current;
     // The STARTER awaits its own boot outright: the boot runs in its invocation, so if
-    // the starter is alive to watch, so is the boot — and if the invocation is canceled,
+    // the starter is alive to watch, so is the boot, and if the invocation is canceled,
     // this await dies with it. A starter that also watched would restart its own
     // (dead-for-everyone-else) boot every window, endlessly.
     if (!boot || this.isStale(boot)) return this.start(run, keepAlive, boot).promise;
@@ -82,7 +82,7 @@ export class SharedBoot {
       // Wait, but wake when the boot WOULD count as stale, and re-check: progress since
       // means it is alive and we keep waiting; none means it is orphaned.
       if (await this.settledBeforeStale(boot)) return;
-      // Someone else may already have replaced it — join theirs rather than start a third.
+      // Someone else may already have replaced it, so join theirs rather than start a third.
       const live = this.current;
       if (live && live !== boot && !this.isStale(live)) {
         boot = live;
@@ -92,7 +92,7 @@ export class SharedBoot {
     }
   }
 
-  /** Whether a boot has completed in this isolate — for diagnostics only. */
+  /** Whether a boot has completed in this isolate. For diagnostics only. */
   isDone(): boolean {
     return this.current?.done === true;
   }
@@ -131,7 +131,7 @@ export class SharedBoot {
   }
 
   /** Resolves `true` when the boot settles (rejects if it rejected), `false` once it has
-   * gone `staleMs` without progress — the timer re-arms from the latest progress instant,
+   * gone `staleMs` without progress. The timer re-arms from the latest progress instant,
    * so a boot that keeps working is never reported stale. */
   private settledBeforeStale(boot: BootRecord): Promise<boolean> {
     return new Promise<boolean>((resolve, reject) => {
@@ -158,7 +158,7 @@ export class SharedBoot {
   }
 }
 
-/** Wrap a Driver so every statement it runs reports progress — the boot's liveness signal.
+/** Wrap a Driver so every statement it runs reports progress: the boot's liveness signal.
  * `batch` is forwarded only when the wrapped driver has it, because the migrator decides
  * between an atomic batch and sequential exec by its presence. */
 export function observeDriver(driver: Driver, progress: () => void): Driver {

@@ -1,10 +1,10 @@
-// Db — the repository surface handed to handlers, wrapping the DO's in-process
-// SqlStorage. This is the single ACL chokepoint — all reads go through the read
+// Db: the repository surface handed to handlers, wrapping the DO's in-process
+// SqlStorage. This is the single ACL chokepoint: all reads go through the read
 // engine: every find/insert/update/delete resolves a scope for the
 // caller's identity and is denied, row-filtered, or field-projected accordingly.
 //
 // Generic over the app's schema S: method inputs and results are typed against
-// the entity definitions (sdk/infer.ts). Types are erased at runtime — the body
+// the entity definitions (sdk/infer.ts). Types are erased at runtime, so the body
 // works in terms of plain strings and Rows.
 //
 // Every Db also records the tables it touched during one handler run (`touched`),
@@ -91,7 +91,7 @@ function columnsInExpr(expr: SqlExpr | null | undefined, out: Set<string> = new 
       columnsInExpr(expr.expr, out);
       break;
     case "sub":
-      out.add(expr.outerCol); // inner `where` is over another table — not this row's columns
+      out.add(expr.outerCol); // inner `where` is over another table, not this row's columns
       break;
   }
   return out;
@@ -110,7 +110,7 @@ export interface FindSpec<S extends SchemaDef, T extends keyof S> {
   offset?: number;
   /** Eager-load relations. Each loaded relation is independently ACL-checked. */
   with?: Partial<Record<keyof RelationsOf<S[T]> & string, true>>;
-  /** Fetch only these columns (a projection). Each must be readable — a hidden or
+  /** Fetch only these columns (a projection). Each must be readable: a hidden or
    * unreadable column is a 403, like ordering by one. This narrows the SQL SELECT so a
    * wide `json`/`text` column the handler doesn't need never crosses RPC on the D1 path;
    * the PK, order, and relation-join columns are always fetched internally regardless.
@@ -118,7 +118,7 @@ export interface FindSpec<S extends SchemaDef, T extends keyof S> {
   select?: readonly (keyof FieldsOf<S[T]> & string)[];
 }
 
-/** Cursor (keyset) pagination input — `after` is an opaque cursor from a prior page. */
+/** Cursor (keyset) pagination input. `after` is an opaque cursor from a prior page. */
 export interface PageSpec<S extends SchemaDef, T extends keyof S> {
   from: T;
   where?: WhereClause<S, T>;
@@ -133,7 +133,7 @@ export interface PageSpec<S extends SchemaDef, T extends keyof S> {
 
 export interface Page<R> {
   items: R[];
-  /** Opaque cursor for the last item — pass as `after` to fetch the next page. */
+  /** Opaque cursor for the last item; pass as `after` to fetch the next page. */
   cursor: string | null;
   hasMore: boolean;
 }
@@ -216,7 +216,7 @@ function keysetAfter(order: OrderBy[], values: CellValue[]): SqlExpr {
 export class Db<S extends SchemaDef = SchemaDef> {
   /** Tables read or written during this Db's lifetime. */
   readonly touched = new Set<string>();
-  /** Tasks enqueued by declarative triggers during this Db's lifetime — the DO adds
+  /** Tasks enqueued by declarative triggers during this Db's lifetime. The DO adds
    * this to ctx.tasks enqueues to decide whether to arm its drain alarm. */
   private taskEnqueueCount = 0;
   get taskEnqueues(): number {
@@ -239,7 +239,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
 
   /** Partition guard. When this Db's context carries an active partition (a
    * partition-DO knows which partition it serves), reject any access to a table
-   * that lives in a different partition — a partition-DO only owns its own tables,
+   * that lives in a different partition: a partition-DO only owns its own tables,
    * so touching another partition's table is a routing bug, not an empty result.
    * Unset partition (the D1/Worker shared-store path, or a single-partition app on
    * the default DO with no header) makes this a no-op. */
@@ -299,7 +299,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
    * and the keyset cursor would otherwise expose a hidden column's values). Columns
    * granted only conditionally are NOT orderable. */
   private assertReadableCols(from: string, scope: Scope, cols: string[]): void {
-    // Hidden columns are never readable through the ORM — not orderable either,
+    // Hidden columns are never readable through the ORM, and not orderable either,
     // regardless of scope (else the order/keyset cursor leaks the hidden value).
     const hidden = new Set(this.hiddenColsOf(from));
     for (const c of cols) if (hidden.has(c)) throw new AclDenied(from, "read", c);
@@ -409,7 +409,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
       }
     }
 
-    // Hidden columns are never readable through the ORM — reject group-by / aggregating
+    // Hidden columns are never readable through the ORM, so reject group-by / aggregating
     // them UNCONDITIONALLY (independent of scope.fields, which is null under full/SYSTEM
     // read), else min/max/groupBy over a hidden column exposes its values.
     const hiddenCols = new Set(this.hiddenColsOf(from));
@@ -439,7 +439,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
     const where = scope.where ? and(userExpr, scope.where) : userExpr;
     // A relation-traversal `where` (or a relation-traversing ACL scope) compiles to a
     // `sub` node over another table. Record those tables in `touched` so the live-query
-    // layer re-checks the subscription when the traversed table changes — else a write
+    // layer re-checks the subscription when the traversed table changes, since otherwise a write
     // there never intersects the sub's read-set and the client stays stale.
     this.addTouchedTables(where);
     return where;
@@ -467,8 +467,8 @@ export class Db<S extends SchemaDef = SchemaDef> {
   /** Reject a user `where` that filters on a column the caller cannot read (closes
    * the same info-leak as ordering by a hidden column: a filter is an oracle for a
    * hidden field's values). Mirrors `assertReadableCols`. Relation keys are skipped
-   * here — they're filtered through the TARGET's read scope in acl.relationPredicate
-   * — and AND/OR groups recurse. Operator objects (`{ gt: … }`) sit under the column
+   * here: they're filtered through the TARGET's read scope in acl.relationPredicate
+   *, and AND/OR groups recurse. Operator objects (`{ gt: … }`) sit under the column
    * key, so checking the top-level keys is sufficient. */
   private assertReadableWhere(from: string, scope: Scope, where: unknown): void {
     if (scope.fields === null || where == null || typeof where !== "object") return;
@@ -526,15 +526,15 @@ export class Db<S extends SchemaDef = SchemaDef> {
     for (const c of cols) if (!allowed.has(c)) throw new AclDenied(from, "read", c);
   }
 
-  /** The columns to SELECT for a read over `from` under `scope` — replacing `SELECT *`,
+  /** The columns to SELECT for a read over `from` under `scope`, replacing `SELECT *`,
    * which fetches every column (wide `json`/`text` + `hidden()`) and drops them in JS,
    * paying full RPC cost on the D1 path. Names exactly what can surface:
    *   - the visible field set: an explicit `select`, else the base readable fields ∪ every
    *     conditional-`when` field, else all non-hidden columns when the scope is
    *     unrestricted (fields === null) or a field-resolver (fieldsFn) may expose anything;
-   *   - PLUS the columns the machinery needs regardless of visibility — the PK (identity /
+   *   - PLUS the columns the machinery needs regardless of visibility: the PK (identity /
    *     relation grouping / cursor), the order-by columns, each eager-loaded relation's
-   *     parent-side join column, and any cell-`when` input columns — some of which the
+   *     parent-side join column, and any cell-`when` input columns, some of which the
    *     caller can't read; they're fetched, used, then stripped by projectRow/stripHidden
    *     before return.
    * Returns undefined (→ `SELECT *`) only for a schemaless/unknown table. */
@@ -544,7 +544,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
     opts: { select?: readonly string[]; orderBy?: OrderBy[]; withSel?: Selected } = {},
   ): readonly string[] | undefined {
     const all = this.allColsOf(from);
-    if (all.length === 0) return undefined; // unknown schema — leave as SELECT *
+    if (all.length === 0) return undefined; // unknown schema, so leave as SELECT *
     const hidden = new Set(this.hiddenColsOf(from));
 
     let visible: string[];
@@ -584,7 +584,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
       .map(([n]) => n);
   }
 
-  /** Boolean columns — stored as INTEGER 0/1 (SQLite has no boolean), decoded back to
+  /** Boolean columns, stored as INTEGER 0/1 (SQLite has no boolean), decoded back to
    * true/false on read so handlers see the `boolean` the InferRow type promises. */
   private boolColsOf(table: string): string[] {
     const fields = this.schema[table]?.fields;
@@ -594,7 +594,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
       .map(([n]) => n);
   }
 
-  /** Columns marked `hidden()` — never projected on an ORM read (even SYSTEM/full). */
+  /** Columns marked `hidden()`, never projected on an ORM read (even SYSTEM/full). */
   private hiddenColsOf(table: string): string[] {
     const fields = this.schema[table]?.fields;
     if (!fields) return [];
@@ -614,11 +614,11 @@ export class Db<S extends SchemaDef = SchemaDef> {
 
   /** Fire declarative write-triggers for `op` on `entity`: enqueue a task per matching
    * trigger into the outbox, in THIS mutation's transaction (atomic with the write).
-   * `row` is the affected row (decoded — new values for create/update, the removed row
+   * `row` is the affected row (decoded: new values for create/update, the removed row
    * for delete); `writtenCols` are the columns the write touched; `before` is the prior
    * row (update only) for value-change detection on a field-filtered trigger.
    *
-   * - Hidden columns are STRIPPED from the payload row — `hidden()` ("never readable via
+   * - Hidden columns are STRIPPED from the payload row. `hidden()` ("never readable via
    *   the ORM, even under SYSTEM") must hold here too, or a secret like passwordHash
    *   would leak to a task handler / webhook.
    * - A field-filtered update trigger fires only when a watched column's value actually
@@ -650,7 +650,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
   }
 
   /** Mint a UUID for every `generated()` uuid column the caller omitted, mutating
-   * `vals`. Returns the columns it filled — server-minted, so the insert path treats
+   * `vals`. Returns the columns it filled: server-minted, so the insert path treats
    * them like forced `set` values (bypassing the writable-field ACL check). */
   private fillGeneratedUuids(table: string, vals: Row): string[] {
     const fields = this.schema[table]?.fields;
@@ -764,7 +764,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
     const scope = this.acl.system ? ALLOW_ALL : resolveRelationScope(this.acl, parentEntity, relName, rel.target);
     if (!scope.allowed) throw new AclDenied(rel.target, "read");
 
-    // Strip hidden() columns from the relation load, like every other read path —
+    // Strip hidden() columns from the relation load, like every other read path:
     // projectRow alone keeps them under a full/allow()/SYSTEM scope (fields === null).
     const project = (row: Row): Row => this.stripHidden(rel.target, projectRow(row, effectiveFields(scope, row, this.acl.identity)));
     // One IN query per relation (no N+1). Match column before projecting (which
@@ -788,7 +788,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
       for (const { key, row } of await fetchBy(this.pkOf(rel.target), keys)) byId.set(key, row);
       for (const r of rows) r[relName] = r[rel.column] != null ? (byId.get(r[rel.column]) ?? null) : null;
     } else if (rel.kind === "oneHasOneInverse") {
-      // inverse 1:1 — target[column] -> parent.<pk>, single object (or null)
+      // inverse 1:1: target[column] -> parent.<pk>, single object (or null)
       const pk = this.pkOf(parentEntity);
       const ids = [...new Set(rows.map((r) => r[pk]).filter((v) => v != null))];
       const byParent = new Map<unknown, Row>();
@@ -796,7 +796,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
       for (const r of rows) r[relName] = byParent.get(r[pk]) ?? null;
     } else if (rel.kind === "manyToMany") {
       // parent.<pk> -> junction(sourceColumn -> targetColumn) -> target.<pk>. The junction
-      // is read for just its two link columns (its own ACL isn't applied — like hasMany's
+      // is read for just its two link columns (its own ACL isn't applied, like hasMany's
       // intermediate); the target rows ARE scope-filtered by fetchBy, so an unreadable
       // target simply drops out of the list.
       const pk = this.pkOf(parentEntity);
@@ -825,7 +825,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
       }
       for (const r of rows) r[relName] = grouped.get(r[pk]) ?? [];
     } else {
-      // hasMany: target[column] -> parent.<pk> (NOT hardcoded `id` — a parent keyed by
+      // hasMany: target[column] -> parent.<pk> (NOT hardcoded `id`, since a parent keyed by
       // slug/username would otherwise join on an undefined `r.id` and get []).
       const pk = this.pkOf(parentEntity);
       const ids = [...new Set(rows.map((r) => r[pk]).filter((v) => v != null))];
@@ -954,13 +954,13 @@ export class Db<S extends SchemaDef = SchemaDef> {
     return deleted != null;
   }
 
-  /** Escape hatch — raw SQL, NOT ACL-checked. For system/internal use only. */
+  /** Escape hatch: raw SQL, NOT ACL-checked. For system/internal use only. */
   async exec(sql: string, ...params: CellValue[]): Promise<Row[]> {
     return this.driver.exec(sql, params.map((p) => this.dialect.encode(p)));
   }
 
   // RETURNING is supported on SQLite/Postgres; a dialect without it (MySQL) would
-  // need an insert-then-select-back path — not implemented in this spike.
+  // need an insert-then-select-back path, not implemented in this spike.
   private returningClause(cols: string): string {
     return this.dialect.returning ? ` RETURNING ${cols}` : "";
   }

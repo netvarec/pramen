@@ -1,8 +1,8 @@
-// System roles — the invariant that makes a `__`-prefixed `auth` gate mean anything.
+// System roles: the invariant that makes a `__`-prefixed `auth` gate mean anything.
 //
 // A handler that must be reachable by the server and by NOBODY else names a private role and
 // has `callPrivileged` present it (`@pramen/auth`'s OIDC user upsert, `@pramen/analytics`'s
-// event ingest). That is only a gate if the role cannot arrive from outside — and it very
+// event ingest). That is only a gate if the role cannot arrive from outside, and it very
 // nearly could not be guaranteed: `toIdentity` copies the `roles` claim verbatim, and on the
 // verify-only (BYO-IdP) path that claim is written entirely by someone else's directory. A
 // group named `__oidc_system` would have been enough to reach a handler that writes arbitrary
@@ -48,7 +48,7 @@ describe("a verified token can never carry one", () => {
 
   // Dropped, not rejected: a colliding directory group is far likelier than an attack, and
   // failing the token would be a denial of service someone else's naming could trigger.
-  test("the token still authenticates — the role is dropped, the session is not", async () => {
+  test("the token still authenticates: the role is dropped, the session is not", async () => {
     const identity = await identityFor({ sub: "mallory", roles: [OIDC_SYSTEM_ROLE] });
     expect(identity).not.toBeNull();
     expect(identity?.userId).toBe("mallory");

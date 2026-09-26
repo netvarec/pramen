@@ -1,4 +1,4 @@
-// makeWorker(app) — builds the stateless HTTP front door bound to an app. It
+// makeWorker(app): builds the stateless HTTP front door bound to an app. It
 // authenticates the request, authorizes the tenant, and routes /rpc/<handler> and
 // /live to the per-tenant Durable Object, plus the /files/* route and admin
 // endpoints (/tenants, /admin/recover, /admin/schema). createPramen() pairs the
@@ -29,12 +29,12 @@ import type { PramenApp } from "./pramen";
 
 /** Widen the closed `Env` interface to the open `EnvBag` handlers and services see.
  * Spreading yields an anonymous object type, which TypeScript gives an implicit index
- * signature — so this needs no type assertion. */
+ * signature, so this needs no type assertion. */
 const envBag = (env: Env): EnvBag => ({ ...env });
 
 export interface Env {
   PRAMEN: DurableObjectNamespace;
-  /** Project KV — tenant registry (`tenant:` keys) + handler ctx.kv (`app:` keys). */
+  /** Project KV: tenant registry (`tenant:` keys) + handler ctx.kv (`app:` keys). */
   KV: KVNamespace;
   /** HMAC secret for verifying HS256 bearer JWTs. Dev value in wrangler.jsonc;
    * production via `wrangler secret put AUTH_SECRET`. Ignored if JWKS_URL is set. */
@@ -52,7 +52,7 @@ export interface Env {
   /** Optional required issuer. When set, a token's `iss` must equal this exactly.
    * Unset ⇒ `iss` is not checked. */
   AUTH_ISSUER?: string;
-  /** D1 binding. Enables the "Worker + D1 (no DO)" path — the same schema/ACL/read
+  /** D1 binding. Enables the "Worker + D1 (no DO)" path: the same schema/ACL/read
    * engine over D1 instead of a Durable Object. Selected per-request via
    * `x-pramen-store: d1`. RPC only (live queries need the DO). */
   DB?: D1Database;
@@ -76,12 +76,12 @@ export interface Env {
    * commingle. Only set this if the app genuinely single-tenants that D1 (or has added
    * its own tenant isolation). */
   PRAMEN_D1_ALLOW_MULTITENANT?: string;
-  /** Cloudflare Queues producer binding for ctx.queue (declared in oblaka.ts). Optional —
+  /** Cloudflare Queues producer binding for ctx.queue (declared in oblaka.ts). Optional:
    * ctx.queue discovers any producer binding by name; this just types the common one. */
   JOBS?: QueueProducerBinding;
 }
 
-/** The secret used to sign/verify file tokens — a dedicated FILES_SECRET if set,
+/** The secret used to sign/verify file tokens: a dedicated FILES_SECRET if set,
  * else AUTH_SECRET (so HS256 setups work out of the box). */
 const filesSecret = (env: Env): string => env.FILES_SECRET || env.AUTH_SECRET;
 
@@ -91,12 +91,12 @@ const filesSecret = (env: Env): string => env.FILES_SECRET || env.AUTH_SECRET;
 const D1_BOOKMARK_HEADER = "x-pramen-d1-bookmark";
 
 /** Decide whether an /rpc request runs on the D1 store. **Live queries ALWAYS use the
- * DO** (they need a single writer + a socket host), regardless of header or default —
+ * DO** (they need a single writer + a socket host), regardless of header or default,
  * so enabling `PRAMEN_STORE=d1` never silently breaks `/live`. Otherwise an explicit
  * `x-pramen-store` header wins (`d1`/`do`), then the `PRAMEN_STORE` default. Pure +
  * exported for unit testing. */
 export function useD1Store(opts: { storeHeader: string | null; isLive: boolean; defaultStore: string | undefined }): boolean {
-  if (opts.isLive) return false; // live is DO-only — never the D1 path
+  if (opts.isLive) return false; // live is DO-only, never the D1 path
   if (opts.storeHeader === "d1") return true;
   if (opts.storeHeader === "do") return false;
   return opts.defaultStore === "d1";
@@ -104,22 +104,22 @@ export function useD1Store(opts: { storeHeader: string | null; isLive: boolean; 
 
 /** How long the D1 boot may go without completing a statement before an awaiter treats it
  * as orphaned and starts its own (GitHub #51). 30 s is the platform's `waitUntil` cap after
- * a response or a disconnect — the point past which a boot's starter can no longer be
- * keeping it alive — and comfortably above any single D1 statement a bounded migration
+ * a response or a disconnect: the point past which a boot's starter can no longer be
+ * keeping it alive, and comfortably above any single D1 statement a bounded migration
  * should issue. Measured from the last STATEMENT, not from the boot's start, so a slow but
  * live boot (a table rebuild followed by a backfill) is never mistaken for a dead one. */
 export const D1_BOOT_STALE_MS = 30_000;
 
 /** Should we warn that no Cron trigger seems to be wired?
  *
- * The DO store self-drains via an alarm; the D1 store has none, so a DELAYED task — a
- * scheduled publish, a retry backoff — runs only when a Cron trigger calls
+ * The DO store self-drains via an alarm; the D1 store has none, so a DELAYED task (a
+ * scheduled publish, a retry backoff) runs only when a Cron trigger calls
  * `createPramen().scheduled`. Forgetting that is silent: the row simply never goes live,
  * and nothing anywhere says why.
  *
  * A request-tail drain that leaves something due in the FUTURE is exactly the situation
  * that depends on the cron, so it is the moment to say so. Once a cron actually fires, the
- * question is settled and we never warn again. Exported for tests — the decision is pure. */
+ * question is settled and we never warn again. Exported for tests: the decision is pure. */
 export function shouldWarnMissingCron(opts: { cronSeen: boolean; warned: boolean; nextRunAt: number | null; now: number }): boolean {
   if (opts.cronSeen || opts.warned) return false;
   return opts.nextRunAt != null && opts.nextRunAt > opts.now;
@@ -161,7 +161,7 @@ function withCors(res: Response, cors: Record<string, string>): Response {
 /** Resolve the Durable Object stub for a `(tenant, partition)`. The DO name comes from
  * `partitionDoName`, so routing and the registry stay in lockstep: it returns the BARE
  * `tenant` for the default partition (so `idFromName(tenant)` is byte-for-byte unchanged
- * — backward-compat) and `${tenant}:${partition}` for any other partition. */
+ * for backward-compat) and `${tenant}:${partition}` for any other partition. */
 function partitionStubFor(env: Env, tenant: string, partition: string = DEFAULT_PARTITION): DurableObjectStub {
   // Fail with a clear message rather than a cryptic `Cannot read 'get' of undefined`
   // when the Durable Object isn't bound (e.g. a D1-only deployment that fell through to
@@ -177,7 +177,7 @@ function partitionStubFor(env: Env, tenant: string, partition: string = DEFAULT_
 
 /** Forward a privileged mutation into a tenant's DO from a public route. The
  * synthetic identity (default `["admin"]`) is trusted because the call originates
- * in the Worker — the same internal mechanism the admin endpoints use. Returns the
+ * in the Worker: the same internal mechanism the admin endpoints use. Returns the
  * DO's JSON response (`{ ok, result }` / `{ ok: false, … }`). */
 export async function callPrivileged(
   env: Env,
@@ -206,7 +206,7 @@ export function makeWorker(app: PramenApp) {
   // JwksStrategy caches fetched public keys, so keep one instance per isolate (keyed
   // by URL) rather than rebuilding it per request. HmacStrategy is stateless.
   let jwks: JwksStrategy | undefined;
-  // Opt-in claim validation from env — default OFF (unset) so existing tokens keep
+  // Opt-in claim validation from env, default OFF (unset) so existing tokens keep
   // verifying. Threaded into whichever strategy the deployment uses.
   const verifyOptsFor = (env: Env): VerifyOptions => ({
     requireExp: env.AUTH_REQUIRE_EXP === "true",
@@ -227,7 +227,7 @@ export function makeWorker(app: PramenApp) {
   // stored schema hash thereafter); a failed run is not cached.
   const d1Acl = compileAcl(app.acl ?? []);
 
-  // Converge code-defined reference data on the D1 path — the mirror of the DO's
+  // Converge code-defined reference data on the D1 path: the mirror of the DO's
   // runBootstrap(), run once per isolate after migration. D1 is a single shared store (no
   // partition split), so every reconciler runs under the default partition. SYSTEM-scoped
   // Db (ACL bypassed), triggers suppressed; a failing reconciler is logged, never fatal.
@@ -246,19 +246,19 @@ export function makeWorker(app: PramenApp) {
 
   // The mirror of the DO's runDataMigrations() for the D1 store, run once per isolate after
   // migration. It diverges in one deliberate way: it runs EVERY declared migration whatever
-  // partition it names, because D1 is ONE shared database with no partition split — every
+  // partition it names, because D1 is ONE shared database with no partition split: every
   // entity's table lives in it, so a migration declared for "audit" has real rows to touch
   // here and would otherwise be permanently unrunnable on this store. Each is still recorded
   // under its OWN declared partition key, so a ledger read is comparable across stores.
   //
   // Errors are NOT swallowed (unlike runBootstrapD1): a rejected boot clears the shared
   // memo (`SharedBoot`), so a failed migration fails this request and is retried on the
-  // next one — the same fail-closed contract as the DO path.
+  // next one, the same fail-closed contract as the DO path.
   //
   // ATOMICITY CAVEAT: D1's `transaction(fn)` is `fn()` (no interactive transactions), so
   // here the claim and the work do NOT commit together. The runner claims the ledger row
   // before running (which is what keeps two cold isolates from both applying the same
-  // backfill — the boot memo is per-isolate and there is no single writer) and releases it on a
+  // backfill, since the boot memo is per-isolate and there is no single writer) and releases it on a
   // throw, so a failed migration leaves partial writes and re-runs. Write SQL that tolerates
   // that (`WHERE col IS NULL`) when the D1 store is in play.
   const runDataMigrationsD1 = async (driver: Driver): Promise<void> => {
@@ -266,13 +266,13 @@ export function makeWorker(app: PramenApp) {
     if (!migrations?.length) return;
     const db = new Db(driver, { acl: d1Acl, identity: { roles: ["admin"] }, system: true, schema: app.schema, suppressTriggers: true }, app.schema);
     await runDataMigrations(driver, migrations, {
-      // No `partition` — see the "runs every declared migration" note above.
+      // No `partition`: see the "runs every declared migration" note above.
       makeContext: (partition) => ({ db, driver, schema: app.schema, partition }),
     });
   };
 
   /** Partitions an admin route may address: the schema's, the default (always addressable),
-   * and any a data migration declares. Computed once — the app is static. */
+   * and any a data migration declares. Computed once, since the app is static. */
   let knownPartitionsCache: Set<string> | undefined;
   const knownPartitions = (): Set<string> => {
     if (!knownPartitionsCache) {
@@ -286,7 +286,7 @@ export function makeWorker(app: PramenApp) {
    * cannot drift on migration, bootstrap, the multi-tenant guard or the outbox drain.
    *
    * Returns the `{ ok, result }` envelope rather than a Response so each caller can add
-   * what only it needs — CORS and the session bookmark for a request, nothing for an
+   * what only it needs: CORS and the session bookmark for a request, nothing for an
    * internal call. */
   const dispatchD1 = async (
     env: Env,
@@ -297,7 +297,7 @@ export function makeWorker(app: PramenApp) {
     // Same COMMINGLING GUARD as the request path: shared D1 has no tenant column, so a
     // non-`main` tenant would mix rows unless the operator opted in explicitly.
     if (opts.tenant !== "main" && env.PRAMEN_D1_ALLOW_MULTITENANT !== "true") {
-      throw new Forbidden(`D1 store for tenant '${opts.tenant}' (shared D1 has no tenant isolation — set PRAMEN_D1_ALLOW_MULTITENANT=true to allow)`);
+      throw new Forbidden(`D1 store for tenant '${opts.tenant}' (shared D1 has no tenant isolation; set PRAMEN_D1_ALLOW_MULTITENANT=true to allow)`);
     }
     const driver = new D1Driver(env.DB, { start: opts.start });
     const files = createFiles({ tenant: opts.tenant, secret: filesSecret(env), adapter: new R2Adapter(env.FILES) });
@@ -319,7 +319,7 @@ export function makeWorker(app: PramenApp) {
       // D1 has no interactive transactions, so `transaction(fn)` runs `fn` as-is and a
       // mutation that throws midway keeps whatever it already wrote. Say so: a partially
       // applied mutation looks exactly like an ordinary 500 in the logs, and the difference
-      // — data left in a state no code path intended — is the whole point.
+      // (data left in a state no code path intended) is the whole point.
       const written = driver.writtenCount();
       if (written > 0) {
         console.error(
@@ -340,7 +340,7 @@ export function makeWorker(app: PramenApp) {
   // is a SharedBoot rather than a bare memoized promise because of GitHub #51: the first
   // request after a deploy carrying a table rebuild legitimately ran past the caller's
   // 15 s ceiling, the caller disconnected, the Workers runtime canceled that invocation's
-  // pending I/O — and a promise chained on canceled I/O never settles. Not rejects: never
+  // pending I/O, and a promise chained on canceled I/O never settles. Not rejects: never
   // settles. The memo then wedged every later fetch in that isolate for its lifetime
   // (0 ms CPU, no logs, "canceled" at whatever timeout the caller had), while crons in
   // another isolate stayed healthy. See `runtime/boot.ts` for the two defenses.
@@ -375,7 +375,7 @@ export function makeWorker(app: PramenApp) {
     );
 
   // A privileged, system-scoped context for running task handlers on the D1 (Worker)
-  // path — mirrors the DO's taskCtx. No live socket, so no DO; drained by a Cron / the
+  // path, mirroring the DO's taskCtx. No live socket, so no DO; drained by a Cron / the
   // /admin/tasks/drain route, never a DO alarm.
   const d1TaskCtx = (driver: Driver, env: Env): HandlerContext => {
     const identity: Identity = { roles: ["admin"] };
@@ -384,11 +384,11 @@ export function makeWorker(app: PramenApp) {
     const kv = new Kv(env.KV);
     const bag = envBag(env);
     // The D1 store is not per-tenant addressed (one shared database, no DO), so the
-    // task context runs as the default tenant — matching the `files` scope just above.
+    // task context runs as the default tenant, matching the `files` scope just above.
     return { db, kv, files, env: bag, identity, tenant: "main", store: "d1", tasks: tasksFacade(driver), mail: createMail(bag, kv), queue: createQueue(bag) };
   };
 
-  /** Drain the D1 outbox in the Worker (no DO/alarm on this path) — called by the
+  /** Drain the D1 outbox in the Worker (no DO/alarm on this path). Called by the
    * /admin/tasks/drain route with `x-pramen-store: d1`, and by `scheduled()` (Cron). */
   // Whether a Cron trigger has ever driven a drain in this isolate, and whether we have
   // already said it looks missing. See `shouldWarnMissingCron`.
@@ -398,7 +398,7 @@ export function makeWorker(app: PramenApp) {
   const drainD1 = async (env: Env, source: "request" | "cron" | "admin" = "request", ctx?: ExecutionContext): Promise<unknown> => {
     if (!env.DB) throw new Error("D1 store is not configured");
     if (source === "cron") cronSeen = true;
-    // The drain reads due tasks then writes their status — pin the primary so it sees
+    // The drain reads due tasks then writes their status, so pin the primary so it sees
     // and updates current outbox state (not a lagging replica).
     const driver = new D1Driver(env.DB, { start: "first-primary" });
     await ensureD1Migrated(driver, env, ctx);
@@ -418,7 +418,7 @@ export function makeWorker(app: PramenApp) {
 
   const listD1Tasks = async (env: Env, ctx: ExecutionContext, status?: string, limit?: number): Promise<unknown> => {
     if (!env.DB) throw new Error("D1 store is not configured");
-    // Inspection listing — pin the primary so it reflects current outbox state.
+    // Inspection listing: pin the primary so it reflects current outbox state.
     const driver = new D1Driver(env.DB, { start: "first-primary" });
     await ensureD1Migrated(driver, env, ctx);
     return listTasks(driver, { status, limit });
@@ -430,14 +430,14 @@ export function makeWorker(app: PramenApp) {
    *
    * Strictly READ-ONLY: deliberately NOT ensureD1Migrated / ensureMigrationsTable. Booting
    * the store here would apply every pending backfill as a side effect of asking about them,
-   * so `migrations status` could never report PENDING — which is the only question the
+   * so `migrations status` could never report PENDING, which is the only question the
    * command exists to answer. An absent ledger table is simply "none applied". */
   const listD1Migrations = async (env: Env, tenant: string, partition: string): Promise<unknown> => {
     if (!env.DB) throw new BadRequest("D1 store is not configured");
     // The same COMMINGLING GUARD as every other D1 entry point: one shared database with no
     // tenant column, so reporting it as some specific tenant's ledger requires the opt-in.
     if (tenant !== "main" && env.PRAMEN_D1_ALLOW_MULTITENANT !== "true") {
-      throw new Forbidden(`D1 store for tenant '${tenant}' (shared D1 has no tenant isolation — set PRAMEN_D1_ALLOW_MULTITENANT=true to allow)`);
+      throw new Forbidden(`D1 store for tenant '${tenant}' (shared D1 has no tenant isolation; set PRAMEN_D1_ALLOW_MULTITENANT=true to allow)`);
     }
     const driver = new D1Driver(env.DB, { start: "first-primary" });
     const rows = await appliedMigrations(driver, partition).catch(() => []);
@@ -449,27 +449,27 @@ export function makeWorker(app: PramenApp) {
     const url = new URL(request.url);
 
     // File upload/download stream through the Worker (bytes never touch the DO),
-    // authorized purely by the HMAC token in the url — no JWT/tenant routing.
+    // authorized purely by the HMAC token in the url, with no JWT/tenant routing.
     if (url.pathname.startsWith("/files/")) {
       const res = await handleFileRequest(request, { adapter: new R2Adapter(env.FILES), secret: filesSecret(env) });
       if (res) return res;
     }
 
     // Public media serving: `GET /media/<tenant>/media/<key>` streams a CMS media blob
-    // from R2 (cache-friendly, no auth — published-site assets are public). Put Cloudflare
+    // from R2 (cache-friendly, no auth, since published-site assets are public). Put Cloudflare
     // Image Resizing (/cdn-cgi/image) in front for transforms. Restricted to media keys.
     if (url.pathname.startsWith("/media/") && env.FILES) {
       const res = await handleMediaRequest(request, { adapter: new R2Adapter(env.FILES) });
       if (res) return res;
     }
 
-    // Public (pre-auth) routes — matched before identity resolution, so a
+    // Public (pre-auth) routes, matched before identity resolution, so a
     // signature-authed webhook can live outside the JWT-gated /rpc surface.
     for (const r of app.routes ?? []) {
       if (request.method === r.method && url.pathname === r.path) {
         // A public route has no ctx.db, so it reaches a handler through here. On the D1
-        // store there is no Durable Object to forward to — the engine runs in THIS Worker
-        // — so dispatch locally instead. Without this, everything built on a pre-auth
+        // store there is no Durable Object to forward to: the engine runs in THIS Worker
+        //, so dispatch locally instead. Without this, everything built on a pre-auth
         // route (a signed preview link, the sitemap) was DO-only, and the CMS had to
         // refuse to mint preview links on D1 rather than hand out a dead one.
         const routeCtx = {
@@ -528,9 +528,9 @@ export function makeWorker(app: PramenApp) {
     // Hard revocation (deactivate / delete / compromise), independent of token TTL: a
     // revoked `sub` is on the KV denylist (written by @pramen/auth's setUserActive(false)
     // / deleteUser, self-expiring at the session TTL). Check it HERE, at identity-resolution
-    // time — before the DO proxy AND the D1 store path, and before the admin routes — so it
+    // time, before the DO proxy AND the D1 store path, and before the admin routes, so it
     // covers HTTP and the WebSocket upgrade alike. A denied token fails CLOSED (401); we do
-    // NOT silently downgrade to anonymous — a revoked user should see a clear auth failure.
+    // NOT silently downgrade to anonymous: a revoked user should see a clear auth failure.
     // Synthetic identities (callPrivileged) never pass through here, so they're unaffected.
     const sub = typeof identity?.userId === "string" ? identity.userId : undefined;
     if (sub && (await isSessionDenied(new Kv(env.KV), sub))) {
@@ -573,14 +573,14 @@ export function makeWorker(app: PramenApp) {
     }
 
     // --- admin: which data migrations a tenant has applied. The fleet-wide "is it safe to
-    // prune this id?" signal — a cold tenant is unmigrated until touched, so nothing else
+    // prune this id?" signal: a cold tenant is unmigrated until touched, so nothing else
     // can answer it. `x-pramen-store: d1` reads the Worker's shared ledger instead. ---
     if (url.pathname === "/admin/migrations") {
       if (!isAdmin(identity)) return withCors(forbidden("migrations"), cors);
       const partition = url.searchParams.get("partition") || DEFAULT_PARTITION;
       const tenant = url.searchParams.get("tenant") ?? "main";
       // `partition` is caller-supplied and reaches partitionStubFor, which INSTANTIATES a
-      // DO — the same reason /live validates it: without this an admin typo mints a junk DO
+      // DO, the same reason /live validates it: without this an admin typo mints a junk DO
       // and a permanent registry key for a partition nothing lives in. A migration may
       // declare a partition of its own, so accept those too.
       if (!knownPartitions().has(partition)) return withCors(badRequest(`unknown partition '${partition}'`), cors);
@@ -603,7 +603,7 @@ export function makeWorker(app: PramenApp) {
 
     // --- admin: generic data ops over a tenant's tables (browse/edit any row).
     // Body: { tenant, table, op: list|get|create|update|delete|count, ... }. Runs
-    // in the DO under SYSTEM scope (ACL bypassed) — gated to admins here. ---
+    // in the DO under SYSTEM scope (ACL bypassed), gated to admins here. ---
     if (url.pathname === "/admin/data" && request.method === "POST") {
       if (!isAdmin(identity)) return forbidden("data");
       const body = (await request.json().catch(() => ({}))) as { tenant?: unknown; partition?: unknown };
@@ -679,7 +679,7 @@ export function makeWorker(app: PramenApp) {
 
     if (!isRpc && !(isLive && isWs)) {
       return new Response(
-        "pramen — POST /rpc/<handler> (JSON body), or WebSocket /live for live queries. " +
+        "pramen: POST /rpc/<handler> (JSON body), or WebSocket /live for live queries. " +
           "Header X-Pramen-Tenant selects the store (default: main). " +
           "Admin (optional partition selects the partition DO, default: " + DEFAULT_PARTITION + "): " +
           "GET /tenants, POST /admin/recover {tenant,timestamp,partition?}, GET /admin/schema?tenant=&partition=, " +
@@ -696,7 +696,7 @@ export function makeWorker(app: PramenApp) {
     // --- Worker + D1 (no DO): the same schema/ACL/read engine over a D1 binding.
     // Selected per-request via `x-pramen-store: d1`, OR as the app-wide default when
     // PRAMEN_STORE=d1 (the header still overrides: `x-pramen-store: do` forces the DO).
-    // RPC only — live queries need the DO (single writer + a socket host). This proof
+    // RPC only: live queries need the DO (single writer + a socket host). This proof
     // uses ONE shared D1 database across tenants; a real product would add a tenant
     // column or a per-tenant DB.
     const storeHeader = req.headers.get("x-pramen-store");
@@ -705,23 +705,23 @@ export function makeWorker(app: PramenApp) {
       if (!env.DB) return badRequest("D1 store is not configured");
       // COMMINGLING GUARD: this D1 path is ONE shared database with no tenant column, so
       // every tenant's rows live together. Selecting it for a non-`main` tenant (a
-      // multi-tenant scenario) would leak/mix tenants — and `PRAMEN_STORE=d1` makes it a
+      // multi-tenant scenario) would leak/mix tenants, and `PRAMEN_STORE=d1` makes it a
       // silent global default. Fail closed unless the operator explicitly opts in.
       if (tenant !== "main" && env.PRAMEN_D1_ALLOW_MULTITENANT !== "true") {
         return withCors(
-          forbidden(`D1 store for tenant '${tenant}' (shared D1 has no tenant isolation — set PRAMEN_D1_ALLOW_MULTITENANT=true to allow)`),
+          forbidden(`D1 store for tenant '${tenant}' (shared D1 has no tenant isolation; set PRAMEN_D1_ALLOW_MULTITENANT=true to allow)`),
           cors,
         );
       }
-      // (isLive is excluded by useD1Store — live always routes to the DO below.)
+      // (isLive is excluded by useD1Store: live always routes to the DO below.)
       const name = url.pathname.replace(/^\/rpc\//, "");
-      // The RPC body is JSON — parse it into the domain type once, here at the boundary.
+      // The RPC body is JSON, so parse it into the domain type once, here at the boundary.
       let input: JsonValue = null;
       if (request.method === "POST") input = ((await request.json().catch(() => null)) ?? null) as JsonValue;
 
       // Pick where the D1 session may start its first read. A mutation ALWAYS pins the
       // primary (`first-primary` is a superset of read-your-writes) so a read-modify-write
-      // can't run off a lagging replica — an inbound bookmark must not widen that window.
+      // can't run off a lagging replica, and an inbound bookmark must not widen that window.
       // A query honors a client-supplied bookmark (read-your-writes), else the nearest replica.
       const inboundBookmark = req.headers.get(D1_BOOKMARK_HEADER);
       const kind = app.handlers[name]?.kind;
@@ -754,7 +754,7 @@ export function makeWorker(app: PramenApp) {
       partition = app.handlers[name]?.partition ?? DEFAULT_PARTITION;
     } else {
       // /live's partition is client-supplied (?partition= / x-pramen-partition), so
-      // validate it against the schema's known partitions BEFORE routing — otherwise an
+      // validate it against the schema's known partitions BEFORE routing, since otherwise an
       // anonymous caller could spin up unbounded junk DOs + permanent registry KV keys.
       partition = req.headers.get("x-pramen-partition") || DEFAULT_PARTITION;
       if (!partitionsOf(app.schema).includes(partition)) {
@@ -763,7 +763,7 @@ export function makeWorker(app: PramenApp) {
     }
 
     // Forward a trusted identity to the DO (the DO never re-derives it). Also set the
-    // tenant header so the DO learns its own name — without it, `main` (the default when
+    // tenant header so the DO learns its own name: without it, `main` (the default when
     // the client omits x-pramen-tenant) never registers and re-runs its guard forever.
     const headers = new Headers(req.headers);
     if (identity) headers.set("x-pramen-identity", JSON.stringify(identity as Identity));
@@ -771,7 +771,7 @@ export function makeWorker(app: PramenApp) {
     headers.set("x-pramen-tenant", tenant);
     headers.set("x-pramen-partition", partition);
 
-    // Routed to the DO but no DO is bound — return a clear, actionable error instead of
+    // Routed to the DO but no DO is bound: return a clear, actionable error instead of
     // crashing the whole RPC surface. (A D1-only deployment should pin the D1 store with
     // the `x-pramen-store: d1` header; the `PRAMEN_STORE` env default can be dropped by
     // some adapters' env proxies, so the header is the reliable way to pin it.)
@@ -780,7 +780,7 @@ export function makeWorker(app: PramenApp) {
         badRequest(
           isLive
             ? "live queries require a Durable Object, but no PRAMEN binding is configured"
-            : "no Durable Object (PRAMEN) is bound — pin the D1 store with the 'x-pramen-store: d1' header (or bind the DO)",
+            : "no Durable Object (PRAMEN) is bound. Pin the D1 store with the 'x-pramen-store: d1' header (or bind the DO)",
         ),
         cors,
       );

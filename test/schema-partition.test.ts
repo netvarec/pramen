@@ -1,4 +1,4 @@
-// Unit test for entity partitions — `Entity(..., { partition })` and the
+// Unit test for entity partitions: `Entity(..., { partition })` and the
 // partitionOf / partitionsOf / entitiesInPartition helpers that the migrator/admin
 // use to group tables per Durable Object class.
 

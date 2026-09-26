@@ -1,6 +1,6 @@
 // Real foreign keys on a belongsTo that declares onDelete: runtime enforcement
 // (CASCADE / SET NULL / RESTRICT, insert integrity) and migration (add/remove an FK via
-// a rebuild, and the orphaned-data skip). Driven over bun:sqlite with FKs enabled — the
+// a rebuild, and the orphaned-data skip). Driven over bun:sqlite with FKs enabled: the
 // test driver mirrors DO/D1's default enforcement and models D1's atomic batch().
 
 import { describe, expect, test } from "bun:test";
@@ -28,7 +28,7 @@ const noFk = defineSchema({
 const fkList = (db: Database) => db.query("PRAGMA foreign_key_list(posts)").all() as { table: string; from: string; on_delete: string }[];
 const count = (db: Database, sql: string) => (db.query(sql).get() as { n: number }).n;
 
-describe("foreign keys — runtime enforcement", () => {
+describe("foreign keys: runtime enforcement", () => {
   test("a new table emits the FK with its ON DELETE action", async () => {
     const db = new Database(":memory:");
     await migrate(bunSqliteDriver(db), withOnDelete("cascade"));
@@ -72,7 +72,7 @@ describe("foreign keys — runtime enforcement", () => {
   });
 });
 
-describe("foreign keys — migration", () => {
+describe("foreign keys: migration", () => {
   test("declaring onDelete rebuilds the table and installs the FK", async () => {
     const db = new Database(":memory:");
     const d = bunSqliteDriver(db);
@@ -123,11 +123,11 @@ describe("foreign keys — migration", () => {
 
 // Rebuilding a table that live FKs REFERENCE (the parent side) must not fire the
 // children's ON DELETE actions: `DROP TABLE parent` implicit-DELETEs its rows, and
-// defer_foreign_keys defers only checks, not actions — so without the holder
+// defer_foreign_keys defers only checks, not actions, so without the holder
 // quarantine, CASCADE wipes the children, SET NULL corrupts them, and RESTRICT
 // aborts the migration. The parent rebuild is triggered by an expr-default column
 // (a safe, ungated rebuild).
-describe("foreign keys — rebuilding the referenced (parent) table", () => {
+describe("foreign keys: rebuilding the referenced (parent) table", () => {
   const parentV2 = (action: "cascade" | "setNull" | "restrict") =>
     defineSchema({
       authors: Entity((t) => ({ id: t.id(), name: t.text(), createdAt: defaultTo(t.text(), expr.now()) })),

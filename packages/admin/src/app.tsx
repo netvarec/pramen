@@ -5,7 +5,7 @@
 //
 // Design system = podoba (@podoba/react + tokens). The chrome is podoba's AppShell
 // (topbar + sidebar + main); data uses its Table/Dialog/Select/Card/Badge. Dark mode
-// is free — the token vars flip under `[data-theme="dark"]`.
+// is free, since the token vars flip under `[data-theme="dark"]`.
 
 import { AppShell, Badge, Button, Card, Dialog, Heading, Input, MoonIcon, Select, SelectItem, SunIcon, Table, Text, Topbar, type TableColumn } from "@podoba/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -53,7 +53,7 @@ export function App() {
   const [tenant, setTenant] = useLocal(LS.tenant, "main");
   const [theme, setTheme] = useLocal(LS.theme, "light");
 
-  // podoba tokens flip on `[data-theme="dark"]` — no `dark:` prefixes needed.
+  // podoba tokens flip on `[data-theme="dark"]`, so no `dark:` prefixes are needed.
   useEffect(() => {
     document.documentElement.dataset.theme = theme === "dark" ? "dark" : "light";
   }, [theme]);
@@ -83,7 +83,7 @@ export function App() {
     try {
       setTenants(await api.tenants(cfg));
     } catch (e) {
-      // Surface only if it's auth — a missing list is fine.
+      // Surface only if it's auth; a missing list is fine.
       if (e instanceof ApiError && e.status === 403) report(e);
     }
   }, [cfg, token, report]);
@@ -293,7 +293,7 @@ export function App() {
           </div>
         ) : (
           <Text size="small" tone="subtle">
-            {token ? "—" : "enter a token"}
+            {token ? "-" : "enter a token"}
           </Text>
         )}
       </div>

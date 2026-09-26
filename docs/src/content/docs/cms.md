@@ -1,13 +1,13 @@
 ---
 title: CMS
 order: 13
-summary: A block/page builder (@pramen/cms) + a visual editor (@pramen/cms-editor) — typed content blocks in named regions, media, i18n, editorial workflow, SEO, site furniture, and custom admin pages.
+summary: A block/page builder (@pramen/cms) + a visual editor (@pramen/cms-editor). Typed content blocks in named regions, media, i18n, editorial workflow, SEO, site furniture, and custom admin pages.
 ---
 
 ## @pramen/cms
 
-An optional **block/page builder** — Drupal-Paragraphs-style typed content blocks arranged
-in named regions — built entirely from pramen primitives (`t.json()`, `t.fileRef()`+R2,
+An optional **block/page builder** (Drupal-Paragraphs-style typed content blocks arranged
+in named regions) built entirely from pramen primitives (`t.json()`, `t.fileRef()`+R2,
 relations, ACL, `ctx.tasks`). It's an ordinary app fragment: spread its schema, handlers,
 policies, tasks, and routes into your app.
 
@@ -33,7 +33,7 @@ export const app = {
 ### Which store
 
 Both. The CMS is an ordinary app fragment, so it runs on the Durable Object (the default)
-and on D1 unchanged — same schema, same ACL, same handlers. See [Stores](/stores/).
+and on D1 unchanged: same schema, same ACL, same handlers. See [Stores](/stores/).
 
 D1 is *usually* the right choice for a CMS behind a site, because it is a binding: the whole
 backend can live inside the site's own Worker, where a Durable Object would have to be
@@ -45,7 +45,7 @@ work on either.
 
 | Concept | Table | Notes |
 |---|---|---|
-| Block **type** | `cms_block_types` | slug + a recursive `fieldsSchema` (JSON). Data-driven — add one with no deploy. |
+| Block **type** | `cms_block_types` | slug + a recursive `fieldsSchema` (JSON). Data-driven: add one with no deploy. |
 | Block **instance** | `cms_blocks` | content matching a type's schema; optionally reusable. |
 | **Content type** | `cms_content_types` | a page's `regions` (each with an `allowedTypes` allow-list) + `defaultBlocks`. |
 | **Page** | `cms_pages` | slug (per-locale), status, scheduling, SEO, locale + `translationGroupId`. |
@@ -62,7 +62,7 @@ work on either.
 
 ### Content API
 
-`getPage({ slug, locale?, preview? })` returns an `AssembledPage` — `page` (meta + `seo` +
+`getPage({ slug, locale?, preview? })` returns an `AssembledPage`: `page` (meta + `seo` +
 `translations` for hreflang) and `regions` (each a list of `RenderedBlock`s with resolved
 media). Anonymous callers get the published snapshot; editors pass `preview: true` for the
 live draft.
@@ -71,7 +71,7 @@ live draft.
 
 `required: true` on a page field is enforced at exactly one moment: publishing. Every draft
 write (`createPage`, `updatePage`, `addBlock`, `updateBlock`) passes `requireRequired: false`
-on purpose — a draft in progress is allowed to be incomplete, and a form you cannot save
+on purpose: a draft in progress is allowed to be incomplete, and a form you cannot save
 until every field is filled is a form you cannot leave. `publishPage`, `approve` and the
 scheduled `cms:publish` task all go through `doPublish`, which checks first and refuses with
 the missing fields named by their **labels**:
@@ -81,7 +81,7 @@ cannot publish: 'Začátek' is required and has no value
 ```
 
 Worth knowing what this is guarding against, because it is not a validation nicety. A front
-end drops content it cannot place — an event with no date has nowhere to go on a calendar —
+end drops content it cannot place (an event with no date has nowhere to go on a calendar)
 so an incomplete page publishes, answers 200 at its own URL, and appears in no listing
 anywhere. Reachable, published, invisible, and nothing said to anyone.
 
@@ -92,7 +92,7 @@ against, and refusing would strand it.
 
 A headless CMS cannot see the routing table in front of it, so by default it will let an
 editor publish a page on a path the site never asks it about. The page reports `published`,
-its URL answers 200, and what it serves is the framework's own route — permanently, silently,
+its URL answers 200, and what it serves is the framework's own route: permanently, silently,
 and undiagnosably from inside the editor.
 
 Tell it which paths you serve yourself:
@@ -102,36 +102,36 @@ createCmsHandlers({ reservedSlugs: ["blog", "search", "about"] })
 ```
 
 A page cannot then be created, renamed or translated onto one. Matching is case-insensitive
-and ignores locale prefixes — a route you serve is served in every locale. Nothing is
+and ignores locale prefixes, since a route you serve is served in every locale. Nothing is
 inferred: the CMS has no way to enumerate your routes, and a list that is 90% right is worse
 than an empty one, because it refuses slugs that are free.
 
 ### Features
 
-- **Media** — `signMediaUpload` → PUT → `createMedia`; `"media"` block fields resolve to
+- **Media**: `signMediaUpload` → PUT → `createMedia`; `"media"` block fields resolve to
   servable URLs; public `GET /media/<key>` route + Cloudflare Image Resizing (`imageUrl()`).
-- **i18n** — per-locale slugs, `translationGroupId`, `createTranslation`/`listTranslations`,
+- **i18n**: per-locale slugs, `translationGroupId`, `createTranslation`/`listTranslations`,
   locale-aware `getPage`, hreflang alternates.
-- **Editorial workflow** — `draft → review → published` (+ rejected/archived), reviewer-gated
+- **Editorial workflow**: `draft → review → published` (+ rejected/archived), reviewer-gated
   `approve`/`publishPage`, and a `cms_audit` trail recording the actor.
-- **Scheduling** — `schedulePage` uses intent-token outbox tasks (cancel-on-reschedule).
-- **SEO** — per-page meta/canonical/robots/OpenGraph/JSON-LD + `GET /sitemap.xml` and
+- **Scheduling**: `schedulePage` uses intent-token outbox tasks (cancel-on-reschedule).
+- **SEO**: per-page meta/canonical/robots/OpenGraph/JSON-LD + `GET /sitemap.xml` and
   `/robots.txt` (`cmsRoutes()`).
-- **Soft delete** — `deletePage` trashes (stamps `deletedAt`); `listTrash` shows what is
+- **Soft delete**: `deletePage` trashes (stamps `deletedAt`); `listTrash` shows what is
   trashed, `restorePage` puts it back, `purgePage` removes it for good (row, placements,
   revisions, audit, R2 object). The filter is in the ACL, not in each handler, so a trashed
   page disappears from the public API, the editor, relation traversals and eager-loads at
   once. Same four for media.
-- **Optimistic concurrency** — every page and block carries a `version`. Pass the one you
+- **Optimistic concurrency**: every page and block carries a `version`. Pass the one you
   read back as `expectedVersion` and a stale write is refused with a **409** instead of
   silently clobbering a colleague's edit. Optional: omit it for last-write-wins.
-- **Preview links** — `signPagePreview({ pageId })` mints a signed, self-expiring URL scoped
-  to one page. Minting is editor-gated; **redeeming needs no account**, which is the point —
+- **Preview links**: `signPagePreview({ pageId })` mints a signed, self-expiring URL scoped
+  to one page. Minting is editor-gated; **redeeming needs no account**, which is the point:
   the stakeholder reviewing copy before it ships usually has none. Works on both stores.
-- **Structured rich text** — a `richtext` value is a document *tree*, not an HTML string, so
+- **Structured rich text**: a `richtext` value is a document *tree*, not an HTML string, so
   there is no markup to sanitize: the write path validates it against a node/mark allow-list
   and the render side maps node types to your components.
-- **Declared locales** — `createCmsHandlers({ locales: ["cs", "en"] })`. The deployment
+- **Declared locales**: `createCmsHandlers({ locales: ["cs", "en"] })`. The deployment
   declares what it publishes in and the editor renders its i18n surface off
   `listCmsCapabilities`; one locale means no i18n chrome at all. `locales[0]` is the default
   a page is stamped with.
@@ -146,24 +146,24 @@ Block types are data-driven, but developers can get compile-time field typing:
 
 Block types and content types are data, so the editor authors them: **Types** (`/schema`)
 lists both and opens a builder for either. The block-type builder edits a
-`FieldDefinition[]` — the inverse of the form `FieldForm` renders from one — and the
+`FieldDefinition[]` (the inverse of the form `FieldForm` renders from one) and the
 content-type builder edits regions (name, label, an `allowedTypes` allow-list) plus optional
 page-level fields and default blocks.
 
 A slug is fixed once created. A block type's is the key your front end maps to a component
-(`{ rich_text: RichText }`), and a content type's addresses that type's own page list — so
+(`{ rich_text: RichText }`), and a content type's addresses that type's own page list, so
 renaming one orphans every block of that type, or breaks every link to the list.
 
 The schema you author is validated server-side (`normalizeFieldSchema`), not just in the
 form: a field name has to be usable as an object key, siblings cannot share one, a `select`
 needs options or an `optionsFrom` handler, a `group`/`repeater` needs at least one nested
 field, and a `slug`'s `from` must name a text field standing beside it. These are refusals
-rather than warnings because none of them fails visibly — an unknown field type renders
+rather than warnings because none of them fails visibly: an unknown field type renders
 nothing and `validateFields` skips it, so the field's content is quietly lost on every save.
 
 #### Help text on a field
 
-A field takes an optional `description` — one or two sentences rendered under the control and
+A field takes an optional `description`: one or two sentences rendered under the control and
 announced via `aria-describedby`:
 
 ```ts
@@ -177,7 +177,7 @@ announced via `aria-describedby`:
 
 Write one whenever the label leaves a real question open: which of two plausible readings is
 meant, when the field applies at all, what leaving it empty does. Those are exactly the notes
-that otherwise end up as a comment beside the `defineContentType` call — where the person
+that otherwise end up as a comment beside the `defineContentType` call, where the person
 filling the field in never sees them.
 
 It works on every field type and in the editor's own type builder ("Help text"), so a
@@ -188,8 +188,8 @@ The whole area is gated on `listCmsCapabilities().canEdit`, i.e. the deployment'
 
 #### Code-defined types are read-only here
 
-A type declared in code — `defineBlockType` / `defineContentType`, reconciled by
-`cmsBootstrap` — is stamped with that reconciler's owner id and shown read-only: a `code`
+A type declared in code (`defineBlockType` / `defineContentType`, reconciled by
+`cmsBootstrap`) is stamped with that reconciler's owner id and shown read-only: a `code`
 badge in the lists, a locked form, and a note saying which declaration to edit.
 `updateBlockType` / `updateContentType` answer **409** for one.
 
@@ -197,7 +197,7 @@ That is because `cmsBootstrap` converges its declarations on **every boot**. Wit
 lock, an edit here returned 200 and was patched back to the literal in `app.ts` at the next
 cold start, taking any block content authored against the added field with it.
 
-Drop a type from the declaration and its row is released — it keeps existing, because pages
+Drop a type from the declaration and its row is released: it keeps existing, because pages
 are built out of it, and becomes editable again. To hand *everything* back (you are moving
 type authoring into the editor and removing the reconciler), deploy once with
 `cmsBootstrap({ blockTypes: [], contentTypes: [] })` before deleting the call: an empty array
@@ -206,7 +206,7 @@ declares none and releases them, where an absent key says nothing about that tab
 `cmsBootstrap` validates every definition it will write, at app construction, reporting all
 the problems at once. It runs the same rules as the handlers above, so a code-declared type
 cannot store a schema the builder would then refuse to save. The checks live there rather
-than in `define*` because those helpers are optional — `BlockTypeDef` is a plain interface,
+than in `define*` because those helpers are optional: `BlockTypeDef` is a plain interface,
 so an object literal or a `.map` reaches the store without going near them.
 
 Composing two reconcilers (a package shipping its own block types beside the app's) needs a
@@ -216,7 +216,7 @@ wrote.
 ### Collections
 
 The block/page model is one opinionated shape: a routable page with a mandatory slug and
-regions of blocks. A **collection** is the escape hatch — it points the editor at **one of
+regions of blocks. A **collection** is the escape hatch: it points the editor at **one of
 your own pramen entities** and edits it with the same `FieldDefinition[]` DSL blocks use. So
 "Lectures" is a first-class queryable entity (real columns, relations, cell-level ACL) that
 *also* gets a list and a form. No `cms_pages` row, no slug.
@@ -240,7 +240,7 @@ acl = [role("editor", [...collectionPolicies([lectures])])];
 
 It is **column-mapped**: each scalar field is a real column, and a `repeater`/`group` maps to
 a `t.json()` one. That is what buys filtering, ordering, pagination, row and cell ACL, and
-`where` traversal into CMS content — they follow from it being a table, not from the
+`where` traversal into CMS content. They follow from it being a table, not from the
 collection wrapper.
 
 The `schema` argument is required, and the whole registry is validated against your entities
@@ -252,7 +252,7 @@ slug is a 400 rather than a raw table reference.
 
 #### Workflow (`supports`)
 
-A collection is plain CRUD by default — no notion of published. `supports` opts it into the
+A collection is plain CRUD by default, with no notion of published. `supports` opts it into the
 page-style workflow:
 
 ```ts
@@ -260,12 +260,12 @@ collection("talks", { entity: "talks", label: "Talk", fields: [...],
   supports: ["drafts", "scheduling", "revisions", "preview"] })
 ```
 
-Each feature is backed by **managed columns on your entity** — you declare them, the CMS owns
+Each feature is backed by **managed columns on your entity**: you declare them, the CMS owns
 their values (`status`, `publishedAt`, `scheduledAt`, `unpublishAt`, …). The editor renders
 the matching controls on a row: Publish/Unpublish, a schedule picker, a preview link, a
 restorable revision list. `collectionPublicPolicies` is the actual boundary, AND-merged into
 every `ctx.db` read, so an unpublished row is invisible to your public queries and relation
-traversals alike — not filtered in the UI.
+traversals alike, not filtered in the UI.
 
 `supports` gates **visibility, not content**: a collection is column-mapped, so an edit to a
 published row goes live at once. There is no staged snapshot the way a page has one.
@@ -277,8 +277,8 @@ layout, not by a page, and each gets its own editor section.
 
 **If your layout reads none of them, say so:** `createCmsHandlers({ siteFurniture: false })`
 clears the capability, which drops the whole Site nav section and the page editor's Terms
-tab. These four are the only part of the CMS whose output nothing in the CMS consumes — a
-menu matters because a layout asks for it, a redirect because the edge honours it — so a
+tab. These four are the only part of the CMS whose output nothing in the CMS consumes: a
+menu matters because a layout asks for it, a redirect because the edge honours it, so a
 deployment that renders neither is offering four sections that write to a table nobody reads.
 No error, no clue, just work that quietly never happens; that is worse than the feature being
 absent. The handlers stay registered either way, so an app that grows a menu-rendering layout
@@ -288,11 +288,11 @@ later flips one flag.
 |---|---|---|
 | **Menus** | `getMenu("primary")` | A nested `MenuItem[]`, stored as one document. |
 | **Redirects** | `resolveRedirect({ path })` | Exact lookup on a canonicalized, unique path. |
-| **Taxonomies** | `listTaxonomies` / `getTermTree` / `listPagesByTerm` | `category`/`tag` are not built in — you declare what the site sorts by. |
+| **Taxonomies** | `listTaxonomies` / `getTermTree` / `listPagesByTerm` | `category`/`tag` are not built in; you declare what the site sorts by. |
 | **Widget areas** | `getWidgetArea("sidebar")` | A named layout slot an editor fills without a deploy. |
 
 All of those reads are **public**; every write is editor-gated. Spread
-`cmsPolicies().public` and `.editor` as before — the furniture tables are already in both.
+`cmsPolicies().public` and `.editor` as before; the furniture tables are already in both.
 
 **A menu item stores a reference, not an href.** `kind: "page"` holds a page id and the URL
 is worked out when the menu is read, so a link follows its page instead of breaking the day
@@ -307,14 +307,14 @@ createCmsHandlers({
 ```
 
 **Redirects** are what a slug change needs. `fromPath` is canonicalized on write (trailing
-slash, query and fragment removed) because matching is an exact lookup on a unique column —
+slash, query and fragment removed) because matching is an exact lookup on a unique column:
 `/old` and `/old/` would otherwise be two rows and only one of them could ever match.
 Disabling a redirect keeps the record of what the old URL was; deleting it does not. There
 is deliberately **no hit counter**: counting would turn the one handler anonymous 404 traffic
 calls into a write.
 
 Serving one is the site's job. `@pramen/cms-astro` exposes `client.resolveRedirect(path)`
-and a `redirectResponse(client, url)` helper for the 404 path — that is where it belongs,
+and a `redirectResponse(client, url)` helper for the 404 path, which is where it belongs,
 since a lookup in front of every render would buy a round trip to answer "no" almost every
 time:
 
@@ -328,7 +328,7 @@ if (redirect) return redirect;
 ```
 
 **Taxonomies** are an explicit junction (`cms_page_terms`), so "pages in this category" is an
-ordinary query — `where: { terms: { slug: "news" } }` compiles to a subquery. Terms nest only
+ordinary query: `where: { terms: { slug: "news" } }` compiles to a subquery. Terms nest only
 in a vocabulary declared `hierarchical`, and a parent that would close a cycle is refused on
 write, which is the only place a cycle is preventable. Assign terms from the **Terms** panel
 in the page editor.
@@ -342,14 +342,14 @@ widget is resolved inline by `getWidgetArea`, so a whole sidebar is one call.
 
 The editor's primary nav is a **left sidebar**, shaped like Notion's: its own ground tone, a
 dense icon-and-label row per destination, and collapsible groups. It was a row of tabs in the
-topbar, which stopped working at about the point a real deployment reaches — Pages (or one
+topbar, which stopped working at about the point a real deployment reaches: Pages (or one
 tab per content type), N collections, Media, Menus, Taxonomies, Widgets, Redirects, any
 Block Kit page, Types, Users, Settings and whatever `extraNav` adds is a dozen-plus
 destinations, and past six or seven the tabs became a dense ribbon and then a horizontal
 scroller, i.e. a nav you have to scroll to discover. A column holds all of them at once.
 Below `md` it collapses to a disclosure under the wordmark.
 
-The groups — **Content**, **Site**, **Apps**, **System** — are bands of `order`, not a
+The groups (**Content**, **Site**, **Apps**, **System**) are bands of `order`, not a
 hand-written list of sections, so the one contract below still decides everything: an entry
 placed at 250 is Content, at 450 it is Site. Groups with nothing in them are not rendered,
 and a deployment with only one group gets no headings at all.
@@ -359,10 +359,10 @@ Each group **folds**, and the fold is remembered per browser (`localStorage`). T
 everything stays one click away by default, and a deployment that never opens Site or System
 folds them away once.
 
-Each row carries an icon, from [Phosphor](https://phosphoricons.com) at regular weight — one
+Each row carries an icon, from [Phosphor](https://phosphoricons.com) at regular weight: one
 family, chosen because at 15px an icon has to survive as a silhouette. A collection or a Block
-Kit page that declares its own (`icon: "🎓"`) gets it in the icon column instead — it used to
-be prepended to the label, where it read as part of the words — and anything that declares
+Kit page that declares its own (`icon: "🎓"`) gets it in the icon column instead. It used to
+be prepended to the label, where it read as part of the words, and anything that declares
 none gets its section's glyph.
 
 The nav is ordered by a number, not by the sequence it is written in. Every built-in has a
@@ -421,7 +421,7 @@ collection rather than `t.text()`.
 
 Client sites are mostly conventional, and nearly every one grows **one section that is not**:
 a screen over an external API, a filtered browse UI over data you do not own, a bespoke
-picker. `adminPage()` is where that goes — a real screen inside the admin's own chrome, at a
+picker. `adminPage()` is where that goes: a real screen inside the admin's own chrome, at a
 nav position you choose.
 
 ```ts
@@ -461,7 +461,7 @@ runs in the admin**. Blocks: `header`, `section`, `context`, `divider`, `fields`
 `number_input`, `select`, `toggle`, `secret_input`.
 
 **A row can act.** A table cell holds either a value or an *element*, so the control lives
-where the thing it acts on is — no `actions` block per row:
+where the thing it acts on is, with no `actions` block per row:
 
 ```ts
 { type: "table", block_id: "venues", columns: [{ key: "name", label: "Name" }, { key: "act", label: "" }],
@@ -472,8 +472,8 @@ where the thing it acts on is — no `actions` block per row:
 ```
 
 One `action_id` serves the whole column; the button's **`value` is what identifies the row**
-(`i.value` in `render`). An **input** in a cell has no such carrier — the editor keys the
-page's whole value bag by `action_id` — so a per-row input must mint a **per-row id**
+(`i.value` in `render`). An **input** in a cell has no such carrier: the editor keys the
+page's whole value bag by `action_id`, so a per-row input must mint a **per-row id**
 (``action_id: `hours:${v.id}` ``), and a response where two inputs share one is refused with a
 message saying so, rather than silently rendering one field 830 times.
 
@@ -484,11 +484,11 @@ message saying so, rather than silently rendering one field 830 times.
 ```
 
 Use it for anything the *field* got wrong ("the end is before the start"); `toast` stays the
-page-level message. Errors are part of the render, not client state — the whole page comes
+page-level message. Errors are part of the render, not client state: the whole page comes
 back on every interaction, so an error lasts exactly as long as the response carrying it.
 
 `render` is an ordinary handler body with the caller's own context, so `ctx.db` is scoped by
-the same policies as everywhere else — Block Kit removes the browser code, not the boundary.
+the same policies as everywhere else. Block Kit removes the browser code, not the boundary.
 There is no ACL fragment to spread. `listAdminPages` is role-**filtered**, so a page you may
 not open is simply absent, and asking for it answers exactly as an unknown slug does.
 
@@ -502,7 +502,7 @@ ones that cap it: the whole page comes back on every interaction, so an input ca
 every control is disabled for the round trip (focus and caret with it), a table row cannot
 expand, and there is no link, no redirect, no dialog, no autofocus and no date input. For the
 screen that needs local interaction, `adminPanel()` gives you **a React component of your own,
-rendered inside the editor's chrome** — same sidebar, same header, same theme, a real route,
+rendered inside the editor's chrome**: same sidebar, same header, same theme, a real route,
 a real nav entry.
 
 It is the *same registry* as `adminPage()`, so nothing about how a screen is placed or gated
@@ -522,7 +522,7 @@ handlers = { ...createAdminPageHandlers([desk, curation], { editorRoles }) };
 ```
 
 There is no `render` here on purpose. **The server owns the entry, the bundle owns the
-component.** The label, the icon, the position and — above all — the role filter stay server
+component.** The label, the icon, the position and, above all, the role filter stay server
 facts, so `listAdminPages` filters a panel exactly as it filters a Block Kit page: a panel you
 may not open is simply absent, and there is no nav entry to click. If the bundle declared any
 of that, a bundle that failed to load would take the whole section with it.
@@ -547,11 +547,11 @@ globalThis.PRAMEN_CMS_EDITOR_RUNTIME.registerPanel({
 
 `contract` is required, and it is a **literal you write**, not a value read off the runtime.
 Your bundle is compiled against whichever React you have installed and linked, at runtime,
-against the React the editor loaded — and nothing in between notices if those disagree: the
+against the React the editor loaded, and nothing in between notices if those disagree: the
 import map resolves, the shims hand over a perfectly good React, and the mismatch surfaces as
 a missing export or a hook that behaves differently, deep inside your minified bundle. The
 number is the only fact about your build that survives into it, so the editor asks for it and
-**refuses a panel that does not match**, with a message naming the slug and the fix — shown on
+**refuses a panel that does not match**, with a message naming the slug and the fix, shown on
 the panel's own route, not only in the console. (Reading it back off
 `PRAMEN_CMS_EDITOR_RUNTIME` would be the editor comparing its number to its own, which is why
 it is not published there.)
@@ -559,24 +559,24 @@ it is not published there.)
 The number moves when a React major lands in `@pramen/cms-editor`, when `PanelProps` or
 `PanelApi` loses a key or one changes meaning, or when a name leaves the published runtime.
 It does **not** move for anything else this package releases. When it does move, the fix is to
-rebuild the bundle and then change the literal — in that order; changing the literal alone is
+rebuild the bundle and then change the literal, in that order; changing the literal alone is
 the one edit that fixes nothing.
 
 A panel is handed four things, and only these:
 
 | | |
 | --- | --- |
-| `api` | `call(name, input?)` and `resolve(path)`, as the signed-in user. The narrow view — not the editor's whole `Api` class. |
+| `api` | `call(name, input?)` and `resolve(path)`, as the signed-in user. The narrow view, not the editor's whole `Api` class. |
 | `basePath` | The mount prefix (`/__admin`), so links you build stay inside it. |
-| `theme` | `"light"` / `"dark"`. Styling follows on its own (podoba tokens flip at the document root); this is for what CSS cannot decide — a chart palette, a canvas. |
+| `theme` | `"light"` / `"dark"`. Styling follows on its own (podoba tokens flip at the document root); this is for what CSS cannot decide: a chart palette, a canvas. |
 | `setError` | The chrome's one error banner. |
 
 The identity is deliberately *not* handed over. It is one `api.call("me")` away, and a panel
 that branches on the caller's roles to decide what to show is doing client-side
-authorization — the gate that counts is `roles` above, enforced before the entry is listed.
+authorization. The gate that counts is `roles` above, enforced before the entry is listed.
 
 **Build it with React external.** The panel renders into the editor's React tree, and two
-copies of React in one page share no hook dispatcher — the first `useState` would throw
+copies of React in one page share no hook dispatcher: the first `useState` would throw
 "invalid hook call". So the editor publishes its own React and the shell's import map points
 the bare specifiers at it; your build just has to not bundle them:
 
@@ -587,7 +587,7 @@ the bare specifiers at it; your build just has to not bundle them:
 }
 ```
 
-Any bundler will do — the whole contract is *those four specifiers stay external*. (Mark the
+Any bundler will do; the whole contract is *those four specifiers stay external*. (Mark the
 dev JSX runtime too even if you only ship minified: unmapped, it is the one bare import that
 still resolves, straight into a second React.)
 
@@ -600,20 +600,20 @@ pramenCms({
 })
 ```
 
-An entry is an ES module URL — a path from `public/`, a fingerprinted path your build
+An entry is an ES module URL: a path from `public/`, a fingerprinted path your build
 emitted, or an absolute http(s) URL. The **editor imports it**, rather than the shell adding a
 script tag, because the shared React has to be published before the bundle evaluates; the
 loads do not block the first paint, and a bundle that 404s costs its own panel and nothing
 else. Anything that is not an http(s) URL is refused with a console warning.
 
-A panel renders behind an **error boundary** — it is your component in the editor's tree, and
+A panel renders behind an **error boundary**, because it is your component in the editor's tree, and
 React unmounts the whole root on an uncaught render error, so without one a bad panel would
 blank the admin rather than the screen. You get a message naming the panel and the failure, and
 the chrome stays navigable.
 
 Panels and pages share `/apps/:slug`, so a slug used twice is a **boot error** whichever kinds
 collide. A slug the server lists but no bundle registers renders a message saying exactly
-that, naming the slug — not a spinner.
+that, naming the slug, rather than a spinner.
 
 > **Which one?** Reach for `adminPage()` first: it is a list-and-form screen with no browser
 > code, no build step and no version skew. Reach for `adminPanel()` when the screen itself is
@@ -621,7 +621,7 @@ that, naming the slug — not a spinner.
 
 > **A panel is trusted code.** Block Kit's headline property is that *no project JavaScript
 > ever runs in the admin*; a panel gives that up on purpose. Its bundle runs in the editor's
-> own page with the editor's own session in scope — it can read the stored token, call
+> own page with the editor's own session in scope: it can read the stored token, call
 > anything, and render anything. `roles` and the ACL still bound what the SERVER will do for
 > the caller, and `PanelApi` is a small surface to write against, but neither is a sandbox.
 > Ship a panel you wrote, from your own origin, and treat its bundle as part of the admin.
@@ -641,24 +641,24 @@ const products = collection("products", {
 Filtering (`contains` / `startsWith`), ordering, pagination, row and cell ACL, revisions, and
 linking to CMS content through `manyToMany` all come for free, because it is a real table.
 The external API becomes a *sync source* rather than a live one. Reach for `adminPage()` when
-the screen itself is the unusual part — a workflow, a reconciliation view, an action that is
+the screen itself is the unusual part: a workflow, a reconciliation view, an action that is
 not "edit a row".
 
 > **Non-goal: virtual collections.** It is tempting to let a collection's list/get dispatch to
 > a handler instead of a table. `collection()` promises ACL through `ctx.db`, row scope,
-> cell-level projection and `where` traversal — *all of which follow from it being a real
+> cell-level projection and `where` traversal, *all of which follow from it being a real
 > table*. A handler-backed collection would void every one of those while keeping the name,
 > leaving one word for two things with different security properties. `adminPage()` promises
 > none of them and says so by having a different name.
 
 ## @pramen/cms-editor
 
-A **React visual editor** — page list, a region canvas with allowed-type block palettes,
+A **React visual editor**: page list, a region canvas with allowed-type block palettes,
 schema-driven field forms (incl. a media picker, date/datetime pickers, repeaters, groups),
 and inspector panels for SEO / workflow / i18n / audit. It mutates through the semantic
 handlers (so all validation and gates apply).
 
-**Your Astro site serves it**, at `/__admin` — one line in the integration:
+**Your Astro site serves it**, at `/__admin`, in one line in the integration:
 
 ```js
 pramenCms({ backend: { url: "https://cms.example.workers.dev" }, admin: true })
@@ -666,7 +666,7 @@ pramenCms({ backend: { url: "https://cms.example.workers.dev" }, admin: true })
 
 That injects a catch-all Astro route, so every view is a real server route on your own
 origin. There is no `dist/` to deploy, no second hostname for the editor, no SPA-fallback
-rewrite to configure, and nothing to point it at — the shell tells it which Worker and
+rewrite to configure, and nothing to point it at: the shell tells it which Worker and
 tenant to call, so the first screen asks for an editor/reviewer JWT and nothing else. The
 editor's two assets (`editor.js`, `editor.css`) go through your site's bundler like any
 other import, which is what makes the prefix mount work at all.
@@ -677,55 +677,55 @@ This moves where the editor is SERVED, not where the API lives: it still calls
 away too.
 
 **Signing in is the SITE's job.** The editor verifies a bearer token and knows nothing about
-how one is obtained — that is what keeps it BYO-IdP — so a real deployment points it at its
+how one is obtained (that is what keeps it BYO-IdP) so a real deployment points it at its
 own screen with `admin: { signInUrl: "/admin/sign-in" }`, and that page calls `login` (or
 `loginWithMagicLink`), writes the token into `localStorage["pramen.cmsEditor"]`, and
 redirects into the editor. `example/site/src/pages/admin/sign-in.astro` is the whole pattern
 in one file. Without `signInUrl` the built-in screen asks for an editor/reviewer JWT instead,
-which `/__admin?setup=1` always forces — the way in when there is no account to sign in as
+which `/__admin?setup=1` always forces: the way in when there is no account to sign in as
 yet.
 
 `admin` also carries the editor's own configuration, replacing the old `/config.js`:
 
 ```js
 admin: {
-  brand: { name: "Acme", suffix: "cms" },      // the wordmark — set it when you deploy for a client
+  brand: { name: "Acme", suffix: "cms" },      // the wordmark; set it when you deploy for a client
   signInUrl: "/signin/",                        // must be a page that EXISTS (see below)
   hidePages: true,                              // collections-only deployments
-  layout: "topbar",                             // the horizontal bar instead of the sidebar — see below
-  pageHeader: { variant: "flat", accent: "#73e2b2" },  // dress the screen header — see below
+  layout: "topbar",                             // the horizontal bar instead of the sidebar; see below
+  pageHeader: { variant: "flat", accent: "#73e2b2" },  // dress the screen header; see below
   extraNav: [{ label: "Curation", href: "/curate", target: "_self" }],
-  panels: ["/admin/curation.js"],               // your own React screens — see "Custom admin panels"
+  panels: ["/admin/curation.js"],               // your own React screens; see "Custom admin panels"
 }
 ```
 
-### `layout` — sidebar or topbar
+### `layout`: sidebar or topbar
 
 The editor ships **two chromes** for the same nav.
 
 `"sidebar"` (the default) is a left rail: an icon and a label per destination, grouped under
-collapsible headings, everything one click away. It is what a full admin needs — Pages or one
+collapsible headings, everything one click away. It is what a full admin needs: Pages or one
 entry per content type, N collections, Media, Menus, Taxonomies, Widgets, Redirects, your
 Apps, Types, Users, Settings and any host links is a dozen-plus destinations, which in a row
 is a dense unlabelled ribbon over a horizontal scroller.
 
 `"topbar"` is the horizontal bar the **Graphic Standard** apps wear (podoba's `Topbar`):
 brand on the left, tabs on the right, the account avatar at the end, a hairline under it.
-Choose it when the editor sits inside a product that already has that bar — a vertical rail
-under a horizontal one reads as two apps stacked — or when your nav genuinely fits a row.
+Choose it when the editor sits inside a product that already has that bar (a vertical rail
+under a horizontal one reads as two apps stacked, or when your nav genuinely fits a row.
 
 It stays usable past six destinations without reviving the scroller: the **first** nav group
 renders as flat tabs and each later group folds into a dropdown, so a full admin reads as
 `Pages · Articles · Lectures · Media · Site ⌄ · Apps ⌄ · System ⌄` plus the avatar. Below
 `md` the whole nav moves into a dialog behind a hamburger. Everything else is the same
-editor: the same screens, the same breadcrumb (the detail half, beside the wordmark — the lit
+editor: the same screens, the same breadcrumb (the detail half, beside the wordmark, since the lit
 tab already says which section you are in), the same theme and sign-out in the avatar menu.
 
 The choice is a **deployment** setting, not a per-reader preference like the theme or a
 folded nav group: it decides the chrome's height, which every sticky header in the editor is
 positioned against.
 
-### `pageHeader` — dressing the screen header
+### `pageHeader`: dressing the screen header
 
 `brand` and `layout` dress the **chrome**, and `panels`/`adminPage()` add whole screens of
 your own. `pageHeader` is the third surface: the sticky panel carrying the `<h1>` and the
@@ -739,7 +739,7 @@ pageHeader: {
 }
 ```
 
-`variant` decides how much panel there is. `"cover"` is what every screen gets by default — a
+`variant` decides how much panel there is. `"cover"` is what every screen gets by default: a
 card with the seeded Truchet artwork that makes a dozen interchangeable list screens
 recognisable before the type is. `"flat"` keeps the card and drops the art. `"bare"` drops the
 card too, so the title and the action sit on the page the way a Graphic Standard section
@@ -747,7 +747,7 @@ header does. All three still stick and still condense on scroll.
 
 `accent` re-points `--color-brand-primary` **inside the header only**, so the primary action
 wears your colour and nothing else in the app moves. It must be an **opaque hex or `rgb()`
-literal** — `var(--your-token)`, `oklch()` and anything with alpha are refused with a console
+literal**. `var(--your-token)`, `oklch()` and anything with alpha are refused with a console
 warning. That restriction is the feature: the editor parses the colour to derive the label
 colour on it (the better of podoba's ink and paper by WCAG contrast) and the hover shade (a
 dark accent lightens, a light one darkens), so a host cannot ship an illegible button through
@@ -765,7 +765,7 @@ page rather than a header that looks wrong.
 > **Use this instead of a stylesheet that selects on the editor's DOM.** A panel bundle can
 > load CSS, and a selector like
 > `div.sticky[class*="max-w-[1200px]"] > div.relative.isolate… > div.relative.grid > :not(h1)`
-> does work — until the next release, which can void it with no error anywhere. It is also
+> does work, until the next release, which can void it with no error anywhere. It is also
 > blind in two ways that cost real bugs: it cannot tell one screen from another, so a label
 > injected for "the header's action" turned Media's `+ Upload` into "New + Upload"; and it
 > cannot tell the container from the control, so one rule landed on both and put white text on
@@ -773,7 +773,7 @@ page rather than a header that looks wrong.
 > [open an issue](https://github.com/netvarec/pramen/issues) rather than a selector.
 
 `extraNav` links open in a **new tab** by default, because the editor's catch-all route
-matches every same-origin path — a same-tab click would land on the editor's own 404 instead
+matches every same-origin path: a same-tab click would land on the editor's own 404 instead
 of your tool. Add `target: "_self"` to ask for a same-tab navigation; it is honoured only
 where the router provably will not claim the url:
 
@@ -783,12 +783,12 @@ where the router provably will not claim the url:
 | Same origin, outside the mount (`/curate`) | same tab | new tab |
 | Same origin, inside the mount | new tab | new tab |
 
-Anything else — a relative href that resolves back inside the mount, a `javascript:` url, an
-unparseable one — degrades to a new tab rather than stranding the editor on its 404. A
+Anything else (a relative href that resolves back inside the mount, a `javascript:` url, an
+unparseable one) degrades to a new tab rather than stranding the editor on its 404. A
 same-tab link runs the unsaved-changes guard first, so it cannot silently discard an edit in
 progress.
 
-Views are real, deep-linkable URLs — file-based routing via [`@buzola/router`](https://www.npmjs.com/package/@buzola/router)
+Views are real, deep-linkable URLs, from file-based routing via [`@buzola/router`](https://www.npmjs.com/package/@buzola/router)
 (`/`, `/media`, `/users`, `/settings`, `/pages/:pageId?tab=seo`, each under the mount
 prefix), so Back/Forward and refresh behave. Navigation is scoped to the mount: a click on
 one of your own site's pages leaves the editor instead of being swallowed by its catch-all
@@ -798,7 +798,7 @@ route.
 > the stored session, so a path that lands back inside the editor is a loop with nothing to
 > recover from. `?setup=1` always forces the built-in screen, for pasting a first-admin JWT.
 
-A working site is in `example/site` — content collections and the admin route in one
+A working site is in `example/site`: content collections and the admin route in one
 `pramenCms()` call, against the example backend in `example/app.ts`.
 
 For local work on the editor itself, `bun run --cwd packages/cms-editor dev` serves it at
@@ -809,13 +809,13 @@ the origin root on <http://localhost:5175> against whatever Worker you point it 
 Two extra tabs surface the `@pramen/auth` management handlers, so they appear only when
 those handlers are wired into your app (`createUserHandlers`/`authPolicies` + `inviteUser`):
 
-- **Users** (admin-only — gated on `me.roles` including `admin`) — invite a teammate by
+- **Users** (admin-only, gated on `me.roles` including `admin`): invite a teammate by
   email (`inviteUser` sends a one-time magic link and creates the account, defaulting to the
   `editor` role), edit roles inline (`setUserRoles`), activate/deactivate (`setUserActive`),
   and delete (`deleteUser`). You can't deactivate or delete your own account.
-- **Settings** — account self-service for any signed-in user: change your contact email
+- **Settings**: account self-service for any signed-in user: change your contact email
   (`changeEmail`) or password (`changePassword`), plus an about card and sign-out. Someone who
-  signed in with a magic link leaves "Current password" empty — they have none yet, and that
+  signed in with a magic link leaves "Current password" empty, since they have none yet, and that
   sets their first one.
 
 Both go through the same ACL-gated handlers, so a non-admin who forges the tab still hits a

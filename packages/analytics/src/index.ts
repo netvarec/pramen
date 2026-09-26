@@ -1,7 +1,7 @@
-// @pramen/analytics — first-party traffic analytics for a pramen deployment.
+// @pramen/analytics: first-party traffic analytics for a pramen deployment.
 //
 // SCOPE, because it explains most of what is missing compared with a hosted analytics
-// product: this tracks ONE site — the project it is installed in. There is no sites table,
+// product: this tracks ONE site, the project it is installed in. There is no sites table,
 // no API key, no allowed-origin list and no per-site settings screen, and adding them later
 // is a schema change, not a configuration one. That is the trade that buys the rest: a
 // pageview can carry the CMS page's ID rather than a URL string, the collector needs no
@@ -37,7 +37,7 @@ export {
 } from "./events";
 
 /** The queue this package's consumer is registered under, and the producer binding it
- * sends to. Both are overridable — a project with its own queue naming should say so once,
+ * sends to. Both are overridable: a project with its own queue naming should say so once,
  * here, rather than in three places that can disagree. */
 export const ANALYTICS_QUEUE = "pramen-analytics";
 export const ANALYTICS_QUEUE_BINDING = "ANALYTICS";
@@ -49,7 +49,7 @@ const DEFAULT_VIEWER_ROLES = ["editor", "admin"] as const;
 export interface AnalyticsOptions {
   /** Who may read the metrics handlers. Defaults to editor + admin. */
   viewerRoles?: readonly string[];
-  /** Who may trigger a rollup or a prune. Defaults to admin only — these write. */
+  /** Who may trigger a rollup or a prune. Defaults to admin only, since these write. */
   adminRoles?: readonly string[];
   /** Producer binding for the queue sink. Set to `null` to force the direct sink. */
   queueBinding?: string | null;
@@ -63,7 +63,7 @@ export interface AnalyticsOptions {
  * The order is the point. A bound queue wins because it takes the database write off the
  * visitor's request entirely; without one, the direct sink writes in-request, which on the
  * DO store is a single in-process SQLite insert and genuinely fine at small scale. Only
- * when neither is possible does it degrade to dropping events — loudly, once.
+ * when neither is possible does it degrade to dropping events, loudly, once.
  */
 export function createAnalyticsSink(
   env: EnvBag,
@@ -113,7 +113,7 @@ export function createAnalyticsHandlers(opts: AnalyticsOptions = {}) {
   const adminRoles = [...(opts.adminRoles ?? ["admin"])];
 
   return {
-    /** The single write path. Gated on `INGEST_ROLE`, which only the collector supplies —
+    /** The single write path. Gated on `INGEST_ROLE`, which only the collector supplies.
      * see the note there for why the obvious `auth: []` does not work. */
     [INGEST_HANDLER]: mutation(
       (ctx: HandlerContext, input: { events: [] }) => runIngest(ctx, input as never),
@@ -121,7 +121,7 @@ export function createAnalyticsHandlers(opts: AnalyticsOptions = {}) {
     ),
 
     /** Headline metrics for a range. Role-gated: this reads `ctx.kv`-free but ALSO reads
-     * through `ctx.db`, so the ACL bounds it too — the gate is what keeps an anonymous
+     * through `ctx.db`, so the ACL bounds it too. The gate is what keeps an anonymous
      * caller from learning the shape of the traffic at all. */
     analyticsOverview: query(
       (ctx: HandlerContext, input: { from: string; to: string }) => metricsForRange(adb(ctx), input.from, input.to),
@@ -151,7 +151,7 @@ export function createAnalyticsHandlers(opts: AnalyticsOptions = {}) {
   };
 }
 
-/** Tasks to spread into `app.tasks` — the rollup as a deferred job, for a deployment that
+/** Tasks to spread into `app.tasks`: the rollup as a deferred job, for a deployment that
  * drives it from `ctx.tasks.enqueue` rather than a cron. */
 export function createAnalyticsTasks() {
   return {
@@ -163,7 +163,7 @@ export function createAnalyticsTasks() {
 
 /** The queue consumer to spread into `app.queues`, keyed by queue NAME.
  *
- * A consumer runs once per MESSAGE (not per batch) and is Worker-level, with no `ctx.db` —
+ * A consumer runs once per MESSAGE (not per batch) and is Worker-level, with no `ctx.db`,
  * so it reaches the store the only way it can, `callPrivileged` into the tenant the message
  * names. One message already carries a whole batch of events, because that is what the
  * producer sends: the batching happens at `QueueSink.write`, so this stays one privileged

@@ -1,8 +1,8 @@
-// @pramen/cms-editor — the page header's generated cover art.
+// @pramen/cms-editor: the page header's generated cover art.
 //
 // The whole value of the feature is one property: the SAME NAME DRAWS THE SAME PICTURE. A
 // cover exists to make "Media" recognisable before you have read the word, and art that
-// shifted between renders — or between two browsers, or after a deploy — would be worse than
+// shifted between renders (or between two browsers, or after a deploy) would be worse than
 // no art, because the reader would learn a picture that then lied to them. Everything below
 // is that property, from three angles: the hash, the accent, and the rendered markup.
 
@@ -26,7 +26,7 @@ describe("hashSeed", () => {
     expect(hashSeed("Media")).not.toBe(hashSeed("Pages"));
   });
 
-  test("stays a uint32 — the mixing degrades to nothing if it goes negative", () => {
+  test("stays a uint32, since the mixing degrades to nothing if it goes negative", () => {
     for (const name of [...NAMES, "část", "🎓", "x".repeat(500)]) {
       const h = hashSeed(name);
       expect(Number.isInteger(h)).toBe(true);
@@ -66,7 +66,7 @@ describe("the accent", () => {
 
   test("is stable per name and spreads across the real screen names", () => {
     for (const name of NAMES) expect(accentFor(name)).toBe(accentFor(name));
-    // Not "all different" — five accents cannot colour nine screens uniquely, and asserting
+    // Not "all different": five accents cannot colour nine screens uniquely, and asserting
     // that would be asserting a coincidence. What matters is that they do not collapse onto
     // one, which is what a broken hash looks like.
     expect(new Set(NAMES.map(accentFor)).size).toBeGreaterThan(2);
@@ -81,7 +81,7 @@ describe("the rendered cover", () => {
 
   test("is a background, not content: hidden from assistive tech and un-clickable", () => {
     // The screen's name is in the <h1> beside it, so announcing "image" here would add a stop
-    // on the way to the thing being labelled — and a full-bleed absolute layer that swallowed
+    // on the way to the thing being labelled, and a full-bleed absolute layer that swallowed
     // clicks would sit over the header's own action button.
     const html = draw("Pages");
     expect(html).toContain('aria-hidden="true"');

@@ -1,4 +1,4 @@
-// Schema migration — applied on boot, wrapped in a transaction by the caller.
+// Schema migration, applied on boot, wrapped in a transaction by the caller.
 // Runs over a Driver, so it works on any SQLite-flavored substrate (DO SQLite and
 // D1). The introspection (`PRAGMA table_info`, `sqlite_master`) and table-rebuild
 // are SQLite-specific; a Postgres/MySQL migrator would be a separate adapter.
@@ -8,31 +8,31 @@
 //   2. reconcile existing columns + drop obsolete ones. A live column the schema no
 //      longer declares is DROPPED, a type change is applied, a `renamedFrom` column is
 //      renamed, and a MODIFIER change on an existing column (NOT NULL / DEFAULT /
-//      PRIMARY KEY) is enacted — all via the standard SQLite table-rebuild (create new,
+//      PRIMARY KEY) is enacted, all via the standard SQLite table-rebuild (create new,
 //      copy, drop old, rename); UNIQUE is reconciled with a CREATE/DROP INDEX. Each
-//      change is classified SAFE (loses no data — applied always: a DEFAULT add/change,
+//      change is classified SAFE (loses no data, applied always: a DEFAULT add/change,
 //      dropping a constraint, adding NOT NULL when a backfill/default covers it, adding
 //      UNIQUE with no duplicates) or DESTRUCTIVE (GATED behind PRAMEN_ALLOW_DESTRUCTIVE,
 //      off by default: a drop, a type change, a rename, a PRIMARY KEY change, adding
 //      NOT NULL over NULL rows with no default). Adding UNIQUE over duplicate values is
-//      always SKIPPED (the index can't build). `hidden()`/`generated()` are ORM-only —
+//      always SKIPPED (the index can't build). `hidden()`/`generated()` are ORM-only:
 //      no physical column change, so they don't appear here.
 //
 // The guiding invariant: the schema hash is recorded ONLY when the store fully matches
 // the schema. Any detected change that is SKIPPED (destructive-gated, a UNIQUE-over-
-// duplicates, or a partition MOVE — see below) leaves the hash UNWRITTEN, so `schema
+// duplicates, or a partition MOVE, see below) leaves the hash UNWRITTEN, so `schema
 // status` keeps reporting drift and a later opt-in / data-fixed deploy retries. This is
 // what stops a modifier change (e.g. an unenforced NOT NULL) from silently diverging the
 // store from the schema while the hash claims "in sync". Local dev sets the flag on; a
 // bad deploy CAN then lose data (WIP, no backward-compat).
 //
 // A partition MOVE (an entity reassigned to a different Durable Object) is never auto-
-// applied — the data can't cross DOs — so it's detected and reported as a skipped manual
+// applied (the data can't cross DOs) so it's detected and reported as a skipped manual
 // migration (hash withheld), leaving the source DO's data intact.
 //
 // A schema hash in the internal `_pramen_meta` table lets an unchanged schema skip
 // introspection entirely on warm boots. The live table (PRAGMA) is the ground
-// truth diffed against the schema — no stored shape needed.
+// truth diffed against the schema; no stored shape needed.
 //
 // ADD COLUMN is always nullable (SQLite can't add NOT NULL to a populated table).
 // A rename can't be inferred from a diff (a removed + added column is ambiguous),
@@ -60,20 +60,20 @@ export interface MigrationReport {
 
 export interface MigrateOptions {
   /** Apply destructive changes (drop/rebuild/type-change/table-drop). Off by default
-   * — data-loss is gated behind an explicit opt-in (env `PRAMEN_ALLOW_DESTRUCTIVE`).
+   * (data-loss is gated behind an explicit opt-in, env `PRAMEN_ALLOW_DESTRUCTIVE`).
    * Additive changes (create table, add column, add index) always apply. */
   allowDestructive?: boolean;
   /** Scope the migration to a single partition (Durable Object class). When set,
-   * migrate operates ONLY on entities whose `partition` matches — it creates/alters
+   * migrate operates ONLY on entities whose `partition` matches: it creates/alters
    * just that partition's tables and never drops other partitions' tables (a
    * partition-DO never sees them). The schema hash is stored under a per-partition
    * key so partitions don't thrash each other's drift detection. When unset, all
-   * entities are migrated and the legacy single-hash key is used (unchanged — the
+   * entities are migrated and the legacy single-hash key is used (unchanged, for the
    * D1 path and existing callers). */
   partition?: string;
 }
 
-/** Internal bookkeeping tables the migrator must never touch — pramen's own, SQLite's,
+/** Internal bookkeeping tables the migrator must never touch: pramen's own, SQLite's,
  * and the substrate's (D1 keeps `_cf_*` / `d1_*` tables in sqlite_master and forbids
  * dropping them). Matched case-insensitively. */
 function isInternalTable(name: string): boolean {
@@ -111,7 +111,7 @@ async function tableColumns(driver: Driver, table: string): Promise<Map<string, 
 
 /** The constraint-bearing facts a migrator compares against a schema field's modifiers:
  * SQL type, NOT NULL, PRIMARY KEY membership, and the raw DEFAULT text (as reported by
- * PRAGMA — e.g. `'pending'`, `1`, `datetime('now')`, or null). */
+ * PRAGMA, e.g. `'pending'`, `1`, `datetime('now')`, or null). */
 interface LiveColumn {
   type: string;
   notNull: boolean;
@@ -197,7 +197,7 @@ async function compositeHasDuplicates(driver: Driver, table: string, cols: reado
 
 /** Normalize a DEFAULT's SQL text for comparison: trim, and strip balanced outer
  * parens (SQLite reports an expr default with or without the wrapping parens the DDL
- * emitted — `(datetime('now'))` vs `datetime('now')` — depending on the engine, so the
+ * emitted, `(datetime('now'))` vs `datetime('now')`, depending on the engine, so the
  * comparison must not depend on them). */
 function normalizeDefault(s: string | null): string | null {
   if (s == null) return null;
@@ -235,7 +235,7 @@ async function writeMeta(driver: Driver, key: string, value: string): Promise<vo
  * REFERENCES `table`, with everything needed to drop + faithfully restore them around a
  * rebuild of `table`: their column list, their exact CREATE TABLE DDL, and their index
  * DDL (both verbatim from sqlite_master). Needed because `DROP TABLE parent` performs an
- * implicit `DELETE FROM parent`, and `defer_foreign_keys` defers only violation CHECKS —
+ * implicit `DELETE FROM parent`, and `defer_foreign_keys` defers only violation CHECKS:
  * ON DELETE actions still fire (CASCADE/SET NULL corrupt the holders' rows; RESTRICT
  * aborts immediately). SQLite's official escape (`PRAGMA foreign_keys=OFF`) is
  * unavailable on DO SQLite and D1, so the holders are quarantined instead. */
@@ -261,14 +261,14 @@ async function liveReferencingHolders(
  * type change; brand-new columns left NULL), drop the old table, rename the temp.
  *
  * FK safety: dropping the old table implicit-DELETEs its rows, which fires the ON DELETE
- * actions of any live FK that references it — even under `defer_foreign_keys` (deferral
+ * actions of any live FK that references it, even under `defer_foreign_keys` (deferral
  * postpones checks, not actions). So every live referencing holder is QUARANTINED first
  * (bare FK-less copy of its rows, table dropped) and restored from its verbatim DDL after
- * the swap — all inside the same atomic step, so the holders' rows can never be cascaded
+ * the swap, all inside the same atomic step, so the holders' rows can never be cascaded
  * away, nulled, or trip a RESTRICT mid-rebuild. A SELF-referential FK gets the same
  * treatment applied to the rebuilt table itself: the plain tmp+rename swap would give tmp
  * a live FK into the old table right when it's dropped, so the swap goes through a bare
- * (FK-less) copy instead — quarantine out, recreate final, copy back. */
+ * (FK-less) copy instead: quarantine out, recreate final, copy back. */
 async function rebuildTable(
   driver: Driver,
   table: string,
@@ -286,7 +286,7 @@ async function rebuildTable(
     if (!src) continue; // brand-new column with no source -> leave NULL
     const target = sqlType(f);
     let expr = live.get(src) === target ? quoteIdent(src) : `CAST(${quoteIdent(src)} AS ${target})`;
-    // Backfill NULLs when the target is NOT NULL and carries a default — makes adding
+    // Backfill NULLs when the target is NOT NULL and carries a default, which makes adding
     // NOT NULL to a column with NULL rows safe (the copy fills them from the default),
     // instead of the INSERT failing the new NOT NULL constraint.
     const notNull = !!f.notNull || !!f.primaryKey;
@@ -297,8 +297,8 @@ async function rebuildTable(
   }
 
   const holders = await liveReferencingHolders(driver, table);
-  // Self-referential FK — declared in the new shape (and surviving skipFks) or live on
-  // the old table — forces the bare-copy swap for the table itself.
+  // A self-referential FK, declared in the new shape (and surviving skipFks) or live on
+  // the old table, forces the bare-copy swap for the table itself.
   const declaredSelf = [...declaredForeignKeys(def)].some(([col, s]) => s.target === table && !skipFks?.has(col));
   const liveSelf = [...(await liveForeignKeys(driver, table)).values()].some((s) => s.target === table);
   const selfRef = declaredSelf || liveSelf;
@@ -308,7 +308,7 @@ async function rebuildTable(
   // ATOMICALLY: the D1 driver's batch() defers FK checks to the batch commit, and on the
   // DO the ambient boot transaction (+ defer set at migrate start) already covers it.
   const stmts: { sql: string; params: CellValue[] }[] = [];
-  // Quarantine tables are bare column lists — untyped, no constraints, no FKs. Values
+  // Quarantine tables are bare column lists: untyped, no constraints, no FKs. Values
   // round-trip verbatim (they were already coerced by the original table's affinity).
   const bareCopy = (name: string, quotedCols: string[]): string => `CREATE TABLE ${quoteIdent(name)} (${quotedCols.join(", ")})`;
   // 1. Quarantine every live holder referencing this table (FK-less row copy, then drop),
@@ -384,20 +384,20 @@ async function fkColumnHasOrphans(driver: Driver, table: string, col: string, ta
 }
 
 export async function migrate(driver: Driver, schema: SchemaDef, opts: MigrateOptions = {}): Promise<MigrationReport> {
-  // Static schema invariants (relation targets exist, no cross-partition relations) —
+  // Static schema invariants (relation targets exist, no cross-partition relations),
   // checked before any DDL so a bad schema fails fast on boot / the D1 path, not mid-migration.
   validateSchema(schema);
   await driver.exec(`CREATE TABLE IF NOT EXISTS _pramen_meta (key TEXT PRIMARY KEY, value TEXT)`, []);
   // Defer FK checks to the end of the migration transaction so drop/rebuild steps don't
   // trip an immediate FK violation. On the DO the whole migrate runs in one transaction, so
   // this one PRAGMA covers everything; on D1 (no ambient transaction) rebuilds instead go
-  // through driver.batch(), which sets its own defer — so this is a harmless no-op there.
+  // through driver.batch(), which sets its own defer, so this is a harmless no-op there.
   await driver.exec(`PRAGMA defer_foreign_keys = ON`, []);
   const allowDestructive = opts.allowDestructive ?? false;
   // Resolve a referenced entity's PK column (for FOREIGN KEY ... REFERENCES emission).
   const pkOf = (entity: string): string => pkColumnOf(schema[entity]);
 
-  // When a partition is named, narrow the schema to just that partition's entities —
+  // When a partition is named, narrow the schema to just that partition's entities:
   // every later pass (create/alter/rebuild/drop/index/hash) iterates this subset, so
   // a partition-DO only ever touches its own tables. Unset ⇒ the whole schema, the
   // legacy (default) behavior.
@@ -426,11 +426,11 @@ export async function migrate(driver: Driver, schema: SchemaDef, opts: MigrateOp
   const rebuilt: string[] = [];
   const droppedTables: string[] = [];
   const skipped: string[] = [];
-  // Per-table: columns whose new `unique()` can't be indexed (duplicate values) — the
+  // Per-table: columns whose new `unique()` can't be indexed (duplicate values). The
   // index pass must skip them so it doesn't throw. They're already reported in `skipped`.
   const uniqueIndexSkip = new Map<string, Set<string>>();
   // Per-table: composite-unique tuples (keyed by compositeKey) whose new index can't be
-  // built (duplicate tuples present) — skipped by the index pass, reported in `skipped`.
+  // built (duplicate tuples present), skipped by the index pass, reported in `skipped`.
   const compositeUniqueSkip = new Map<string, Set<string>>();
 
   for (const [table, def] of entries) {
@@ -440,9 +440,9 @@ export async function migrate(driver: Driver, schema: SchemaDef, opts: MigrateOp
       created.push(table);
       continue;
     }
-    // Pass 1 — additive: add any column the schema declares but the table lacks.
+    // Pass 1, additive: add any column the schema declares but the table lacks.
     // SQLite forbids ALTER ADD COLUMN with a non-constant DEFAULT (e.g. expr.now()),
-    // so such a column is added via a table rebuild instead — which is still additive
+    // so such a column is added via a table rebuild instead, which is still additive
     // (no data loss): the rebuild's INSERT omits the new column, so SQLite applies its
     // CREATE TABLE default, backfilling existing rows. Flagged here, done in Pass 2.
     let needsAdditiveRebuild = false;
@@ -456,7 +456,7 @@ export async function migrate(driver: Driver, schema: SchemaDef, opts: MigrateOp
       added.push(`${table}.${name}`);
     }
 
-    // Pass 2 — reconcile existing columns against the schema. Rebuild the table when a
+    // Pass 2, reconcile existing columns against the schema. Rebuild the table when a
     // live column must be dropped, a declared column changed type, a rename hint points
     // at an existing live column, or a MODIFIER changed on an existing column (NOT NULL,
     // DEFAULT, PRIMARY KEY). UNIQUE is reconciled with an index (create/drop), no rebuild.
@@ -477,7 +477,7 @@ export async function migrate(driver: Driver, schema: SchemaDef, opts: MigrateOp
     // Modifier reconciliation on existing (same-named) columns. A change to NOT NULL /
     // DEFAULT / PRIMARY KEY is enacted by a table rebuild (which reconstructs the column
     // to its exact declared shape); UNIQUE is an index op. Classify each as either a
-    // SAFE change (loses no data — applied always) or a DESTRUCTIVE one (gated behind
+    // SAFE change (loses no data, applied always) or a DESTRUCTIVE one (gated behind
     // allowDestructive). `hidden()`/`generated()` are ORM-only (no physical column
     // change), so they never appear here.
     let modifierRebuildSafe = false; // default add/change/remove, notNull widen, safe notNull add
@@ -486,16 +486,16 @@ export async function migrate(driver: Driver, schema: SchemaDef, opts: MigrateOp
     const dropUniqueCols: string[] = []; // `unique()` removed -> drop the managed index
     for (const [name, field] of Object.entries(def.fields)) {
       const info = liveInfo.get(name);
-      if (!info) continue; // new column (Pass 1) or a rename target — not an existing column
+      if (!info) continue; // new column (Pass 1) or a rename target, not an existing column
       const f = field as FieldDef;
       const fieldPk = !!f.primaryKey;
       const fieldNotNull = !!f.notNull || fieldPk;
 
-      // DEFAULT add / change / remove — a rebuild backfills existing rows and applies the
+      // DEFAULT add / change / remove: a rebuild backfills existing rows and applies the
       // new default going forward; no data loss.
       if (normalizeDefault(defaultSqlValue(f)) !== normalizeDefault(info.default)) modifierRebuildSafe = true;
 
-      // NOT NULL — PRAGMA reports notnull=0 for a PRIMARY KEY column, so only compare on
+      // NOT NULL: PRAGMA reports notnull=0 for a PRIMARY KEY column, so only compare on
       // non-PK columns (PK-ness is compared separately below).
       if (!fieldPk && !info.pk) {
         if (fieldNotNull && !info.notNull) {
@@ -507,17 +507,17 @@ export async function migrate(driver: Driver, schema: SchemaDef, opts: MigrateOp
             modifierRebuildSafe = true; // no NULLs, or backfilled from the default
           }
         } else if (!fieldNotNull && info.notNull) {
-          modifierRebuildSafe = true; // dropping NOT NULL only widens — safe
+          modifierRebuildSafe = true; // dropping NOT NULL only widens, so it is safe
         }
       }
 
-      // PRIMARY KEY change — reshapes the table's key; treat as destructive.
+      // PRIMARY KEY change: reshapes the table's key; treat as destructive.
       if (fieldPk !== info.pk) {
         modifierRebuildDestructive = true;
         destructiveReasons.push(`PRIMARY KEY ${name}`);
       }
 
-      // UNIQUE — reconciled with an index (create/drop), not a rebuild.
+      // UNIQUE: reconciled with an index (create/drop), not a rebuild.
       const fieldUnique = !!f.unique;
       if (fieldUnique && !liveUnique.has(name)) {
         // Added: safe only if no duplicate values exist; otherwise the index can't build.
@@ -527,12 +527,12 @@ export async function migrate(driver: Driver, schema: SchemaDef, opts: MigrateOp
         }
         // else: the index pass creates it below (no rebuild needed).
       } else if (!fieldUnique && liveUnique.has(name)) {
-        dropUniqueCols.push(name); // drop the managed unique index (safe — no data loss)
+        dropUniqueCols.push(name); // drop the managed unique index (safe, no data loss)
       }
     }
 
     // Foreign keys (belongsTo with onDelete). SQLite can't ALTER a table to add/change an
-    // FK, so any FK delta is enacted by a rebuild (safe — no data loss). An FK being ADDED
+    // FK, so any FK delta is enacted by a rebuild (safe, no data loss). An FK being ADDED
     // over data with orphaned references is skipped (reported) and left out of the rebuild,
     // mirroring the unique-over-duplicates behavior, so the migration doesn't fail.
     const declaredFks = declaredForeignKeys(def);
@@ -554,7 +554,7 @@ export async function migrate(driver: Driver, schema: SchemaDef, opts: MigrateOp
 
     const destructive = needsDrop || needsTypeChange || renamedSources.size > 0 || modifierRebuildDestructive;
     if (destructive && !allowDestructive) {
-      // The destructive part is gated off — skip the whole rebuild (any pending safe
+      // The destructive part is gated off, so skip the whole rebuild (any pending safe
       // rebuild for this table waits until destructive migrations are allowed).
       const reasons = [
         ...(needsDrop ? ["drop"] : []),
@@ -565,14 +565,14 @@ export async function migrate(driver: Driver, schema: SchemaDef, opts: MigrateOp
       skipped.push(`rebuild ${table} (${reasons.join(", ")})`);
     } else if (destructive || needsAdditiveRebuild || modifierRebuildSafe || fkChanged) {
       // A safe rebuild (expr-default column, default/notNull modifier change, FK add/change)
-      // needs no permission — it loses no data.
+      // needs no permission, because it loses no data.
       await rebuildTable(driver, table, def, live, pkOf, fkSkip);
       rebuilt.push(table);
     }
 
     // Drop the managed unique index for a column that no longer declares `unique()`. A
     // rebuild already dropped every index (and the index pass won't recreate this one),
-    // so this only matters when no rebuild ran — DROP INDEX IF EXISTS is a safe no-op
+    // so this only matters when no rebuild ran: DROP INDEX IF EXISTS is a safe no-op
     // otherwise. No data loss either way.
     for (const col of dropUniqueCols) {
       await driver.exec(`DROP INDEX IF EXISTS ${quoteIdent(indexName(table, col))}`, []);
@@ -597,8 +597,8 @@ export async function migrate(driver: Driver, schema: SchemaDef, opts: MigrateOp
     }
   }
 
-  // A partition MOVE — an entity that was applied in THIS partition before but the
-  // current schema assigns to a DIFFERENT partition — is NOT auto-migratable: the data
+  // A partition MOVE (an entity that was applied in THIS partition before but the
+  // current schema assigns to a DIFFERENT partition) is NOT auto-migratable: the data
   // lives in this DO's SQLite and boot migration can't move it across DOs. Detect it
   // (scoped path only; the unscoped/single-store path never strands data), report it as
   // a skipped manual migration, and leave the table in place so its data is preserved
@@ -610,7 +610,7 @@ export async function migrate(driver: Driver, schema: SchemaDef, opts: MigrateOp
       for (const t of Object.keys(prevApplied)) {
         if (!inScope.has(t) && t in schema && partitionOf(schema, t) !== opts.partition) {
           skipped.push(
-            `move partition ${t} (${opts.partition} → ${partitionOf(schema, t)}) — data stays in this DO; manual cross-DO migration required`,
+            `move partition ${t} (${opts.partition} → ${partitionOf(schema, t)}): data stays in this DO; manual cross-DO migration required`,
           );
         }
       }
@@ -627,7 +627,7 @@ export async function migrate(driver: Driver, schema: SchemaDef, opts: MigrateOp
 
   // Drop tables the schema no longer declares (internal bookkeeping tables skipped).
   // When scoped to a partition, a live table that belongs to ANOTHER partition's
-  // entity must NOT be dropped — a partition-DO never owns it, and even when several
+  // entity must NOT be dropped: a partition-DO never owns it, and even when several
   // partitions share a store the other partition's reconciler owns that table. So the
   // drop candidate set is: live tables that are neither in this scope's declared
   // entities nor declared by any other partition. (Unscoped: `otherPartitionTables`
@@ -646,12 +646,12 @@ export async function migrate(driver: Driver, schema: SchemaDef, opts: MigrateOp
   }
 
   // Only record the schema as applied when fully reconciled. If destructive changes
-  // were skipped, leave the hash so a later deploy (with allowDestructive) retries —
+  // were skipped, leave the hash so a later deploy (with allowDestructive) retries;
   // additive work is idempotent, so re-running is safe.
   if (skipped.length === 0) {
     await writeMeta(driver, hashKey, current);
     // Persist the applied table→columns so /admin/schema reports it without a raw
-    // PRAGMA at request time — workerd's SQLite authorizer rejects PRAGMA once the
+    // PRAGMA at request time: workerd's SQLite authorizer rejects PRAGMA once the
     // DO-storage alarm API has run in the object. Migrate runs on boot, before any.
     await writeMeta(driver, tablesKey, tablesValue());
   } else {

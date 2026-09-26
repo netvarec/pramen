@@ -1,9 +1,9 @@
-// SharedBoot — the D1 store's once-per-isolate boot, shared across invocations (GitHub #51).
+// SharedBoot: the D1 store's once-per-isolate boot, shared across invocations (GitHub #51).
 //
 // The failure it exists for: the request that STARTS the boot is canceled by its caller
 // (a proxy ceiling on the legitimately slow first request after a deploy), the Workers
 // runtime cancels that invocation's pending I/O, and a promise chained on canceled I/O
-// never settles — so a bare memoized promise wedges every later request in the isolate,
+// never settles, so a bare memoized promise wedges every later request in the isolate,
 // forever. These tests model that as a boot that never settles and never reports progress,
 // and assert the memo heals itself instead of trusting the orphan for its lifetime.
 
@@ -61,7 +61,7 @@ describe("SharedBoot", () => {
     const second = boot.ensure(() => sleep(10), (p) => kept.push(p));
     await Promise.all([first, second]);
     expect(kept.length).toBe(1);
-    // It never rejects — waitUntil must not see a boot failure as its own error.
+    // It never rejects: waitUntil must not see a boot failure as its own error.
     await kept[0];
   });
 
@@ -70,7 +70,7 @@ describe("SharedBoot", () => {
     const orphaned: number[] = [];
     const boot = new SharedBoot({ staleMs: STALE, onOrphaned: (idle) => orphaned.push(idle) });
     const wedged = new Promise<void>(() => {}); // canceled I/O: never settles
-    // The starter's own await hangs (its caller will time out) — that is the isolate's
+    // The starter's own await hangs (its caller will time out); that is the isolate's
     // first request. Don't await it.
     void boot.ensure(() => wedged).catch(() => {});
     await sleep(STALE + 10);
@@ -98,7 +98,7 @@ describe("SharedBoot", () => {
       ranFresh = true;
     });
     expect(ranFresh).toBe(true);
-    // It waited out the staleness window rather than forever — and not much longer.
+    // It waited out the staleness window rather than forever, and not much longer.
     expect(Date.now() - started).toBeGreaterThanOrEqual(STALE - 10);
     expect(Date.now() - started).toBeLessThan(STALE * 4);
   });

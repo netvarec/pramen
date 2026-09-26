@@ -1,4 +1,4 @@
-// Driver + Dialect — the substrate seam. pramen's ACL, read-engine, repository, and
+// Driver + Dialect: the substrate seam. pramen's ACL, read-engine, repository, and
 // migrator are written against these two interfaces, so the same data layer runs
 // over any SQL backend:
 //
@@ -31,7 +31,7 @@ export interface Dialect {
 const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 // Column/table names come from developer schema keys (and validated `where` keys),
-// never raw user input — but we still guard the identifier shape before interpolating.
+// never raw user input, but we still guard the identifier shape before interpolating.
 function checkIdent(name: string): string {
   if (!IDENT_RE.test(name)) throw new Error(`invalid identifier: ${name}`);
   return name;
@@ -41,7 +41,7 @@ function checkIdent(name: string): string {
  * shape first. SQLite (DO SQLite + D1) and Postgres all accept double-quoted
  * identifiers, so a column/table named after a reserved word (`order`, `group`, …)
  * is safe and case is preserved. The single source of truth for both dialects and
- * the DDL generator — keep every emitted identifier going through this. */
+ * the DDL generator, so keep every emitted identifier going through this. */
 export function quoteIdent(name: string): string {
   return `"${checkIdent(name)}"`;
 }
@@ -74,14 +74,14 @@ export interface Driver {
   /** Run `fn` inside a transaction: commit on resolve, roll back on throw. */
   transaction<T>(fn: () => Promise<T>): Promise<T>;
   /** Run a fixed sequence of write statements ATOMICALLY with FK checks deferred to the
-   * end — for a table rebuild that involves foreign keys (drop + recreate would trip an
+   * end, for a table rebuild that involves foreign keys (drop + recreate would trip an
    * immediate FK check). Optional: absent on a driver whose migrate already runs inside a
    * transaction (the DO), where the migrator falls back to sequential exec. Provided by the
-   * D1 driver (no interactive transactions — uses db.batch(), itself atomic). */
+   * D1 driver (no interactive transactions; it uses db.batch(), itself atomic). */
   batch?(statements: ReadonlyArray<{ sql: string; params: unknown[] }>): Promise<void>;
 }
 
-/** DO SQLite — the in-process store. `SqlStorage` is synchronous; we wrap it as an
+/** DO SQLite: the in-process store. `SqlStorage` is synchronous; we wrap it as an
  * async Driver. Transactions use the DO's atomic `transaction()`. */
 export class DoSqliteDriver implements Driver {
   readonly dialect = sqliteDialect;
@@ -97,29 +97,29 @@ export class DoSqliteDriver implements Driver {
 }
 
 /** How a D1Driver's session is anchored (passed to `db.withSession`):
- *   - `"first-primary"`       — first query hits the primary (current data), the rest
+ *   - `"first-primary"`: first query hits the primary (current data), the rest
  *                               read replicas consistent with the session bookmark. Use
  *                               for a MUTATION (reads must see current data; writes go
  *                               to primary anyway).
- *   - `"first-unconstrained"` — first query may hit the nearest replica. Use for a QUERY.
- *   - a bookmark string       — anchor at a prior write's bookmark for read-your-writes
+ *   - `"first-unconstrained"`: first query may hit the nearest replica. Use for a QUERY.
+ *   - a bookmark string: anchor at a prior write's bookmark for read-your-writes
  *                               (the client carries it forward via a header).
  * A bookmark always wins over a constraint when one is supplied. */
 export type D1SessionStart = "first-primary" | "first-unconstrained" | (string & {});
 
 /** Does this statement mutate? Used only to notice a partial write after a failed
- * mutation — deliberately coarse: over-reporting a warning is harmless, missing one is not. */
+ * mutation. Deliberately coarse: over-reporting a warning is harmless, missing one is not. */
 const WRITE_SQL = /^\s*(insert|update|delete|replace|create|drop|alter)\b/i;
 
-/** D1 — SQLite over RPC. Async by nature.
+/** D1: SQLite over RPC. Async by nature.
  *
  * Read replicas (Sessions API): every D1Driver opens ONE `db.withSession(start)` and
  * runs all `exec` through it. Writes in a session always land on the primary; the
  * `start` only chooses where the FIRST read may begin. The session maintains a
  * bookmark (`getBookmark()`) so later reads are sequentially consistent with earlier
- * writes — read-your-writes when the bookmark is threaded across requests.
+ * writes, giving read-your-writes when the bookmark is threaded across requests.
  *
- * ATOMICITY LIMIT (intentional): D1 has NO interactive transactions — a session can't
+ * ATOMICITY LIMIT (intentional): D1 has NO interactive transactions. A session can't
  * read mid-`batch()`, and pramen mutations interleave reads + writes + RETURNING +
  * trigger-into-outbox inside one `transaction()`. So `transaction(fn) = fn()`: each
  * statement auto-commits on its own, and a multi-statement mutation does NOT roll back
@@ -143,7 +143,7 @@ export class D1Driver implements Driver {
    *
    * There is no rollback here (see the ATOMICITY LIMIT above), so a mutation that throws
    * midway leaves whatever it had already written. Counting the writes lets the caller say
-   * so out loud instead of surfacing a half-applied mutation as an ordinary 500 — the
+   * so out loud instead of surfacing a half-applied mutation as an ordinary 500: the
    * difference between "the request failed" and "the request failed and your data is now
    * in a state no code path intended". */
   writtenCount(): number {
@@ -158,7 +158,7 @@ export class D1Driver implements Driver {
     return this.session.getBookmark();
   }
 
-  // D1 has no interactive/atomic transactions — see the class doc. Run `fn` as-is.
+  // D1 has no interactive/atomic transactions. See the class doc. Run `fn` as-is.
   transaction<T>(fn: () => Promise<T>): Promise<T> {
     return fn();
   }

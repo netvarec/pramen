@@ -1,6 +1,6 @@
 // D1-backed end-to-end: the SAME schema / ACL / read engine running over a real D1
 // binding (the "Worker + D1, no DO" path, selected via `x-pramen-store: d1`). Proves
-// the Driver seam works end-to-end in miniflare — auth, row scoping, field
+// the Driver seam works end-to-end in miniflare: auth, row scoping, field
 // projection, cell-level ACL, writes, and aggregates all run over D1, not just the
 // DO. (Live queries are intentionally DO-only and not exercised here.)
 
@@ -107,7 +107,7 @@ export async function runD1(base: string): Promise<void> {
   assert(live.body.ok, "D1: RPC remains available (live queries require the DO store)");
 
   // --- deferred tasks over D1: enqueue in a D1 mutation, drain the D1 outbox in the
-  // Worker (no DO alarm on this path — drained via /admin/tasks/drain or a Cron). ---
+  // Worker (no DO alarm on this path, so drained via /admin/tasks/drain or a Cron). ---
   const notif = await post("createNoteAndNotify", { title: "d1-note", to: "d1@example.com" }, T.admin);
   assert(notif.body.ok, "D1: createNoteAndNotify enqueues a task into the D1 outbox");
   const drained = (await fetch(`${base}/admin/tasks/drain`, {
@@ -122,7 +122,7 @@ export async function runD1(base: string): Promise<void> {
   // --- read replicas (Sessions API) + read-your-writes via the bookmark round-trip.
   // Every D1-path response carries `x-pramen-d1-bookmark` (the session's latest
   // bookmark), so we can assert the session plumbing is wired and thread it forward.
-  // Local D1/miniflare is single-node, so true replica lag isn't observable — we assert
+  // Local D1/miniflare is single-node, so true replica lag isn't observable: we assert
   // the PLUMBING (session used, bookmark set + honored), not latency. ---
   const q = await postH("listNotes", {}, T.alice);
   assert(typeof q.bookmark === "string" && q.bookmark.length > 0, "D1: a query runs via a D1 session and returns an x-pramen-d1-bookmark header");
@@ -139,7 +139,7 @@ export async function runD1(base: string): Promise<void> {
   const ryw = await postH("listNotes", {}, T.alice, wrote.bookmark!);
   assert(
     Array.isArray(ryw.body.result) && ryw.body.result.some((n: any) => n.id === wrote.body.result.id),
-    "D1: read-your-writes — a read anchored at the write's bookmark sees the new row",
+    "D1: read-your-writes, a read anchored at the write's bookmark sees the new row",
   );
   assert(typeof ryw.bookmark === "string" && ryw.bookmark.length > 0, "D1: the bookmarked read also returns a fresh bookmark to carry forward");
 

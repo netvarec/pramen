@@ -60,7 +60,7 @@ describe("ctx.queue producer facade", () => {
     const env = {
       JOBS: { send: () => {}, sendBatch: () => {} }, // a queue
       EVENTS: { send: () => {}, sendBatch: () => {} }, // another queue
-      EMAIL: { send: () => {} }, // email binding — send only, NOT a queue
+      EMAIL: { send: () => {} }, // email binding: send only, NOT a queue
       KV: { get: () => {}, put: () => {} }, // not a queue
       AUTH_SECRET: "x", // a var
     };

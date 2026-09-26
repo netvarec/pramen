@@ -1,4 +1,4 @@
-// The types overview (`/schema`) — block types and content types, and the way into their
+// The types overview (`/schema`): block types and content types, and the way into their
 // builders.
 //
 // `/schema`, not `/types`: `/types/:slug` is already ONE content type's page list (the tab

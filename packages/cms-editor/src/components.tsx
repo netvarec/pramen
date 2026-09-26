@@ -28,13 +28,13 @@ import { MEDIA_KIND_KEYS, MEDIA_KINDS, MEDIA_SORT_KEYS, MEDIA_SORTS } from "./ty
 
 export type InspectorTab = "settings" | "seo" | "i18n" | "terms" | "audit";
 // `workflow` is deliberately NOT here any more. Publishing is what someone opened the editor
-// to do, and it was a lowercase ghost button among five that looked like filter chips — you
+// to do, and it was a lowercase ghost button among five that looked like filter chips: you
 // had to know the word "workflow" meant "publish". The transitions now live in the toolbar,
 // where the state they act on is already shown.
 export const INSPECTOR_TABS: InspectorTab[] = ["settings", "seo", "i18n", "terms", "audit"];
 
 /** What each tab is called on screen. A table rather than a CSS `capitalize`, which renders
- * "seo" as "Seo" and "i18n" as "I18n" — both wrong, and wrong in the one place a reader is
+ * "seo" as "Seo" and "i18n" as "I18n", both wrong, and wrong in the one place a reader is
  * scanning for the word they want. */
 export const INSPECTOR_TAB_KEYS = {
   settings: "pageEditor.tab.settings",
@@ -57,7 +57,7 @@ export const INSPECTOR_TAB_LABELS: Readonly<Record<InspectorTab, string>> = {
 /** One workflow transition the page can make from where it is. */
 export interface PageAction {
   label: string;
-  /** The RPC handler name — `publishPage`, `approve`, … */
+  /** The RPC handler name: `publishPage`, `approve`, … */
   action: string;
 }
 
@@ -74,8 +74,8 @@ export interface PageAction {
  * `published` used to offer Unpublish and nothing else, on the reading that publishing is a
  * one-way status flip and a live page has nowhere left to go. That reading is wrong about
  * what `publishPage` DOES: it bakes the assembled page into a revision and points
- * `currentRevisionId` at it, and that snapshot — not the row the editor has been writing to
- * — is what the public content API serves. So an edit to a live page saves, versions,
+ * `currentRevisionId` at it, and that snapshot (not the row the editor has been writing
+ * to) is what the public content API serves. So an edit to a live page saves, versions,
  * shows in History, and is invisible on the site, with no button anywhere that would put it
  * there. The only way through was Unpublish followed by Publish, which takes the page OFF
  * the internet to push a typo fix. Re-publishing is idempotent (`doPublish` re-snapshots and
@@ -88,7 +88,7 @@ export function pageWorkflowActions(status: string): PageAction[] {
       return [
         { label: t("workflow.approve"), action: "approve" },
         { label: t("workflow.reject"), action: "reject" },
-        // The solo operator's escape from the two-actor pipeline — same endpoint the draft
+        // The solo operator's escape from the two-actor pipeline: the same endpoint the draft
         // path offers, kept reachable so a reviewer is not forced through their own review.
         { label: t("workflow.publishDirectly"), action: "publishPage" },
       ];
@@ -108,7 +108,7 @@ export function pageWorkflowActions(status: string): PageAction[] {
 }
 
 /** The tabs a deployment actually shows. ONE definition, used by the tab bar, the panel
- * switch and the route's deep-link fallback — three places that previously each re-derived
+ * switch and the route's deep-link fallback, three places that previously each re-derived
  * "is i18n visible?" and could disagree.
  *
  * `terms` follows `siteFurniture` for the same reason `i18n` follows `multilingual`: on a
@@ -120,7 +120,7 @@ export function visibleTabs(multilingual: boolean, siteFurniture = false): Inspe
 }
 
 /** Collections-only deployments hide the block/page builder entirely. Read in one place so
- * the nav, the landing redirect and the per-type route cannot disagree about it — a deep
+ * the nav, the landing redirect and the per-type route cannot disagree about it: a deep
  * link to `/types/:slug` used to render the very builder this flag exists to hide. */
 export function pagesHidden(): boolean {
   return typeof window !== "undefined" && window.PRAMEN_CMS_EDITOR?.hidePages === true;
@@ -130,7 +130,7 @@ export function pagesHidden(): boolean {
  * Does this deployment get one tab and one list PER CONTENT TYPE?
  *
  * ONE definition, used by the tab bar, the landing redirect and the page editor's back
- * target — the same reason `visibleTabs` exists. Three places re-deriving the whole nav
+ * target, the same reason `visibleTabs` exists. Three places re-deriving the whole nav
  * shape is three places that can disagree about which screen `/` is.
  *
  * - `null` content types mean NOT ANSWERED YET, and answer `false` without committing: the
@@ -183,13 +183,13 @@ const Hero = PageHeader;
 // just the button.
 //
 // The header grew a cover (see `Hero`), and a saturated pill on top of it was a panel inside
-// a panel — a second filled surface competing with the artwork for the same corner. The
+// a panel: a second filled surface competing with the artwork for the same corner. The
 // sentence went with it because by then it was the third telling of one fact: the title above
 // says "Media / None yet", the empty state below says "No media yet. Upload images to…", and
 // the button itself says "+ Upload".
 //
 // It also carried a real bug, visible only on the dark theme. The wrapper was `bg-brand-green`
-// (#75e7b8) and podoba maps `brand-primary` — what a default `Button` fills with — onto
+// (#75e7b8) and podoba maps `brand-primary` (what a default `Button` fills with) onto
 // #75e7b8 in dark. Mint on mint: the button had no edge at all, and read as a run of text.
 // Sitting directly on `surface-card` it has proper contrast in both themes, which is the
 // contrast podoba designed for it.
@@ -235,11 +235,11 @@ function Pill({ status, children }: { status?: string; children: ReactNode }) {
  * A modal, on podoba's `Dialog`.
  *
  * It used to hand-compose `ModalOverlay` + `ModalSurface` + `ModalDialog` with its own
- * max-widths — the raw primitives podoba documents for "edge-to-edge / split modal
+ * max-widths, the raw primitives podoba documents for "edge-to-edge / split modal
  * compositions", which a form dialog is not. What that cost was everything `Dialog` puts
  * around the content: the ✕ (this app's modals could only be left by finding the word
  * "cancel", or by guessing that Esc works), the labelling `<Heading slot="title">`, the
- * `description` block, and the size presets — including `full`, the near-fullscreen canvas.
+ * `description` block, and the size presets, including `full`, the near-fullscreen canvas.
  *
  * `size` is passed straight through, so picking a modal's weight is one prop rather than a
  * `wide` boolean that meant 680px and nothing else.
@@ -286,7 +286,7 @@ function Banner({ ok, children }: { ok?: boolean; children: ReactNode }) {
 
 const Dim = ({ children }: { children: ReactNode }) => <span className="text-fg-subtle">{children}</span>;
 
-/** A one-line neutral panel with an optional way out — the loading / not-found / unknown-slug
+/** A one-line neutral panel with an optional way out: the loading / not-found / unknown-slug
  * state every route needs before (or instead of) its real screen. Four routes had it written
  * out verbatim; the copies had already drifted on which of them offered a way back. */
 export function Notice({ children, action }: { children: ReactNode; action?: ReactNode }) {
@@ -301,7 +301,7 @@ export function Notice({ children, action }: { children: ReactNode; action?: Rea
 // --- pages list --------------------------------------------------------------
 
 /** Page size for the page list. `listPages` caps server-side, so a request without an
- * explicit limit silently truncates — and the header then reports the truncated count as if
+ * explicit limit silently truncates, and the header then reports the truncated count as if
  * it were the total, which reads as "that is all there is". Same reason, same answer, as
  * `COLLECTION_PAGE_SIZE` below. */
 const PAGE_LIST_SIZE = 50;
@@ -310,14 +310,14 @@ const PAGE_LIST_SIZE = 50;
  * the SERVER for that type (narrowing a capped list here would drop the tail of every type),
  * the heading is the type's name, and the create modal opens on that type instead of asking
  * again. Omitted ⇒ the pooled list over every type, which is what a single-type deployment
- * should keep seeing — byte for byte, including the wording.
+ * should keep seeing, byte for byte, including the wording.
  *
  * It owns the fetching (like `CollectionList`) rather than taking rows as a prop, because
  * the two things that go wrong when a route owns them both go wrong invisibly: rows left
  * standing from the previous type while the heading has already flipped to the new one, and
  * a count that is really the server's cap. */
 export function PageList({ api, type, onOpen, onError }: { api: Api; type?: ContentType; onOpen: (p: Page) => void; onError: (s: string) => void }) {
-  // From the SERVER (listCmsCapabilities), not a local flag — see `CmsCapabilities`.
+  // From the SERVER (listCmsCapabilities), not a local flag. See `CmsCapabilities`.
   const { cms: { multilingual }, contentTypes } = useApp();
   const { t } = useI18n();
   // Whose words the list uses: its own type's, or on the pooled list the ONE type there is.
@@ -339,7 +339,7 @@ export function PageList({ api, type, onOpen, onError }: { api: Api; type?: Cont
   const list = usePagedList(fetchPage, PAGE_LIST_SIZE, onError);
   const pages = list.rows;
 
-  // Only for the empty state's hint, and it is a GLOBAL list — keyed on `api` alone so
+  // Only for the empty state's hint, and it is a GLOBAL list, keyed on `api` alone so
   // switching type tabs doesn't refetch it.
   useEffect(() => {
     api.listBlockTypes().then(setBlockTypes).catch((e) => onError(errMsg(e)));
@@ -348,7 +348,7 @@ export function PageList({ api, type, onOpen, onError }: { api: Api; type?: Cont
   // "pages", not "entries": these are pages of a content type, and a single-type deployment
   // must read exactly as it did before types had tabs. `type.name` is a label a host writes
   // (often plural, it labels the tab), so it heads the screen and is never bent into a noun
-  // phrase — "+ New Articles" is what guessing at grammar produces.
+  // phrase: "+ New Articles" is what guessing at grammar produces.
   const count = listSummary(list.phase, pages.length, { empty: t("common.noneYet"), forms: pageCountForms(wording) }, list.hasMore);
   return (
     <>
@@ -380,7 +380,7 @@ export function PageList({ api, type, onOpen, onError }: { api: Api; type?: Cont
 }
 
 function CreatePage({ api, type, onClose, onCreated, onError }: { api: Api; type?: ContentType; onClose: () => void; onCreated: () => void; onError: (s: string) => void }) {
-  // The app context already holds this list — a second fetch per modal open is a second
+  // The app context already holds this list: a second fetch per modal open is a second
   // cache of one list in one tree, with its own error policy.
   const { contentTypes } = useApp();
   const { t } = useI18n();
@@ -392,7 +392,7 @@ function CreatePage({ api, type, onClose, onCreated, onError }: { api: Api; type
   // (or an impatient second one on a slow network) filed the same page twice.
   const [busy, setBusy] = useState(false);
   // Re-sync, not seed-once. On a type-scoped list the type is decided by the screen you are
-  // on — and that screen can change UNDER an open modal: history navigation isn't blocked by
+  // on, and that screen can change UNDER an open modal: history navigation isn't blocked by
   // the overlay the way a topbar click is, and buzola keeps this component instance across
   // it. Seeded once, the modal kept filing the new screen's page under the old screen's type,
   // with the picker hidden so nothing on screen said so and `createPage` trusting the id.
@@ -414,11 +414,11 @@ function CreatePage({ api, type, onClose, onCreated, onError }: { api: Api; type
   };
   return (
     // `full`: creating a page is the one thing this screen exists to start, and the header's
-    // action should open a room rather than a panel. The form is centred and capped inside it
-    // — a canvas is what the takeover is for, not a reason to stretch two inputs across it.
+    // action should open a room rather than a panel. The form is centred and capped inside it.
+    // A canvas is what the takeover is for, not a reason to stretch two inputs across it.
     //
     // Name the type when the picker is hidden. Otherwise the whole modal says "page" and
-    // nothing on it says WHICH type the page is being filed under — on a per-type list that is
+    // nothing on it says WHICH type the page is being filed under: on a per-type list that is
     // the one fact the screen is supposed to be carrying.
     <Modal
       onClose={onClose}
@@ -473,12 +473,12 @@ function CreatePage({ api, type, onClose, onCreated, onError }: { api: Api; type
 // --- collections -------------------------------------------------------------
 //
 // Generic list + edit views over a host-app entity registered as a collection. Both are
-// driven entirely by the CollectionMeta fetched from `listCollections` — one editor, N
+// driven entirely by the CollectionMeta fetched from `listCollections`: one editor, N
 // collections, zero per-collection code. Rows are addressed by `def.idField` (the entity's
 // PK column, defaults "id"); the server resolves the real PK from the value.
 
 /** Render a list-cell value as a short string (objects/arrays are summarized, not dumped).
- * A `richtext` column is a document tree, so flatten it to words rather than showing "—". */
+ * A `richtext` column is a document tree, so flatten it to words rather than showing "-". */
 function cellText(v: unknown): string {
   if (v == null) return "";
   if (typeof v === "boolean") return v ? t("collection.yes") : t("collection.no");
@@ -492,7 +492,7 @@ function cellText(v: unknown): string {
 }
 
 /** Page size for collection lists. collectionList defaults to 100 server-side, so a
- * request without an explicit limit silently truncates — and the header then reports the
+ * request without an explicit limit silently truncates, and the header then reports the
  * truncated count as if it were the total, which reads as "that is all there is". */
 const COLLECTION_PAGE_SIZE = 50;
 
@@ -540,7 +540,7 @@ export function CollectionList({ api, def, onOpen, onNew, onError }: { api: Api;
   );
 }
 
-/** The workflow surface for a collection row — the UI half of the server's `supports`.
+/** The workflow surface for a collection row: the UI half of the server's `supports`.
  *
  * Without this the feature is unreachable from the editor: `collectionCreate` always seeds
  * `status: "draft"` and `collectionUpdate` strips `status` from the values bag (it is a
@@ -727,7 +727,7 @@ export function CollectionEditor({ api, def, id, onSaved, onDeleted, onBack, bac
   // own singular label; an existing one takes its title field, and `undefined` while that is
   // still loading leaves the bar showing the section rather than a "Loading…" that then
   // changes under the reader's eye.
-  // Through `cellText`, the same function the LIST renders this very column with — so the
+  // Through `cellText`, the same function the LIST renders this very column with, so the
   // crumb and the row a reader clicked to get here say the same thing, rather than two
   // renderings of one `FieldValue` that can disagree about a rich-text or array cell.
   const title = cellText(values[def.titleField]);
@@ -754,7 +754,7 @@ export function CollectionEditor({ api, def, id, onSaved, onDeleted, onBack, bac
     setBusy(true);
     try {
       if (isNew) {
-        // Creating: a new record has no route yet — return to the list so the caller lands
+        // Creating: a new record has no route yet, so return to the list so the caller lands
         // somewhere stable (the new row is now in it).
         await api.call("collectionCreate", { collection: def.slug, values });
         onSaved();
@@ -795,8 +795,8 @@ export function CollectionEditor({ api, def, id, onSaved, onDeleted, onBack, bac
       ) : (
         <div className="flex max-w-[720px] flex-col gap-4">
           {ok ? <Banner ok>{t("collectionItem.saved")}</Banner> : null}
-          {/* Publishing is a separate, separately-gated call — `status` is a managed column
-              the ordinary save cannot touch — so the workflow controls live outside the
+          {/* Publishing is a separate, separately-gated call: `status` is a managed column
+              the ordinary save cannot touch, so the workflow controls live outside the
               form. Only on an existing row: there is nothing to publish until it exists. */}
           {!isNew && id ? (
             <CollectionWorkflow api={api} def={def} id={id} values={values} onChanged={setValues} onError={onError} />
@@ -827,7 +827,7 @@ export function CollectionEditor({ api, def, id, onSaved, onDeleted, onBack, bac
  * It exists because none of that was anywhere. The editor opened onto three columns of panels
  * with no header; the status appeared twice (a rail card and an inspector row) and the actions
  * that change it were behind a tab labelled "workflow", rendered as a lowercase ghost button
- * among five that read as filter chips. Publishing — the point of the screen — required
+ * among five that read as filter chips. Publishing, the point of the screen, required
  * knowing that word.
  *
  * Sticky, because a long page scrolls away from it and the save state has to stay visible.
@@ -851,7 +851,7 @@ function PageToolbar({ page, dirtyCount, onAct, busy }: {
    *
    * The tab is opened SYNCHRONOUSLY, before the round trip, and pointed at the link
    * afterwards. `window.open` called after an `await` has lost the user gesture that
-   * authorised it and is blocked by every browser's popup blocker — which is exactly why this
+   * authorised it and is blocked by every browser's popup blocker, which is exactly why this
    * used to only reveal a link and make you click it a second time.
    *
    * The link is still shown, and still copied: "look at my draft" and "send this to someone
@@ -859,12 +859,12 @@ function PageToolbar({ page, dirtyCount, onAct, busy }: {
    */
   const mintPreview = async () => {
     setMinting(true);
-    // `null` when the browser blocked it — the revealed link below is then the whole answer,
+    // `null` when the browser blocked it: the revealed link below is then the whole answer,
     // which is the state this had before and is still a working one.
     //
     // No `noopener` FEATURE, deliberately: passing it makes `window.open` return null by
     // spec, and the handle is the entire point here. The reference is severed after the
-    // navigation instead, which gets the same guarantee — the preview page can never reach
+    // navigation instead, which gets the same guarantee: the preview page can never reach
     // back into the editor through `window.opener`.
     const tab = window.open("", "_blank");
     try {
@@ -901,7 +901,7 @@ function PageToolbar({ page, dirtyCount, onAct, busy }: {
       <Pill status={page.status}>{statusLabel(page.status)}</Pill>
       <span className="flex-1" />
       {/* ONE line of truth about saving. Page fields and blocks autosave; this says so, and
-          says when they have not finished — replacing two identically-labelled "Save" buttons
+          says when they have not finished, replacing two identically-labelled "Save" buttons
           that saved different halves of the screen and a third surface that saved silently. */}
       <span className="shrink-0 text-caption text-fg-subtle">
         {dirtyCount > 0 ? <span className="text-accent-strong">{i18n.tp("pageEditor.savingChanges", dirtyCount)}</span> : t("pageEditor.allSaved")}
@@ -922,7 +922,7 @@ function PageToolbar({ page, dirtyCount, onAct, busy }: {
     {/* The minted link is REVEALED rather than opened: the point of a preview link is to
         SEND it, and a popup blocker eating the click that produced it would leave nothing to
         copy. In flow rather than floating under the sticky bar, where it covered the first
-        thing on the canvas with no way to move it — and dismissible, because it is a
+        thing on the canvas with no way to move it, and dismissible, because it is a
         transient answer, not a permanent row. */}
     {preview ? (
       <div className="mt-3 flex items-center gap-2 rounded-lg bg-surface-muted px-3 py-2 text-caption">
@@ -961,16 +961,16 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, backLabe
   const [assembled, setAssembled] = useState<AssembledPage | null>(null);
   const [err, setErr] = useState("");
 
-  // Unsaved-changes guard. Every editable surface on the canvas — each BlockCard, plus the
-  // page's own PageFields form (keyed "page") — reports its dirty state up; while anything
+  // Unsaved-changes guard. Every editable surface on the canvas (each BlockCard, plus the
+  // page's own PageFields form, keyed "page") reports its dirty state up; while anything
   // is dirty, warn before leaving. PageFields must participate: for a content type with no
   // regions it is the ENTIRE editor, sitting right under the back button. Reorder/add/remove
-  // keep local state — React reuses instances by key — so those don't lose edits and need no
+  // keep local state (React reuses instances by key) so those don't lose edits and need no
   // guard; only unmounting the editor or a page unload discards them.
   //
   // Three exits, three mechanisms, one predicate (`confirmLeave`): the ← all pages buttons
   // ask directly, `beforeunload` covers refresh/close/off-site, and `registerGuard` publishes
-  // it to the root layout so the topbar (wordmark, tabs, sign out) asks too — an in-app
+  // it to the root layout so the topbar (wordmark, tabs, sign out) asks too: an in-app
   // navigation fires no `beforeunload`, so without that it would discard edits silently.
   const dirtyRef = useRef<Set<string>>(new Set());
   const [dirtyCount, setDirtyCount] = useState(0);
@@ -982,7 +982,7 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, backLabe
     setDirtyCount(s.size);
   }, []);
   // Stable (reads `dirtyRef`, never state), so the layout can hold it for the editor's
-  // whole lifetime. Synchronous by design — a caller decides whether to navigate on the
+  // whole lifetime. Synchronous by design, because a caller decides whether to navigate on the
   // return value, which a modal dialog could not answer in time.
   const confirmLeave = useCallback(
     () => dirtyRef.current.size === 0 || window.confirm(getI18n().tp("pageEditor.leaveUnsaved", dirtyRef.current.size)),
@@ -1015,18 +1015,18 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, backLabe
   }, [dirtyCount]);
 
   const regions: RegionDefinition[] = ct?.regions ?? [];
-  /** The content type's PAGE-level fields — rendered on the canvas, not in the inspector. */
+  /** The content type's PAGE-level fields, rendered on the canvas, not in the inspector. */
   const pageSchema: FieldDefinition[] = ct?.fieldsSchema ?? [];
 
   const patchRegion = (region: string, fn: (list: RenderedBlock[]) => RenderedBlock[]) =>
     setAssembled((prev) => (prev ? { ...prev, regions: { ...prev.regions, [region]: fn(prev.regions[region] ?? []) } } : prev));
 
-  // Add a block, optionally AT an index (`at`) rather than appended — the Notion-style
+  // Add a block, optionally AT an index (`at`) rather than appended: the Notion-style
   // insert-between. addBlock always appends server-side, so when `at` lands mid-list we
   // follow up with a reorderRegion to move the new placement into place.
   const addBlock = async (region: string, slug: string, at?: number) => {
     // Optimistic: show a placeholder immediately (no wait for the round trip), then
-    // reconcile with the persisted row addBlock echoes — or roll it back on failure.
+    // reconcile with the persisted row addBlock echoes, or roll it back on failure.
     const tempId = `tmp:${crypto.randomUUID()}`;
     const existingIds = (assembled?.regions[region] ?? []).map((b) => b.id);
     const index = at != null && at >= 0 && at < existingIds.length ? at : existingIds.length;
@@ -1078,7 +1078,7 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, backLabe
     }
   };
 
-  // Patch a block's raw fields into local state after an inline save — keeps the collapsed
+  // Patch a block's raw fields into local state after an inline save: keeps the collapsed
   // preview fresh without a full reload (which would remount every editor + lose caret/focus).
   const patchBlockFields = useCallback((placementId: string, fields: FieldValues) => {
     setAssembled((prev) => {
@@ -1126,8 +1126,8 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, backLabe
       <PageToolbar page={page} dirtyCount={dirtyCount} busy={acting} onAct={act} />
       {err ? <Banner>{err}</Banner> : null}
 
-      {/* Two columns, always. There was a third — an outline listing each region and its block
-          count — and it was a table of contents for a document that is almost never longer
+      {/* Two columns, always. There was a third, an outline listing each region and its block
+          count, and it was a table of contents for a document that is almost never longer
           than the screen: the canvas already prints the same region names, in the same order,
           a column away, and the count it added is what "is this region empty" looks like when
           you look at it. Its one real service, jumping to a far region, is scrolling on a page
@@ -1138,7 +1138,7 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, backLabe
       {/* The canvas: one inline document. `pl-8` reserves the left gutter that each
           block's drag handle occupies on hover. Regions are titled sections. */}
       <div className="min-w-0 py-1.5 pl-8 pr-2">
-        {/* The page's own fields are CONTENT, so they belong on the canvas at full width —
+        {/* The page's own fields are CONTENT, so they belong on the canvas at full width,
             not in the inspector. For a content type with no regions (a fixed layout, all
             of it page fields) this is the entire editor; the canvas is never empty. */}
         {pageSchema.length ? (
@@ -1155,7 +1155,7 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, backLabe
               <div className={`sticky ${BELOW_PAGE_TOOLBAR} z-10 -mx-2 mb-1 bg-surface px-2 py-1 text-caption font-medium uppercase tracking-wide text-fg-subtle`}>{r.label ?? r.name}</div>
               {blocks.map((b, i) => (
                 <div key={b.id}>
-                  {/* Between-blocks insert point — a hover "+" that adds AT index i. */}
+                  {/* Between-blocks insert point: a hover "+" that adds AT index i. */}
                   <Inserter compact allowed={allowed} btBySlug={btBySlug} onAdd={(slug) => addBlock(r.name, slug, i)} />
                   <BlockCard
                     api={api}
@@ -1177,7 +1177,7 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, backLabe
                   />
                 </div>
               ))}
-              {/* End inserter — appends. */}
+              {/* End inserter, which appends. */}
               <div className="mt-1">
                 <Inserter allowed={allowed} btBySlug={btBySlug} onAdd={(slug) => addBlock(r.name, slug)} />
               </div>
@@ -1219,7 +1219,7 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, backLabe
 
 // A single block, edited inline: the block IS its editor. Fields render in place (rich text
 // as the WYSIWYG, media as a thumbnail picker). Edits are held locally and committed only on
-// an explicit Save — the header + footer show an "unsaved" state until you do, and nothing is
+// an explicit Save: the header + footer show an "unsaved" state until you do, and nothing is
 // written until you click Save. Collapse folds it to a one-line plain-text preview.
 function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, onPatch, onDirtyChange, onError, dragging, isOver, onDragStartBlock, onDragOverBlock, onDropBlock, onDragEndBlock }: {
   api: Api;
@@ -1243,13 +1243,13 @@ function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, o
   const [fields, setFields] = useState<FieldValues | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
-  const saved = useRef<string>(""); // JSON of the last-persisted fields — the dirty baseline
+  const saved = useRef<string>(""); // JSON of the last-persisted fields: the dirty baseline
   const cardRef = useRef<HTMLDivElement>(null);
   const blockId = block.block_id;
   const placementId = block.id;
 
   // Load RAW fields (media as ids, richtext as a document tree) so the value round-trips on save.
-  // A pending optimistic block has no persisted row yet — start empty and skip the fetch
+  // A pending optimistic block has no persisted row yet, so start empty and skip the fetch
   // (its temp id would 404); when it reconciles to real ids the card remounts and fetches.
   useEffect(() => {
     if (block.pending) { setFields({}); saved.current = "{}"; return; }
@@ -1285,9 +1285,9 @@ function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, o
     }
   }, [api, blockId, placementId, fields, onPatch, onError, block.pending]);
 
-  // Debounced autosave — persist ~800ms after the last edit (Notion-style). Keyed on
+  // Debounced autosave: persist ~800ms after the last edit (Notion-style). Keyed on
   // `fields`, so it fires only on an actual edit: a failed save leaves `fields`
-  // unchanged and does NOT auto-retry (no hot loop) — the next edit, or the manual
+  // unchanged and does NOT auto-retry (no hot loop); the next edit, or the manual
   // Save button, retries. The editor's unsaved guard still covers the debounce window
   // if you navigate away mid-edit.
   const saveRef = useRef(save);
@@ -1319,7 +1319,7 @@ function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, o
       onDragOver={(e) => { e.preventDefault(); onDragOverBlock(); }}
       onDrop={(e) => { e.preventDefault(); onDropBlock(); }}
     >
-      {/* Left gutter — drag handle, revealed on hover, sitting in the canvas's pl-8. */}
+      {/* Left gutter: drag handle, revealed on hover, sitting in the canvas's pl-8. */}
       <span
         draggable
         onDragStart={(e) => {
@@ -1333,7 +1333,7 @@ function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, o
         title={t("blocks.dragToReorder")}
       >⠿</span>
 
-      {/* Header — subtle type label + state + actions, mostly revealed on hover. */}
+      {/* Header: subtle type label + state + actions, mostly revealed on hover. */}
       <div className="flex items-center gap-2 opacity-60 transition-opacity group-hover:opacity-100">
         <button type="button" className="w-4 shrink-0 text-fg-subtle hover:text-fg" title={collapsed ? t("blocks.expand") : t("blocks.collapse")} aria-label={collapsed ? t("blocks.expand") : t("blocks.collapse")} onClick={() => setCollapsed((c) => !c)}>{collapsed ? "▸" : "▾"}</button>
         <span className="text-caption font-medium uppercase tracking-wide text-fg-subtle">{name}</span>
@@ -1374,7 +1374,7 @@ function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, o
   );
 }
 
-// Notion-style block inserter — the page-canvas analogue of the BlockEditor's `/`
+// Notion-style block inserter, the page-canvas analogue of the BlockEditor's `/`
 // palette. A slim "＋ Add block" affordance expands into a searchable list of the
 // region's allowed block types (type to filter; ↑/↓ + Enter to pick, Esc/blur to
 // close). Insertion appends to the region; reorder via drag to position.
@@ -1466,11 +1466,11 @@ function Inserter({ allowed, btBySlug, onAdd, compact }: { allowed: string[]; bt
 }
 
 /**
- * Page META — title / slug / locale. Settings, not content, so it lives in the inspector.
+ * Page META: title / slug / locale. Settings, not content, so it lives in the inspector.
  *
  * Split from the page's FIELDS (below) because the two are different things: the fields
  * are what the page SAYS, and burying them in a 400px inspector made a page whose content
- * type has no regions look empty — a wide, blank canvas next to a cramped form.
+ * type has no regions look empty: a wide, blank canvas next to a cramped form.
  */
 function PageMeta({ api, page, onSaved, onError }: { api: Api; page: Page; onSaved: (p: Page) => void; onError: (s: string) => void }) {
   const { cms: { multilingual, locales } } = useApp();
@@ -1490,11 +1490,11 @@ function PageMeta({ api, page, onSaved, onError }: { api: Api; page: Page; onSav
   const save = async () => {
     setBusy(true);
     try {
-      // Meta only — `fields` is deliberately omitted so saving here can never clobber
+      // Meta only: `fields` is deliberately omitted so saving here can never clobber
       // content edited in the canvas (updatePage patches only what it is given).
       // `locale` is sent ONLY where it is editable. On a single-locale deployment there is
       // no control for it, so including it would blind-overwrite whatever the row holds
-      // with mount-time state — reverting an import or another editor's change through a
+      // with mount-time state, reverting an import or another editor's change through a
       // field this user cannot see. `updatePage` treats an absent key as no-change.
       const patch = multilingual ? { title, slug: slug.trim(), locale } : { title, slug: slug.trim() };
       const r = await api.call<{ page?: Page }>("updatePage", { pageId: page.id, ...patch });
@@ -1525,7 +1525,7 @@ function PageMeta({ api, page, onSaved, onError }: { api: Api; page: Page; onSav
           </select>
         </label>
       ) : null}
-      {/* Explicit, unlike the canvas — a slug is the page's URL, and autosaving one keystroke
+      {/* Explicit, unlike the canvas: a slug is the page's URL, and autosaving one keystroke
           at a time would publish `/ab`, `/abo`, `/abou` as real addresses and race the
           uniqueness check on every one. Named for what it saves, since it is no longer the
           only Save on screen by accident. */}
@@ -1536,23 +1536,23 @@ function PageMeta({ api, page, onSaved, onError }: { api: Api; page: Page; onSav
   );
 }
 
-/** The page's own FIELDS — its content. Rendered in the canvas, at full width. */
+/** The page's own FIELDS, its content. Rendered in the canvas, at full width. */
 function PageFields({ api, page, schema, initialFields, onDirtyChange, onError }: { api: Api; page: Page; schema: FieldDefinition[]; initialFields: FieldValues; onDirtyChange: (id: string, dirty: boolean) => void; onError: (s: string) => void }) {
   const { t } = useI18n();
   const [fields, setFields] = useState<FieldValues>(initialFields);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
 
-  // Dirty is DERIVED from a snapshot of what's persisted, the way BlockCard does it — not a
+  // Dirty is DERIVED from a snapshot of what's persisted, the way BlockCard does it, not a
   // one-way flag set on every keystroke. Typing a character and deleting it again leaves the
   // form matching the store, and the guard this feeds now fronts the whole topbar: a sticky
   // flag would mean confirming your way past a prompt with nothing to save.
   const saved = useRef(JSON.stringify(initialFields));
   const dirty = JSON.stringify(fields) !== saved.current;
 
-  // Re-seed the form ONLY when the editor switches to a different page — never on a mere
+  // Re-seed the form ONLY when the editor switches to a different page, never on a mere
   // `initialFields` identity change. Every reload() (add/remove/reorder a block, save the
   // slug) replaces `assembled` wholesale, and when `page.fields` is SQL NULL the caller's
-  // `?? {}` fallback mints a fresh object on EVERY render — keying off the object would
+  // `?? {}` fallback mints a fresh object on EVERY render, so keying off the object would
   // silently drop in-progress edits and clear the "● unsaved" badge with no warning.
   const seededFor = useRef(page.id);
   useEffect(() => {
@@ -1566,7 +1566,7 @@ function PageFields({ api, page, schema, initialFields, onDirtyChange, onError }
   useEffect(() => { onDirtyChange("page", dirty); }, [dirty, onDirtyChange]);
   useEffect(() => () => { onDirtyChange("page", false); }, [onDirtyChange]);
 
-  // AUTOSAVED, on the same 800ms debounce a block uses — because this is the same thing a
+  // AUTOSAVED, on the same 800ms debounce a block uses, because this is the same thing a
   // block is: content on the canvas. It used to carry its own "Save" button, which sat a
   // column away from the inspector's identically-labelled one and saved the other half of the
   // screen, while the blocks between them saved silently. Three save models on one screen.
@@ -1587,7 +1587,7 @@ function PageFields({ api, page, schema, initialFields, onDirtyChange, onError }
   }, [api, page.id, fields, onError]);
 
   // Keyed on `fields`, so it fires only on an actual edit: a failed save leaves them
-  // unchanged and does NOT auto-retry (no hot loop) — the next edit does. The leave guard
+  // unchanged and does NOT auto-retry (no hot loop); the next edit does. The leave guard
   // above still covers the debounce window.
   const saveRef = useRef(save);
   saveRef.current = save;
@@ -1685,7 +1685,7 @@ function I18n({ api, page, onError }: { api: Api; page: Page; onError: (s: strin
 /** The page's taxonomy terms.
  *
  * Assignment has to live in the page editor: `cms_page_terms` links a term to a PAGE, so
- * the vocabulary screen can define terms but has no way to attach one — a taxonomy with no
+ * the vocabulary screen can define terms but has no way to attach one: a taxonomy with no
  * assignment surface is a list of words.
  *
  * `setPageTerms` replaces the whole selection rather than adding and removing one at a
@@ -1745,7 +1745,7 @@ function PageTerms({ api, pageId, canEdit, onError }: { api: Api; pageId: string
 
   if (taxa === null) return <p className="text-fg-subtle">{t("common.loading")}</p>;
   // Not "none defined": the list is narrowed to the vocabularies that apply to PAGES, so a
-  // site whose only vocabulary is media-only would read as having none — and send an editor
+  // site whose only vocabulary is media-only would read as having none, and send an editor
   // off to create a duplicate of the one it already has.
   if (taxa.length === 0) return <p className="text-fg-subtle">{t("terms.noVocabularies")}</p>;
 
@@ -1760,7 +1760,7 @@ function PageTerms({ api, pageId, canEdit, onError }: { api: Api; pageId: string
             {(terms[tx.slug] ?? []).map((term) => (
               <label key={term.id} className="flex items-center gap-2">
                 {/* `setPageTerms` is editor-gated, so a reviewer got live checkboxes and a
-                    Save button that 403s — the one new write surface that did not take
+                    Save button that 403s: the one new write surface that did not take
                     `canEdit`. */}
                 <input type="checkbox" disabled={!canEdit} checked={selected.has(term.id)} onChange={() => toggle(term.id)} />
                 <span className="text-sm text-fg">{term.label}</span>
@@ -1809,7 +1809,7 @@ function AuditLog({ api, pageId, onError }: { api: Api; pageId: string; onError:
 }
 
 /** One filter bucket. A toggle rather than a link: pressing the active one clears the filter,
- * which is the gesture a chip bar teaches — and `aria-pressed` says so, since the tint alone
+ * which is the gesture a chip bar teaches, and `aria-pressed` says so, since the tint alone
  * is invisible to a screen reader and marginal to anyone who cannot see it. */
 function FilterChip({ active, onPress, children }: { active: boolean; onPress: () => void; children: ReactNode }) {
   return (
@@ -1841,7 +1841,7 @@ export function mediaCountLabel(phase: ListPhase, count: number, hasMore: boolea
 }
 
 /** The tag menu's "no filter" row. A menu item needs an id and `null` is not one, so the
- * clear option carries a sentinel — safe against a real term id, which is a uuid. */
+ * clear option carries a sentinel, safe against a real term id, which is a uuid. */
 const ALL_TAGS = "__all";
 
 export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) => void }) {
@@ -1858,7 +1858,7 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
   // than being created per click, so the picker's `change` handler is the ordinary React one.
   const fileInput = useRef<HTMLInputElement>(null);
   // Trashed files. Deleting no longer removes the R2 object, so without this the bytes stay
-  // publicly fetchable with no way to reach purgeMedia — the case a takedown request needs.
+  // publicly fetchable with no way to reach purgeMedia: the case a takedown request needs.
   const [trash, setTrash] = useState<Media[]>([]);
   const [showTrash, setShowTrash] = useState(false);
   // Order and type filter. Both are SERVER-side: the library is paged, and sorting or
@@ -1867,8 +1867,8 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
   const [sort, setSort] = useState<MediaSort>("newest");
   const [kind, setKind] = useState<MediaKind | null>(null);
   // Two states for one search box. `query` is what the field shows and must update on every
-  // keystroke; `search` is what the server is asked for, and lags it by `SEARCH_DEBOUNCE_MS`
-  // — without the split, either the field stutters or every letter is a round trip.
+  // keystroke; `search` is what the server is asked for, and lags it by `SEARCH_DEBOUNCE_MS`.
+  // Without the split, either the field stutters or every letter is a round trip.
   const [query, setQuery] = useState("");
   const [search, setSearch] = useState("");
   useEffect(() => {
@@ -1878,7 +1878,7 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
   // Tags. The vocabularies are loaded ONCE here rather than in the detail modal: the filter
   // above the grid and the checkboxes inside a file both need the same list, and fetching it
   // per opened file would be a round trip on every click for data that changes on the terms
-  // screen. `term` filters server-side like `kind` — it is a relation traversal, not a
+  // screen. `term` filters server-side like `kind`: it is a relation traversal, not a
   // client-side pass over the page that happened to arrive.
   const [term, setTerm] = useState<string | null>(null);
   const [taxa, setTaxa] = useState<Taxonomy[]>([]);
@@ -1964,7 +1964,7 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
         {/* A real `Button` driving a hidden input, not a `<label>` painted to look like one.
             The lookalike had to restate podoba's primary fill by hand, and once the mint
             wrapper was gone the two "primary" actions in this app were visibly different
-            colours on the dark theme — `surface-inverted` (cream) here, `brand-primary`
+            colours on the dark theme: `surface-inverted` (cream) here, `brand-primary`
             (mint) everywhere else. */}
         <input ref={fileInput} type="file" multiple hidden disabled={busy} onChange={(e) => { upload(e.target.files); e.target.value = ""; }} />
         <Button className="shrink-0" isDisabled={busy} onPress={() => fileInput.current?.click()}>
@@ -1974,7 +1974,7 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
       <div className={WRAP}>
         {/* Order and type, above the grid rather than in the header: the header is the
             SCREEN's identity and its one primary action, and a row of controls in it would be
-            the mint-pill mistake again — a second cluster competing with the artwork. They sit
+            the mint-pill mistake again: a second cluster competing with the artwork. They sit
             with the thing they act on. */}
         {showSearch || showFilters ? (
           <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -2052,7 +2052,7 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
           // Search, type and tag are all new, so this is a state the screen could not reach
           // before: typing "logo" or picking Documents on an image-only library told you the
           // CMS was empty and asked you to upload, when the answer was that the filter matched
-          // nothing — and the way out is to clear it, not to upload a file.
+          // nothing, and the way out is to clear it, not to upload a file.
           narrowed ? (
             <div className="flex flex-wrap items-center gap-3">
               <p className="text-fg-subtle">{t("media.noFilterMatches")}</p>
@@ -2136,13 +2136,13 @@ function MediaDetail({ api, media, taxa, terms, canEdit, canDownload, onClose, o
   /** Open the file at full size in a new tab.
    *
    * Worth having even though the image is already on screen: the inline render is capped at
-   * 340px, and a banner is wide and short — scaled to fit that box it is unreadable, which
+   * 340px, and a banner is wide and short: scaled to fit that box it is unreadable, which
    * is the whole reason you would open the library to look at one. For a PDF or a video the
    * panel shows only the file extension, so this is the ONLY way to see the thing at all.
    *
    * A plain `window.open` on a click: no url to mint, so there is nothing async to survive a
    * popup blocker, and `opener` is severed rather than passing `noopener` as a feature
-   * string — that form returns null by spec, which is how the page-preview button was
+   * string, since that form returns null by spec, which is how the page-preview button was
    * briefly broken. */
   const preview = () => {
     // `noopener` here, rather than severing `opener` after the fact: that feature string
@@ -2158,7 +2158,7 @@ function MediaDetail({ api, media, taxa, terms, canEdit, canDownload, onClose, o
    * `/media/<key>` serves inline and would save under the opaque storage key, so this mints
    * the signed attachment url instead. Driven through a temporary anchor rather than
    * `location.href`: the response is a download, so assigning location works only as long as
-   * the server really does send `Content-Disposition: attachment` — if it ever did not, the
+   * the server really does send `Content-Disposition: attachment`. If it ever did not, the
    * editor would navigate away from itself and lose whatever was on screen. */
   const download = async () => {
     setBusy(true);
@@ -2169,8 +2169,8 @@ function MediaDetail({ api, media, taxa, terms, canEdit, canDownload, onClose, o
       a.rel = "noreferrer";
       // `target` is what actually guarantees the editor is never navigated away, and it is
       // needed because the two softer guards BOTH fail on the same row. `file.filename` is
-      // optional — `createMedia` stores whatever ref it was given, and the media backfill
-      // writes `filename: null` for rows that had none — and with no filename
+      // optional: `createMedia` stores whatever ref it was given, and the media backfill
+      // writes `filename: null` for rows that had none, and with no filename
       // `signDownload` omits `fn`, so `/files/download` sends no `content-disposition` at
       // all. The `download` attribute would be the remaining guard, and it is ignored
       // cross-origin per spec, which is exactly the standalone-editor topology `CORS_ORIGINS`
@@ -2249,7 +2249,7 @@ function MediaDetail({ api, media, taxa, terms, canEdit, canDownload, onClose, o
 
 /** A file's taxonomy terms, inside the detail modal.
  *
- * The vocabularies arrive as props — the library loaded them once for its filter, and this
+ * The vocabularies arrive as props: the library loaded them once for its filter, and this
  * panel opens and closes per file. Only the ASSIGNMENTS are fetched here, because they are
  * the part that is per-file.
  *
@@ -2311,7 +2311,7 @@ function MediaTerms({ api, mediaId, taxa, terms, canEdit, onSaved, onError }: { 
                   {list.map((term) => (
                     <label key={term.id} className="flex items-center gap-2">
                       {/* `setMediaTerms` is editor-gated, so without this a reviewer gets live
-                          checkboxes and a Save that 403s — the same gap `PageTerms` closed. */}
+                          checkboxes and a Save that 403s, the same gap `PageTerms` closed. */}
                       <input type="checkbox" disabled={!canEdit} checked={selected.has(term.id)} onChange={() => toggle(term.id)} />
                       <span className="text-sm text-fg">{term.label}</span>
                     </label>
@@ -2526,7 +2526,7 @@ function MyAccountCard({ api, me, onError, onSignOut }: { api: Api; me: Me | nul
    * Sets a password as well as changes one.
    *
    * An account created by an invite or a magic link has NO password, so "Current password"
-   * is a field it can never fill — and the form used to hold the button disabled until
+   * is a field it can never fill, and the form used to hold the button disabled until
    * something was typed into it, then report that whatever was typed was "incorrect".
    * Setting a password after signing in with a link was, in other words, impossible from
    * here; the only route was the password-RESET page, which is named for a problem the user
@@ -2534,7 +2534,7 @@ function MyAccountCard({ api, me, onError, onSignOut }: { api: Api; me: Me | nul
    *
    * `changePassword` now fills an empty slot from the session and still requires the current
    * password to REPLACE a real one (see its handler docs for why that line is drawn there),
-   * so the same form serves both — the field is simply left empty by whoever has nothing to
+   * so the same form serves both: the field is simply left empty by whoever has nothing to
    * put in it. The server says which case it was, so the confirmation can too.
    */
   const savePassword = async () => {
@@ -2631,7 +2631,7 @@ function ext(m: Media): string {
 export function fallbackFilename(m: Media): string {
   const sub = (m.file.contentType ?? "").split("/")[1]?.split("+")[0];
   // Alphanumerics only. An extension needs nothing else, and the content type is
-  // caller-supplied — allowing `.` and `-` let `image/../../etc/passwd` through as the
+  // caller-supplied: allowing `.` and `-` let `image/../../etc/passwd` through as the
   // "extension" `..`, producing `m-1...`. Anything that is not a plain extension is dropped
   // whole rather than sanitized halfway.
   const safe = sub && /^[a-z0-9]{1,8}$/i.test(sub) ? `.${sub.toLowerCase()}` : "";
@@ -2655,7 +2655,7 @@ export function errMsg(e: unknown): string {
   if (e instanceof ApiError) return e.message;
   return e instanceof Error ? e.message : String(e);
 }
-/** Strip HTML tags + decode the few entities the WYSIWYG emits, for a clean text preview —
+/** Strip HTML tags + decode the few entities the WYSIWYG emits, for a clean text preview,
  * so a collapsed rich_text block reads "Test Toakdopwad" instead of "<b>Test</b>&nbsp;…". */
 function plainText(html: string): string {
   return html
@@ -2668,7 +2668,7 @@ function plainText(html: string): string {
     .trim();
 }
 /** Readable text for one field value, whatever shape it is. A `richtext` field is a
- * document tree, so the first non-empty STRING is no longer enough — a block whose only
+ * document tree, so the first non-empty STRING is no longer enough: a block whose only
  * field is prose would read "empty". Legacy HTML strings still pass through `plainText`. */
 function fieldText(v: FieldValue): string {
   if (typeof v === "string") return plainText(v);

@@ -5,7 +5,7 @@ summary: Subscribe to a query over a WebSocket and receive a push on every relev
 ---
 
 Connect to `ws://<host>/live` and subscribe to a query by name. The server pushes
-fresh results whenever a mutation writes a table that the query reads — whether the
+fresh results whenever a mutation writes a table that the query reads, whether the
 write came over HTTP *or* over the socket. Because a Durable Object sees every write
 to its store (single-writer), invalidation is **exact**: only subscriptions whose
 read set intersects the mutation's write set are re-run.
@@ -34,12 +34,12 @@ DO in memory.
 
 Browser WebSockets can't set headers, so `/live` also accepts the bearer token and
 tenant via the query string (`?token=...&tenant=...`); the Worker folds them into
-headers for the rest of the flow. The `@pramen/client` library handles this for you —
+headers for the rest of the flow. The `@pramen/client` library handles this for you:
 see [Clients](/docs/client).
 
 ## Token expiry
 
-The token is verified **once, at upgrade** — the socket's identity is fixed from then
+The token is verified **once, at upgrade**, and the socket's identity is fixed from then
 on. So that a long-lived (or hibernating) connection can't outlive its session, the DO
 re-checks the token's `exp` on every message: an expired socket gets an `unauthorized`
 error frame, is closed with code **4401**, and stops receiving pushes.

@@ -7,7 +7,7 @@ const byOrder = (a: CollectionEntry, b: CollectionEntry) =>
   (a.data.order as number) - (b.data.order as number);
 
 // pletivo emits ```lang blocks as `<pre><code class="language-x">…</code></pre>`
-// with `<`/`&` HTML-encoded. Decode, run highlight.js, and re-emit token spans —
+// with `<`/`&` HTML-encoded. Decode, run highlight.js, and re-emit token spans,
 // all at build time, so the published HTML is already highlighted (no client JS).
 function decodeEntities(s: string): string {
   return s

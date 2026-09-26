@@ -1,4 +1,4 @@
-// @pramen/cms — DECLARED locales, and the editor surface that renders off them.
+// @pramen/cms: DECLARED locales, and the editor surface that renders off them.
 //
 // The i18n surface used to be gated by a client-side `hideI18n` flag in the editor's
 // /config.js. That duplicated on the client a truth the server owns: it hid the control
@@ -33,7 +33,7 @@ const rawCaps = (opts?: { locales?: readonly string[]; editorRoles?: readonly st
   return h.listCmsCapabilities.run(ctx);
 };
 
-/** The DECLARED half — everything except `canEdit`, which is per-caller and asserted
+/** The DECLARED half: everything except `canEdit`, which is per-caller and asserted
  * separately below. */
 const caps = (opts?: { locales?: readonly string[] }): Omit<Caps, "canEdit"> => {
   const { canEdit: _canEdit, ...declared } = rawCaps(opts);
@@ -43,11 +43,11 @@ const caps = (opts?: { locales?: readonly string[] }): Omit<Caps, "canEdit"> => 
 const asRole = (...roles: string[]): HandlerContext => ({ identity: { roles } }) as unknown as HandlerContext;
 
 describe("declared locales", () => {
-  test("a deployment that declares nothing is monolingual `en` — the previous default", () => {
+  test("a deployment that declares nothing is monolingual `en`, the previous default", () => {
     expect(caps()).toEqual({ locales: ["en"], defaultLocale: "en", multilingual: false, pagesByType: true, siteFurniture: true, codeDefinedTypes: true, typeDeletion: true, mediaTerms: true, mediaDownload: true });
   });
 
-  test("one declared locale is still monolingual — no i18n surface for a single-locale site", () => {
+  test("one declared locale is still monolingual, with no i18n surface for a single-locale site", () => {
     expect(caps({ locales: ["cs"] })).toEqual({ locales: ["cs"], defaultLocale: "cs", multilingual: false, pagesByType: true, siteFurniture: true, codeDefinedTypes: true, typeDeletion: true, mediaTerms: true, mediaDownload: true });
   });
 
@@ -70,7 +70,7 @@ describe("declared locales", () => {
 
 // `canEdit` is the one per-CALLER answer in the capability probe. `viewer` is
 // `editorRoles ∪ reviewerRoles`, so a reviewer-only session reaches this handler and every
-// read handler while every WRITE stays editor-gated — and the editor cannot work that out
+// read handler while every WRITE stays editor-gated, and the editor cannot work that out
 // for itself, because it knows the caller's roles but not which roles this deployment
 // configured as `editorRoles`. Without it the authoring surfaces render for a reviewer and
 // each one 403s on its first save.
@@ -92,7 +92,7 @@ describe("canEdit", () => {
 
 describe("the editor's visible inspector tabs", () => {
   // ONE definition of the rule, used by the tab bar, the panel switch and the route's
-  // deep-link fallback — which previously each re-derived it and could disagree.
+  // deep-link fallback, which previously each re-derived it and could disagree.
   test("i18n is shown only on a multilingual deployment", () => {
     expect(visibleTabs(true, true)).toEqual(INSPECTOR_TABS);
     expect(visibleTabs(false)).not.toContain("i18n");
@@ -103,10 +103,10 @@ describe("the editor's visible inspector tabs", () => {
   });
 
   // `workflow` used to be one of these. Publishing is what someone opened the editor to do,
-  // and it sat behind a lowercase ghost button among five that read as filter chips — you had
+  // and it sat behind a lowercase ghost button among five that read as filter chips: you had
   // to know the word meant "publish". The transitions moved to the toolbar, beside the status
   // they act on; the tab is gone rather than emptied.
-  test("workflow is NOT a tab — publishing lives in the toolbar", () => {
+  test("workflow is NOT a tab, because publishing lives in the toolbar", () => {
     expect(visibleTabs(true, true)).not.toContain("workflow");
   });
 
@@ -118,7 +118,7 @@ describe("the editor's visible inspector tabs", () => {
     expect(visibleTabs(false, false)).toEqual(["settings", "seo", "audit"]);
   });
 
-  // Until the server answers — and on a server too old to have the handler — the editor
+  // Until the server answers, and on a server too old to have the handler, the editor
   // assumes monolingual: a hidden surface recovers on reload, a half-rendered one is what
   // this replaced.
   test("the pre-answer default is monolingual", () => {
@@ -128,7 +128,7 @@ describe("the editor's visible inspector tabs", () => {
 
   // Same argument, the other capability: an older server ACCEPTS `listPages({ contentType })`
   // and ignores it, answering with the pooled list. An editor that assumed the feature would
-  // render one tab per type, each showing every type's pages under a heading naming one — and
+  // render one tab per type, each showing every type's pages under a heading naming one, and
   // "New page" from any of them stamping that tab's type. So the default is off.
   test("per-type lists are off until the server declares them", () => {
     expect(DEFAULT_CAPABILITIES.pagesByType).toBe(false);
@@ -143,7 +143,7 @@ describe("the nav shape", () => {
     expect(splitsByType(TWO_TYPES, cms, false)).toBe(true);
   });
 
-  test("one type keeps the pooled `Pages` list — there is nothing there to separate", () => {
+  test("one type keeps the pooled `Pages` list, since there is nothing there to separate", () => {
     expect(splitsByType([TWO_TYPES[0]], cms, false)).toBe(false);
   });
 

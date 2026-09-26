@@ -56,8 +56,8 @@ export default function Layout(props: {
       <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>{props.title} — pramen</title>
-        <meta name="description" content="pramen — a reactive backend runtime for TypeScript on Cloudflare." />
+        <title>{props.title} · pramen</title>
+        <meta name="description" content="pramen: a reactive backend runtime for TypeScript on Cloudflare." />
         <link rel="stylesheet" href="/style.css" />
       </head>
       <body>

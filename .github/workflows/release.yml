@@ -1,6 +1,6 @@
 name: release
 
-# Publishes @pramen/* to npm via OIDC **trusted publishing** — no NPM_TOKEN.
+# Publishes @pramen/* to npm via OIDC **trusted publishing**, with no NPM_TOKEN.
 # The packages have this repo + this workflow (release.yml) registered as a
 # trusted publisher on npmjs.com, so npm mints a short-lived OIDC credential at
 # publish time (and attaches provenance automatically). Trigger by pushing a

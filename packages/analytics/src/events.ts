@@ -5,7 +5,7 @@
 // than through a booted Worker.
 //
 // TWO SOURCES, ONE SHAPE. A pageview can be recorded by the Worker that served the page,
-// or by the browser beacon when no Worker was in the path (a prerendered page off a CDN —
+// or by the browser beacon when no Worker was in the path (a prerendered page off a CDN,
 // which is how `@pramen/cms-astro` sites are built by default). The two see different
 // things, so several columns are nullable BY CONSTRUCTION, not by accident:
 //
@@ -21,7 +21,7 @@ export const EVENT_ORIGINS = ["server", "beacon"] as const;
 export type EventOrigin = (typeof EVENT_ORIGINS)[number];
 
 /** A `pageview` is one page load. An `engagement` is the beacon reporting on a pageview
- * that was ALREADY recorded (by either collector), keyed by the same `viewId` — it is an
+ * that was ALREADY recorded (by either collector), keyed by the same `viewId`. It is an
  * update in event form, not a second visit, and must never be counted as one. */
 export const EVENT_KINDS = ["pageview", "engagement"] as const;
 export type EventKind = (typeof EVENT_KINDS)[number];
@@ -62,7 +62,7 @@ export function dayOf(iso: string): string {
 /** Strip the query string and fragment, collapse a trailing slash, cap the length.
  *
  * Analytics paths are GROUPING KEYS, and an unnormalized one fragments a page's history
- * across `/a`, `/a/`, `/a?utm_source=x` — three rows in Top Pages for one page. The query
+ * across `/a`, `/a/`, `/a?utm_source=x`: three rows in Top Pages for one page. The query
  * string is dropped rather than kept because campaign parameters are per-visitor and would
  * make the cardinality unbounded; the campaign itself is carried by `source`.
  *
@@ -80,7 +80,7 @@ export function normalizePath(raw: string): string {
 /** Classify a User-Agent into a device bucket.
  *
  * Order matters: every tablet UA also says "Mobile" or is an Android, so tablet is tested
- * first. An unrecognized UA is `desktop` — the majority case, and one bucket is better
+ * first. An unrecognized UA is `desktop`, the majority case, and one bucket is better
  * than an "unknown" slice that only ever means "our regex is out of date". */
 export function deriveDevice(ua: string | null | undefined): Device {
   const s = (ua ?? "").toLowerCase();
@@ -95,7 +95,7 @@ export function deriveDevice(ua: string | null | undefined): Device {
  * This list exists because the two collectors disagree about bots and would otherwise
  * disagree about the totals: a crawler runs no JavaScript, so the beacon never sees it,
  * while the Worker sees every crawl. On a well-indexed site that gap is not a rounding
- * error — it can be most of the traffic. Filtering at the collector keeps ONE definition
+ * error: it can be most of the traffic. Filtering at the collector keeps ONE definition
  * of a pageview instead of a dashboard that has to explain which number to believe. */
 const BOT_MARKERS = [
   "bot", "crawl", "spider", "slurp", "curl", "wget", "python-requests", "httpclient",
@@ -104,7 +104,7 @@ const BOT_MARKERS = [
 ];
 
 /** Whether a User-Agent looks automated. Deliberately substring matching and deliberately
- * not exhaustive — a bot list is never finished, and the cost of a miss is one inflated
+ * not exhaustive: a bot list is never finished, and the cost of a miss is one inflated
  * pageview, while the cost of a false positive is a silently dropped human. */
 export function isBot(ua: string | null | undefined): boolean {
   const s = (ua ?? "").toLowerCase();
@@ -114,7 +114,7 @@ export function isBot(ua: string | null | undefined): boolean {
 
 /** Bucket a referrer into a traffic source.
  *
- * `selfHost` is what separates a real referral from internal navigation — without it every
+ * `selfHost` is what separates a real referral from internal navigation: without it every
  * click from one page of the site to the next counts as a referral from the site itself,
  * which is both wrong and, on any content site, the largest "source" in the report. */
 export function deriveSource(referrer: string | null | undefined, selfHost?: string | null): string {
@@ -136,7 +136,7 @@ export function deriveSource(referrer: string | null | undefined, selfHost?: str
 /** Clamp a beacon-reported number into a sane range, or drop it.
  *
  * The beacon is caller-controlled input: these values arrive from a public endpoint that
- * anyone can POST to. A negative duration or a scroll depth of 10^9 would not throw — it
+ * anyone can POST to. A negative duration or a scroll depth of 10^9 would not throw; it
  * would quietly poison an average that someone then reads as fact. */
 export function clampMetric(v: unknown, max: number): number | null {
   if (typeof v !== "number" || !Number.isFinite(v)) return null;

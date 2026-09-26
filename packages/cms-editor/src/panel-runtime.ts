@@ -1,13 +1,13 @@
 // What the editor bundle publishes on `globalThis` for panel bundles to build against.
 //
 // A panel is a separate bundle that renders into THIS bundle's React tree. Two copies of
-// React in one page share no hook dispatcher, so a second copy does not degrade — the first
+// React in one page share no hook dispatcher, so a second copy does not degrade: the first
 // `useState` in a panel throws "invalid hook call" and the screen is a blank error. The
 // panel bundle therefore cannot contain React; it must import the one already here.
 //
 // So the editor publishes its React (plus react-dom and both JSX runtimes) on a global, and
 // the shell's import map points those bare specifiers at four tiny shim modules that read it
-// back out — see `panel-globals.ts`, which GENERATES the shims from the very namespaces
+// back out. See `panel-globals.ts`, which GENERATES the shims from the very namespaces
 // published here, so the names they re-export cannot drift from the React actually loaded.
 //
 // The consequence, and the whole point: a panel is written as ordinary React, with ordinary
@@ -15,28 +15,28 @@
 // about the source says it is a panel except the one `registerPanel` call. That is what
 // makes an existing standalone screen portable rather than rewritable.
 //
-// THE SURFACE IS FOUR NAMESPACES AND ONE FUNCTION, and it is meant to stay that size —
+// THE SURFACE IS FOUR NAMESPACES AND ONE FUNCTION, and it is meant to stay that size.
 // every name here is a thing this package can never move again:
 //
-//   - `react` — the shared copy. Non-negotiable; it is the reason this exists.
-//   - `reactDom` — shared for the same reason, one level down. A panel that bundled its own
+//   - `react`: the shared copy. Non-negotiable; it is the reason this exists.
+//   - `reactDom`: shared for the same reason, one level down. A panel that bundled its own
 //     react-dom would be a SECOND RECONCILER driving one React, which is worse than a second
 //     React because it can appear to work. It is also where `createPortal` lives, and a
 //     dialog is the first thing a panel needs that Block Kit could not express.
-//   - `jsxRuntime` / `jsxDevRuntime` — the automatic JSX transform emits imports from
+//   - `jsxRuntime` / `jsxDevRuntime`: the automatic JSX transform emits imports from
 //     `react/jsx-runtime`, or from `react/jsx-dev-runtime` when the panel is built
-//     unminified. A panel bundle does not choose this, its compiler does — and the dev half
+//     unminified. A panel bundle does not choose this, its compiler does, and the dev half
 //     is the one that MUST be here: left out, a development build resolves that specifier
 //     from the consumer's own node_modules and quietly bundles a second React, which is the
 //     exact failure this whole mechanism exists to prevent, arriving on the one build where
 //     nobody is looking for it.
-//   - `registerPanel` — the registration itself, and the gate: it refuses a bundle whose
+//   - `registerPanel`: the registration itself, and the gate. It refuses a bundle whose
 //     stated contract is not the one this editor implements, naming the slug and the fix.
 //     See `PANEL_RUNTIME_CONTRACT` in `panels.ts` for what bumps that number, and the note
 //     below for why the number itself is not published here.
 //
 // Not published, and each for a reason: the `Api` class (a panel gets the narrow `PanelApi`
-// through props — see `panels.ts`), the router (a panel owns its own screen, not the
+// through props, see `panels.ts`), the router (a panel owns its own screen, not the
 // editor's routing table), the podoba component library (it is a dependency a panel can
 // install itself, and freezing OUR version of it as a global API is a promise this package
 // should not make), and the app context (it carries the CMS's own state, none of which is a
@@ -58,7 +58,7 @@ export const PANEL_RUNTIME_GLOBAL = "PRAMEN_CMS_EDITOR_RUNTIME";
 // rather than a gap in it. A panel must state the contract it was BUILT against; publishing
 // ours would put the answer key beside the question, since
 // `PRAMEN_CMS_EDITOR_RUNTIME.contract` is shorter to write than the literal and would satisfy
-// every editor forever — the check would then be this editor comparing its number to its
+// every editor forever: the check would then be this editor comparing its number to its
 // number. The number a panel states is `PANEL_RUNTIME_CONTRACT` in `panels.ts`, taken from
 // the docs or from a refusal message, which prints both sides. It was published here once,
 // read by nothing, and that is exactly what a version guarantee looks like when it is only a
@@ -84,7 +84,7 @@ export function panelRuntime(): PanelRuntime {
     jsxRuntime,
     jsxDevRuntime,
     // Wrapped rather than passed by reference so the published function is this module's,
-    // not the registry's — the registry keeps a second parameter (its warning sink) that is
+    // not the registry's: the registry keeps a second parameter (its warning sink) that is
     // a test seam and must not become part of the surface a panel bundle can reach.
     registerPanel: (def) => registerPanel(def),
   };
@@ -95,7 +95,7 @@ export function panelRuntime(): PanelRuntime {
  * dynamically and before the router mounts, so that by the time a panel bundle's first
  * `import "react"` is evaluated the global is already there.
  *
- * Publishing is unconditional — it does not wait to see whether any panel is configured.
+ * Publishing is unconditional: it does not wait to see whether any panel is configured.
  * The object is four references; making it conditional would mean a deployment that adds a
  * panel later has a second thing to switch on, and a debugging session that starts with
  * "is the runtime there?" would have two answers.

@@ -2,7 +2,7 @@
 // class: the DEFAULT partition (notes/users/signups) and the "audit" partition
 // (auditLog). They are independent Durable Objects (different idFromName), so they
 // migrate, store, broadcast, and are addressed in isolation. This suite is the
-// integration capstone for the partitions feature — it exercises it, not builds it.
+// integration capstone for the partitions feature: it exercises it, not builds it.
 //
 // Coverage (maps to issue 09's six points):
 //  1. Same-partition still works: a notes tx + relation `with` read + a live push.
@@ -40,7 +40,7 @@ export async function runPartitions(base: string, wsUrl: string): Promise<void> 
     );
   };
 
-  // === 1. Same-partition (default) still works — regression guard ===========
+  // === 1. Same-partition (default) still works: regression guard ===========
   // notes tx + relation traversal, over the default partition path (no header).
   // The admin create policy's `set` forces ownerId to the caller (sub "admin"), so
   // seed a matching user for the relation traversal to resolve to a name.

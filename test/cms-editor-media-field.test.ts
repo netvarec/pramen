@@ -4,7 +4,7 @@
 // only writer, so the value can be anything: a seeded page, an import, or a value that made
 // the round trip out of the public read API, where `getPage` resolves a media id into
 // `{ url, alt, … }` so the site can render it. One such object reached `MediaField`, which
-// rendered it as the fallback for a missing filename — and React refuses an object as a
+// rendered it as the fallback for a missing filename, and React refuses an object as a
 // child, so the crash took out the whole `/pages/:id` route through the router's error
 // boundary. Every page holding one became unopenable in the editor while still rendering
 // perfectly on the site, which is the part that made it hard to see.
@@ -30,8 +30,8 @@ describe("a media field's value, as the control has to treat it", () => {
     }
   });
 
-  test("a RESOLVED media value is not an id — and never reaches the DOM as an object", () => {
-    // The shape `getPage` hands the site — minus its `id`, which is the case below.
+  test("a RESOLVED media value is not an id, and never reaches the DOM as an object", () => {
+    // The shape `getPage` hands the site, minus its `id`, which is the case below.
     // `label` is a string in every branch; that is the whole bug, expressed as a type the
     // renderer can rely on.
     const resolved = { url: "/media/main/media/abc123", alt: "Tenisový kurt v ranním světle" };
@@ -43,7 +43,7 @@ describe("a media field's value, as the control has to treat it", () => {
   });
 
   test("a resolved value carries the id it came from, and that id is used", () => {
-    // `ResolvedMedia` is `{ id, key, url, alt, contentType, filename }` — the id survives the
+    // `ResolvedMedia` is `{ id, key, url, alt, contentType, filename }`: the id survives the
     // round trip, so this corruption is fully recoverable: the field resolves and renders as
     // if nothing were wrong, and the next save writes the bare id back.
     expect(
@@ -61,10 +61,10 @@ describe("a media field's value, as the control has to treat it", () => {
     expect(mediaFieldValue({ id: "", url: "/media/x" }).label).toBe("/media/x");
   });
 
-  test("an unrecognised value still offers `clear` — that is how it gets repaired", () => {
+  test("an unrecognised value still offers `clear`, which is how it gets repaired", () => {
     // Not `id !== null`: the whole point is that the picker cannot represent this value, so
     // the only way back to a clean field from inside the editor is to clear it. A bare
-    // primitive counts — the server's `media` check names a number as exactly what a bad
+    // primitive counts: the server's `media` check names a number as exactly what a bad
     // writer puts here, and without a clear button it is indistinguishable from an empty
     // field while every save 400s.
     expect(mediaFieldValue({ url: "/figma/imgComponent14.jpg", alt: "x" }).hasValue).toBe(true);
@@ -81,7 +81,7 @@ describe("a media field's value, as the control has to treat it", () => {
 
 // The other half of the same bug. Opening the page is not enough: the editor autosaves the
 // WHOLE fields bag, so a block holding one of these values sends it straight back on an edit
-// to an unrelated field — and `validateFields` rejected it, naming a field the editor never
+// to an unrelated field, and `validateFields` rejected it, naming a field the editor never
 // touched, on every save, forever.
 describe("a stored non-id media value does not block an unrelated edit", () => {
   const schema: FieldDefinition[] = [
@@ -91,7 +91,7 @@ describe("a stored non-id media value does not block an unrelated edit", () => {
   const stored = { image: { url: "/media/main/media/abc123", alt: "x" }, heading: "before" };
 
   test("echoing back exactly what is stored is tolerated", () => {
-    // Reference equality would never hold here — the bag has been through JSON — so this is
+    // Reference equality would never hold here (the bag has been through JSON) so this is
     // a value comparison, unlike `richtext`, whose tolerated value is a string.
     const edit = { image: { url: "/media/main/media/abc123", alt: "x" }, heading: "after" };
     expect(() => validateFields(schema, edit, "", { legacyBaseline: stored })).not.toThrow();
@@ -102,7 +102,7 @@ describe("a stored non-id media value does not block an unrelated edit", () => {
     const attack = { image: { url: "//evil/x.jpg" }, heading: "after" };
     expect(() => validateFields(schema, attack, "", { legacyBaseline: stored })).toThrow(/must be a media id/);
     expect(() => validateFields(schema, attack, "", {})).toThrow(/must be a media id/);
-    // No baseline at all is the strict default — a fresh write cannot smuggle one in.
+    // No baseline at all is the strict default: a fresh write cannot smuggle one in.
     expect(() => validateFields(schema, stored, "", {})).toThrow(/must be a media id/);
   });
 

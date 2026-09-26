@@ -1,6 +1,6 @@
 // The example Astro site, built and served for real.
 //
-// Everything else about the admin mount is unit-tested — the integration's hooks in
+// Everything else about the admin mount is unit-tested: the integration's hooks in
 // `cms-astro-integration.test.ts`, the router wiring in `cms-editor-mount.test.ts`. What
 // neither can see is the half that actually broke the last attempt at this feature: whether
 // a REAL Astro build emits the editor's assets at URLs the shell can reach, and whether the
@@ -60,7 +60,7 @@ const PAGE = {
   },
 };
 
-/** The same page as an unpublished DRAFT, in the shape `/cms/preview` returns — a bare
+/** The same page as an unpublished DRAFT, in the shape `/cms/preview` returns: a bare
  * `AssembledPage` with `isPreview`, not the `{ ok, result }` envelope /rpc uses. */
 const DRAFT = {
   ...PAGE,
@@ -76,7 +76,7 @@ const DRAFT = {
   isPreview: true,
 };
 
-/** A stub of the CMS's public content API — the two calls `cmsLoader` makes at build time.
+/** A stub of the CMS's public content API: the two calls `cmsLoader` makes at build time.
  * A stub rather than the real Worker so this test costs a build and not a wrangler boot;
  * `test/suites/cms.ts` is where the real handlers are exercised. */
 function stubCms() {
@@ -87,7 +87,7 @@ function stubCms() {
       const json = (result: unknown) => Response.json({ ok: true, result });
       if (pathname === "/rpc/listPublishedPages") return json([{ slug: PAGE.page.slug, locale: PAGE.page.locale, contentType: "article", updatedAt: "2026-08-30T00:00:00.000Z" }]);
       if (pathname === "/rpc/getPage") return json(PAGE);
-      // The preview redemption route — NOT an /rpc call and not an envelope: the real one is
+      // The preview redemption route, NOT an /rpc call and not an envelope: the real one is
       // public, pre-auth, and answers with the assembled draft directly. `good` stands in for
       // a valid signature; anything else is what an expired or forged token gets.
       if (pathname === "/cms/preview") {
@@ -123,7 +123,7 @@ async function waitForReady(url: string, timeoutMs: number): Promise<void> {
 let cms: ReturnType<typeof stubCms> | undefined;
 let site: ReturnType<typeof Bun.spawn> | undefined;
 let dev: ReturnType<typeof Bun.spawn> | undefined;
-/** The shell, fetched once — every assertion below reads the same response. */
+/** The shell, fetched once; every assertion below reads the same response. */
 let shell = "";
 let shellHeaders: Headers | undefined;
 
@@ -220,7 +220,7 @@ describe("admin asset delivery", () => {
 });
 
 // `bun run typecheck` at the repo root cannot cover this site: `astro check` runs the
-// content loaders (it syncs before it checks), so it needs the CMS reachable — and the CMS
+// content loaders (it syncs before it checks), so it needs the CMS reachable, and the CMS
 // is reachable exactly here, where the stub is up. It is the only thing that type-checks
 // `.astro` files at all; nothing else in the repo does.
 describe("example site: types", () => {
@@ -251,7 +251,7 @@ describe("example site: content", () => {
 
 // The half a headless CMS cannot supply. `/cms/preview` answers with JSON, because the
 // server has the draft and no idea what it should look like; the SITE renders it, through
-// the same layout the published route uses — a preview drawn by a second copy of the markup
+// the same layout the published route uses: a preview drawn by a second copy of the markup
 // is a preview of the copy.
 describe("example site: preview links", () => {
   test("a valid token renders the DRAFT, through the site's own layout", async () => {
@@ -272,7 +272,7 @@ describe("example site: preview links", () => {
     expect(html).toContain("noindex");
   });
 
-  test("a draft is never cached — not by the browser and not in between", async () => {
+  test("a draft is never cached, not by the browser and not in between", async () => {
     const res = await fetch(`${SITE_BASE}/preview?token=good`);
     expect(res.headers.get("cache-control")).toContain("no-store");
   });
@@ -286,7 +286,7 @@ describe("example site: preview links", () => {
     }
   });
 
-  test("the published route is unaffected — no draft leaks into a static page", async () => {
+  test("the published route is unaffected, so no draft leaks into a static page", async () => {
     const html = await (await fetch(`${SITE_BASE}/${PAGE.page.slug}`)).text();
     expect(html).toContain("Hello world");
     expect(html).not.toContain("Draft preview");
@@ -326,7 +326,7 @@ describe("example site: the admin route", () => {
   });
 
   // The shell was rewritten when the asset-selection design changed, and `lang` is one
-  // attribute in a file that got replaced wholesale — exactly the thing a merge drops without
+  // attribute in a file that got replaced wholesale, exactly the thing a merge drops without
   // failing anything. A page whose language the browser has to guess is a screen reader
   // reading Czech copy in an English voice, so it is asserted here rather than trusted.
   test("the shell declares the editor's language", () => {
@@ -340,7 +340,7 @@ describe("example site: the admin route", () => {
 
 // The finding that sank the previous attempt: a baked index.html could only reference
 // `/editor.js` root-absolute, so the one deployment shape the feature existed for was the
-// one shape it could not boot in. These assert the opposite — that the site's own bundler
+// one shape it could not boot in. These assert the opposite: that the site's own bundler
 // emitted both assets and the shell points at where they actually are.
 describe("example site: the editor's assets", () => {
   test("no index.html or config.js is shipped by the editor package", () => {
@@ -351,7 +351,7 @@ describe("example site: the editor's assets", () => {
   test("the bundle is emitted by the site's build and loads under the prefix", async () => {
     const src = /<script type="module" src="([^"]+)"/.exec(shell)?.[1];
     expect(src).toBeDefined();
-    // Fingerprinted by the site, not by us — proof the site's bundler owns the file.
+    // Fingerprinted by the site, not by us, which proves the site's bundler owns the file.
     expect(src).toMatch(/editor\..+\.js$/);
     const res = await fetch(new URL(src!, `${SITE_BASE}${ADMIN}/`));
     expect(res.status).toBe(200);

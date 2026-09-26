@@ -2,15 +2,15 @@
 //
 // Two jobs. `rollupPending` turns finished days of raw events into one `analytics_daily`
 // row (and one `analytics_pages` row per path); `pruneRawEvents` then deletes the raw rows
-// for days that have been rolled up. Neither is required for the dashboard to be correct —
-// `queries.ts` computes an un-rolled day on the fly — so a deployment with no cron loses
+// for days that have been rolled up. Neither is required for the dashboard to be correct:
+// `queries.ts` computes an un-rolled day on the fly, so a deployment with no cron loses
 // speed and unbounded storage, not accuracy.
 //
 // NO LEASE, and that is a deliberate difference from `app.migrations`. A data migration may
 // be non-idempotent (`n = n * 2`), so it must be claimed before it runs. A rollup is a pure
 // function of one finished day's events: running it twice writes the same numbers. The
 // unique index on `analytics_daily.day` plus an upsert is therefore the whole concurrency
-// story — two isolates racing produce one row with the correct contents, where a lease
+// story: two isolates racing produce one row with the correct contents, where a lease
 // would only have made one of them wait to compute the same thing.
 
 import type { AnalyticsDb } from "./ingest";
@@ -45,7 +45,7 @@ export interface RollupResult {
  *
  * `maxDays` bounds the work: this runs inside a request (a cron invocation, or the admin
  * button), and a store that has gone months without a cron must not try to catch up in one
- * invocation and hit the wall-clock limit. Falling behind is recoverable — each run makes
+ * invocation and hit the wall-clock limit. Falling behind is recoverable: each run makes
  * progress and the next one continues. */
 export async function rollupPending(db: AnalyticsDb, opts: { through?: string; maxDays?: number } = {}): Promise<RollupResult> {
   const through = opts.through ?? previousDay();
@@ -61,7 +61,7 @@ export async function rollupPending(db: AnalyticsDb, opts: { through?: string; m
 
     // Upsert rather than insert: see the header. `excluded` is the row that would have been
     // inserted, so a re-run overwrites with freshly computed numbers instead of adding to
-    // stale ones — which is what makes "run it twice" a no-op rather than a doubling.
+    // stale ones, which is what makes "run it twice" a no-op rather than a doubling.
     await db.exec(
       `INSERT INTO "analytics_daily"
          ("id","day","pageviews","sessions","bounces","engagedViews","totalDurationMs","totalScrollDepth","byDevice","bySource","byCountry")
@@ -75,7 +75,7 @@ export async function rollupPending(db: AnalyticsDb, opts: { through?: string; m
       JSON.stringify(m.byDevice), JSON.stringify(m.bySource), JSON.stringify(m.byCountry),
     );
 
-    // Per-path totals for the same day. Read straight from raw — this is the last chance,
+    // Per-path totals for the same day. Read straight from raw, since this is the last chance,
     // since pruning removes these rows.
     const perPath = await db.aggregate({
       from: "analytics_events",
@@ -100,7 +100,7 @@ export async function rollupPending(db: AnalyticsDb, opts: { through?: string; m
 /** Delete raw events for days that have been rolled up and are older than `keepDays`.
  *
  * Guarded on the rollup EXISTING, not merely on the date: deleting a day whose aggregate was
- * never written destroys it outright, and the failure would be invisible — a silently empty
+ * never written destroys it outright, and the failure would be invisible: a silently empty
  * week in a chart nobody cross-checks. So the delete names only days present in
  * `analytics_daily`. */
 export async function pruneRawEvents(db: AnalyticsDb, opts: { keepDays?: number } = {}): Promise<{ deletedDays: string[] }> {

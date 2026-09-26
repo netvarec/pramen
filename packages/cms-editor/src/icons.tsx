@@ -1,9 +1,9 @@
 // The editor's icon family: Phosphor, regular weight.
 //
-// ONE family, chosen for its plainness — at 15px in a nav rail an icon has to survive as a
+// ONE family, chosen for its plainness: at 15px in a nav rail an icon has to survive as a
 // silhouette, and Phosphor's regular weight is the simplest set that still reads at that
 // size. It replaces two half-families: podoba's own line set (which does not cover a CMS's
-// nouns — no taxonomy, no widget area, no redirect) and, next to it, the glyphs this file
+// nouns, with no taxonomy, no widget area, no redirect) and, next to it, the glyphs this file
 // used to draw by hand to fill those gaps. Two sets of hand-fitted curves side by side is
 // the one outcome worse than either.
 //
@@ -11,12 +11,12 @@
 // this app rather than what it depicts. That is not ceremony: it is what makes the family a
 // decision recorded in one file. Swapping it (or moving it into @podoba/react, where it
 // belongs once the design system adopts a set) is then this module's imports and nothing
-// else — no call site names a vendor.
+// else, since no call site names a vendor.
 //
 // A HOST's own icon is a separate thing and stays a separate thing: a collection or a Block
 // Kit page declares `icon: "🎓"` and that string goes in the icon column verbatim (see
 // `NavIcon` in nav.ts). Resolving such a string against Phosphor BY NAME is deliberately not
-// offered — a by-name lookup needs the whole 3000-icon registry in the bundle, which is
+// offered: a by-name lookup needs the whole 3000-icon registry in the bundle, which is
 // megabytes to let a deployment name one glyph it can already supply directly.
 
 import {
@@ -60,7 +60,7 @@ export const MenuToggleIcon = ListIcon;
  * new picture means before they can decide whether to press it. `aria-expanded` carries the
  * state, which is where a state belongs. */
 export const RailToggleIcon = SidebarSimpleIcon;
-/** A group that is open — points down, as every file tree has agreed. */
+/** A group that is open, pointing down, as every file tree has agreed. */
 export const GroupOpenIcon = CaretDownIcon;
 /** …and one that is folded. */
 export const GroupFoldedIcon = CaretRightIcon;
@@ -70,7 +70,7 @@ export const LightThemeIcon = SunIcon;
 export const DarkThemeIcon = MoonIcon;
 /** Drop the session. */
 export { SignOutIcon };
-/** The account menu's settings entry — the same glyph the nav's Settings row uses. */
+/** The account menu's settings entry, the same glyph the nav's Settings row uses. */
 export { GearIcon as SettingsIcon };
 
 // --- the nav's destinations ---------------------------------------------------------------

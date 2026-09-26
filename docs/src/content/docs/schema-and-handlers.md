@@ -31,17 +31,17 @@ Field builders: `id()` (auto-increment integer PK), `textId()` (text PK), `text(
 `belongsTo(target, column)` and `hasMany(target, column)`.
 
 Any column or table name is safe, **including SQL reserved words** (`order`, `group`,
-`select`, …) — pramen double-quotes every identifier it emits.
+`select`, …) because pramen double-quotes every identifier it emits.
 
 **Modifiers** wrap a builder and compose: `notNull()`, `unique()`, `indexed()`,
-`defaultTo(value)`, `primaryKey()`, `generated()`, and `hidden()` — e.g.
+`defaultTo(value)`, `primaryKey()`, `generated()`, and `hidden()`, e.g.
 `code: unique(t.text())`, `status: defaultTo(t.text(), "pending")`.
 
 ### Hidden columns
 
 `hidden()` marks a column **never readable through the ORM**: it's stripped from every
-read projection — `find`/`get`, mutation echoes, relation loads, and even the
-SYSTEM-scope admin data API — regardless of ACL, including a full `allow()` grant. It
+read projection (`find`/`get`, mutation echoes, relation loads, and even the
+SYSTEM-scope admin data API) regardless of ACL, including a full `allow()` grant. It
 stays writable on insert/update and visible to the raw `ctx.db.exec` escape hatch, so
 credential code can still read it. Use it for secrets like a password hash:
 
@@ -73,7 +73,7 @@ await ctx.db.insert("posts", { });
 // -> { id: 1, status: "draft", createdAt: "2026-09-03T21:05:00.412Z" }  (DB-filled)
 ```
 
-`expr.now()` is the current UTC instant as **ISO-8601 TEXT** — byte-identical to
+`expr.now()` is the current UTC instant as **ISO-8601 TEXT**, byte-identical to
 `new Date().toISOString()`, so it compares correctly against [`$now()`](/docs/acl) under
 SQLite's lexicographic TEXT comparison. `expr.raw(sql)` is an escape hatch for any other
 SQLite default expression. Expr-default columns are filled by the database, so they're
@@ -81,7 +81,7 @@ optional on insert.
 
 > **Upgrading a store written before v0.0.60.** `expr.now()` used to emit `datetime('now')`
 > (`'2026-09-03 21:05:00'`). Changing a column's DEFAULT rebuilds the table, and a rebuild
-> copies existing values through — so old rows keep the space form while new ones get ISO.
+> copies existing values through, so old rows keep the space form while new ones get ISO.
 > Mixed in one column, values on the *same date* sort by their separator rather than their
 > instant (a space sorts below `T`), and a `{ lte: $now() }` policy lets a row scheduled for
 > later today through. Declare `isoTimestampBackfill()` in `app.migrations` to rewrite them:
@@ -95,7 +95,7 @@ optional on insert.
 >
 > It finds every `expr.now()` column from your schema; `extraColumns` names the ones written
 > by handler code, which have no default to find. Declaring it on a fresh store costs
-> nothing — every `UPDATE` matches no rows.
+> nothing: every `UPDATE` matches no rows.
 
 ### UUIDs
 
@@ -115,13 +115,13 @@ await ctx.db.insert("events", { kind: "signup" });
 // -> { id: "9f1c2e3a-…", kind: "signup", traceId: "1b7d…" }   (uuids minted server-side)
 ```
 
-> SQLite (DO) has no boolean type — booleans are stored as INTEGER 0/1; the runtime
+> SQLite (DO) has no boolean type: booleans are stored as INTEGER 0/1; the runtime
 > handles the coercion for you.
 
 ## Handlers
 
 `createApp(schema)` returns `query` and `mutation` whose `ctx.db` is fully inferred
-from the schema — table names, `where` columns and value types, row results, and
+from the schema: table names, `where` columns and value types, row results, and
 insert/patch shapes are all checked at compile time.
 
 ```ts
@@ -141,15 +141,15 @@ export const handlers = {
 ```
 
 - **Queries** read; **mutations** write. A mutation is automatically wrapped in
-  `storage.transaction()` — it commits on return and rolls back on throw. Do **not**
+  `storage.transaction()`: it commits on return and rolls back on throw. Do **not**
   write transaction control in handler code.
-- **No raw SQL in handlers** — go through `ctx.db`. (`ctx.db.exec` is an escape
+- **No raw SQL in handlers**; go through `ctx.db`. (`ctx.db.exec` is an escape
   hatch and is *not* ACL-checked.)
 - **Side effects after a write** (send an email, fire a webhook) go through
-  `ctx.tasks.enqueue` — a transactional outbox, not an inline call. See
+  `ctx.tasks.enqueue`, a transactional outbox, not an inline call. See
   [Deferred Tasks](/docs/tasks).
 
-The context is `{ db, kv, files, env, identity, tasks, mail, queue }` — `ctx.kv`
+The context is `{ db, kv, files, env, identity, tasks, mail, queue }`: `ctx.kv`
 (global config cache), `ctx.files` (R2, see [File Storage](/docs/file-storage)),
 `ctx.env` (bindings + secrets), `ctx.identity` (the verified caller), `ctx.tasks`
 (deferred work), `ctx.mail` (transactional email), and `ctx.queue` (Cloudflare Queues).
@@ -174,4 +174,4 @@ createNote: mutation(run, {
 Responses are `{ ok, result }` or `{ ok: false, error, code }` with a real status:
 ACL denial → `403 forbidden`; bad input / unknown handler / failed `validate` →
 `400 bad_request`. Anything unexpected is logged server-side and returned as a
-generic `500` — stack traces and internal messages never reach the client.
+generic `500`; stack traces and internal messages never reach the client.

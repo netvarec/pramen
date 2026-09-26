@@ -7,7 +7,7 @@ import { assert, http, sleep, token, wsClient } from "../lib";
 export async function runLive(base: string, wsUrl: string): Promise<void> {
   const TENANT = "live-demo";
   const post = http(base, TENANT);
-  const auth = await token("admin", ["admin"]); // full access — this suite isn't about ACL
+  const auth = await token("admin", ["admin"]); // full access; this suite isn't about ACL
 
   const live = wsClient(wsUrl, { authorization: `Bearer ${auth}`, "x-pramen-tenant": TENANT });
   await live.ready;

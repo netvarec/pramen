@@ -1,8 +1,8 @@
-// @pramen/cms-editor — which chrome a deployment wears (`window.PRAMEN_CMS_EDITOR.layout`).
+// @pramen/cms-editor, which chrome a deployment wears (`window.PRAMEN_CMS_EDITOR.layout`).
 //
 // The editor ships two shapes of the same nav: the default sidebar rail, and the Graphic
 // Standard topbar for a deployment whose own product wears that bar. These pin the two
-// halves that are pure functions and so testable without a DOM — the resolution of the
+// halves that are pure functions and so testable without a DOM: the resolution of the
 // config value, and the rule that decides which nav entries a horizontal bar can show flat.
 //
 // The load-bearing case is the FIRST one: configuring nothing has to render exactly as it
@@ -21,7 +21,7 @@ import { buildNav, navSections, topbarNav, type NavInput } from "../packages/cms
 import { DEFAULT_CAPABILITIES, type CollectionMeta } from "../packages/cms-editor/src/types";
 
 describe("cms-editor chrome layout", () => {
-  test("unconfigured is the sidebar — the shape every existing deployment already has", () => {
+  test("unconfigured is the sidebar, the shape every existing deployment already has", () => {
     expect(resolveLayout(undefined)).toBe("sidebar");
     expect(resolveLayout(null)).toBe("sidebar");
     expect(DEFAULT_LAYOUT).toBe("sidebar");
@@ -39,7 +39,7 @@ describe("cms-editor chrome layout", () => {
 
   // Same rule as `resolveBrand`: this config is templated from env vars and hand-edited, it
   // is read at MODULE LOAD in the entry bundle's import graph, and there is no error
-  // boundary above it — a throw here is a blank page, not a chrome that looks wrong.
+  // boundary above it: a throw here is a blank page, not a chrome that looks wrong.
   test("a malformed value falls back instead of throwing", () => {
     const junk: unknown[] = [true, 0, 123, "", "   ", "top", "Topbar", [], ["topbar"], {}, () => "topbar"];
     for (const v of junk) {
@@ -137,10 +137,10 @@ describe("topbarNav", () => {
     expect(menus.map((m) => m.id)).toEqual(["system"]);
   });
 
-  // A lone "Content" dropdown would hide the entire nav behind a click — and there is
+  // A lone "Content" dropdown would hide the entire nav behind a click, and there is
   // nothing to fold away FROM, which is the same reason `navSections` leaves one group
   // unlabelled. Constructed rather than built, because Settings is unconditional so a real
-  // nav always has a System band — the same reason `navSectionsAreLabelled`'s own
+  // nav always has a System band, the same reason `navSectionsAreLabelled`'s own
   // single-group case is a literal in `cms-editor-nav.test.ts`.
   test("a single section stays entirely flat", () => {
     const [content] = sections({ hidePages: true, collections: [col("lectures")] });

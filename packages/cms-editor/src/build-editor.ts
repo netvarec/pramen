@@ -1,4 +1,4 @@
-// Building the editor, as an API a HOST can call — not just as this package's own script.
+// Building the editor, as an API a HOST can call, not just as this package's own script.
 //
 // `dist/editor.js` and `dist/editor.css` are self-contained on purpose: the drop-in story is
 // that a host adds the integration and gets a working CMS with no build config at all. The
@@ -10,7 +10,7 @@
 //
 // What a deployment did instead is the evidence this API exists: it rebuilt the editor out of
 // the `src/` this package ships, resolving podoba to its own copy, and got the rest of the way
-// with ~70 string replacements against our source — `contents.replace()` per upstream line,
+// with ~70 string replacements against our source: `contents.replace()` per upstream line,
 // several of them by `indexOf` + `slice`. Every one of those is a silent break waiting for the
 // next release, and none of them is something the project WANTED to write; they are what is
 // left when the supported path stops at a sealed bundle.
@@ -18,7 +18,7 @@
 // So: the same build, parameterized. `buildEditor()` with no options is what `scripts/build.ts`
 // runs and produces the published `dist/`. A host passes `designSystem` to bundle against its
 // own podoba and React, `styles` to compile the stylesheet from its own Tailwind entry (which
-// is the half a runtime import map can never fix — CSS is compiled, not linked), and `slots`
+// is the half a runtime import map can never fix, since CSS is compiled, not linked), and `slots`
 // to put its own component in place of one of ours.
 //
 // Source-side rather than inside `scripts/build.ts`, for the reason `panel-globals.ts` gives
@@ -98,7 +98,7 @@ export interface BuildEditorOptions {
    * The project whose `node_modules` supply `@podoba/*`, `react` and `react-dom`.
    *
    * Unset, nothing is redirected and the bundle is built against this package's own pinned
-   * copies — byte-for-byte the published `dist/`. Set to your project root to make the editor
+   * copies, byte-for-byte the published `dist/`. Set to your project root to make the editor
    * a real consumer of YOUR design system: one podoba generation in the page, one set of
    * tokens, and an editor that moves when your design system does.
    *
@@ -114,7 +114,7 @@ export interface BuildEditorOptions {
    * `@theme`, plus the editor's own base rules.
    *
    * This is the OTHER HALF of `designSystem`, and it is a separate option because CSS is
-   * compiled rather than linked, so no runtime mechanism can stand in for it — and because
+   * compiled rather than linked, so no runtime mechanism can stand in for it, and because
    * Tailwind resolves a bare `@import` from the directory of the FILE that wrote it, not from
    * the process's cwd. Our `app.css` therefore always resolves podoba out of our
    * `node_modules`, wherever it is compiled from. A host's tokens can only reach the editor
@@ -146,7 +146,7 @@ export interface BuildEditorOptions {
   /**
    * Inline podoba's web font into the stylesheet as a data: URI.
    *
-   * Default true only when neither `styles` nor `designSystem` is set — that is, for the
+   * Default true only when neither `styles` nor `designSystem` is set, that is, for the
    * published `dist/`, which is re-hosted by strangers' bundlers and so must reference nothing
    * else. Any host build defaults to false: a host that named its own stylesheet has said what
    * face it wants, and appending ours AFTER it would win on `--font-sans` and silently undo
@@ -156,7 +156,7 @@ export interface BuildEditorOptions {
   /**
    * Extra Bun plugins, registered BEFORE this function's own.
    *
-   * Bun takes the first `onResolve` that matches, so a caller's plugin wins — which is how the
+   * Bun takes the first `onResolve` that matches, so a caller's plugin wins, which is how the
    * in-repo build hands over `buzolaPlugin` to regenerate the route table from `src/routes`.
    * A host needs no plugin for that: the generated table ships in `src/buzola.gen.ts` and the
    * fallback below resolves the virtual module to it.
@@ -183,8 +183,8 @@ function designSystemPlugin(root: string): BunPlugin {
 /**
  * Resolve one specifier from the design system root, and say so plainly when it is not there.
  *
- * One helper for all three places a host root is read — the bundle's imports, the panel shims'
- * export lists, the inlined font — so a missing install reads the same wherever it is noticed
+ * One helper for all three places a host root is read (the bundle's imports, the panel shims'
+ * export lists, the inlined font, so a missing install reads the same wherever it is noticed
  * first. Bun's own message ("Cannot find package 'react' imported from /tmp/x") names the
  * directory but not what it was FOR, and `designSystem` is the only reason this package ever
  * resolves out of a stranger's tree.
@@ -193,7 +193,7 @@ function resolveFrom(specifier: string, root: string): string {
   try {
     return Bun.resolveSync(specifier, root);
   } catch (cause) {
-    throw new Error(`@pramen/cms-editor: the designSystem root ${root} cannot resolve "${specifier}" — the editor is built against your copies of podoba and React, so install it there`, { cause });
+    throw new Error(`@pramen/cms-editor: the designSystem root ${root} cannot resolve "${specifier}". The editor is built against your copies of podoba and React, so install it there`, { cause });
   }
 }
 
@@ -201,7 +201,7 @@ function resolveFrom(specifier: string, root: string): string {
  * Put a host's module in place of one of ours.
  *
  * Scoped by importer, because the specifiers are relative: `./page-header` means our header
- * only when our own file wrote it. And the slot is CHECKED — if the importer we expect no
+ * only when our own file wrote it. And the slot is CHECKED: if the importer we expect no
  * longer imports that specifier, nothing here matches and the host silently gets our
  * component back, which is precisely the failure mode this API exists to end. So the plugin
  * records what it matched and `buildEditor` throws on a slot that never fired.
@@ -259,7 +259,7 @@ function selfEntriesPlugin(): BunPlugin {
  * Resolve buzola's virtual route table to the one this package SHIPS.
  *
  * `main.tsx` imports `virtual:buzola/routes`, which in this repo is generated from `src/routes`
- * by `@buzola/bun-plugin` — a devDependency, and one a host has no reason to install. The
+ * by `@buzola/bun-plugin`, a devDependency, and one a host has no reason to install. The
  * generated table is checked in and published in `src/`, so for anyone building from the
  * package it is already correct: the routes cannot have changed since the release they came
  * with. Registered last, so the in-repo build's real plugin takes precedence.
@@ -277,7 +277,7 @@ function shippedRoutesPlugin(): BunPlugin {
  * podoba's web font, as CSS with the binary inlined.
  *
  * @podoba/tokens ships `fonts.css` next to `./fonts/*.woff2` and leaves the relative `url()`
- * to the consumer's bundler. The published `editor.css` has no consumer bundler — it is
+ * to the consumer's bundler. The published `editor.css` has no consumer bundler: it is
  * emitted as an opaque asset and re-hosted (fingerprinted, moved into `_astro/`) by whoever
  * serves it, which breaks any relative reference. Inlining costs ~68KB of base64 and makes
  * the stylesheet a single file that works wherever it lands.
@@ -287,8 +287,8 @@ function shippedRoutesPlugin(): BunPlugin {
  */
 async function fontCss(root: string): Promise<string> {
   // RESOLVED, not joined onto `node_modules`. A package manager is free to hoist, dedupe or
-  // link through a store — bun puts the real file under `node_modules/.bun/…` and leaves a
-  // symlink — so a guessed path works only for the layout it was guessed against. `dirname`
+  // link through a store (bun puts the real file under `node_modules/.bun/…` and leaves a
+  // symlink, so a guessed path works only for the layout it was guessed against. `dirname`
   // of the resolved `fonts.css` is then the directory its own relative `url()`s are written
   // against, whatever that turns out to be.
   const file = resolveFrom("@podoba/tokens/fonts.css", root);
@@ -305,7 +305,7 @@ async function fontCss(root: string): Promise<string> {
  * Compile the stylesheet.
  *
  * The font block goes AFTER the compiled CSS, not before. Both declare `--font-sans` on
- * `:root`, so the later one wins — and `fonts.css`'s whole job is to point that token at the
+ * `:root`, so the later one wins, and `fonts.css`'s whole job is to point that token at the
  * real typeface. Linking them the other way round is how the bundled face got loaded and then
  * never used.
  */
@@ -325,7 +325,7 @@ async function styles(opts: BuildEditorOptions, dsRoot: string): Promise<void> {
 }
 
 /**
- * The four shims a panel bundle's bare imports resolve to — generated from the React that is
+ * The four shims a panel bundle's bare imports resolve to, generated from the React that is
  * actually being bundled.
  *
  * `import(...)` through the design system root, not the bare specifier, for the invariant
@@ -353,7 +353,7 @@ export async function buildEditor(opts: BuildEditorOptions): Promise<void> {
   // and the colours are subtly not theirs. The two options are one decision (see `styles`),
   // and a build that made only one of them is more likely a forgotten line than an intent.
   if (opts.designSystem && !opts.styles) {
-    console.warn("@pramen/cms-editor: `designSystem` is set but `styles` is not — the bundle will link your podoba while the stylesheet stays compiled against ours. Pass your own Tailwind entry too.");
+    console.warn("@pramen/cms-editor: `designSystem` is set but `styles` is not, so the bundle will link your podoba while the stylesheet stays compiled against ours. Pass your own Tailwind entry too.");
   }
   // Checked up front, by name, for two slips the bundler would report badly: a key that is not
   // a slot (a typo, or a slot from a newer release) is otherwise silently ignored, and a target
@@ -387,7 +387,7 @@ export async function buildEditor(opts: BuildEditorOptions): Promise<void> {
     // bundler leaves the expression in, nothing is eliminated, and the DEVELOPMENT build ships:
     // ~268KB (19%) of extra bytes, the dev-only warning machinery, and the slower paths it
     // exists to make debuggable. Tied to `minify`, because that is already the flag that means
-    // "this is the build someone will be served" — the watch loop wants the dev build and its
+    // "this is the build someone will be served": the watch loop wants the dev build and its
     // warnings, and gets them.
     define: { "process.env.NODE_ENV": JSON.stringify(opts.minify === false ? "development" : "production") },
     plugins: [
@@ -402,12 +402,12 @@ export async function buildEditor(opts: BuildEditorOptions): Promise<void> {
     for (const log of out.logs) console.error(log);
     throw new Error("@pramen/cms-editor: build failed");
   }
-  // A slot that never matched means the module it targets no longer imports that specifier —
+  // A slot that never matched means the module it targets no longer imports that specifier:
   // a release moved it. Loud here, because the alternative is a host shipping our component
   // under the impression it shipped theirs.
   for (const name of Object.keys(slots) as EditorSlot[]) {
     if (!matched.has(name)) {
-      throw new Error(`@pramen/cms-editor: slot "${name}" matched nothing — this release no longer imports "${EDITOR_SLOTS[name].specifier}" from ${EDITOR_SLOTS[name].from}/. Review the slot against this version.`);
+      throw new Error(`@pramen/cms-editor: slot "${name}" matched nothing. This release no longer imports "${EDITOR_SLOTS[name].specifier}" from ${EDITOR_SLOTS[name].from}/. Review the slot against this version.`);
     }
   }
 }

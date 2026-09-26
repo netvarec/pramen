@@ -1,6 +1,6 @@
 // The public collector: `POST /collect` (the beacon) and `GET /analytics.js` (the script).
 //
-// Both are `app.routes` — PRE-AUTH, matched in the Worker before identity resolution and
+// Both are `app.routes`, so PRE-AUTH, matched in the Worker before identity resolution and
 // before the DO proxy. That is required, not convenient: a visitor has no session, and the
 // beacon must not pay for one.
 
@@ -31,7 +31,7 @@ const MAX_BODY_BYTES = 16 * 1024;
 const MAX_EVENTS_PER_REQUEST = 20;
 
 /** Cloudflare's per-request geo, present on `request.cf` in the Workers runtime and absent
- * in most local/test runtimes — so every read is optional and the columns are nullable. */
+ * in most local/test runtimes, so every read is optional and the columns are nullable. */
 interface RequestGeo {
   country?: string;
   city?: string;
@@ -45,7 +45,7 @@ function geoOf(request: Request): RequestGeo {
 /** A per-day, per-visitor pseudonym: `sha256(salt + ip + ua + day)`, truncated.
  *
  * No cookie and no storage on the visitor's device, so there is nothing to consent to and
- * nothing to clear — and because the day is part of the input, the value cannot link a
+ * nothing to clear, and because the day is part of the input, the value cannot link a
  * visitor across days even server-side.
  *
  * WITHOUT A SALT IT RETURNS NULL, and sessions are simply unavailable. That is not
@@ -115,7 +115,7 @@ const CORS = {
   "access-control-max-age": "86400",
 };
 
-/** The beacon endpoint. Always answers 204 — see the note on failure below. */
+/** The beacon endpoint. Always answers 204; see the note on failure below. */
 export function collectRoute(opts: CollectOptions): PublicRoute[] {
   const path = opts.path ?? "/collect";
   const saltOf = opts.salt ?? defaultSalt;
@@ -171,7 +171,7 @@ export function collectRoute(opts: CollectOptions): PublicRoute[] {
       await opts.sink(request, env, ctx).write(events);
     } catch (e) {
       // Never surface a collector failure. `sendBeacon` discards the response, so a status
-      // code here reaches nobody — but this same route shape is what the server-side hook
+      // code here reaches nobody, but this same route shape is what the server-side hook
       // will call, and there a throw would take the PAGE down. Losing a pageview is the
       // correct trade; losing it silently is not, hence the log.
       console.error("@pramen/analytics: collect failed", e);

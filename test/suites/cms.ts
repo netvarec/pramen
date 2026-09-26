@@ -1,4 +1,4 @@
-// @pramen/cms e2e — the block/page builder wired into the example app. Exercises the
+// @pramen/cms e2e: the block/page builder wired into the example app. Exercises the
 // full flow against a real wrangler-dev DO: define block/content types, build a page from
 // typed blocks in named regions, field validation + region allow-lists, publish (snapshot),
 // the public content API (anonymous sees only the published snapshot), preview gating,
@@ -10,7 +10,7 @@ import { join } from "node:path";
 
 import { assert, http, token } from "../lib";
 
-/** A minimal rich-text document. `richtext` is a document TREE, not an HTML string — the
+/** A minimal rich-text document. `richtext` is a document TREE, not an HTML string: the
  * server rejects a string outright, so every fixture below builds one of these. */
 const rt = (text: string) => ({ type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text }] }] });
 
@@ -34,7 +34,7 @@ export async function runCms(base: string): Promise<void> {
 
   // --- app.bootstrap: a fresh tenant is already seeded with code-defined types on boot ---
   // example/app.ts registers cmsBootstrap({ contentTypes: [seeded_doc], blockTypes: [seeded_note] }).
-  // Before this suite creates anything, those must already exist — proving the server ran
+  // Before this suite creates anything, those must already exist, proving the server ran
   // app.bootstrap after migrating this tenant's store (no createContentType call was made).
   const seededCts = await call("listContentTypes", {}, admin);
   assert(
@@ -47,7 +47,7 @@ export async function runCms(base: string): Promise<void> {
     "cms: app.bootstrap seeded the 'seeded_note' block type on boot",
   );
 
-  // GitHub #48 — a seeded type is CODE-DEFINED, and bootstrap patches it back on every boot.
+  // GitHub #48: a seeded type is CODE-DEFINED, and bootstrap patches it back on every boot.
   // The flag is what the editor reads to render it read-only; the refusal below is what stops
   // a curl (or a stale tab) from making an edit that silently disappears at the next cold start.
   assert(
@@ -82,7 +82,7 @@ export async function runCms(base: string): Promise<void> {
   assert(anonTypes.body.ok === true && Array.isArray(anonTypes.body.result), "cms: listPublicContentTypes is readable anonymously");
   assert(
     (anonTypes.body.result as Array<Record<string, unknown>>).every((t) => typeof t.slug === "string" && typeof t.name === "string" && !("regions" in t) && !("fieldsSchema" in t)),
-    "cms: the public content-type listing is slug + name only — never the editing surface",
+    "cms: the public content-type listing is slug + name only, never the editing surface",
   );
   assert((await call("listContentTypes", {})).status === 403, "cms: the editor-facing listContentTypes stays viewer-gated");
 
@@ -187,7 +187,7 @@ export async function runCms(base: string): Promise<void> {
   // self-expiring link naming one page; redeeming it needs no session at all.
   // --- listing pages: viewer-gated, narrowed BY THE SERVER, and addressable by id ---
   // The rows are full page records (schedule stamps, revision pointer, every SEO column,
-  // the whole `fields` bag) — the editing surface, not the published one.
+  // the whole `fields` bag): the editing surface, not the published one.
   assert((await call("listPages", {})).status === 403, "cms: listPages is viewer-gated (anonymous 403)");
   assert((await call("getPageById", { pageId })).status === 403, "cms: getPageById is viewer-gated (anonymous 403)");
 
@@ -201,14 +201,14 @@ export async function runCms(base: string): Promise<void> {
   assert(byType.length <= allPages.length, "cms: the type-scoped list is a subset of the pooled one");
   const otherType = (await call("listPages", { contentType: "seeded_doc" }, admin)).body.result as Array<{ slug: string }>;
   assert(!otherType.some((p) => p.slug === slug), "cms: another type's list does not carry this page");
-  // An unknown slug — and an EMPTY one, which a falsy check read as "no filter" — must
+  // An unknown slug, and an EMPTY one, which a falsy check read as "no filter", must
   // return nothing rather than every type's pages under a tab naming one.
   assert(((await call("listPages", { contentType: "no-such-type" }, admin)).body.result as unknown[]).length === 0, "cms: an unknown content-type slug lists nothing, not everything");
   assert(((await call("listPages", { contentType: "" }, admin)).body.result as unknown[]).length === 0, "cms: an empty content-type slug lists nothing, not everything");
   // Paged, so the caller can tell a full first page from the whole table.
   const firstOnly = (await call("listPages", { limit: 1 }, admin)).body.result as unknown[];
   assert(firstOnly.length === 1, "cms: listPages honours an explicit limit");
-  // Projection: only the named columns come back (the D1-over-RPC shape — see GitHub #22).
+  // Projection: only the named columns come back (the D1-over-RPC shape, see GitHub #22).
   const projected = (await call("listPages", { limit: 1, select: ["id", "title"] }, admin)).body.result as Array<Record<string, unknown>>;
   assert(projected[0] && "title" in projected[0] && !("fields" in projected[0]) && !("metaTitle" in projected[0]), "cms: listPages({ select }) projects to the named columns");
 
@@ -231,7 +231,7 @@ export async function runCms(base: string): Promise<void> {
   assert(redeemed.headers.get("cache-control") === "private, no-store", "cms: a preview response is never cached");
 
   // The route must work under the roles an app ACTUALLY configures. The e2e app defines
-  // an `admin` role, which masked a bug where the route hardcoded roles:["admin"] — under
+  // an `admin` role, which masked a bug where the route hardcoded roles:["admin"]: under
   // the README's own wiring (anonymous + editor, no admin) every link 404'd. Redeeming as
   // a plain editor exercises the configured-viewer-roles path.
   const plainEditor = await token("cms-editor-only", ["editor"]);
@@ -243,7 +243,7 @@ export async function runCms(base: string): Promise<void> {
   // The D1 store is the topology an Astro site embeds (no Durable Object to export), so
   // preview has to work there too. `callPrivileged` now dispatches locally on D1 instead
   // of only forwarding to a DO, which is what used to make a D1-minted link undeliverable.
-  // The store is chosen PER REQUEST, and the two stores hold different rows — so this runs
+  // The store is chosen PER REQUEST, and the two stores hold different rows, so this runs
   // the whole flow on D1: seed a page there, mint from there, redeem from there. (A real
   // D1 deployment sets PRAMEN_STORE=d1 and never sends the header; the e2e app defaults to
   // the DO, so every call below opts in explicitly.)
@@ -263,7 +263,7 @@ export async function runCms(base: string): Promise<void> {
   assert(d1Mint.status === 200 && d1Mint.body.ok === true, `cms: signPagePreview mints on the D1 store (got ${d1Mint.status})`);
   // …and the link REDEEMS there. This is what used to be impossible: redemption goes
   // through callPrivileged, which only knew how to reach a Durable Object, so a D1-minted
-  // link was undeliverable — which is why minting used to refuse outright.
+  // link was undeliverable, which is why minting used to refuse outright.
   const d1Redeemed = await fetch(`${base}${(d1Mint.body.result as { url: string }).url}`, { headers: { "x-pramen-store": "d1" } });
   assert(d1Redeemed.status === 200, `cms: a preview link minted on D1 redeems on D1 (got ${d1Redeemed.status})`);
 
@@ -279,7 +279,7 @@ export async function runCms(base: string): Promise<void> {
   const editorPreview = await call("getPage", { slug, preview: true }, admin);
   assert(editorPreview.body.result.isPreview === true, "cms: getPage(preview) sets isPreview like the token route does");
 
-  // a tampered token is refused — the signature covers the page id
+  // a tampered token is refused, because the signature covers the page id
   const [tokData, tokSig] = previewToken.split(".");
   const tampered = await fetch(`${base}/cms/preview?token=${encodeURIComponent(`${tokData}x.${tokSig}`)}`);
   assert(tampered.status === 403, "cms: a tampered preview token is refused (403)");
@@ -287,7 +287,7 @@ export async function runCms(base: string): Promise<void> {
   assert(noToken.status === 403, "cms: a preview request with no token is refused (403)");
 
   // the /rpc back door stays shut: getPagePreview is role-gated, so knowing a page id
-  // is not enough — only the signed route can reach a draft anonymously.
+  // is not enough: only the signed route can reach a draft anonymously.
   const anonDirect = await call("getPagePreview", { pageId: pageRow.id });
   assert(anonDirect.status === 403, "cms: getPagePreview over /rpc is role-gated (403)");
 
@@ -308,7 +308,7 @@ export async function runCms(base: string): Promise<void> {
     "cms: listPublishedPages carries the content-type slug for type-filtered collections",
   );
   // …and narrows BY THE SERVER. The result is capped, so a build filtering the answer would
-  // be filtering an already-truncated list — with `collections: "auto"` generating one
+  // be filtering an already-truncated list, with `collections: "auto"` generating one
   // collection per type, every one of them loses its own tail past the cap, build still green.
   const pubArticles = await call("listPublishedPages", { contentType: "article" });
   assert(
@@ -348,23 +348,23 @@ export async function runCms(base: string): Promise<void> {
   const firstSave = await call("updatePage", { pageId: vId, title: "Editor A", expectedVersion: 1 }, admin);
   assert(firstSave.body.ok && firstSave.body.result.page.version === 2, "cms: a matching expectedVersion saves and bumps the version");
 
-  // The second still holds version 1 — previously this silently overwrote Editor A.
+  // The second still holds version 1. Previously this silently overwrote Editor A.
   const staleSave = await call("updatePage", { pageId: vId, title: "Editor B", expectedVersion: 1 }, admin);
   assert(staleSave.status === 409 && staleSave.body.code === "conflict", "cms: a stale expectedVersion is refused with 409 conflict");
   assert(/version 1.*current is 2/.test(String(staleSave.body.error ?? "")), "cms: the conflict names both versions so a client can explain itself");
   assert((await call("getPage", { slug: "concurrent", preview: true }, admin)).body.result.page.title === "Editor A", "cms: the losing write did not land");
 
-  // Omitting expectedVersion keeps last-write-wins — this is opt-in, not a breaking change.
+  // Omitting expectedVersion keeps last-write-wins: this is opt-in, not a breaking change.
   const unguarded = await call("updatePage", { pageId: vId, title: "Editor C" }, admin);
   assert(unguarded.body.ok && unguarded.body.result.page.version === 3, "cms: omitting expectedVersion still saves, and still bumps");
 
   // The version has to be readable from the same call that loads the content, or a client
-  // has nothing to echo back — the feature had no consumer without this.
+  // has nothing to echo back: the feature had no consumer without this.
   const vRead = await call("getPage", { slug: "concurrent", preview: true }, admin);
   assert(vRead.body.result.page.version === 3, "cms: getPage exposes the page version for a client to echo");
 
   // The PUBLIC path serves a snapshot baked at publish time, so its version must come from
-  // the LIVE row — otherwise a client echoes a frozen number and 409s forever, and a
+  // the LIVE row, since otherwise a client echoes a frozen number and 409s forever, and a
   // re-read hands back the same stale value.
   await call("publishPage", { pageId: vId }, admin);
   await call("updatePage", { pageId: vId, title: "After publish" }, admin);
@@ -385,7 +385,7 @@ export async function runCms(base: string): Promise<void> {
   assert((await call("updateBlock", { blockId: vBlockId, title: "B1", expectedVersion: 1 }, admin)).body.result.version === 2, "cms: updateBlock bumps the block version");
   assert((await call("updateBlock", { blockId: vBlockId, title: "B2", expectedVersion: 1 }, admin)).status === 409, "cms: a stale block expectedVersion is a 409");
 
-  // updatePageSeo shares the page's version line — SEO and body edits conflict with each other.
+  // updatePageSeo shares the page's version line, so SEO and body edits conflict with each other.
   // Read the current version rather than hardcoding it, so adding a write above doesn't
   // silently retune these two.
   const seoVersion = (await call("getPage", { slug: "concurrent", preview: true }, admin)).body.result.page.version as number;
@@ -412,7 +412,7 @@ export async function runCms(base: string): Promise<void> {
   const mediaId = media.body.result.id as string;
   const mediaKey = signed.body.result.ref.key as string;
 
-  // The library is PAGED, so sorting and filtering have to happen in SQL — which they can only
+  // The library is PAGED, so sorting and filtering have to happen in SQL, which they can only
   // do against real columns, because `file` is a fileRef (JSON in a TEXT cell) and `orderBy`
   // cannot see inside it. These assert the projection actually lands on the row.
   const mediaListed = await call("listMedia", { limit: 50 }, admin);
@@ -423,16 +423,16 @@ export async function runCms(base: string): Promise<void> {
 
   // --- Preview vs Download -------------------------------------------------------------
   // `/media/<key>` is the preview path: public, inline, on every server version. Assert it
-  // serves INLINE, because that is exactly what makes a download button necessary — saving
+  // serves INLINE, because that is exactly what makes a download button necessary: saving
   // from here would write the file under its opaque storage key.
   const inline = await fetch(`${base}/media/${mediaKey}`);
   assert(inline.status === 200, "cms: /media/<key> serves the bytes for preview");
   assert(inline.headers.get("content-type") === "image/png", "cms: …with the stored content type");
-  assert(inline.headers.get("content-disposition") === null, "cms: …and INLINE — no attachment disposition");
+  assert(inline.headers.get("content-disposition") === null, "cms: …and INLINE, with no attachment disposition");
 
   // An ACTIVE type (svg is an ordinary image an editor would upload) is sandboxed on the way
   // out. `signMediaUpload` takes the content type from its caller, and in the embedded
-  // topology `/media` shares an origin with the editor's stored session token — so without
+  // topology `/media` shares an origin with the editor's stored session token, so without
   // this, previewing an editor-uploaded SVG runs its script next to that token.
   const svgUp = await call("signMediaUpload", { contentType: "image/svg+xml", filename: "mark.svg" }, admin);
   await fetch(`${base}${svgUp.body.result.url}`, {
@@ -460,7 +460,7 @@ export async function runCms(base: string): Promise<void> {
   assert(new Uint8Array(await dlRes.arrayBuffer()).length === bytes.length, "cms: …and the bytes are the stored ones");
 
   // The url is minted from the row the ACL'd read returned, never from a caller-supplied
-  // key — so an unknown id is a 404, not a signed url for something that does not exist.
+  // key, so an unknown id is a 404, not a signed url for something that does not exist.
   assert((await call("signMediaDownload", { id: "00000000-0000-4000-8000-000000000000" }, admin)).status === 404,
     "cms: signMediaDownload 404s on an unknown id rather than signing it");
 
@@ -476,8 +476,8 @@ export async function runCms(base: string): Promise<void> {
   );
 
   // A LEGACY row: projection columns never backfilled, so `contentType` is NULL. Reached
-  // through /admin/data because `createMedia` cannot produce one — its parser defaults the
-  // content type — and this is exactly the row a deployment that upgraded without spreading
+  // through /admin/data because `createMedia` cannot produce one: its parser defaults the
+  // content type, and this is exactly the row a deployment that upgraded without spreading
   // `cmsMigrations` is full of.
   //
   // SQL is three-valued, so `NOT (col LIKE … OR …)` is NULL against a NULL column, not TRUE:
@@ -526,7 +526,7 @@ export async function runCms(base: string): Promise<void> {
     !(mediaNarrowed.body.result as Array<{ id: string }>).some((m) => m.id === mediaId),
     "cms: a search inside a type filter is ANDed, not ORed",
   );
-  // The needle goes into a LIKE pattern, so its wildcards must be literal — otherwise "%"
+  // The needle goes into a LIKE pattern, so its wildcards must be literal. Otherwise "%"
   // matches the entire library and a filename is unsearchable the moment it contains one.
   const wild = await call("listMedia", { limit: 50, q: "%" }, admin);
   assert(
@@ -565,7 +565,7 @@ export async function runCms(base: string): Promise<void> {
   // --- richtext is a structural allow-list on write (a caller can bypass the editor) ---
   const xssPage = await call("createPage", { typeId: ct.body.result.id, title: "XSS", slug: "xss" }, admin);
 
-  // A legacy HTML string is no longer a rich-text value at all — rejected, not scrubbed.
+  // A legacy HTML string is no longer a rich-text value at all: rejected, not scrubbed.
   const asHtml = await call("addBlock", { pageId: xssPage.body.result.id, blockTypeSlug: "rich_text", region: "content", fields: { body: "<p>hi</p>" } }, admin);
   assert(asHtml.status === 400 && asHtml.body.ok === false, "cms: an HTML string in a richtext field is rejected (400)");
 
@@ -589,9 +589,9 @@ export async function runCms(base: string): Promise<void> {
   const xssGot = await call("getPage", { slug: "xss" });
   const rtBody = (xssGot.body.result.regions.content as Array<{ block_type: string; fields: { body?: unknown } }>).find((b) => b.block_type === "rich_text")?.fields.body;
   const rtJson = JSON.stringify(rtBody ?? {});
-  assert(!/"script"|"image"/.test(rtJson), "cms: richtext normalized on write — unknown node types dropped");
-  assert(!/onclick|onerror|alert\(/.test(rtJson), "cms: richtext normalized on write — unknown marks + smuggled attrs dropped");
-  assert(!/javascript:/i.test(rtJson), "cms: richtext normalized on write — javascript: link mark dropped");
+  assert(!/"script"|"image"/.test(rtJson), "cms: richtext normalized on write, unknown node types dropped");
+  assert(!/onclick|onerror|alert\(/.test(rtJson), "cms: richtext normalized on write, unknown marks + smuggled attrs dropped");
+  assert(!/javascript:/i.test(rtJson), "cms: richtext normalized on write, javascript: link mark dropped");
   assert(/"bold"/.test(rtJson) && /"there"/.test(rtJson), "cms: richtext normalization preserves allow-listed marks and text");
 
   // --- `pramen cms types`: codegen from the LIVE tenant's block types ---
@@ -618,7 +618,7 @@ export async function runCms(base: string): Promise<void> {
 
   const trashDel = await call("deletePage", { pageId: trashId }, admin);
   assert(trashDel.body.ok, "cms: deletePage trashes the page");
-  // The ACL read scope hides it — for anonymous AND for the editor, without either handler
+  // The ACL read scope hides it, for anonymous AND for the editor, without either handler
   // filtering. A published page that was trashed must stop being served.
   assert((await call("getPage", { slug: "doomed" })).status === 404, "cms: a trashed page is gone from the public content API");
   assert((await call("getPage", { slug: "doomed", preview: true }, admin)).status === 404, "cms: a trashed page is hidden from the editor too");
@@ -630,7 +630,7 @@ export async function runCms(base: string): Promise<void> {
   const trash = (await call("listTrash", {}, admin)).body.result as { pages: Array<{ id: string }>; media: Array<{ id: string }> };
   assert(trash.pages.some((p) => p.id === trashId), "cms: listTrash shows the trashed page");
 
-  // The slug is still held while trashed — a DB unique constraint, so say so plainly.
+  // The slug is still held while trashed (a DB unique constraint) so say so plainly.
   const slugClash = await call("createPage", { typeId: ct.body.result.id, title: "Reuse", slug: "doomed" }, admin);
   assert(slugClash.status === 400 && /trash/i.test(String(slugClash.body.error ?? "")), "cms: reusing a trashed page's slug fails with a message naming the trash");
 
@@ -639,7 +639,7 @@ export async function runCms(base: string): Promise<void> {
   assert((await call("getPage", { slug: "doomed" })).body.ok, "cms: a restored page is publicly readable again");
 
   // A scheduled publish must NOT resurrect a trashed page. The publish task runs on the
-  // SYSTEM context, where the ACL is bypassed — so the read scope does not protect it and
+  // SYSTEM context, where the ACL is bypassed, so the read scope does not protect it and
   // deletePage has to clear the schedule itself.
   const schedPage = await call("createPage", { typeId: ct.body.result.id, title: "Scheduled", slug: "sched-doomed" }, admin);
   const schedId = schedPage.body.result.id as string;
@@ -654,10 +654,10 @@ export async function runCms(base: string): Promise<void> {
   // THIS is the assertion that tests the fix. The two above pass either way: `getPage`
   // 404s on `deletedAt IS NOT NULL` regardless of status, and trash membership is keyed on
   // deletedAt, which publishing never touches. Only `status` shows whether the SYSTEM-context
-  // task actually published it — the one property the ACL read scope cannot cover.
+  // task actually published it, the one property the ACL read scope cannot cover.
   assert(schedRow!.status !== "published", `cms: the scheduled task did not publish the trashed page (status=${schedRow!.status})`);
 
-  // A trashed translation still blocks its locale — the guard reads raw, not through the
+  // A trashed translation still blocks its locale: the guard reads raw, not through the
   // ACL, or restoring the first would leave two live pages for one locale in a group.
   const trGroup = await call("createPage", { typeId: ct.body.result.id, title: "TrSrc", slug: "tr-src" }, admin);
   await call("createTranslation", { pageId: trGroup.body.result.id, locale: "de", slug: "tr-de" }, admin);
@@ -667,7 +667,7 @@ export async function runCms(base: string): Promise<void> {
   const dupTr = await call("createTranslation", { pageId: trGroup.body.result.id, locale: "de", slug: "tr-de-2" }, admin);
   assert(dupTr.status === 400 && /trash/i.test(String(dupTr.body.error ?? "")), "cms: a trashed translation still holds its locale");
 
-  // Purge is irreversible and refuses a LIVE page — trash it first.
+  // Purge is irreversible and refuses a LIVE page, so trash it first.
   assert((await call("purgePage", { pageId: trashId }, admin)).status === 404, "cms: purging a live page is refused");
   await call("deletePage", { pageId: trashId }, admin);
   assert((await call("purgePage", { pageId: trashId }, admin)).body.ok, "cms: purgePage removes a trashed page for good");
@@ -689,14 +689,14 @@ export async function runCms(base: string): Promise<void> {
 
   const del = await call("deleteMedia", { id: mediaId }, admin);
   assert(del.body.ok, "cms: deleteMedia trashes the media row");
-  // getMedia returns null (not 404) for an unreadable row — the read scope simply
+  // getMedia returns null (not 404) for an unreadable row: the read scope simply
   // yields nothing, which is what "hidden" means here.
   assert((await call("getMedia", { id: mediaId }, admin)).body.result === null, "cms: trashed media is hidden by the read scope");
-  // The BLOB survives a soft delete on purpose — dropping the bytes here would make
+  // The BLOB survives a soft delete on purpose, since dropping the bytes here would make
   // restoreMedia a lie, and a block still holding the id would render a dead url.
   assert((await fetch(`${base}/media/${mediaKey}`)).status === 200, "cms: the R2 object survives deleteMedia");
 
-  // Trashed media MUST be discoverable, or restore/purge can never be called again —
+  // Trashed media MUST be discoverable, or restore/purge can never be called again:
   // every other read of it is ACL-scoped, while /media/<key> keeps serving the bytes.
   const mediaTrash = (await call("listTrash", {}, admin)).body.result as { media: Array<{ id: string }> };
   assert(mediaTrash.media.some((m) => m.id === mediaId), "cms: listTrash surfaces trashed media, so purge/restore stay reachable");
@@ -751,7 +751,7 @@ export async function runCms(base: string): Promise<void> {
   // reject sends it back
   const reject = await call("reject", { pageId: wfId, note: "needs work" }, admin);
   assert(reject.body.ok && reject.body.result.page.status === "rejected", "cms: reject moves review → rejected");
-  // approve only works from review — a rejected page must be resubmitted
+  // approve only works from review, so a rejected page must be resubmitted
   const approveRejected = await call("approve", { pageId: wfId }, admin);
   assert(approveRejected.status === 400, "cms: approve only works from the review state (400)");
   // resubmit → approve (publishes)
@@ -767,7 +767,7 @@ export async function runCms(base: string): Promise<void> {
   assert((audit.body.result as Array<{ action: string; actor: string | null }>).some((a) => a.action === "submit" && a.actor === "cms-editor"), "cms: audit captures the actor (identity.userId)");
 
   // reviewer RBAC: a pure reviewer (not editor/admin) can VIEW a draft (preview + content
-  // type) to review it, then approve — but cannot edit.
+  // type) to review it, then approve, but cannot edit.
   const reviewerTok = await token("cms-reviewer", ["reviewer"]);
   const revPage = await call("createPage", { typeId: ct.body.result.id, title: "Review Me", slug: "review-me" }, admin);
   const revPageId = revPage.body.result.id as string;
@@ -861,7 +861,7 @@ export async function runCms(base: string): Promise<void> {
 
   // --- scheduling does not publish: a FUTURE schedule, so nothing can drain it ---
   //
-  // This used to be asserted against a schedule due NOW, one HTTP call after arming it — and
+  // This used to be asserted against a schedule due NOW, one HTTP call after arming it, and
   // the DO self-drains via an alarm set to the next due time, so it was asserting that the
   // race went its way. It held locally and lost in CI. Split in two instead, so neither half
   // races: the "does not publish" claim is made about a schedule that CANNOT be due yet, and
@@ -934,7 +934,7 @@ export async function runCms(base: string): Promise<void> {
   assert(gotLecture.body.ok && gotLecture.body.result.title === "Reactive Backends", "cms: collectionGet returns the row by id");
 
   // A `richtext` collection field maps to a t.json() column. Writing a document into a
-  // TEXT column bound the object raw and DO SQLite rejected the parameter — the whole
+  // TEXT column bound the object raw and DO SQLite rejected the parameter. The whole
   // path was untested because every fixture set only scalar fields.
   const richLecture = await call("collectionCreate", {
     collection: "lectures",
@@ -964,7 +964,7 @@ export async function runCms(base: string): Promise<void> {
   // --- collection workflow features (`supports`) over a real DO -------------------------
   // The example's `lectures` collection opts into all four. What matters end-to-end is that
   // the publish state is NOT a value the client can send, and that the anonymous read scope
-  // — not any handler's `where` — is what hides an unpublished row.
+  // (not any handler's `where`) is what hides an unpublished row.
   const wfCreated = await call("collectionCreate", { collection: "lectures", values: { title: "Workflow", speaker: "W", date: "2026-06-01" } }, admin);
   const wfRowId = wfCreated.body.result.id as string;
   assert(wfCreated.body.result.status === "draft", "cms: a new collection row is seeded as a draft");
@@ -1006,7 +1006,7 @@ export async function runCms(base: string): Promise<void> {
     wfMemberRead.body.ok && (wfMemberRead.body.result as Array<{ id: string }>).some((r) => r.id === wfRowId),
     "cms: a published collection row is readable by an authenticated non-editor too",
   );
-  // The public projection is the declared fields + id — never an undeclared entity column.
+  // The public projection is the declared fields + id, never an undeclared entity column.
   // `?? {}` here would make this assertion VACUOUS: a regression that both leaked the
   // managed columns AND dropped the row from the public scope would still pass, because an
   // empty object has none of them. Assert the row was actually found first.
@@ -1036,7 +1036,7 @@ export async function runCms(base: string): Promise<void> {
     "cms: collectionSchedule rejects an out-of-range epoch (400, not a 500 from toISOString)");
 
   // …and DRAIN it. Without this the scheduled-publish TASK has no end-to-end coverage at
-  // all — `createCollectionTasks` could be deleted from example/app.ts and the whole suite
+  // all: `createCollectionTasks` could be deleted from example/app.ts and the whole suite
   // would still pass, despite the README's "WITHOUT THIS WIRING A SCHEDULE NEVER FIRES".
   // Schedule for NOW so the outbox row is due, then drain the tenant's outbox.
   const dueAt = Date.now();
@@ -1056,7 +1056,7 @@ export async function runCms(base: string): Promise<void> {
     "cms: the row scheduled and drained is publicly readable",
   );
 
-  // A scheduled TAKEDOWN, drained the same way, takes it back down — and spends BOTH
+  // A scheduled TAKEDOWN, drained the same way, takes it back down, and spends BOTH
   // tokens, so a redelivered publish task cannot put it back up.
   await call("collectionSchedule", { collection: "lectures", id: wfRowId, publishAt: dueAt + 1, unpublishAt: dueAt + 2 }, admin);
   await fetch(`${base}/admin/tasks/drain`, {
@@ -1123,7 +1123,7 @@ export async function runCms(base: string): Promise<void> {
   assert(badMenu.status === 400, "cms: a javascript: menu href is refused (400)");
 
   const anonMenu = await call("getMenu", { name: "primary" });
-  assert(anonMenu.body.ok, "cms: getMenu is public — a menu is site chrome");
+  assert(anonMenu.body.ok, "cms: getMenu is public, because a menu is site chrome");
   const anonMenuItems = anonMenu.body.result.items as Array<{ id: string; url: string; children?: unknown[] }>;
   assert(anonMenuItems.length === 2, "cms: both items resolve while the page is published");
   assert(anonMenuItems[1].url.endsWith("/nav-target"), "cms: a page item follows its page's slug rather than a frozen href");
@@ -1181,7 +1181,7 @@ export async function runCms(base: string): Promise<void> {
   assert(bogusTag.body.ok === true && !(bogusTag.body.result as Array<{ id: string }>).some((m) => m.id === taggedId), "cms: an unknown term id narrows to nothing");
 
   // --- what a vocabulary is offered for -----------------------------------------------------
-  // `category` above was created without `appliesTo`, i.e. it classifies EVERYTHING — which is
+  // `category` above was created without `appliesTo`, i.e. it classifies EVERYTHING, which is
   // also how a row written before the column existed reads. Both assignments above therefore
   // had to be accepted, and were.
   const catAll = await call("listTaxonomies", { target: "media" });
@@ -1195,7 +1195,7 @@ export async function runCms(base: string): Promise<void> {
   assert((forMedia.body.result as Array<{ slug: string }>).some((t) => t.slug === "shot-type"), "cms: listTaxonomies(media) offers a media vocabulary");
   assert(!(forPages.body.result as Array<{ slug: string }>).some((t) => t.slug === "shot-type"), "cms: …and listTaxonomies(page) does not");
   const unfiltered = await call("listTaxonomies", {});
-  assert((unfiltered.body.result as Array<{ slug: string }>).some((t) => t.slug === "shot-type"), "cms: an unfiltered list still shows it — the screen that edits the scope must see it");
+  assert((unfiltered.body.result as Array<{ slug: string }>).some((t) => t.slug === "shot-type"), "cms: an unfiltered list still shows it, because the screen that edits the scope must see it");
 
   // The write side, not just the UI: hiding the vocabulary from a panel without refusing the
   // assignment would make appliesTo a hint, and leave every non-panel caller unguarded.
@@ -1212,12 +1212,12 @@ export async function runCms(base: string): Promise<void> {
   assert((await call("createTaxonomy", { slug: "bad-scope", label: "Bad", appliesTo: ["collection"] }, admin)).status === 400, "cms: an unknown target is refused, not dropped");
   assert((await call("createTaxonomy", { slug: "empty-scope", label: "Empty", appliesTo: [] }, admin)).status === 400, "cms: a vocabulary that classifies nothing is refused");
 
-  // Deleting a term takes its assignments with it — a real ON DELETE CASCADE, so the
+  // Deleting a term takes its assignments with it, via a real ON DELETE CASCADE, so the
   // cleanup cannot be half-done by a handler that threw between two writes.
   assert((await call("deleteTerm", { id: newsId }, admin)).body.ok, "cms: deleteTerm ok");
   assert(((await call("listPageTerms", { pageId: menuPageId })).body.result as unknown[]).length === 0, "cms: the term's page assignments went with it");
   assert((await call("deleteTerm", { id: localId }, admin)).body.ok, "cms: deleteTerm ok (the media-tagged one)");
-  // The DELETED term specifically, not "the list is empty" — the file also carries the
+  // The DELETED term specifically, not "the list is empty": the file also carries the
   // shot-type term by now, and an emptiness check would pass for the wrong reason if the
   // cascade ever took the wrong rows.
   const afterCascade = (await call("listMediaTerms", { mediaId: taggedId }, admin)).body.result as Array<{ id: string }>;
@@ -1237,7 +1237,7 @@ export async function runCms(base: string): Promise<void> {
 
   // --- Block Kit: a custom admin page (GitHub #33 / #44 tier 3) ---
   const anonPages = await call("listAdminPages", {});
-  assert(anonPages.body.ok && (anonPages.body.result as unknown[]).length === 0, "cms: listAdminPages is FILTERED — anonymous sees no page it cannot open");
+  assert(anonPages.body.ok && (anonPages.body.result as unknown[]).length === 0, "cms: listAdminPages is FILTERED, so anonymous sees no page it cannot open");
   const adminPages = await call("listAdminPages", {}, admin);
   assert((adminPages.body.result as Array<{ slug: string }>).some((p) => p.slug === "lecture-desk"), "cms: an editor sees the registered admin page");
   assert(!Object.keys((adminPages.body.result as Array<Record<string, unknown>>)[0]).includes("roles"), "cms: the listing never carries the role list");

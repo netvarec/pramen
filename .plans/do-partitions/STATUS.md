@@ -12,17 +12,17 @@ use `idFromName(`${tenant}:${partition}`)`.
 
 ## Completed
 
-- [x] 01 — DESIGN.md: Partitions spec & decisions
-- [x] 02 — Schema: `partition` on Entity + `partitionOf` helper
-- [x] 11 — DO registry: track & enumerate all (tenant, partition) DOs
-- [x] 03 — Schema validation: reject cross-partition relations
-- [x] 04 — Partition-aware migrate (DDL scoped to a partition)
-- [x] 05 — Handler partition declaration + Worker routing key
-- [x] 06 — DO partition awareness + runtime table-access guard
-- [x] 07 — Admin surface per-partition
-- [x] 09 — Example partitioned entity + e2e tests
-- [x] 10 — CLI / codegen + docs
-- [x] 08 — Type-level cross-partition rejection — runtime-only by decision (see below)
+- [x] 01. DESIGN.md: Partitions spec & decisions
+- [x] 02. Schema: `partition` on Entity + `partitionOf` helper
+- [x] 11. DO registry: track & enumerate all (tenant, partition) DOs
+- [x] 03. Schema validation: reject cross-partition relations
+- [x] 04. Partition-aware migrate (DDL scoped to a partition)
+- [x] 05. Handler partition declaration + Worker routing key
+- [x] 06. DO partition awareness + runtime table-access guard
+- [x] 07. Admin surface per-partition
+- [x] 09. Example partitioned entity + e2e tests
+- [x] 10. CLI / codegen + docs
+- [x] 08. Type-level cross-partition rejection: runtime-only by decision (see below)
 
 ## Discoveries
 
@@ -31,13 +31,13 @@ use `idFromName(`${tenant}:${partition}`)`.
   so subsequent runs hang on "wrangler dev did not become ready in time". Recovery:
   `lsof -iTCP:8788` → `kill -9 <pid>`. Check this before blaming an e2e regression.
 - Issue 05 wired `partition` into the standalone `query`/`mutation` (sdk/handlers.ts) but
-  NOT the typed `createApp` factories (sdk/app.ts) the example uses — partitioned handlers
+  NOT the typed `createApp` factories (sdk/app.ts) the example uses, so partitioned handlers
   routed to the default DO. Caught by the issue-09 integration suite; fixed in sdk/app.ts.
 - Issue 08 deferred to runtime-only: a compile-time cross-partition relation/`with`
   rejection needs the entity `partition` to survive inference as a string literal, but
   `EntityDef.partition` is widened to `string` at the `Entity()` factory. Doing it means
   threading a `P extends string` generic through EntityDef/Entity/SchemaDef + all
-  consumers (FieldsOf/RelationsOf/RelValue/WhereClause/RelationsResult) — out of scope
+  consumers (FieldsOf/RelationsOf/RelValue/WhereClause/RelationsResult), which is out of scope
   and would destabilize the depth-bounded WhereClause. Enforcement stays at runtime/boot
   (validateSchema) + e2e. Candidate future issue if the type-level guard is wanted.
 

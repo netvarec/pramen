@@ -1,5 +1,5 @@
 // ctx.kv: handlers can read/write the project KV. It is GLOBAL across tenants
-// (config/flags/cache), unlike ctx.db which is per-tenant — a value set while
+// (config/flags/cache), unlike ctx.db which is per-tenant: a value set while
 // addressing one tenant is visible while addressing another.
 
 import { assert, http, token } from "../lib";

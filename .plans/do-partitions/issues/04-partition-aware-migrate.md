@@ -3,7 +3,7 @@
 **Priority:** high
 **Files:** `packages/server/src/runtime/migrate.ts`
 
-A partition-DO must create/alter **only its own partition's tables** — the others
+A partition-DO must create/alter **only its own partition's tables**; the others
 don't (and must not) exist in that DO's SQLite.
 
 ## Implementation
@@ -11,13 +11,13 @@ don't (and must not) exist in that DO's SQLite.
 - Add an optional `partition?: string` to `migrate`'s options. When set, migrate
   operates only on entities where `partitionOf(schema, name) === partition` (use
   Issue 02's `entitiesInPartition` / `partitionOf`). When unset, behavior is
-  unchanged (all entities) — preserves the D1 path and any single-partition use.
+  unchanged (all entities), which preserves the D1 path and any single-partition use.
 - The schema-hash that migrate stores in `_pramen_meta` must be computed over the
   **partition's** entity subset (so two partitions of the same app don't thrash each
   other's hash / each correctly detects its own drift). Confirm the hash input is the
   filtered subset, not the whole schema.
 - `renamedFrom` / destructive handling unchanged, just applied to the filtered set.
-- Do NOT drop tables that belong to other partitions — since a partition-DO never sees
+- Do NOT drop tables that belong to other partitions: since a partition-DO never sees
   them, the existing "drop tables not in schema" logic (if any) must operate only over
   the filtered subset, or it will try to drop everything. Verify and guard this.
 

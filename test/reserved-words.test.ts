@@ -1,5 +1,5 @@
 // Reserved-word identifiers (`order`, `group`, `select`) must be quoted everywhere the
-// engine emits SQL — DDL (CREATE TABLE, the UNIQUE INDEX), every read/write/where/orderBy,
+// engine emits SQL: DDL (CREATE TABLE, the UNIQUE INDEX), every read/write/where/orderBy,
 // and the destructive table-rebuild's INSERT…SELECT. Before quoting, a column named
 // `order` broke the migration outright; this pins it end-to-end on real SQLite.
 
@@ -74,7 +74,7 @@ describe("reserved-word identifiers are quoted end-to-end", () => {
     await migrate(driver, schema);
     await adminDb(driver).insert("items", { id: 1, order: 7, group: "g", select: "s" });
 
-    // Adding an expr-default column forces a table rebuild (create temp, copy, swap) —
+    // Adding an expr-default column forces a table rebuild (create temp, copy, swap), and
     // its INSERT…SELECT names every reserved column. Additive, so ungated.
     const v2 = defineSchema({
       items: Entity((t) => ({

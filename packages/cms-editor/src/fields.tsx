@@ -22,7 +22,7 @@ import type { FieldDefinition, FieldValue, FieldValues, Media, ReferenceOption, 
 export const CONTROL = "h-10 w-full rounded-lg border border-border bg-surface-card px-4 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus:border-brand-green";
 
 /**
- * A field's help text — `FieldDefinition.description`, rendered under the control.
+ * A field's help text: `FieldDefinition.description`, rendered under the control.
  *
  * Styled to match what podoba's `Input`/`Textarea` emit for their own `description` prop
  * (`<Text slot="description">`), because those two render theirs and everything else renders
@@ -41,7 +41,7 @@ function FieldHint({ id, children }: { id: string; children: ReactNode }) {
  * `description` is rendered OUTSIDE the `<label>`, deliberately.
  *
  * A `<label>` wrapping a control contributes ALL its text to that control's accessible name,
- * so a hint nested inside would be read out as part of the field's name — "Adresa Použije se,
+ * so a hint nested inside would be read out as part of the field's name: "Adresa Použije se,
  * jen když akce nemá přiřazená sportoviště" instead of "Adresa". The hint belongs in
  * `aria-describedby`, which is a separate announcement the user can skip; hence the id, which
  * the caller puts on the control itself.
@@ -49,7 +49,7 @@ function FieldHint({ id, children }: { id: string; children: ReactNode }) {
 function FieldShell({ label, description, descriptionId, children }: { label: ReactNode; description?: string; descriptionId?: string; children: ReactNode }) {
   const field = (
     <label className="flex w-full flex-col gap-2">
-      {/* No label element at all when there is no label — an empty one still occupies a
+      {/* No label element at all when there is no label: an empty one still occupies a
           row and, with a required marker, showed a stray asterisk above the control. */}
       {label === undefined ? null : <span className="text-sm font-medium text-fg">{label}</span>}
       {children}
@@ -65,14 +65,14 @@ function FieldShell({ label, description, descriptionId, children }: { label: Re
 }
 
 /**
- * `YYYY-MM-DDTHH:MM` in LOCAL time — what <input type="datetime-local"> shows and expects.
+ * `YYYY-MM-DDTHH:MM` in LOCAL time, what <input type="datetime-local"> shows and expects.
  *
  * It is only ever the DISPLAY format. The stored value is always a UTC ISO string,
  * because the server decides "is this published yet?" by comparing against its own clock:
  * storing an editor's wall-clock time made "Publish now" in UTC+2 look two hours in the
  * future, so a row published this way stayed invisible until the clock caught up.
  *
- * Returns "" for anything Date can't parse — a legacy or hand-written column value must
+ * Returns "" for anything Date can't parse: a legacy or hand-written column value must
  * not reach the input as `NaN-NaN-NaNTNaN:NaN`, which the browser silently discards.
  */
 export function toLocalInput(value: string): string {
@@ -98,8 +98,8 @@ export function formatWhen(value: string): string {
  *
  * `scheduled` is derived from the clock, so without this a form left open across the
  * scheduled instant keeps claiming "Scheduled for 14:00" well after 14:00. The timeout is
- * clamped to the 32-bit setTimeout ceiling — a longer delay overflows and fires
- * immediately — and `tick` is a dependency so a clamped wait re-arms instead of giving up.
+ * clamped to the 32-bit setTimeout ceiling, since a longer delay overflows and fires
+ * immediately, and `tick` is a dependency so a clamped wait re-arms instead of giving up.
  */
 function useTickAt(at: number | null): void {
   const [tick, setTick] = useState(0);
@@ -117,11 +117,11 @@ function useTickAt(at: number | null): void {
  * publish it now, publish it at a chosen time, or take it down.
  *
  * A bare datetime-local input made "publish this" mean "work out the current time and
- * type it in", and "unpublish" mean "clear a text box" — neither of which reads as the
+ * type it in", and "unpublish" mean "clear a text box", neither of which reads as the
  * action it is.
  *
  * NOTE for the caller: these are <button>s, so this must NOT be rendered inside a
- * <label> — a <button> is labelable, and clicking the label text would forward a click
+ * <label>: a <button> is labelable, and clicking the label text would forward a click
  * to the first one (publishing the row).
  */
 function PublishControl({ value, onChange }: { value: string; onChange: (v: string | null) => void }) {
@@ -129,7 +129,7 @@ function PublishControl({ value, onChange }: { value: string; onChange: (v: stri
   const [scheduling, setScheduling] = useState(false);
   // The picker's own text, kept separate from the stored instant. A `datetime-local`
   // reports "" for ANY incomplete state, so deleting the year to retype it would
-  // otherwise read as "unpublish" — and the debounced autosave would take the row off
+  // otherwise read as "unpublish", and the debounced autosave would take the row off
   // the site mid-keystroke. Only an explicit Unpublish clears the stored value.
   const [draft, setDraft] = useState("");
   const published = Boolean(value);
@@ -164,7 +164,7 @@ function PublishControl({ value, onChange }: { value: string; onChange: (v: stri
           {scheduled ? t("field.publish.changeSchedule") : published ? t("field.publish.changeTime") : t("field.publish.schedule")}
         </Button>
         {published ? (
-          // Clearing the value is what takes the row off the site — the read policy is
+          // Clearing the value is what takes the row off the site: the read policy is
           // scoped to this field being set.
           <Button variant="ghost" size="sm" className="text-danger" onPress={() => { setScheduling(false); onChange(null); }}>
             {t("field.publish.unpublish")}
@@ -205,11 +205,11 @@ export function FieldForm({ schema, value, onChange, api }: { schema: FieldDefin
 /**
  * `hideLabelAs` renders the field with NO visible label, using the given string as its
  * accessible name instead. The single-field repeater asks for this: the list already
- * carries the name, so repeating it on every row is noise — but an unlabelled input is
+ * carries the name, so repeating it on every row is noise, but an unlabelled input is
  * announced as a bare edit field, so the name has to go somewhere.
  *
  * It cannot be done by passing an empty label: `text`/`url`/`textarea` render through
- * podoba's `Input`/`Textarea`, which emit `<Label>{label}</Label>` unconditionally — an
+ * podoba's `Input`/`Textarea`, which emit `<Label>{label}</Label>` unconditionally, and an
  * empty label element still claims a flex row and its `gap-3`, and still wins the
  * accessible-name computation via `aria-labelledby`. Those three go through the bare
  * `CONTROL` skin instead, the same way `number`/`date` already do.
@@ -220,7 +220,7 @@ function FieldInput({ def, value, onChange, api, hideLabelAs, siblings }: { def:
       {def.label ?? def.name} {def.required ? <span className="text-danger">*</span> : null}
     </>
   );
-  // A label names the field; a description says what it MEANS — which of two plausible
+  // A label names the field; a description says what it MEANS, which of two plausible
   // readings is the right one, when it applies, what leaving it empty does. Without
   // somewhere to put that, the only place it can live is a comment in the app's source,
   // where the person filling the field in will never see it.
@@ -230,7 +230,7 @@ function FieldInput({ def, value, onChange, api, hideLabelAs, siblings }: { def:
   // buries the rows.
   const hint = hideLabelAs !== undefined ? undefined : def.description?.trim() || undefined;
   // Stable per field instance, so the control can point `aria-describedby` at the hint.
-  // `useId` is called unconditionally — it is a hook, and the switch below returns early.
+  // `useId` is called unconditionally: it is a hook, and the switch below returns early.
   const hintId = useId();
   const describedBy = hint ? hintId : undefined;
   const asText = (v: FieldValue) => (typeof v === "string" ? v : v == null ? "" : JSON.stringify(v));
@@ -287,7 +287,7 @@ function FieldInput({ def, value, onChange, api, hideLabelAs, siblings }: { def:
       );
     case "publish":
       // Deliberately NOT FieldShell: it wraps children in a <label>, whose implicit
-      // control would be PublishControl's first <button> ("Publish now") — clicking the
+      // control would be PublishControl's first <button> ("Publish now"), so clicking the
       // label text would then publish the row. Same reason the boolean case opts out.
       return (
         <div className="flex w-full flex-col gap-2">
@@ -303,7 +303,7 @@ function FieldInput({ def, value, onChange, api, hideLabelAs, siblings }: { def:
             <input type="checkbox" aria-describedby={describedBy} checked={Boolean(value)} onChange={(e) => onChange(e.target.checked)} />
             <span className="text-sm text-fg">{def.label ?? def.name}</span>
           </label>
-          {/* Outside the <label>, like everywhere else — inside, it would be read out as
+          {/* Outside the <label>, like everywhere else: inside, it would be read out as
               part of the checkbox's name. */}
           {hint ? <FieldHint id={hintId}>{hint}</FieldHint> : null}
         </div>
@@ -317,8 +317,8 @@ function FieldInput({ def, value, onChange, api, hideLabelAs, siblings }: { def:
     case "media":
       return (
         <FieldShell label={label} description={hint} descriptionId={hintId}>
-          {/* No cast: what is in the column decides, not what the schema says should be —
-              see `mediaFieldValue`. */}
+          {/* No cast: what is in the column decides, not what the schema says should be.
+              See `mediaFieldValue`. */}
           <MediaField value={value} onChange={onChange} api={api} />
         </FieldShell>
       );
@@ -353,7 +353,7 @@ function FieldInput({ def, value, onChange, api, hideLabelAs, siblings }: { def:
 // block conversion, inline bubble toolbar.
 //
 // The STORED value is a document tree (`RichTextDoc`), never HTML. BlockEditor's own
-// value contract is an HTML string — its docs call that presentation-only — so the
+// value contract is an HTML string (its docs call that presentation-only) so the
 // conversion happens here, at the boundary, and the HTML never leaves this component:
 // seeded from the stored doc on mount, converted back to a doc on every change.
 //
@@ -377,11 +377,11 @@ function htmlToDoc(html: string): RichTextDoc {
   }
 }
 
-/** Seed HTML for the editor. A legacy HTML string passes through untouched — that is the
+/** Seed HTML for the editor. A legacy HTML string passes through untouched: that is the
  * migration ramp (see `RichText`, which upgrades it on mount).
  *
  * `generateHTML` throws a RangeError for any node or mark outside RT_EXTENSIONS, and this
- * runs in a useState initializer with no ErrorBoundary above it — so an un-normalized
+ * runs in a useState initializer with no ErrorBoundary above it, so an un-normalized
  * document (a custom `richTextSchema`, an import, a bootstrap seed, `ctx.db.exec`) would
  * throw during render and blank the whole SPA, not just this field. Fail to an empty
  * editor and say so instead. */
@@ -397,7 +397,7 @@ function docToEditorHtml(value: RichTextDoc | string | null | undefined): string
 }
 
 export function RichText({ value, onChange }: { value: RichTextDoc | string | null; onChange: (v: RichTextDoc) => void }) {
-  // BlockEditor requires its own HTML echoed back VERBATIM — normalising in render would
+  // BlockEditor requires its own HTML echoed back VERBATIM, and normalising in render would
   // re-seed the document on every keystroke and throw the caret back to the start. So the
   // HTML lives in local state and the doc goes upward.
   const [html, setHtml] = useState(() => docToEditorHtml(value));
@@ -405,7 +405,7 @@ export function RichText({ value, onChange }: { value: RichTextDoc | string | nu
 
   // Upgrade a legacy HTML value to a document AS SOON AS IT OPENS, not on first edit of
   // this field. The server only tolerates a legacy string that is byte-identical to what
-  // is stored, and both renderers emit nothing for a string — so a value that is never
+  // is stored, and both renderers emit nothing for a string, so a value that is never
   // upgraded stays invisible on the site forever. Converting on mount means any ordinary
   // save (even of a sibling field) writes it back as a document.
   const upgraded = useRef(false);
@@ -417,7 +417,7 @@ export function RichText({ value, onChange }: { value: RichTextDoc | string | nu
     onChange(doc);
   }, [value, onChange]);
 
-  // Re-seed only when the parent hands us a doc that is not the one we last emitted —
+  // Re-seed only when the parent hands us a doc that is not the one we last emitted,
   // i.e. the form switched to a different block, not our own change coming back around.
   useEffect(() => {
     if (value !== null && value === emitted.current) return;
@@ -440,8 +440,8 @@ export function RichText({ value, onChange }: { value: RichTextDoc | string | nu
  * A repeater's items.
  *
  * Two shapes, because a list of one field and a list of six are different things to edit.
- * A SINGLE-field repeater (bullet points) renders one row per item — handle, input,
- * actions — with no card and no field label repeated down the page saying the same word.
+ * A SINGLE-field repeater (bullet points) renders one row per item: handle, input,
+ * actions, with no card and no field label repeated down the page saying the same word.
  * Anything wider keeps a card, with a header that summarises the item so eight slides are
  * scannable without expanding each one.
  *
@@ -452,7 +452,7 @@ function Repeater({ def, value, onChange, api, label, description, descriptionId
   const { t } = useI18n();
   const items = Array.isArray(value) ? value : [];
   const fields = def.fields ?? [];
-  // One field, and not itself a tall control — the case where the card is pure overhead.
+  // One field, and not itself a tall control: the case where the card is pure overhead.
   const compact = fields.length === 1 && !["repeater", "group", "richtext", "media"].includes(fields[0].type);
 
   const [drag, setDrag] = useState<{ from: number; over: number } | null>(null);
@@ -477,7 +477,7 @@ function Repeater({ def, value, onChange, api, label, description, descriptionId
    *
    * Restricted to prose-ish field types on purpose. Taking the first non-empty STRING
    * instead titled every slide with the uuid of its image, which is worse than no summary
-   * at all — the point is to tell two rows apart at a glance.
+   * at all, since the point is to tell two rows apart at a glance.
    */
   const summarise = (it: FieldValues): string => {
     const readable = ["text", "textarea", "richtext", "select", "url"];
@@ -485,7 +485,7 @@ function Repeater({ def, value, onChange, api, label, description, descriptionId
       if (!readable.includes(f.type)) continue;
       const v = it[f.name];
       // A `richtext` value is a document tree, so a string check alone would skip the one
-      // prose field an item has — exactly the row this summary exists to distinguish.
+      // prose field an item has, exactly the row this summary exists to distinguish.
       const text = isRichTextDoc(v) ? richTextToPlainText(v) : typeof v === "string" ? v.replace(/<[^>]+>/g, " ") : "";
       const trimmed = text.replace(/\s+/g, " ").trim();
       if (trimmed) return trimmed.slice(0, 80);
@@ -515,7 +515,7 @@ function Repeater({ def, value, onChange, api, label, description, descriptionId
         // Firefox refuses to start a drag without a payload, but the payload must be
         // EMPTY: a card-variant drop zone spans the item's rich-text body, and
         // ProseMirror's own `drop` listener (on view.dom, so it runs before React's
-        // delegated one — preventDefault here can't stop it) pastes `text/plain` at the
+        // delegated one, so preventDefault here can't stop it) pastes `text/plain` at the
         // cursor. An empty slice leaves the doc equal and PM bails. Same reason the block
         // canvas passes "" (components.tsx).
         e.dataTransfer.setData("text/plain", "");
@@ -536,7 +536,7 @@ function Repeater({ def, value, onChange, api, label, description, descriptionId
    * unconditionally where hover doesn't exist.
    *
    * `group/row` is NAMED on purpose: `BlockCard` is also a `group`, and an unnamed
-   * `group-hover:` matches ANY `.group` ancestor — hovering the block revealed every
+   * `group-hover:` matches ANY `.group` ancestor, so hovering the block revealed every
    * row's actions at once. And Tailwind v4 emits `hover:`/`group-hover:` under
    * `@media (hover: hover)`, so on touch (where drag-and-drop doesn't work either)
    * a hover-only affordance leaves no way at all to reorder or delete.
@@ -568,8 +568,8 @@ function Repeater({ def, value, onChange, api, label, description, descriptionId
             <div key={i} className={`group/row flex items-center gap-1 rounded-lg px-1 py-0.5 transition-colors ${rowState(i)}`} {...dropZone(i)}>
               {handle(i)}
               <div className="min-w-0 flex-1">
-                {/* No visible label — it would repeat the list's own name down the page
-                    ("Bod", "Bod", "Bod"…) — but the input still needs an accessible one,
+                {/* No visible label: it would repeat the list's own name down the page
+                    ("Bod", "Bod", "Bod"…), but the input still needs an accessible one,
                     and one that tells the rows apart. */}
                 <FieldInput
                   def={fields[0]}
@@ -610,11 +610,11 @@ function Repeater({ def, value, onChange, api, label, description, descriptionId
  * Turn a title into a URL segment.
  *
  * Diacritics are decomposed and their marks dropped, so Czech text transliterates the way
- * a reader expects — "Vrátnice výrobního závodu" becomes "vratnice-vyrobniho-zavodu"
+ * a reader expects: "Vrátnice výrobního závodu" becomes "vratnice-vyrobniho-zavodu"
  * rather than losing the accented letters entirely.
  */
 export function slugify(input: string): string {
-  // Trailing trim AFTER the length cap — slicing a hyphen-terminated prefix out of a long
+  // Trailing trim AFTER the length cap: slicing a hyphen-terminated prefix out of a long
   // title would otherwise leave the slug ending in "-".
   return slugifyInput(input).replace(/-+$/, "");
 }
@@ -622,7 +622,7 @@ export function slugify(input: string): string {
 /**
  * Per-keystroke normalization: everything `slugify` does EXCEPT the trailing-hyphen trim.
  *
- * The input is controlled, so anything this strips can never be typed at all — trimming the
+ * The input is controlled, so anything this strips can never be typed at all. Trimming the
  * trailing "-" here would make a separator unenterable (type "my-", `slugify` hands back
  * "my", the value prop never changes, React restores the DOM). The full `slugify` runs on
  * blur instead, once the word is finished.
@@ -642,7 +642,7 @@ function slugifyInput(input: string): string {
  * A slug that follows another field while it is untouched.
  *
  * It deliberately stops following the moment the value differs from what it last derived
- * — which includes every row that already has a slug. Renaming a published project must
+ *, which includes every row that already has a slug. Renaming a published project must
  * not silently change its URL and break every link to it; "Generate from …" is there for
  * when that IS what you want.
  */
@@ -650,7 +650,7 @@ function SlugField({ def, label, description, descriptionId, value, source, onCh
   // What this control last wrote. While the field still holds it, the field is "untouched"
   // and free to follow; anything else means a human typed it.
   const derived = useRef<string | null>(null);
-  // Whether a human has edited this field. Once true it stays true for the session —
+  // Whether a human has edited this field. Once true it stays true for the session:
   // emptying the field is an edit, not an invitation to start following again.
   const touched = useRef(false);
   // The source we last saw. Seeded on the first run so merely OPENING a row never derives:
@@ -665,7 +665,7 @@ function SlugField({ def, label, description, descriptionId, value, source, onCh
     lastSource.current = source;
     if (prev === null || prev === source || !source) return;
     if (touched.current) return;
-    // Follow only an empty field or one still holding our own last derivation — an existing
+    // Follow only an empty field or one still holding our own last derivation. An existing
     // slug is a live URL, and renaming its page must not break every link to it.
     if (value !== "" && value !== derived.current) return;
     const next = slugify(source);
@@ -685,7 +685,7 @@ function SlugField({ def, label, description, descriptionId, value, source, onCh
         aria-describedby={description ? descriptionId : undefined}
         value={value}
         onChange={(e) => {
-          touched.current = true; // typed by hand — stop following from here on
+          touched.current = true; // typed by hand, so stop following from here on
           derived.current = null;
           onChange(slugifyInput(e.target.value));
         }}
@@ -709,8 +709,8 @@ function SlugField({ def, label, description, descriptionId, value, source, onCh
 }
 
 // A `select` field. Static `options` render as-is; when `optionsFrom` is set, the options are
-// fetched once from that query handler (returns `{ value, label }[]`) — e.g. a live list of
-// campaigns — so the editor never has to hardcode or copy identifiers by hand.
+// fetched once from that query handler (returns `{ value, label }[]`), e.g. a live list of
+// campaigns, so the editor never has to hardcode or copy identifiers by hand.
 function SelectField({ def, value, onChange, api, ariaLabel, describedBy }: { def: FieldDefinition; value: string | null; onChange: (v: FieldValue) => void; api: Api; ariaLabel?: string; describedBy?: string }) {
   const [dyn, setDyn] = useState<{ value: string; label: string }[] | null>(null);
   const from = def.optionsFrom;
@@ -737,12 +737,12 @@ function SelectField({ def, value, onChange, api, ariaLabel, describedBy }: { de
 
 /** What a `media` field's stored value is, as the control has to treat it.
  *
- * A media field holds a media ID — but the column is free-form JSON and the editor is not
+ * A media field holds a media ID, but the column is free-form JSON and the editor is not
  * the only writer. A page seeded by a script, an import, or a value round-tripped out of the
  * PUBLIC read API (where `getPage` resolves the id into `{ url, alt, … }` for the site to
  * render) all put something else in there. The component used to render that value straight
  * into a `<span>` as the fallback for a missing filename, and React refuses an object as a
- * child — so ONE such field took down the whole `/pages/:id` route, error boundary and all,
+ * child, so ONE such field took down the whole `/pages/:id` route, error boundary and all,
  * with the page unopenable until someone edited the database.
  *
  * So the narrowing happens once, here, and the component only ever sees strings:
@@ -751,16 +751,16 @@ function SelectField({ def, value, onChange, api, ariaLabel, describedBy }: { de
  *     non-empty string qualifies; anything else is `null`. A RESOLVED value is the one
  *     recoverable case: `getPage` builds it as `{ id, key, url, alt, … }`, so it still
  *     carries the id it was resolved FROM. Reading that back means the field renders
- *     normally — thumbnail and all — and the next save writes the bare id, so the round
+ *     normally (thumbnail and all) and the next save writes the bare id, so the round
  *     trip repairs itself instead of costing the editor a clear and a manual re-pick.
  *   - `label` is what to SHOW when there is no resolved asset to name. An unrecognised
- *     object says what it points at (its `url`) rather than reading as an empty field —
+ *     object says what it points at (its `url`) rather than reading as an empty field:
  *     the page it belongs to usually still renders that image on the site, and "empty" would
  *     send an editor looking for a picture that is not missing.
  *   - `hasValue` decides whether "clear" is offered, and it is deliberately NOT `id !== null`:
  *     clearing is how an editor repairs one of these by hand, so it has to be reachable
  *     exactly when the value is something the picker cannot represent. That includes a bare
- *     `42` or `true` — the server's own `media` check names a number as the thing a bad
+ *     `42` or `true`. The server's own `media` check names a number as the thing a bad
  *     writer puts here, and such a value is otherwise indistinguishable from an empty field:
  *     no label, no clear button, and a save that 400s until someone edits the database. */
 export function mediaFieldValue(value: unknown): { id: string | null; label: string; hasValue: boolean } {
@@ -906,7 +906,7 @@ export function MediaPicker({ api, onClose, onPick }: { api: Api; onClose: () =>
 // --- reference ------------------------------------------------------------------------
 //
 // A pointer to a record that is not this row. `select` + `optionsFrom` already does the
-// easy half — fetch `{ value, label }[]` once, render a `<select>` — and stays the right
+// easy half (fetch `{ value, label }[]` once, render a `<select>`) and stays the right
 // answer for twenty campaigns. It has no answer for a thousand records: no search, no
 // paging, and no way to render the label of a stored value that is not in the one page it
 // fetched, so an existing row shows a uuid.
@@ -922,7 +922,7 @@ export function MediaPicker({ api, onClose, onPick }: { api: Api; onClose: () =>
 
 const REFERENCE_PAGE_SIZE = 20;
 
-/** Tolerate a handler that answers with a bare array — the `optionsFrom` shape — so a
+/** Tolerate a handler that answers with a bare array (the `optionsFrom` shape) so a
  * `select`'s existing options handler can be pointed at a `reference` without a rewrite. */
 function asReferenceResult(raw: unknown): ReferenceResult {
   if (Array.isArray(raw)) return { items: raw as ReferenceOption[] };
@@ -937,7 +937,7 @@ function asReferenceResult(raw: unknown): ReferenceResult {
  * them on every keystroke in a sibling field. */
 function useReferenceLabels(api: Api, from: string | undefined, ids: readonly string[]): Map<string, ReferenceOption> {
   const [known, setKnown] = useState<Map<string, ReferenceOption>>(() => new Map());
-  // The ids, as a stable primitive — an array literal is a new identity every render.
+  // The ids, as a stable primitive: an array literal is a new identity every render.
   //
   // JSON, not `join(" ")`: an id here is OPAQUE, which is the whole premise of the field, so
   // it may contain a space. Splitting on one turned a single external id into two ids that
@@ -958,7 +958,7 @@ function useReferenceLabels(api: Api, from: string | undefined, ids: readonly st
           const next = new Map(prev);
           for (const it of items) next.set(it.value, it);
           // An id the handler did not answer for is recorded as UNRESOLVED rather than left
-          // missing — otherwise this effect asks for it again on every render, forever, for
+          // missing, since otherwise this effect asks for it again on every render, forever, for
           // a record that has been deleted.
           for (const id of missing) if (!next.has(id)) next.set(id, { value: id, label: "" });
           return next;
@@ -981,7 +981,7 @@ function useReferenceLabels(api: Api, from: string | undefined, ids: readonly st
 function referenceLabel(id: string, known: Map<string, ReferenceOption>): { label: string; muted: boolean } {
   const hit = known.get(id);
   if (!hit) return { label: getI18n().t("relation.loading"), muted: true };
-  // An empty label is the recorded "no such record" — show the raw id, because that is the
+  // An empty label is the recorded "no such record", so show the raw id, because that is the
   // only thing left that identifies what the row points at.
   return hit.label ? { label: hit.label, muted: false } : { label: id, muted: true };
 }
@@ -1009,7 +1009,7 @@ function ReferenceField({ def, value, onChange, api, ariaLabel }: { def: FieldDe
   const remove = (id: string) => onChange(multiple ? ids.filter((v) => v !== id) : null);
 
   // Nothing to pick FROM. Said out loud rather than rendered as an empty control that
-  // silently does nothing when clicked — this is a schema mistake, and the person seeing it
+  // silently does nothing when clicked: this is a schema mistake, and the person seeing it
   // is the one who can fix it.
   if (!def.referenceFrom) {
     return <span className="text-sm text-danger">{t("relation.noHandler")}</span>;
@@ -1092,7 +1092,7 @@ function ReferencePicker({ api, from, title, selected, multiple, onPick, onClose
           const r = asReferenceResult(raw);
           setItems((prev) => (offset === 0 ? r.items : [...prev, ...r.items]));
           // A handler that omits `hasMore` is taken at its word only when it returned a
-          // SHORT page; a full one is assumed to have more — the same rule the page and
+          // SHORT page; a full one is assumed to have more, the same rule the page and
           // collection lists use.
           setHasMore(r.hasMore ?? r.items.length === REFERENCE_PAGE_SIZE);
         })

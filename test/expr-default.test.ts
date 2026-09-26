@@ -41,7 +41,7 @@ describe("expr defaults", () => {
   });
 });
 
-describe("migrate — expr default", () => {
+describe("migrate: expr default", () => {
   test("CREATE TABLE: an omitted expr-default column is filled by the DB", async () => {
     const db = new Database(":memory:");
     await migrate(bunSqliteDriver(db), defineSchema({ events: Entity((b) => ({ id: b.id(), at: defaultTo(b.text(), expr.now()) })) }));
@@ -56,7 +56,7 @@ describe("migrate — expr default", () => {
     // v1: no `at` column; seed a row.
     await migrate(d, defineSchema({ events: Entity((b) => ({ id: b.id(), kind: b.text() })) }));
     db.run("INSERT INTO events (kind) VALUES ('signup')");
-    // v2: add an expr-default column. NOTE: allowDestructive is NOT set — the rebuild
+    // v2: add an expr-default column. NOTE: allowDestructive is NOT set, because the rebuild
     // is additive, so it must still apply.
     const r = await migrate(d, defineSchema({ events: Entity((b) => ({ id: b.id(), kind: b.text(), at: defaultTo(b.text(), expr.now()) })) }));
     expect(r.rebuilt).toContain("events");

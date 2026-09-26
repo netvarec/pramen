@@ -76,7 +76,7 @@ export const readChecks = query(async (ctx) => {
   void next;
   void firstViews;
 
-  // count + aggregate — the result row is inferred from the spec.
+  // count + aggregate: the result row is inferred from the spec.
   const n: number = await ctx.db.count({ from: "notes", where: { pinned: true } });
   const stats = await ctx.db.aggregate({
     from: "notes",
@@ -102,7 +102,7 @@ export const readChecks = query(async (ctx) => {
 });
 
 // ProjectedRow: the honest type when field-level (incl. cell-level) ACL may drop
-// columns per row — every field optional, so a partial literal compiles and a
+// columns per row: every field optional, so a partial literal compiles and a
 // dropped field is not assignable to a required value.
 type ProjectedNote = ProjectedRow<FieldsOf<typeof schema.notes>>;
 const projectedNote: ProjectedNote = { id: 1 }; // all fields optional

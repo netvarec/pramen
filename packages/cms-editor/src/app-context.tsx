@@ -1,6 +1,6 @@
 // App-wide context for the routed editor: the HTTP client, the persisted config, the
 // signed-in identity (`me`), and a global error sink rendered by the root layout. Also
-// owns the pre-route config gate — when there's no base URL + token yet, it renders the
+// owns the pre-route config gate: when there's no base URL + token yet, it renders the
 // Setup screen instead of mounting the router at all.
 
 import { Button, Input } from "@podoba/react";
@@ -14,20 +14,20 @@ import { DEFAULT_CAPABILITIES, type AdminPageMeta, type CmsCapabilities, type Co
 
 declare global {
   interface Window {
-    /** Runtime config written by the SHELL that served the editor — a server-rendered
+    /** Runtime config written by the SHELL that served the editor: a server-rendered
      * inline script, not a file anyone hand-edits (see `PramenAdmin.astro` in
      * @pramen/cms-astro, and the dev preview in scripts/build.ts). */
     PRAMEN_CMS_EDITOR?: {
       /** Which CMS Worker to call, and as which tenant. Declared by the shell because the
-       * server already knows — it is what makes the Setup screen a token field and
+       * server already knows, and it is what makes the Setup screen a token field and
        * nothing else. `url: ""` means the CMS is on this same origin. */
       backend?: { url?: string; tenant?: string };
       signInUrl?: string;
-      /** Hide the Pages tab for deployments that use collections only — no block/page
+      /** Hide the Pages tab for deployments that use collections only, with no block/page
        * building. The tab is otherwise always shown and lands on an empty list, which
        * reads as "the CMS is broken" rather than "this site has no pages". */
       hidePages?: boolean;
-      /** Which chrome the nav wears — `"sidebar"` (the default rail) or `"topbar"` (the
+      /** Which chrome the nav wears: `"sidebar"` (the default rail) or `"topbar"` (the
        * Graphic Standard bar: brand left, tabs right, avatar at the end).
        *
        * A deployment-level choice, not a reading preference like the theme or a folded nav
@@ -39,7 +39,7 @@ declare global {
        * Rendered as plain external `<a>` links, positioned by `order` (see `NAV_ORDER`) and
        * defaulting to after the built-in tabs. */
       extraNav?: { label: string; href: string; target?: "_blank" | "_self"; order?: number }[];
-      /** Module URLs of this deployment's PANEL bundles — the project's own React screens,
+      /** Module URLs of this deployment's PANEL bundles: the project's own React screens,
        * rendered inside the chrome at `/apps/:slug`. Imported by the editor at boot (see
        * `main.tsx`), not by a script tag of the shell's, because the shared React they
        * import has to be published first. */
@@ -47,13 +47,13 @@ declare global {
       /** The wordmark in the topbar, on the Setup screen, and in the browser tab.
        *
        * This editor ships as a package an agency deploys FOR ITS CLIENT, so the default
-       * put the framework's name where the client's belongs — someone logging into their
+       * put the framework's name where the client's belongs: someone logging into their
        * own CMS was greeted by "pramen". Set `name` (and optionally `suffix`) to the
        * deployment's own; `suffix: null` drops the "· cms" half entirely. */
       brand?: BrandConfig;
       /** Where THIS SITE renders a page preview (e.g. `/preview`). The editor appends
        * `?token=…`. Unset, a preview link points at the CMS's own redeem endpoint, which
-       * answers with JSON — see `preview.ts`. */
+       * answers with JSON. See `preview.ts`. */
       previewUrl?: string;
       /** Rows added to the account menu, each opening a screen of the editor. Parsed and
        * validated by `resolveAccountMenu` in `nav.ts`; see `AccountMenuItem` in `slots.ts`. */
@@ -71,9 +71,9 @@ const BACKEND = readBackend(globalThis as BackendHost);
 
 /** External sign-in URL, if the host configured one. When set, an
  * unauthenticated OR expired session is redirected here instead of the built-in Setup
- * screen — for deployments whose auth (magic-link, SSO, …) lives on a separate page.
+ * screen, for deployments whose auth (magic-link, SSO, …) lives on a separate page.
  *
- * `?setup=1` forces the built-in Setup screen even when a sign-in URL is configured — the
+ * `?setup=1` forces the built-in Setup screen even when a sign-in URL is configured: the
  * bootstrap escape hatch for pasting a first-admin JWT before any account exists. */
 const SIGN_IN_URL: string | undefined =
   typeof window !== "undefined" && !new URLSearchParams(window.location.search).has("setup") ? window.PRAMEN_CMS_EDITOR?.signInUrl : undefined;
@@ -91,18 +91,18 @@ export interface Me {
 }
 
 /**
- * Whether the SERVER accepted this session — the answer to `me`, which is the identity it
+ * Whether the SERVER accepted this session: the answer to `me`, which is the identity it
  * resolved the bearer token to, or `null` when it resolved none.
  *
  * The editor used to decide it was signed in from the token's own `exp` claim alone, read
- * client-side. That covers exactly one way to stop being signed in. Every other way — the
+ * client-side. That covers exactly one way to stop being signed in. Every other way (the
  * signing secret rotated, the account deleted or deactivated, the token revoked onto the
- * denylist, a stored token from an older deployment — leaves an unexpired `exp` on a token
+ * denylist, a stored token from an older deployment) leaves an unexpired `exp` on a token
  * the server treats as ANONYMOUS. And anonymous is not an error here: pramen's ACL answers
  * it, so the editor mounted and rendered a shell that looked signed in and was empty.
  * `listContentTypes` and `listBlockTypes` 403 into swallowed catches, `me` comes back null,
  * so the tabs collapse to the pre-types default and the page list shows only what the public
- * can read — no error, no way back, nothing to click.
+ * can read: no error, no way back, nothing to click.
  *
  * `userId`, not truthiness of the object: `me` for an anonymous caller is `null` today, but
  * an identity carrying no subject is the same non-answer and must not read as a session.
@@ -116,10 +116,10 @@ interface AppContextValue {
   cfg: Config;
   me: Me | null;
   isAdmin: boolean;
-  /** Collections registered on the server (from `listCollections`) — drives the nav + the
+  /** Collections registered on the server (from `listCollections`), which drives the nav + the
    * generic list/edit routes. Empty when the server registers none. */
   collections: CollectionMeta[];
-  /** Custom admin screens the CALLER may open (from `listAdminPages`) — Block Kit pages a
+  /** Custom admin screens the CALLER may open (from `listAdminPages`): Block Kit pages a
    * project registered with `adminPage()`, and panels it registered with `adminPanel()`.
    * They render inside the editor's own chrome, at a nav position they choose, which is the
    * difference from an `extraNav` link.
@@ -144,23 +144,23 @@ interface AppContextValue {
    * `null` means NOT ANSWERED YET, which is a different thing from "this deployment has
    * none" and has to be told apart from it: the whole nav shape is decided by the count, so
    * an empty array standing in for "still loading" makes every screen paint the single-type
-   * layout first and correct itself a round trip later. It also swallowed failure — a 5xx,
-   * or a session whose role cannot call `listContentTypes` — into the same value, leaving a
+   * layout first and correct itself a round trip later. It also swallowed failure (a 5xx,
+   * or a session whose role cannot call `listContentTypes`) into the same value, leaving a
    * type route showing "Loading…" over data it already had, forever. */
   contentTypes: ContentType[] | null;
   /** The `listContentTypes` call FAILED (as opposed to answering with none). Screens that
    * cannot render without it say so and offer `refreshContentTypes` rather than pretending
    * to still be loading. */
   contentTypesFailed: boolean;
-  /** Retry `listContentTypes` — wired to the retry button on those screens. */
+  /** Retry `listContentTypes`, wired to the retry button on those screens. */
   refreshContentTypes: () => void;
-  /** What the SERVER says this deployment supports (from `listCmsCapabilities`) — today,
+  /** What the SERVER says this deployment supports (from `listCmsCapabilities`): today,
    * its declared locales. The editor renders its i18n surface off this rather than a local
    * flag, so the UI and the data can never disagree about whether the site is multilingual. */
   cms: CmsCapabilities;
   error: string;
   setError: (s: string) => void;
-  /** Sign out — drop the token so the config gate falls back to Setup. */
+  /** Sign out, dropping the token so the config gate falls back to Setup. */
   reconfigure: () => void;
   /** Ask the current screen whether it is safe to navigate away; `false` cancels.
    * `beforeunload` only covers a real page unload, so in-app navigation (the topbar, sign
@@ -168,7 +168,7 @@ interface AppContextValue {
    * this is always `true`. */
   confirmNavigation: () => boolean;
   /** Register the current screen's guard (`null` on unmount). Screens that can hold
-   * unsaved edits — the page editor — register here; the root layout consults it. */
+   * unsaved edits (the page editor) register here; the root layout consults it. */
   setNavGuard: (fn: (() => boolean) | null) => void;
 }
 
@@ -178,11 +178,11 @@ const AppContext = createContext<AppContextValue | null>(null);
  * Register this screen's unsaved-changes guard for as long as `dirty` is true.
  *
  * The five authoring screens added alongside the CMS work each hold a whole unsaved
- * document in local state — a field schema, a menu tree, a widget list — and none of them
+ * document in local state (a field schema, a menu tree, a widget list) and none of them
  * registered a guard, so any topbar click discarded the work with no prompt. `PageEditor`
  * had one; nothing made that reusable, so it stayed the only screen with one.
  *
- * `beforeunload` too, for the refresh/close half — in-app navigation fires neither, which
+ * `beforeunload` too, for the refresh/close half. In-app navigation fires neither, which
  * is why both halves are needed and why the context guard exists at all.
  */
 export function useUnsavedGuard(dirty: boolean, message: string = getI18n().t("session.unsavedChanges")): void {
@@ -234,7 +234,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // When an external sign-in page is configured, bounce there on boot AND the moment the
   // token expires mid-session (poll + on tab focus), so an idle editor never sits on a dead
-  // session showing errors. Keyed on the token's own `exp` — the server can't distinguish an
+  // session showing errors. Keyed on the token's own `exp`: the server can't distinguish an
   // expired token (rejected as anonymous → 403) from a valid token lacking a role.
   useEffect(() => {
     if (!SIGN_IN_URL) return;
@@ -253,12 +253,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!authValid) return;
-    // `me` gates the Users tab + drives Settings — a failing call is fine (leaves it {}).
+    // `me` gates the Users tab + drives Settings; a failing call is fine (leaves it {}).
     //
     // It is also the only thing that asks the server whether this session is real, so a token
     // it will not accept ends the session HERE rather than rendering an empty editor around it
-    // (see `hasIdentity`). A THROWN call is not that answer — a network blip or a deployment
-    // without auth handlers must not sign anyone out — only a successful call that resolves to
+    // (see `hasIdentity`). A THROWN call is not that answer (a network blip or a deployment
+    // without auth handlers must not sign anyone out) and only a successful call that resolves to
     // no identity is.
     api
       .call<Me>("me")
@@ -271,7 +271,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       })
       .catch(() => setMe({}));
     // Collections drive the nav + list/edit routes. An app that registers none (or an older
-    // server without the handler) just leaves the nav as-is — a failure is non-fatal.
+    // server without the handler) just leaves the nav as-is, since a failure is non-fatal.
     api.call<CollectionMeta[]>("listCollections")
       .then(setCollections)
       .catch(() => setCollections([]))
@@ -293,7 +293,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [api, authValid]);
 
   // Drives the per-type nav + list routes. A failure falls back to the single pooled "Pages"
-  // tab — the layout before types had tabs of their own — but is RECORDED, so a screen that
+  // tab (the layout before types had tabs of their own) but is RECORDED, so a screen that
   // genuinely cannot render without the list (the per-type route) can say the call failed and
   // offer a retry instead of claiming to still be loading. Its own effect so that retry
   // re-runs THIS call and not `me`/`listCollections`/the capability probe alongside it.
@@ -350,7 +350,7 @@ function Setup({ cfg, onSave }: { cfg: Config; onSave: (c: Config) => void }) {
           {BRAND.name} <span className="text-fg-subtle">{SETUP_TITLE}</span>
         </h1>
         {/* Two screens, because there are two things a deployment can leave unanswered. When
-            the shell declared a backend there is nothing to point at — asking for a URL that
+            the shell declared a backend there is nothing to point at: asking for a URL that
             is already known invites someone to type the mount path instead of the origin and
             get a stream of "non-JSON response" back. */}
         <p className="mb-6 text-sm text-fg-muted">

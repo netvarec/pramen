@@ -1,4 +1,4 @@
-// The admin mount — where @pramen/cms-editor lives on the host site, and what the shell
+// The admin mount: where @pramen/cms-editor lives on the host site, and what the shell
 // tells it when it boots.
 //
 // The editor is a routed SPA. Serving it used to mean deploying its `dist/` somewhere and
@@ -10,39 +10,39 @@
 // into the page from typed options.
 //
 // `ADMIN_BASE` is a constant, not an option. It is the pattern passed to `injectRoute` AND
-// the prefix stamped onto the mount node, so the route and the router cannot disagree —
+// the prefix stamped onto the mount node, so the route and the router cannot disagree,
 // which is the entire failure mode a configurable prefix invites. The `__`-prefixed segment
 // is a reserved namespace: the host keeps every ordinary path for its own pages.
 //
 // It does NOT name the framework. `/_pramen/admin` did, and that is the same mistake the
-// `brand` option exists to undo: this path is a client-facing URL — it is what an editor
-// bookmarks, types and reads out over the phone — and the name of the library the agency
+// `brand` option exists to undo: this path is a client-facing URL (it is what an editor
+// bookmarks, types and reads out over the phone), and the name of the library the agency
 // happened to build with does not belong in it any more than it belongs in the wordmark.
 //
 // `__` rather than a single `_` or a leading dot. A dot-segment is the one shape to avoid:
 // dotfile protection is on by default in a great many static hosts, CDNs and reverse
-// proxies, so `/.admin` is a path a share of deployments will simply 404 — `.well-known`
+// proxies, so `/.admin` is a path a share of deployments will simply 404. `.well-known`
 // needed a whole RFC and per-server carve-outs to be reachable, which is the proof, not the
 // counterexample. `__` is instead the settled marker for "the framework serves this, not
 // you": `/_next`, `/_nuxt`, `/_astro`, Cloudflare's `/__scheduled`, lopata's
-// `/__dashboard` — and pramen's own `/__migrations`. Doubling it keeps clear of Astro's own
+// `/__dashboard`, and pramen's own `/__migrations`. Doubling it keeps clear of Astro's own
 // single-underscore conventions.
 
 /** Where the editor is mounted on the host site. */
 export const ADMIN_BASE = "/__admin";
 
-/** The route pattern injected for it — one catch-all, so every in-app URL is a real server
+/** The route pattern injected for it: one catch-all, so every in-app URL is a real server
  * route and a refresh or a deep link is served like any other page. */
 export const ADMIN_ROUTE = `${ADMIN_BASE}/[...path]`;
 
 /** What the editor is handed at boot. Rendered into the shell as one inline script, so it
- * is set before the bundle runs — the contract the old `/config.js` had, minus the file. */
+ * is set before the bundle runs: the contract the old `/config.js` had, minus the file. */
 export interface AdminRuntimeConfig {
   /** Which CMS Worker to call, and as which tenant. The editor asks for a token and
    * nothing else once this is present. */
   backend: { url: string; tenant: string };
   /** The wordmark in the topbar, on the sign-in screen and in the browser tab. Set it when
-   * you deploy for a client — the default is the framework's name, not theirs. */
+   * you deploy for a client. The default is the framework's name, not theirs. */
   brand?: { name?: string; suffix?: string | null };
   /** Send unauthenticated/expired sessions to your own sign-in page. Must be a page that
    * EXISTS: the editor clears the session before redirecting, so a path that lands back
@@ -53,15 +53,15 @@ export interface AdminRuntimeConfig {
   /**
    * Which chrome the editor wears. `"sidebar"` (the default) is the rail: a scannable
    * column with icons and collapsible groups, which is what a dozen-plus destinations
-   * needs. `"topbar"` is the Graphic Standard bar — brand left, tabs right, avatar at the
-   * end — for a site whose own chrome is that bar, or whose nav fits a row.
+   * needs. `"topbar"` is the Graphic Standard bar (brand left, tabs right, avatar at the
+   * end), for a site whose own chrome is that bar, or whose nav fits a row.
    *
    * Past the first nav group the bar folds each later group into a dropdown rather than
    * scrolling sideways, so a big admin stays usable in it; it is still the smaller shape.
    */
   layout?: "sidebar" | "topbar";
   /**
-   * How the SCREEN header is dressed — the sticky panel with the title and the primary
+   * How the SCREEN header is dressed: the sticky panel with the title and the primary
    * action, on the editor's own screens.
    *
    * The declarative alternative to a stylesheet that selects on the editor's internal DOM.
@@ -71,12 +71,12 @@ export interface AdminRuntimeConfig {
    * on mint, 1.58:1). Here the host names the presentation and the editor keeps owning the
    * text, the action and the contrast.
    *
-   * - `variant` — `"cover"` (default) is the seeded artwork; `"flat"` keeps the panel without
+   * - `variant`: `"cover"` (default) is the seeded artwork; `"flat"` keeps the panel without
    *   it; `"bare"` drops the panel too, leaving the title and action on the page.
-   * - `accent` — the colour the primary action wears. An OPAQUE hex or `rgb()` literal, not
+   * - `accent`: the colour the primary action wears. An OPAQUE hex or `rgb()` literal, not
    *   `var()` or `oklch()`: the editor parses it to derive the label colour on it and the
    *   hover shade, which is what makes the contrast bug above unreachable through this API.
-   * - `titleFont` — a `font-family` list for the `<h1>`, and only the `<h1>`. A declaration,
+   * - `titleFont`: a `font-family` list for the `<h1>`, and only the `<h1>`. A declaration,
    *   not a loader: your site is what fetches the face.
    *
    * Anything unusable is warned about in the console and falls back; it never throws.
@@ -117,21 +117,21 @@ export interface AdminRuntimeConfig {
   /**
    * Serve an editor YOU built instead of the one this package ships.
    *
-   * A directory URL — `"/admin"` for a `buildEditor({ outdir: "public/admin" })`, or an
-   * absolute `https://…` — under which all six of its outputs are served: `editor.js`,
+   * A directory URL (`"/admin"` for a `buildEditor({ outdir: "public/admin" })`, or an
+   * absolute `https://…`) under which all six of its outputs are served: `editor.js`,
    * `editor.css` and the four `panel-*.js` shims. ONE option rather than six URLs because
    * `buildEditor` writes them to one directory and they have to agree: a shim re-exports the
    * names of the React that *that* bundle linked, so a shim from one build sitting beside an
    * editor from another is a browser link error in somebody else's panel.
    *
    * Unset, the packaged assets are used, imported with `?url` so the SITE's bundler emits and
-   * fingerprints them. Set, they are referenced exactly as given — a path this build never
+   * fingerprints them. Set, they are referenced exactly as given: a path this build never
    * sees is a path it cannot hash, so **cache-busting becomes yours**: emit under a
    * content-hashed directory, or serve them with a short max-age.
    *
    * The reason to set it is a design system. The packaged bundle has podoba compiled in at the
    * version @pramen/cms-editor pins, so a site whose own design system is podoba would
-   * otherwise run two generations of it — `buildEditor({ designSystem })` links yours instead.
+   * otherwise run two generations of it. `buildEditor({ designSystem })` links yours instead.
    * See "Build it against your own design system" in that package's README.
    */
   editorAssets?: string;
@@ -161,42 +161,42 @@ export interface AdminRuntimeConfig {
    * scopes navigation to its own prefix, so an off-prefix path is left to the browser and
    * a new tab is just clutter. */
   /** `order` places a link against `NAV_ORDER` (from @pramen/cms) instead of leaving it
-   * after Settings — the documented example did not typecheck without it. */
+   * after Settings. The documented example did not typecheck without it. */
   extraNav?: { label: string; href: string; target?: "_blank" | "_self"; order?: number }[];
   /**
-   * Module URLs of this deployment's PANEL bundles — your own React screens, rendered
+   * Module URLs of this deployment's PANEL bundles: your own React screens, rendered
    * inside the editor's chrome at `/apps/<slug>`.
    *
    * A panel is the escape hatch for the screen Block Kit (`adminPage()`) cannot describe:
-   * one that needs local interaction — a control that responds as you type, a row that
+   * one that needs local interaction: a control that responds as you type, a row that
    * expands, a dialog, a redirect. The entry itself is still declared server-side with
    * `adminPanel()` in `app.ts`, which is what carries the label, the position and the role
    * filter; this option only says where the browser half lives.
    *
-   * Each entry is an ES module URL — an absolute path (`/admin/panels.js`, from `public/`),
+   * Each entry is an ES module URL: an absolute path (`/admin/panels.js`, from `public/`),
    * a path your build emitted, or an absolute http(s) URL. It is IMPORTED BY THE EDITOR, not
    * loaded by a script tag: a panel bundle links against the editor's React (see the import
    * map in `PramenAdmin.astro`), so it cannot be evaluated until the editor has published
    * it. Anything that is not an http(s) URL is refused client-side and warned about.
    *
-   * Build one with react, react-dom and the JSX runtimes marked EXTERNAL — see "Custom
+   * Build one with react, react-dom and the JSX runtimes marked EXTERNAL. See "Custom
    * admin panels" in the CMS docs for the recipe and the `registerPanel` call.
    */
   panels?: string[];
-  /** Where YOUR SITE renders a page preview — e.g. `"/preview"`.
+  /** Where YOUR SITE renders a page preview, e.g. `"/preview"`.
    *
    * `signPagePreview` mints a token and a RELATIVE url that the CMS Worker itself redeems,
    * and that endpoint answers with JSON: the CMS is headless, so it has the draft but no
    * idea what the page should look like. Unset, the editor's Preview link therefore opens a
-   * wall of JSON — correct, and useless to the stakeholder preview exists for.
+   * wall of JSON: correct, and useless to the stakeholder preview exists for.
    *
    * Point this at a route of your own that redeems the token (`client.getPreview(token)`)
    * and renders it with the same components the published page uses; the editor appends
    * `?token=…`. The same seam as `menuHref` and the sitemap's `pageUrl`: the CMS cannot know
    * how a deployment routes, so the deployment says.
    *
-   * PAGES only. A collection row has no canonical URL — the site decides what, if anything,
-   * one looks like — so `signCollectionPreview` keeps returning the backend's JSON. */
+   * PAGES only. A collection row has no canonical URL (the site decides what, if anything,
+   * one looks like), so `signCollectionPreview` keeps returning the backend's JSON. */
   previewUrl?: string;
 }
 
@@ -207,8 +207,8 @@ export type AdminOptions = boolean | Omit<AdminRuntimeConfig, "backend">;
 /** Characters that must not survive into an inline `<script>` verbatim. */
 const UNSAFE_IN_SCRIPT = /[<\u2028\u2029]/g;
 
-/** `<` as a JS unicode escape (so `</script>` cannot close the tag), and U+2028/U+2029 —
- * legal in JSON strings, and historically line terminators in JS source — as their own. */
+/** `<` as a JS unicode escape (so `</script>` cannot close the tag), and U+2028/U+2029,
+ * legal in JSON strings and historically line terminators in JS source, as their own. */
 function escapeForScript(char: string): string {
   return `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`;
 }
@@ -217,7 +217,7 @@ function escapeForScript(char: string): string {
  * Serialize the runtime config for an inline `<script>`.
  *
  * `</script>` inside any string value would close the tag early and drop the rest of the
- * page into the browser's HTML parser — and every one of these fields (a brand name, a nav
+ * page into the browser's HTML parser, and every one of these fields (a brand name, a nav
  * label) is content someone types. Escaping at the JSON level is the fix that does not
  * depend on where in the object the value happens to sit.
  */
@@ -225,7 +225,7 @@ export function serializeAdminConfig(cfg: AdminRuntimeConfig): string {
   return `window.PRAMEN_CMS_EDITOR=${JSON.stringify(cfg).replace(UNSAFE_IN_SCRIPT, escapeForScript)};`;
 }
 
-/** The shell's `<title>`, which is only the pre-hydration fallback — the bundle re-applies
+/** The shell's `<title>`, which is only the pre-hydration fallback: the bundle re-applies
  * the wordmark itself on boot. Mirrors `brand.ts`'s rule so the tab does not visibly change
  * text a moment after load: a configured name replaces the whole string (nothing English is
  * appended to a client's name), and `suffix: null` drops the second half. */
@@ -261,8 +261,8 @@ export function adminRuntimeConfig(admin: AdminOptions, backend: { url: string; 
 
 /** Does this deployment declare any panel bundles?
  *
- * Gates the import map in the shell. The map is inert with no panels — nothing else on that
- * page imports a bare specifier — but it is a document-wide rewrite of what `react` means,
+ * Gates the import map in the shell. The map is inert with no panels (nothing else on that
+ * page imports a bare specifier), but it is a document-wide rewrite of what `react` means,
  * and a page that does not need one should not carry one. It also makes the feature legible
  * in the served HTML: the map is there exactly when panels are.
  */
@@ -283,7 +283,7 @@ export interface AdminAssetUrls {
 /**
  * Which editor the shell points at: the packaged one, or the host's own build.
  *
- * All six move together or none do — see `editorAssets`. Taking them as a set rather than
+ * All six move together or none do. See `editorAssets`. Taking them as a set rather than
  * letting a deployment override one is what makes "the shims match the bundle that generated
  * them" a property of the type instead of a sentence in a doc comment.
  *
@@ -296,14 +296,14 @@ export interface AdminAssetUrls {
 export function adminAssetUrls(base: string | undefined, packaged?: AdminAssetUrls): AdminAssetUrls {
   if (base === undefined) {
     // The shell resolves the packaged URLs only when they are the ones being served (see
-    // `PramenAdmin.astro`), so "neither" is not a deployment state — it is this function
+    // `PramenAdmin.astro`), so "neither" is not a deployment state: it is this function
     // being called wrong, and silently returning six empty strings would ship a shell whose
     // module script has no src.
     if (!packaged) throw new Error("@pramen/cms-astro: adminAssetUrls needs either an editorAssets base or the packaged URLs");
     return packaged;
   }
   if (!/^(?:\/|https?:\/\/)/.test(base)) {
-    throw new Error(`@pramen/cms-astro: admin.editorAssets must be root-relative ("/admin") or absolute ("https://…") — got ${JSON.stringify(base)}, which the browser would resolve against the current admin route.`);
+    throw new Error(`@pramen/cms-astro: admin.editorAssets must be root-relative ("/admin") or absolute ("https://…"). Got ${JSON.stringify(base)}, which the browser would resolve against the current admin route.`);
   }
   const at = base.replace(/\/+$/, "");
   return {
@@ -325,8 +325,8 @@ export function adminAssetUrls(base: string | undefined, packaged?: AdminAssetUr
  * like React code, and the port of an existing screen would start with a build-config
  * archaeology session. With the map, a panel is ordinary source built with three externals.
  *
- * It has to be in the DOCUMENT, and ahead of every module script — an import map cannot be
- * added by the editor at runtime once module loading has begun — which is why this is the
+ * It has to be in the DOCUMENT, and ahead of every module script (an import map cannot be
+ * added by the editor at runtime once module loading has begun), which is why this is the
  * shell's job and not the bundle's. The three shim modules it points at are generated at
  * build time from the editor's own React namespaces, so the names they re-export cannot
  * drift from the React that is actually loaded.
@@ -338,7 +338,7 @@ export function adminImportMap(urls: { react: string; reactDom: string; jsxRunti
       "react-dom": urls.reactDom,
       "react/jsx-runtime": urls.jsxRuntime,
       // The specifier an UNMINIFIED panel build emits. Mapped for the same reason the other
-      // three are: unmapped, it is the one bare import that still resolves — from the
+      // three are: unmapped, it is the one bare import that still resolves, from the
       // consumer's own node_modules, into a second React nobody asked for.
       "react/jsx-dev-runtime": urls.jsxDevRuntime,
     },

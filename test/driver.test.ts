@@ -1,7 +1,7 @@
 // Substrate-seam proof: the SAME Db + ACL engine runs over an async, non-DO Driver
 // (bun:sqlite standing in for D1). If this passes, "Worker + D1" reuses the entire
 // ACL/read/write layer unchanged. Also a compile-only check that the Dialect seam
-// produces Postgres-shaped SQL — the remaining piece for a Hyperdrive/Postgres port.
+// produces Postgres-shaped SQL, the remaining piece for a Hyperdrive/Postgres port.
 
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
@@ -44,7 +44,7 @@ describe("Db + ACL over an async (D1-like) sqlite Driver", () => {
     const bobNote = await admin.insert("notes", { title: "bob-note", body: "bob-secret", ownerId: "bob" });
     expect(typeof aliceNote.id).toBe("number");
 
-    // teammate "alice": reads every note, but sees `body` only on her own row — the
+    // teammate "alice": reads every note, but sees `body` only on her own row, the
     // exact cell-level ACL behaviour, now over an async non-DO substrate.
     const team = new Db(driver, ctx({ userId: "alice", roles: ["teammate"] }), schema);
     const rows = await team.find({ from: "notes", orderBy: { column: "id", dir: "asc" } });

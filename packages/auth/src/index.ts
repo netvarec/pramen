@@ -1,4 +1,4 @@
-// @pramen/auth — optional credential→JWT login for pramen, so an app can issue
+// @pramen/auth: optional credential→JWT login for pramen, so an app can issue
 // tokens without a third-party IdP. The core stays verify-only (HS256 against
 // AUTH_SECRET, or RS256/JWKS); this package signs HS256 tokens the verifier accepts.
 //
@@ -42,7 +42,7 @@ export const authSchema = {
     roles: t.json(), // string[]
     email: unique(t.text()), // mutable contact email (nullable, unique); the magic-link key
     emailVerified: t.int(), // epoch ms the current `email` was confirmed; NULL = unverified (additive)
-    active: defaultTo(t.bool(), true), // deactivation flag — false blocks login (additive, backfills 1)
+    active: defaultTo(t.bool(), true), // deactivation flag; false blocks login (additive, backfills 1)
     createdAt: t.int(),
   })),
 };
@@ -68,13 +68,13 @@ const b64urlStr = (s: string) => b64url(enc(s));
 
 /** workerd's hard ceiling on PBKDF2 iterations.
  *
- * It does not clamp — it throws:
+ * It does not clamp. It throws:
  *
  *   NotSupportedError: Pbkdf2 failed: iteration counts above 100000 are not
  *   supported (requested 600000).
  *
  * Bun, Node and browsers have no such cap, so anything above this passes every local
- * test — including under lopata, which is a Bun runtime — and then fails on the first
+ * test (including under lopata, which is a Bun runtime) and then fails on the first
  * real deployment. This value is the platform limit, not a tuning knob. */
 const PBKDF2_MAX_ITERATIONS = 100_000;
 
@@ -85,8 +85,8 @@ const PBKDF2_MAX_ITERATIONS = 100_000;
  * pramen deploys to workerd, so the platform ceiling is the real bound: WebCrypto there
  * offers no scrypt or argon2 either, making 100k the strongest KDF available.
  *
- * The count (and hash alg) are ENCODED in the stored string —
- * `pbkdf2$sha256$<iters>$<saltB64>$<hashB64>` — and verifyPassword parses them back
+ * The count (and hash alg) are ENCODED in the stored string,
+ * `pbkdf2$sha256$<iters>$<saltB64>$<hashB64>`, and verifyPassword parses them back
  * out, so changing this never breaks verification of an already-stored hash, as long
  * as the stored count is itself within the cap. */
 const PBKDF2_ITERATIONS = Math.min(600_000, PBKDF2_MAX_ITERATIONS);
@@ -95,10 +95,10 @@ const PBKDF2_HASH = "SHA-256";
 /** Derive 256 PBKDF2 bits, turning workerd's iteration-cap rejection into a diagnosis.
  *
  * Hashing can no longer request too many, but VERIFY takes its count from the stored
- * hash — so a row written at 600k by pramen <= 0.0.43, or by a Bun/Node-only
+ * hash, so a row written at 600k by pramen <= 0.0.43, or by a Bun/Node-only
  * deployment sharing a database with a Worker, cannot be verified on Workers at all.
- * That would otherwise surface as `NotSupportedError` from deep inside WebCrypto, or —
- * worse, if a caller swallowed it — as a plain "wrong password" locking the account
+ * That would otherwise surface as `NotSupportedError` from deep inside WebCrypto, or
+ * (worse, if a caller swallowed it) as a plain "wrong password" locking the account
  * out with nothing in the logs to explain why. */
 async function deriveBits(password: string, salt: Uint8Array, iterations: number, hash: string): Promise<Uint8Array> {
   const key = await crypto.subtle.importKey("raw", enc(password), "PBKDF2", false, ["deriveBits"]);
@@ -139,7 +139,7 @@ function parseStoredHash(stored: string): { iterations: number; hash: string; sa
   const parts = stored.split("$");
   if (parts[0] !== "pbkdf2") return null;
   // 5 parts: pbkdf2 $ sha256 $ iters $ salt $ hash   (current)
-  // 4 parts: pbkdf2 $ iters $ salt $ hash            (legacy — implicit sha256)
+  // 4 parts: pbkdf2 $ iters $ salt $ hash            (legacy, implicit sha256)
   const [algSeg, iterStr, saltB64, hashB64] = parts.length === 5 ? parts.slice(1) : ["sha256", ...parts.slice(1)];
   const iterations = Number(iterStr);
   if (!saltB64 || !hashB64 || !Number.isFinite(iterations) || iterations <= 0) return null;
@@ -149,7 +149,7 @@ function parseStoredHash(stored: string): { iterations: number; hash: string; sa
 
 // --- foreign hash schemes (opt-in, for migrating in from another system) -----
 //
-// Importing users from an existing app means importing hashes that are NOT PBKDF2 —
+// Importing users from an existing app means importing hashes that are NOT PBKDF2:
 // bcrypt from Contember/Rails, `pbkdf2_sha256$` from Django, and so on. Those cannot be
 // converted (that needs the plaintext), so the only alternative would be forcing every
 // user to reset their password.
@@ -161,7 +161,7 @@ function parseStoredHash(stored: string): { iterations: number; hash: string; sa
 //
 // pramen deliberately does NOT bundle an implementation. bcrypt needs a pure-JS library
 // (WebCrypto has none) which is real bundle weight, and it is useless to the apps that
-// never import anything — so the app supplies it:
+// never import anything, so the app supplies it:
 //
 //   import bcrypt from "bcryptjs";
 //   registerPasswordVerifier("bcrypt", (password, payload) => bcrypt.compare(password, payload));
@@ -195,7 +195,7 @@ export async function verifyPassword(password: string, stored: string): Promise<
   if (scheme !== "pbkdf2") {
     const verify = foreignVerifiers.get(scheme);
     // Unknown scheme (including the empty passwordHash of a passwordless user) never
-    // verifies — same as before this feature existed.
+    // verifies, the same as before this feature existed.
     if (!verify) return false;
     try {
       return await verify(password, stored.slice(scheme.length + 1));
@@ -213,7 +213,7 @@ export async function verifyPassword(password: string, stored: string): Promise<
 
 // A fixed placeholder hash (current params), computed once and reused, so a login for a
 // NON-EXISTENT username can still run a full PBKDF2 verify. That equalizes the timing of
-// the "no such user" and "wrong password" paths — neither short-circuits — closing the
+// the "no such user" and "wrong password" paths (neither short-circuits) closing the
 // user-existence timing oracle. Lazily initialized (top-level await isn't available here).
 let dummyHashPromise: Promise<string> | undefined;
 function dummyPasswordHash(): Promise<string> {
@@ -262,7 +262,7 @@ function parseCreds(raw: JsonValue): Credentials {
   const o = (raw ?? {}) as JsonObject;
   if (typeof o.username !== "string" || o.username.length === 0) throw new Error("username is required");
   if (typeof o.password !== "string" || o.password.length < 8) throw new Error("password must be at least 8 characters");
-  // Optional contact email at signup — validated + normalized when present, so password
+  // Optional contact email at signup, validated + normalized when present, so password
   // reset and email verification work without a separate changeEmail round-trip. Absent ⇒
   // the row's email stays NULL (still allowed; the user can set it later).
   let email: string | undefined;
@@ -276,13 +276,13 @@ function parseCreds(raw: JsonValue): Credentials {
 
 /** Build the `refreshSession` handler: an AUTHENTICATED mutation that re-reads the caller's
  * `roles` + `active` from the users table (keyed on `username` = the JWT `sub`) and reissues a
- * fresh token with the configured session TTL — the same `{ token, user }` shape as `login`.
+ * fresh token with the configured session TTL: the same `{ token, user }` shape as `login`.
  * Throws Unauthorized if the row is gone or the account is deactivated (the `isActive` helper).
  *
  * Why it exists: the core is stateless verify-only, so roles/active are baked into a token at
  * login. refreshSession lets a client (1) silently refresh at ~half-TTL, so AUTH_SESSION_TTL_SECONDS
  * can be kept SHORT (bounded revocation lag) without logging the user out; and (2) pick up a role
- * GRANT immediately — e.g. right after a subscription checkout flips the role — with no re-login.
+ * GRANT immediately (e.g. right after a subscription checkout flips the role) with no re-login.
  * Shared by password users (`authHandlers`) and magic-link users (`createMagicLinkAuth`): both
  * store the row in the same authSchema-shaped table keyed on the immutable `username`. `ttlOf`
  * supplies each factory's own configured TTL. */
@@ -307,21 +307,21 @@ function buildRefreshSession(ttlOf: (ctx: HandlerContext) => number, table = "au
 export interface AuthHandlerOptions {
   /** Which column `login` resolves the submitted identifier against.
    *
-   * - `"username"` (default) — the PK only, the historical behaviour.
-   * - `"email"` — the email column only. For apps where the username is an opaque id
+   * - `"username"` (default): the PK only, the historical behaviour.
+   * - `"email"`: the email column only. For apps where the username is an opaque id
    *   (a migrated tenant identity, say) and members know only their email address.
-   * - `"either"` — username first (it is the PK, so it cannot be ambiguous), then email.
+   * - `"either"`: username first (it is the PK, so it cannot be ambiguous), then email.
    *   Use when two populations coexist: migrated members keyed by an opaque id, and
    *   newer accounts that signed up with their email as the username.
    *
-   * Email lookup tries an exact match, then falls back to a case-insensitive one — but
+   * Email lookup tries an exact match, then falls back to a case-insensitive one, but
    * ONLY when that matches exactly one row, so a pair of addresses differing just by
    * case can never resolve to an arbitrary account. */
   loginBy?: "username" | "email" | "either";
 }
 
 /** Build signup / login / me / refreshSession. Roles are assigned server-side (default
- * `["user"]`) — the client never picks its own roles. Spread into your handler map. */
+ * `["user"]`): the client never picks its own roles. Spread into your handler map. */
 export function createAuthHandlers(opts: AuthHandlerOptions = {}) {
   const loginBy = opts.loginBy ?? "username";
 
@@ -346,7 +346,7 @@ export function createAuthHandlers(opts: AuthHandlerOptions = {}) {
   return {
     // NOTE on username enumeration: signup returns a distinct "username is taken" error,
     // which is an enumeration oracle. This is INHERENT to systems where the username is a
-    // user-chosen, publicly-visible identifier — the caller learns "taken" the moment the
+    // user-chosen, publicly-visible identifier: the caller learns "taken" the moment the
     // name shows up anywhere, so hiding it at signup buys little. What we CAN close is the
     // timing side channel: both the taken and the available paths run the same expensive
     // PBKDF2 hash before responding, so response time doesn't leak which path was taken.
@@ -370,7 +370,7 @@ export function createAuthHandlers(opts: AuthHandlerOptions = {}) {
         const roles = DEFAULT_ROLES;
         const passwordHash = await hashPassword(input.password);
         // Signup stores the email UNVERIFIED (emailVerified NULL). The app confirms it via
-        // createEmailVerification (requestEmailVerification runs right after signup — the
+        // createEmailVerification (requestEmailVerification runs right after signup, when the
         // client already holds the returned session token).
         await ctx.db.exec(
           "INSERT INTO auth_users (username, passwordHash, roles, email, createdAt) VALUES (?, ?, ?, ?, ?)",
@@ -391,7 +391,7 @@ export function createAuthHandlers(opts: AuthHandlerOptions = {}) {
         const u = await findLoginRow(ctx, input.username);
         if (!u) {
           // No such user: still run a full PBKDF2 verify against a fixed dummy hash so the
-          // not-found path costs the same as a wrong-password path — no timing oracle that
+          // not-found path costs the same as a wrong-password path, so there is no timing oracle that
           // distinguishes "unknown username" from "bad password".
           await verifyPassword(input.password, await dummyPasswordHash());
           throw new Unauthorized("invalid username or password");
@@ -406,7 +406,7 @@ export function createAuthHandlers(opts: AuthHandlerOptions = {}) {
         // moment the plaintext is in hand for a user whose hash predates pramen, so rehash
         // to PBKDF2 and drop the old scheme. Deliberately AFTER the active check, so a
         // deactivated account is never rewritten. Best-effort: a failed upgrade must not
-        // fail an otherwise valid login — the row simply upgrades on a later attempt.
+        // fail an otherwise valid login: the row simply upgrades on a later attempt.
         if (isForeignHash(String(u.passwordHash))) {
           try {
             await ctx.db.exec(
@@ -443,7 +443,7 @@ export const authHandlers = createAuthHandlers();
 // anonymous mutations:
 //   requestMagicLink({ email })  -> mints a token, persists its HASH + expiry, and
 //                                   calls your sendEmail. Always returns { ok: true }
-//                                   (no account enumeration — the response is the
+//                                   (no account enumeration: the response is the
 //                                   same whether or not the email has an account).
 //   loginWithMagicLink({ token }) -> validates the token (unexpired, unconsumed),
 //                                   consumes it, find-or-creates the auth_users row
@@ -488,7 +488,7 @@ async function sha256Hex(s: string): Promise<string> {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-/** 256 bits of entropy, url-safe — the raw link token. */
+/** 256 bits of entropy, url-safe: the raw link token. */
 function mintToken(): string {
   return b64url(crypto.getRandomValues(new Uint8Array(32)));
 }
@@ -507,13 +507,13 @@ function parseLinkToken(raw: JsonValue): { token: string } {
 }
 
 export interface MagicLinkOptions {
-  /** Deliver the link to the recipient. Receives the handler ctx and the raw token —
+  /** Deliver the link to the recipient. Receives the handler ctx and the raw token, so
    * build the URL however your app routes it, e.g. `${ctx.env.APP_URL}/auth?token=${token}`.
-   * On Cloudflare the recommended transport is Cloudflare Email Sending — a
+   * On Cloudflare the recommended transport is Cloudflare Email Sending: a
    * `send_email` binding (no API keys), e.g.
    * `await (ctx.env.EMAIL as SendEmail).send({ to, from: { email, name }, subject, text, html })`
    * (see example/app.ts + oblaka.ts). Called from the `sendMagicLinkEmail` TASK, not
-   * inline in the mutation — a slow SMTP/API call can't hold the mutation's storage
+   * inline in the mutation, since a slow SMTP/API call can't hold the mutation's storage
    * transaction open and time the store out. Retries follow the outbox retry policy;
    * a permanent failure dead-letters the task and the token expires unused (users just
    * request a new link). */
@@ -541,9 +541,9 @@ export interface MagicLinkOptions {
  * of failure where a slow SMTP/API call holds the storage lock long enough for the
  * store to time out and reset the underlying object.
  *
- * You MUST spread `magicLink.tasks` into your app's task map — without it, tokens
+ * You MUST spread `magicLink.tasks` into your app's task map. Without it, tokens
  * get written but the email never sends (the drainer retries then dead-letters).
- * Both handlers are anonymous — gate nothing; the token is the capability. */
+ * Both handlers are anonymous and gate nothing; the token is the capability. */
 export function createMagicLinkAuth(opts: MagicLinkOptions): AuthModule {
   const linkTtlMs = (opts.linkTtlSeconds ?? 900) * 1000;
   const sessionTtl = opts.sessionTtlSeconds ?? TOKEN_TTL_SECONDS;
@@ -551,12 +551,12 @@ export function createMagicLinkAuth(opts: MagicLinkOptions): AuthModule {
 
   const handlers: HandlerMap = {
     // Silent token refresh for magic-link users (same table, keyed on username). Reissues
-    // at this factory's configured session TTL. Shared implementation with authHandlers —
+    // at this factory's configured session TTL. Shared implementation with authHandlers:
     // when both are spread into one app, either definition serves either user.
     refreshSession: buildRefreshSession(() => sessionTtl),
 
     /** Admin-only: create a passwordless user with the given roles (defaults if omitted)
-     * and email them a fresh magic link. Idempotent — inviting an existing user just
+     * and email them a fresh magic link. Idempotent: inviting an existing user just
      * resends the link and leaves their roles alone (admin uses setUserRoles for changes).
      * Piggybacks on the sendMagicLinkEmail task, so the send happens outside the
      * mutation's storage transaction. */
@@ -569,7 +569,7 @@ export function createMagicLinkAuth(opts: MagicLinkOptions): AuthModule {
             : defaultRoles;
         const now = Date.now();
         // Existence check on username (== email, per magic-link convention); a re-invite
-        // MUST NOT overwrite roles — that's setUserRoles's job.
+        // MUST NOT overwrite roles; that's setUserRoles's job.
         const existing = await ctx.db.exec("SELECT username FROM auth_users WHERE username = ? LIMIT 1", email);
         if (existing.length === 0) {
           // Same shape as loginWithMagicLink's find-or-create path: username-only, no
@@ -606,7 +606,7 @@ export function createMagicLinkAuth(opts: MagicLinkOptions): AuthModule {
         const token = mintToken();
         const tokenHash = await sha256Hex(token);
         const now = Date.now();
-        // Invalidate any prior pending links for this email — only the latest works.
+        // Invalidate any prior pending links for this email, so only the latest works.
         await ctx.db.exec("DELETE FROM auth_magic_links WHERE email = ?", input.email);
         await ctx.db.exec(
           "INSERT INTO auth_magic_links (tokenHash, email, expiresAt, createdAt) VALUES (?, ?, ?, ?)",
@@ -643,7 +643,7 @@ export function createMagicLinkAuth(opts: MagicLinkOptions): AuthModule {
         // Key on the USERNAME (the immutable identity = the JWT sub), NOT the mutable
         // `email` column: a magic-link user's username IS their email address, so this
         // both matches existing users and avoids resolving login by a mutable, unverified
-        // field (which would let a changeEmail squat another address — and would miss
+        // field (which would let a changeEmail squat another address, and would miss
         // pre-`email`-column users on upgrade, colliding on the username PK).
         const existing = await ctx.db.exec("SELECT roles, active FROM auth_users WHERE username = ? LIMIT 1", email);
         let roles: string[];
@@ -683,7 +683,7 @@ export function createMagicLinkAuth(opts: MagicLinkOptions): AuthModule {
 //
 // Admin + self-service operations over `auth_users`, built the pramen way: ordinary
 // handlers over `ctx.db` whose authorization is the ACL, not imperative `if (admin)`
-// checks. They are inert until you grant access — spread `authPolicies()` into your
+// checks. They are inert until you grant access: spread `authPolicies()` into your
 // roles (admin manages everyone; the authenticated user manages only itself). Because
 // the admin read policy restricts `fields`, `passwordHash` is never projected back.
 //
@@ -691,12 +691,12 @@ export function createMagicLinkAuth(opts: MagicLinkOptions): AuthModule {
 // mechanisms close the gap that leaves, without a session store:
 //  - `refreshSession` (authHandlers / createMagicLinkAuth): an authenticated caller
 //    re-reads roles/active and gets a fresh token. A client refreshing at ~half-TTL lets
-//    AUTH_SESSION_TTL_SECONDS (default 3600) stay short — bounding how long a stale
-//    setUserRoles/setUserActive lingers — and picks up a role GRANT immediately (no re-login).
+//    AUTH_SESSION_TTL_SECONDS (default 3600) stay short, bounding how long a stale
+//    setUserRoles/setUserActive lingers, and picks up a role GRANT immediately (no re-login).
 //  - KV denylist (HARD revocation, independent of TTL): setUserActive(false) and deleteUser
 //    write an `authDenied:<username>` entry via `denySession(ctx.kv, …)`; the core Worker
 //    checks `isSessionDenied` right after resolving identity and fails a revoked token closed
-//    (401) — so a deactivate/delete takes effect on the NEXT request, not the next login. The
+//    (401), so a deactivate/delete takes effect on the NEXT request, not the next login. The
 //    entry self-expires at the session TTL (the list never grows); reactivation lifts it
 //    (`allowSession`). `denySession`/`allowSession`/`isSessionDenied` are exported from
 //    @pramen/server so an app can revoke on its own compromise signals too.
@@ -713,7 +713,7 @@ function requireUserId(ctx: HandlerContext): string {
 }
 
 // `ctx.db` is schema-typed against the *app's* composed schema, which this package
-// can't import — so address the users table through a minimal structural view of the
+// can't import, so address the users table through a minimal structural view of the
 // ACL'd Db. This is the same ctx.db at runtime: row-scope + field projection still apply.
 interface UsersDb {
   update(table: string, id: string, patch: Row): Promise<Row | undefined>;
@@ -729,8 +729,8 @@ function assertIdentifier(table: string): string {
 }
 
 /** Build admin + self-service handlers over a users table (default `auth_users`).
- * Pass `table` to operate over your OWN authSchema-shaped table — e.g. one with an
- * extra `tenants` column — without renaming it: the handlers manage username/roles/
+ * Pass `table` to operate over your OWN authSchema-shaped table (e.g. one with an
+ * extra `tenants` column) without renaming it: the handlers manage username/roles/
  * email/active/delete and ignore any extra columns. Spread the result into your
  * handler map and gate it with the matching `authPolicies({ table })`. The table must
  * have a `username` primary key and (for changeEmail/changePassword) `email`/
@@ -753,7 +753,7 @@ export function createUserHandlers(opts: { table?: string } = {}) {
       if (!Array.isArray(input.roles) || !input.roles.every((r) => typeof r === "string" && r.length > 0)) {
         throw new BadRequest("roles must be a non-empty string[]");
       }
-      // A SYSTEM role (`__`-prefixed) is reserved for calls the Worker makes to itself — it
+      // A SYSTEM role (`__`-prefixed) is reserved for calls the Worker makes to itself: it
       // gates handlers that write roles and bypass the row ACL. The token verifier already
       // strips these, so granting one would do nothing; refusing is the honest answer rather
       // than storing a role that silently never takes effect.
@@ -768,7 +768,7 @@ export function createUserHandlers(opts: { table?: string } = {}) {
 
     /** Admin: activate / deactivate a user. Deactivating blocks future logins AND
      * refreshSession, AND revokes OUTSTANDING tokens immediately via the KV denylist (the
-     * Worker fails them closed) — so revocation no longer waits out the token TTL. The
+     * Worker fails them closed), so revocation no longer waits out the token TTL. The
      * denylist entry self-expires at the session TTL. Reactivating LIFTS the entry (it is
      * username-scoped, so a stale entry would otherwise lock out even a fresh login). */
     setUserActive: mutation(async (ctx, input: { username: string; active: boolean }) => {
@@ -779,7 +779,7 @@ export function createUserHandlers(opts: { table?: string } = {}) {
       }
       const updated = await usersDb(ctx).update(table, input.username, { active: input.active });
       if (!updated) throw new BadRequest("user not found");
-      // KV is not part of the mutation's transaction — do it after the update succeeds.
+      // KV is not part of the mutation's transaction, so do it after the update succeeds.
       if (input.active === false) await denySession(ctx.kv, input.username, sessionTtlOf(ctx));
       else await allowSession(ctx.kv, input.username);
       return updated;
@@ -807,7 +807,7 @@ export function createUserHandlers(opts: { table?: string } = {}) {
       if (taken.length > 0) throw new BadRequest("email already in use");
       const updated = await usersDb(ctx).update(table, userId, { email });
       if (!updated) throw new Unauthorized("authentication required");
-      // The new address is UNVERIFIED — clear any prior verification so `emailVerified`
+      // The new address is UNVERIFIED, so clear any prior verification so `emailVerified`
       // never claims an unconfirmed address. Raw (ACL-bypassing) but self-scoped by the
       // verified identity, and it only ever CLEARS the flag (routing it through the self
       // update policy would instead let a user set their own verified state). Any pending
@@ -816,7 +816,7 @@ export function createUserHandlers(opts: { table?: string } = {}) {
       return { ...updated, emailVerified: null };
     }),
 
-    /** Self-service: set or change the caller's password. A credential op — it reads the
+    /** Self-service: set or change the caller's password. A credential op: it reads the
      * caller's OWN hash (passwordHash is never ACL-readable) and writes the new one.
      * Self-scoped by the verified identity, so it never touches another row.
      *
@@ -831,7 +831,7 @@ export function createUserHandlers(opts: { table?: string } = {}) {
      * That second branch used to be a rejection, and it made "I signed in with a link and
      * now I want a password" IMPOSSIBLE from an authenticated session: the account was
      * asked for a credential it had never had, and told the one it invented was "incorrect".
-     * The only way through was the password-RESET email — a flow named for a problem the
+     * The only way through was the password-RESET email, a flow named for a problem the
      * user does not have, on a page they have to be told about.
      *
      * The security question is whether a session alone should be able to mint a durable
@@ -841,7 +841,7 @@ export function createUserHandlers(opts: { table?: string } = {}) {
      *   the same proof a reset link carries. The reset link is only fresher.
      * - The holder of that session already has everything the account can do, for the
      *   session's whole life. A password is not new authority; it is authority that
-     *   outlives revocation — which is why the branch is narrow (empty slot only) and why
+     *   outlives revocation, which is why the branch is narrow (empty slot only) and why
      *   `refreshSession`'s denylist remains the remedy for a session known to be stolen.
      * - Replacing an EXISTING password from a bare session stays impossible. That is the
      *   property worth keeping, and it is untouched.
@@ -856,7 +856,7 @@ export function createUserHandlers(opts: { table?: string } = {}) {
       const rows = await ctx.db.exec(`SELECT passwordHash FROM ${table} WHERE username = ? LIMIT 1`, userId);
       // No row at all: a token for an account that has since been deleted. Previously this
       // fell into the same `stored === ""` branch as a passwordless user and was rejected as
-      // a wrong password — harmless then, but once an empty slot is fillable it would make
+      // a wrong password, harmless then, but once an empty slot is fillable it would make
       // the UPDATE a silent no-op that reports success.
       if (rows.length === 0) throw new Unauthorized("authentication required");
       const stored = String(rows[0].passwordHash ?? "");
@@ -927,7 +927,7 @@ export function authPolicies(opts: {
 // Two one-time-email-token flows, built on the same machinery as magic-link: mint a
 // random token, persist only its SHA-256 HASH + an expiry (in the shared
 // `auth_email_tokens` table, spread `emailTokenSchema`), email the raw token from a TASK
-// (off the mutation's storage transaction — a slow send can't hold the store lock), and
+// (off the mutation's storage transaction, so a slow send can't hold the store lock), and
 // redeem it once. Both are transport-agnostic: you supply `sendEmail`; pramen owns the
 // token lifecycle. Wire the returned `tasks` into your app's task map, or the token is
 // written but the email never sends.
@@ -955,7 +955,7 @@ async function issueEmailToken(ctx: HandlerContext, purpose: string, username: s
 }
 
 /** Validate a token (right purpose, unexpired, unconsumed) and CONSUME it (single-use).
- * Returns the account + address it was minted for. Throws Unauthorized on any failure —
+ * Returns the account + address it was minted for. Throws Unauthorized on any failure:
  * the same opaque error for missing / wrong-purpose / expired / already-used, so a caller
  * learns nothing beyond "this token won't work". */
 async function redeemEmailToken(ctx: HandlerContext, purpose: string, token: string): Promise<{ username: string; email: string }> {
@@ -980,7 +980,7 @@ function parseResetInput(raw: JsonValue): { token: string; newPassword: string }
 }
 
 export interface PasswordResetOptions {
-  /** Deliver the reset link. Receives the ctx + `{ email, token, username }` — build the
+  /** Deliver the reset link. Receives the ctx + `{ email, token, username }`, so build the
    * URL your app routes to, e.g. `${ctx.env.APP_URL}/reset?token=${token}`. Called from the
    * `sendPasswordResetEmail` TASK (after commit), like magic-link's sendEmail. */
   sendEmail: (ctx: HandlerContext, args: { email: string; token: string; username: string }) => void | Promise<void>;
@@ -992,7 +992,7 @@ export interface PasswordResetOptions {
 }
 
 /** Build the `requestPasswordReset` / `resetPassword` handler pair + the
- * `sendPasswordResetEmail` task. Both handlers are ANONYMOUS — the emailed token is the
+ * `sendPasswordResetEmail` task. Both handlers are ANONYMOUS: the emailed token is the
  * capability. `requestPasswordReset` is enumeration-safe (always `{ ok: true }`, sends only
  * when an active account matches the email); `resetPassword` redeems the single-use token
  * and sets the new password. Spread `emailTokenSchema` into your schema and `.tasks` into
@@ -1003,7 +1003,7 @@ export function createPasswordReset(opts: PasswordResetOptions): AuthModule {
 
   const handlers: HandlerMap = {
     /** Anonymous: request a reset link for `email`. Resolves the address to an ACTIVE
-     * account and, only then, mints a token + enqueues the send — but the response is the
+     * account and, only then, mints a token + enqueues the send, but the response is the
      * same `{ ok: true }` whether or not any account matched (no enumeration). */
     requestPasswordReset: mutation(
       async (ctx, input: { email: string }) => {
@@ -1046,7 +1046,7 @@ export function createPasswordReset(opts: PasswordResetOptions): AuthModule {
 }
 
 export interface EmailVerificationOptions {
-  /** Deliver the verification link. Receives the ctx + `{ email, token, username }` — build
+  /** Deliver the verification link. Receives the ctx + `{ email, token, username }`, so build
    * the URL your app routes to, e.g. `${ctx.env.APP_URL}/verify?token=${token}`. Called from
    * the `sendVerificationEmail` TASK (after commit). */
   sendEmail: (ctx: HandlerContext, args: { email: string; token: string; username: string }) => void | Promise<void>;
@@ -1058,7 +1058,7 @@ export interface EmailVerificationOptions {
 
 /** Build the `requestEmailVerification` / `verifyEmail` handler pair + the
  * `sendVerificationEmail` task. `requestEmailVerification` is AUTHENTICATED (a caller
- * verifies their OWN current email — runs right after signup, when the client already holds
+ * verifies their OWN current email, and runs right after signup, when the client already holds
  * the session token); `verifyEmail` is ANONYMOUS (the token is the capability) and stamps
  * `auth_users.emailVerified`. A token is bound to the address current at request time, so a
  * later `changeEmail` invalidates it (verifyEmail rejects a token whose address no longer
@@ -1076,7 +1076,7 @@ export function createEmailVerification(opts: EmailVerificationOptions): AuthMod
         const rows = await ctx.db.exec(`SELECT email, emailVerified FROM ${table} WHERE username = ? LIMIT 1`, userId);
         const u = rows[0];
         const email = u && typeof u.email === "string" ? u.email : "";
-        if (!email) throw new BadRequest("no email on file — set one with changeEmail first");
+        if (!email) throw new BadRequest("no email on file. Set one with changeEmail first");
         if (u.emailVerified != null) return { ok: true, alreadyVerified: true };
         const token = await issueEmailToken(ctx, PURPOSE_VERIFY, userId, email, Date.now() + linkTtlMs);
         await ctx.tasks.enqueue({ kind: "sendVerificationEmail", payload: { email, token, username: userId } });
@@ -1086,7 +1086,7 @@ export function createEmailVerification(opts: EmailVerificationOptions): AuthMod
     ),
 
     /** Anonymous: redeem a verification token and mark the address verified. Guards that the
-     * account's CURRENT email still equals the address the token was minted for — a stale
+     * account's CURRENT email still equals the address the token was minted for: a stale
      * token (email changed since request) is rejected, never verifying the new address. */
     verifyEmail: mutation(
       async (ctx, input: { token: string }) => {

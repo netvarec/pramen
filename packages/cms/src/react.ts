@@ -1,4 +1,4 @@
-// @pramen/cms/react — the headless renderer. Like WollyCMS's BlockRenderer, it maps a
+// @pramen/cms/react: the headless renderer. Like WollyCMS's BlockRenderer, it maps a
 // block's `block_type` slug to a React component from a registry you provide; the CMS
 // stays headless and never dictates markup. Pair with useLiveQuery from @pramen/react
 // for a live-updating page:
@@ -10,14 +10,14 @@
 //
 // Written with `createElement` (not JSX) so the package needs no DOM lib / JSX build
 // config and stays on the same tsconfig as the rest of pramen. In a JSX codebase you'd
-// normally write `<BlockRenderer .../>` — it's an ordinary component either way.
+// normally write `<BlockRenderer .../>`; it's an ordinary component either way.
 
 import { createElement, Fragment } from "react";
 import type { ComponentType, ReactElement, ReactNode } from "react";
 import { isSafeHref, normalizeHref } from "./href";
 import type { RenderedBlock, BlockTypeDef, BlockFieldsOf, RichTextDoc, RichTextNode, RichTextMark } from "./index";
 
-/** Props a component for a specific typed block type receives — `fields` is inferred from
+/** Props a component for a specific typed block type receives. `fields` is inferred from
  * the block type's schema via `BlockFieldsOf` (see `defineBlockType`). */
 export interface TypedBlockProps<D extends BlockTypeDef> {
   fields: BlockFieldsOf<D>;
@@ -80,7 +80,7 @@ export function RegionRenderer({ regions, name, components, fallback }: RegionRe
 
 // --- rich text ----------------------------------------------------------------------
 // A `richtext` field is a document tree, not an HTML string, so it renders as REAL React
-// elements — no `dangerouslySetInnerHTML`, and nothing to sanitize at render time (the
+// elements, with no `dangerouslySetInnerHTML`, and nothing to sanitize at render time (the
 // write path already dropped every node/mark outside the allow-list). Override any node
 // type through `components` when your design system wants its own element.
 
@@ -107,7 +107,7 @@ const MARK_TAGS: Record<string, string> = {
  * the markup and a bare `_blank` hands the opened page a `window.opener` handle. */
 function renderMarks(text: string, marks: RichTextMark[] | undefined): ReactNode {
   let out: ReactNode = text;
-  // Innermost-first, so `marks[0]` ends up OUTERMOST — matching ProseMirror's own
+  // Innermost-first, so `marks[0]` ends up OUTERMOST, matching ProseMirror's own
   // serializer and RichTextMarks.astro. Folding forwards put marks[0] innermost, so the
   // same document rendered `<code><a>x</a></code>` here and `<a><code>x</code></a>` in
   // Astro: different clickable area, different CSS selectors, same content.
@@ -128,7 +128,7 @@ function renderMarks(text: string, marks: RichTextMark[] | undefined): ReactNode
           title: typeof attrs.title === "string" ? attrs.title : undefined,
           target,
           // Any named target opens a window holding a live `window.opener`, not just
-          // `_blank` — browsers imply noopener for `_blank` alone.
+          // `_blank`, since browsers imply noopener for `_blank` alone.
           rel: target ? "noopener noreferrer" : undefined,
         },
         out,
@@ -155,7 +155,7 @@ function renderRichTextNode(node: RichTextNode, key: number, components?: RichTe
     case "heading": {
       // Range-checked, matching RichText.astro. Both renderers declare themselves a rescue
       // for hand-written content that never passed through normalizeRichText, so neither
-      // may trust the attribute — an out-of-range level would emit <h0>/<h99>.
+      // may trust the attribute: an out-of-range level would emit <h0>/<h99>.
       // Integer too: `h2.5` throws InvalidCharacterError in document.createElement.
       const raw = attrs.level;
       const level = typeof raw === "number" && Number.isInteger(raw) && raw >= 1 && raw <= 6 ? raw : 2;

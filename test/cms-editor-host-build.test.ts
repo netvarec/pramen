@@ -1,8 +1,8 @@
-// `buildEditor` — the editor's build as an API a host can call, proved where it matters.
+// `buildEditor`: the editor's build as an API a host can call, proved where it matters.
 //
 // Two of its options are promises about LINKING, and neither fails visibly when it stops
 // working. `designSystem` says "bundle against my podoba, not yours": broken, the build still
-// succeeds and still produces a working editor — wearing the wrong design system, which is a
+// succeeds and still produces a working editor, wearing the wrong design system, which is a
 // screenshot's worth of difference nobody reads as a build regression. `slots` says "render my
 // component instead of yours": broken, the host ships OUR header believing it shipped theirs.
 //
@@ -27,7 +27,7 @@ const EDITOR = resolve(import.meta.dir, "../packages/cms-editor");
  * Load-bearing, for the same reason `cms-editor-panel-globals.test.ts` says so: the whole
  * subject is module resolution, and a fake `@podoba/react` only shadows the real one when it
  * sits in a `node_modules` the resolver reaches BEFORE the editor's. Inside the editor's own
- * tree, `react` and `react-dom` still resolve by walking up — which is what a real host's root
+ * tree, `react` and `react-dom` still resolve by walking up, which is what a real host's root
  * does too, and what the build needs, since podoba's components call hooks. */
 const dirs: string[] = [];
 async function scratch(prefix: string): Promise<string> {
@@ -35,7 +35,7 @@ async function scratch(prefix: string): Promise<string> {
   dirs.push(dir);
   return dir;
 }
-/** The one case that needs a root with nothing above it — see the resolve-failure test. */
+/** The one case that needs a root with nothing above it. See the resolve-failure test. */
 const outside: string[] = [];
 afterAll(async () => {
   for (const dir of [...dirs, ...outside]) await rm(dir, { recursive: true, force: true });
@@ -45,7 +45,7 @@ afterAll(async () => {
  * A design-system root whose `@podoba/react` is the real one with a fingerprint on `Button`.
  *
  * Re-exported rather than reimplemented, because the editor imports a dozen names from podoba
- * and a stub would fail to LINK — which would prove nothing about the redirect, only that the
+ * and a stub would fail to LINK, which would prove nothing about the redirect, only that the
  * stub was incomplete. `export *` carries every real name; the explicit `Button` declaration
  * shadows the star for that one, so the editor's own `<Button>` call sites (components.tsx)
  * render through the wrapper and drag the marker into the bundle.
@@ -139,7 +139,7 @@ describe("buildEditor", () => {
     for (const file of ["editor.js", "editor.css", "panel-react.js", "panel-react-dom.js", "panel-jsx-runtime.js", "panel-jsx-dev-runtime.js"]) {
       expect(await Bun.file(join(outdir, file)).exists()).toBe(true);
     }
-    // The stylesheet is Tailwind plus podoba's tokens plus the inlined face — all three, or
+    // The stylesheet is Tailwind plus podoba's tokens plus the inlined face: all three, or
     // the editor renders unstyled and this test would have said it was fine.
     const css = await readFile(join(outdir, "editor.css"), "utf8");
     expect(css).toContain("--color-surface");
@@ -161,7 +161,7 @@ describe("buildEditor", () => {
   test("designSystem that cannot resolve fails the build, naming what and where", async () => {
     // OUTSIDE the repo, unlike every other scratch dir here, and that is the point of the
     // case. Node resolution walks UP, so a root nested under our own `node_modules` finds our
-    // podoba and the build quietly succeeds against it — correct semantics, and the reason
+    // podoba and the build quietly succeeds against it, which is correct semantics, and the reason
     // this cannot be checked from in here. A host root is somewhere else entirely; a temp dir
     // with nothing above it is the only faithful stand-in.
     const root = await mkdtemp(join(tmpdir(), "pramen-ds-"));
@@ -183,7 +183,7 @@ describe("buildEditor", () => {
     const js = await build({ slots: { pageHeader: slot } });
     expect(js).toContain("data-host-header");
     // And ours is GONE. Asserting only the marker's presence would pass with both headers in
-    // the bundle and one of them dead — which is a 190px sticky panel's worth of CSS and a
+    // the bundle and one of them dead, which is a 190px sticky panel's worth of CSS and a
     // scroll listener still shipped, and the sign that the slot resolved for one importer and
     // not the other.
     expect(js).not.toContain("useCondensed");
@@ -341,7 +341,7 @@ describe("buildEditor", () => {
   test("a slot that matches nothing is an error, not a silent fallback", async () => {
     // The failure this guard exists for, reproduced the only way the API allows: a slot whose
     // target is never reached because the specifier is resolved by an earlier plugin. Same
-    // observable as a release that renamed the module — nothing matched — and it must be loud,
+    // observable as a release that renamed the module (nothing matched) and it must be loud,
     // because the alternative is a host shipping our header under the impression it shipped
     // theirs.
     const dir = await scratch("noslot");

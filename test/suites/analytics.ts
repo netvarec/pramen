@@ -1,4 +1,4 @@
-// @pramen/analytics e2e — the whole pipeline against a real wrangler-dev DO: the public
+// @pramen/analytics e2e: the whole pipeline against a real wrangler-dev DO, covering the public
 // beacon endpoint, the privileged ingest it funnels into, the role gate on the metric
 // reads, the daily rollup, and the prune that rollup makes safe.
 //
@@ -25,7 +25,7 @@ interface Beacon {
 export async function runAnalytics(base: string): Promise<void> {
   // `main`, like the CMS suite: the collector is anonymous, and an anonymous caller can
   // only reach the open tenant. Every assertion below is therefore written against paths
-  // this suite invents, or as a DELTA — never as an absolute total that another suite
+  // this suite invents, or as a DELTA, never as an absolute total that another suite
   // could move.
   const TENANT = "main";
   const call = http(base, TENANT);
@@ -77,7 +77,7 @@ export async function runAnalytics(base: string): Promise<void> {
   assert(viewsFor(pages, article) === 2, "top pages counts the article twice");
   assert(viewsFor(pages, other) === 1, "and the other page once");
 
-  // The query string must not fragment a page's history — the collector normalizes before
+  // The query string must not fragment a page's history: the collector normalizes before
   // the row is written, so this is the SAME page as the two above.
   await beacon([{ kind: "pageview", viewId: `v-${uniq}-4`, path: `${article}?utm_source=newsletter` }]);
   assert(viewsFor(await pagesOf(admin), article) === 3, "a campaign parameter does not create a second page");
@@ -88,7 +88,7 @@ export async function runAnalytics(base: string): Promise<void> {
   const beforeBots = (await metrics(admin)).pageviews as number;
   await beacon([{ kind: "pageview", viewId: `v-${uniq}-bot`, path: article }], { ua: "Googlebot/2.1" });
   assert(((await metrics(admin)).pageviews as number) === beforeBots, "a crawler records nothing");
-  // The other half of the filter — a client that sends NO User-Agent at all — is asserted in
+  // The other half of the filter (a client that sends NO User-Agent at all) is asserted in
   // test/analytics-events.test.ts and not here, because it cannot be produced over the wire:
   // `fetch` always sends one of its own, so omitting the header from this request tests the
   // HTTP client, not the collector.
@@ -115,14 +115,14 @@ export async function runAnalytics(base: string): Promise<void> {
   assert((await overview(editor)).status === 200, "an editor can read the dashboard's numbers");
   assert(
     (await call("runAnalyticsRollup", {}, editor)).status === 403,
-    "but an editor cannot run the rollup — it writes",
+    "but an editor cannot run the rollup, because it writes",
   );
   assert(
     (await call("pruneAnalytics", {}, editor)).status === 403,
     "nor the prune, which is the only destructive operation here",
   );
 
-  // The ingest handler is `auth: []` — satisfiable by no role, so it is unreachable over
+  // The ingest handler is `auth: []`, satisfiable by no role, so it is unreachable over
   // /rpc even for an admin, while `callPrivileged` (which the collector uses) still gets in.
   assert((await call("__analyticsIngest", { events: [] }, admin)).status === 403, "ingest is not callable over /rpc");
 
@@ -136,7 +136,7 @@ export async function runAnalytics(base: string): Promise<void> {
   assert(rolled.status === 200, "the rollup runs");
   assert((rolled.body.result.days as string[]).includes(today), "it rolled up today");
 
-  // Re-running must not double the numbers — the upsert is what stands in for a lease here.
+  // Re-running must not double the numbers: the upsert is what stands in for a lease here.
   await call("runAnalyticsRollup", { through: today }, admin);
   const afterSecondRollup = await metrics(admin);
   assert(
@@ -149,7 +149,7 @@ export async function runAnalytics(base: string): Promise<void> {
   );
 
   // The prune only ever deletes days that have an aggregate, and only ones older than the
-  // retention window — so today's raw events survive a prune with the default keep.
+  // retention window, so today's raw events survive a prune with the default keep.
   const pruned = await call("pruneAnalytics", { keepDays: 90 }, admin);
   assert(pruned.status === 200, "the prune runs");
   assert((pruned.body.result.deletedDays as string[]).includes(today) === false, "it does not delete a day inside the window");

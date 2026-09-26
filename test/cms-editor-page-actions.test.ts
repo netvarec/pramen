@@ -2,7 +2,7 @@
 //
 // These were a `status === "review" ? [...] : ...` chain inside a panel component, behind an
 // inspector tab labelled "workflow". Publishing is what someone opens the page editor to do,
-// so it moved to the toolbar — and on the way out the table became a pure function, which is
+// so it moved to the toolbar, and on the way out the table became a pure function, which is
 // the only form the ORDER can be asserted in: the head is the toolbar's primary button and
 // the tail is its overflow menu, so "what is the obvious next move from here" is a contract,
 // not a rendering detail.
@@ -27,7 +27,7 @@ describe("what a page can do from where it is", () => {
     expect(handlers("review")).toContain("reject");
   });
 
-  test("a live page can be re-published — that is how an edit reaches the site", () => {
+  test("a live page can be re-published, which is how an edit reaches the site", () => {
     // The public content API serves the revision snapshot `publishPage` bakes, NOT the page
     // row. Without this action an edit to a live page saves, versions and shows in History
     // while the site keeps serving the text it had at first publish, and the only way
@@ -50,14 +50,14 @@ describe("what a page can do from where it is", () => {
     expect(labels("published")[0]).toContain("changes");
   });
 
-  test("rejected and archived get the draft actions — they are editable again", () => {
+  test("rejected and archived get the draft actions, since they are editable again", () => {
     // The old chain's `default` branch, made explicit: these are the states you fix and
     // resubmit from, so offering nothing (or offering Approve) would strand the page.
     for (const status of ["rejected", "archived"]) expect(handlers(status)).toEqual(handlers("draft"));
   });
 
   test("an unknown status still offers a way forward rather than nothing", () => {
-    // A status this build has not heard of must not render a toolbar with no actions —
+    // A status this build has not heard of must not render a toolbar with no actions:
     // the server refuses an invalid transition anyway, and a dead toolbar cannot be argued
     // with. Falls back to the draft set.
     expect(handlers("something-new")).toEqual(handlers("draft"));
@@ -75,7 +75,7 @@ describe("what a page can do from where it is", () => {
 
 describe("the inspector tabs", () => {
   test("every tab has a written-out label", () => {
-    // Not a CSS `capitalize`, which renders "seo" as "Seo" and "i18n" as "I18n" — both wrong,
+    // Not a CSS `capitalize`, which renders "seo" as "Seo" and "i18n" as "I18n", both wrong,
     // in the one place a reader is scanning for the word they want.
     for (const t of INSPECTOR_TABS) expect(INSPECTOR_TAB_LABELS[t]).toBeTruthy();
     expect(INSPECTOR_TAB_LABELS.seo).toBe("SEO");

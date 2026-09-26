@@ -1,4 +1,4 @@
-// Users management route (`/users`) — admin only. The tab is hidden for non-admins, but
+// Users management route (`/users`), admin only. The tab is hidden for non-admins, but
 // the route guards independently (a direct deep link by a non-admin gets a notice, and
 // the server enforces the ACL regardless).
 

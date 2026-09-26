@@ -1,6 +1,6 @@
 // One content type's page list (`/types/:slug`). The pooled list at `/` is what a
 // single-type deployment wants; the moment a deployment declares two (pages AND articles,
-// say) that list stops being a list of anything in particular — same column, same rows,
+// say) that list stops being a list of anything in particular: same column, same rows,
 // nothing to tell a landing page from a news item. This route is that list scoped to one
 // type, and `_layout` gives each type a tab pointing at it.
 
@@ -20,7 +20,7 @@ export default createPage()
     const type = (contentTypes ?? []).find((c) => c.slug === params.slug);
     const back = <Button variant="ghost" size="sm" onPress={() => navigate("home")}>{t("pages.back")}</Button>;
 
-    // This route IS the block/page builder, so a deployment that hides it hides this too —
+    // This route IS the block/page builder, so a deployment that hides it hides this too;
     // otherwise the flag is bypassed by typing the URL, or by a stale link.
     if (pagesHidden()) return <Notice action={back}>{t("pages.builderDisabled")}</Notice>;
 
@@ -32,7 +32,7 @@ export default createPage()
       return <Notice action={<Button variant="ghost" size="sm" onPress={refreshContentTypes}>{t("pages.typesRetry")}</Button>}>{t("pages.typesLoadFailed")}</Notice>;
     }
     if (contentTypes === null) return <Notice>{t("common.loading")}</Notice>;
-    // Nothing is fetched for a slug that is not a content type — the list would be empty and
+    // Nothing is fetched for a slug that is not a content type: the list would be empty and
     // the heading unlabelled, and both round trips are wasted.
     if (!type) return <Notice action={back}>{t("pages.unknownType", { slug: params.slug })}</Notice>;
 
@@ -41,7 +41,7 @@ export default createPage()
         api={api}
         // Keyed on the slug so switching tabs REMOUNTS the list: buzola renders the same
         // component instance across a params-only change, and PageList holds the rows,
-        // the paging offset and any open create-modal — all of which belong to one type.
+        // the paging offset and any open create-modal, all of which belong to one type.
         key={type.slug}
         type={type}
         onOpen={(p) => navigate("page", { params: { pageId: p.id } })}

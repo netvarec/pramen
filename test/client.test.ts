@@ -1,9 +1,9 @@
-// Unit tests for @pramen/client — no server boot. Uses injected fetchImpl/WebSocketImpl
+// Unit tests for @pramen/client, with no server boot. Uses injected fetchImpl/WebSocketImpl
 // so it runs standalone (`bun test test/client.test.ts`). Covers the correctness fixes:
-//   C1 — call() must NOT silently resolve undefined on a 2xx non-envelope response,
+//   C1: call() must NOT silently resolve undefined on a 2xx non-envelope response,
 //        and the base url is normalized so a trailing slash can't produce `//rpc`.
-//   C2 — the D1 read-your-writes bookmark keeps the MAXIMUM, not last-response-wins.
-//   C4 — live connection failures surface via onConnectionError instead of hanging.
+//   C2: the D1 read-your-writes bookmark keeps the MAXIMUM, not last-response-wins.
+//   C4: live connection failures surface via onConnectionError instead of hanging.
 
 import { describe, expect, test } from "bun:test";
 import { createClient, PramenError, type FetchLike } from "@pramen/client";
@@ -98,7 +98,7 @@ describe("live connection error surfaces (C4)", () => {
   test("a socket that keeps closing exhausts reconnects and reports a connection error", async () => {
     const fetchImpl: FetchLike = async () => jsonResponse({ ok: true, result: 1 });
 
-    // A WS that never opens — it emits `close` right after construction (a rejected
+    // A WS that never opens: it emits `close` right after construction (a rejected
     // upgrade, e.g. auth 403). Each reconnect gets the same treatment.
     class ClosingWS {
       static OPEN = 1;

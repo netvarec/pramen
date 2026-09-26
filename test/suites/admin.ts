@@ -36,7 +36,7 @@ export async function runAdmin(base: string): Promise<void> {
   assert(created.body.result.meta?.tag === "x", "admin-data: json codec applies on the create echo");
   const id = created.body.result.id;
 
-  // --- list / get / count (no ACL — admin sees everything, all fields) ---
+  // --- list / get / count (no ACL: admin sees everything, all fields) ---
   const list = await data({ tenant: TENANT, table: "notes", op: "list" });
   assert(list.body.ok && list.body.result.some((r: any) => r.id === id && "body" in r), "admin-data: list returns full rows");
   const got = await data({ tenant: TENANT, table: "notes", op: "get", id });
@@ -59,7 +59,7 @@ export async function runAdmin(base: string): Promise<void> {
   assert(badOp.status === 400, "admin-data: unknown op -> 400");
 
   // --- partition param: an explicit `partition: "default"` routes to the BARE tenant
-  // DO key — byte-for-byte the DO an omitted-partition call hits (back-compat). A row
+  // DO key, byte-for-byte the DO an omitted-partition call hits (back-compat). A row
   // created without a partition is therefore visible to a list with partition:"default". ---
   const partCreated = await data({
     tenant: TENANT,

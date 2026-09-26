@@ -1,5 +1,5 @@
 // The example Astro site: it reads the example CMS backend (`example/app.ts`, deployed by
-// `example/worker.ts`) and — because of `admin` below — also SERVES that backend's editor,
+// `example/worker.ts`) and, because of `admin` below, also SERVES that backend's editor,
 // at /__admin, from this same origin.
 //
 // Run the backend with `bun run dev` at the repo root, then `bun run --cwd example/site dev`.
@@ -33,7 +33,7 @@ export default defineConfig({
 
       // An explicit map, not the `"auto"` default. Auto-discovery names collections after
       // the content-type slugs it finds in the STORE, which is exactly what an example
-      // cannot hard-code — `getCollection("articles")` below has to compile against a name
+      // cannot hard-code: `getCollection("articles")` below has to compile against a name
       // that is known here. A real site usually wants `"auto"`: adding a content type in
       // the editor then takes effect on the next build with no code change.
       collections: { articles: "article" },
@@ -52,13 +52,13 @@ export default defineConfig({
         extraNav: [{ label: "Site", href: "/" }],
 
         // Where the editor's "Preview link" button sends people. Without it the link points
-        // at the CMS Worker's own redeem endpoint, which answers with JSON — right for a
+        // at the CMS Worker's own redeem endpoint, which answers with JSON: right for a
         // machine, useless for the stakeholder a preview link is FOR. `src/pages/preview.astro`
         // redeems the same token and renders it with the site's own layout.
         previewUrl: "/preview",
         // Where an unauthenticated (or expired) session is sent. The editor verifies bearer
         // tokens and knows nothing about how one is obtained, so the SITE owns the sign-in
-        // screen — `src/pages/admin/sign-in.astro` calls `login`, writes the token where the
+        // screen. `src/pages/admin/sign-in.astro` calls `login`, writes the token where the
         // editor reads it, and hands over. `/__admin?setup=1` still forces the editor's own
         // token screen, which is the way in when there is no account to sign in as.
         signInUrl: "/admin/sign-in",

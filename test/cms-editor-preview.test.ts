@@ -1,6 +1,6 @@
 // Where the editor sends a minted preview link.
 //
-// `signPagePreview` returns a token and a url the CMS Worker itself redeems — and that
+// `signPagePreview` returns a token and a url the CMS Worker itself redeems, and that
 // endpoint answers with JSON, because a headless CMS has the draft and no idea what it
 // should look like. Correct for a machine, and useless for the person a preview link is
 // FOR: a stakeholder with no account who opens a wall of braces. So a host may declare
@@ -12,7 +12,7 @@ import { pagePreviewHref, sitePreviewUrl } from "../packages/cms-editor/src/prev
 const MINT = { url: "/cms/preview?token=abc.def", token: "abc.def" };
 /** What `api.resolve` does: make a backend-relative path absolute. */
 const resolve = (p: string) => `https://cms.example.com${p}`;
-/** The editor's own page — what a declared site route is resolved against. */
+/** The editor's own page, what a declared site route is resolved against. */
 const origin = "https://www.example.com/__admin/pages/p1";
 
 describe("the preview href", () => {
@@ -27,7 +27,7 @@ describe("the preview href", () => {
       .toBe("https://www.example.com/preview?token=abc.def");
   });
 
-  // The result is COPIED and shown, not only navigated to — half the reason the button exists
+  // The result is COPIED and shown, not only navigated to: half the reason the button exists
   // is to send the link to someone with no account, and `/preview?token=…` in a Slack message
   // is dead. `previewUrl` is normally written as a path, so the CONFIGURED path was the broken
   // one; the new tab hid it, because a blank window opened by the editor inherits its base URL
@@ -38,7 +38,7 @@ describe("the preview href", () => {
     }
   });
 
-  test("an absolute site route works too — the site is often a different origin", () => {
+  test("an absolute site route works too, since the site is often a different origin", () => {
     expect(pagePreviewHref(MINT, { siteUrl: "https://preview.example.com/p", origin, resolve }))
       .toBe("https://preview.example.com/p?token=abc.def");
   });
@@ -52,7 +52,7 @@ describe("the preview href", () => {
 
   test("the token is url-encoded", () => {
     // A JWT is base64url and safe, but the token is a value from the server and this is the
-    // one place it becomes a URL — encoding it is not conditional on today's alphabet.
+    // one place it becomes a URL, so encoding it is not conditional on today's alphabet.
     const href = pagePreviewHref({ url: "/cms/preview", token: "a+b/c=d" }, { siteUrl: "/preview", origin, resolve });
     expect(href).toBe("https://www.example.com/preview?token=a%2Bb%2Fc%3Dd");
   });

@@ -1,5 +1,5 @@
 // Dynamic resolvers: the `member` read policy consults the DB (SYSTEM mode) per
-// request — read is denied until you've authored a note, then granted for all.
+// request: read is denied until you've authored a note, then granted for all.
 
 import { assert, http, token } from "../lib";
 

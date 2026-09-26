@@ -1,6 +1,6 @@
-// Dispatch — resolves a handler by name and runs it with a fresh, ACL-scoped Db.
+// Dispatch: resolves a handler by name and runs it with a fresh, ACL-scoped Db.
 // Mutations run inside storage.transaction(), which commits on success and rolls
-// back on throw — the platform-correct way to auto-wrap mutations in BEGIN/COMMIT.
+// back on throw, the platform-correct way to auto-wrap mutations in BEGIN/COMMIT.
 // (DO SQLite rejects raw BEGIN/COMMIT because it does atomic write coalescing under
 // this API.) Single-writer serialization is free:
 // a Durable Object processes one request at a time.
@@ -27,7 +27,7 @@ export interface DispatchResult {
   readonly result: unknown;
   readonly kind: HandlerKind;
   readonly touched: string[];
-  /** Number of tasks the handler enqueued — the DO uses this to arm its drain alarm. */
+  /** Number of tasks the handler enqueued; the DO uses this to arm its drain alarm. */
   readonly enqueued: number;
 }
 
@@ -63,7 +63,7 @@ export async function dispatch(
   const handler = handlers[name];
   if (!handler) throw new BadRequest(`unknown handler: ${name}`);
 
-  // Per-handler authorization, enforced before any work (input parse / handler body) —
+  // Per-handler authorization, enforced before any work (input parse / handler body),
   // gates handlers that bypass the row-ACL by touching ctx.kv/ctx.env/ctx.mail directly.
   if (handler.auth && !authorizeHandler(handler.auth, acl.identity)) {
     throw new Forbidden(`not authorized to call '${name}'`);

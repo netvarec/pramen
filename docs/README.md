@@ -1,7 +1,7 @@
 # pramen docs
 
 Documentation site for pramen, built with [pletivo](https://github.com/contember/pletivo)
-(a Bun-powered static site generator). Standalone from the pramen workspace — install
+(a Bun-powered static site generator). Standalone from the pramen workspace: install
 and run from this directory.
 
 ```bash

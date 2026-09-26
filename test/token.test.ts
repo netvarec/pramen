@@ -1,5 +1,5 @@
 // Unit tests for the signed capability tokens behind signed file urls and page-preview
-// links (packages/server/src/runtime/token.ts). Pure WebCrypto — no server boot.
+// links (packages/server/src/runtime/token.ts). Pure WebCrypto, no server boot.
 
 import { expect, test } from "bun:test";
 import { signToken, verifyToken, isUsableSecret, resolveSecret, MIN_TOKEN_SECRET_LEN } from "@pramen/server";
@@ -36,7 +36,7 @@ test("an expired token does not verify", async () => {
 });
 
 test("a payload with no expiry does not verify", async () => {
-  // Hand-rolled, because signToken's type requires `exp` — this is the forged case.
+  // Hand-rolled, because signToken's type requires `exp`; this is the forged case.
   const data = btoa(JSON.stringify({ p: "page-1" })).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(data));
@@ -53,9 +53,9 @@ test("malformed input never throws, it just fails to verify", async () => {
 });
 
 test("a payload survives non-ASCII content", async () => {
-  const payload = { fn: "přehled — návrh.pdf", exp: future() };
+  const payload = { fn: "přehled - návrh.pdf", exp: future() };
   const verified = await verifyToken<typeof payload>(await signToken(payload, SECRET), SECRET);
-  expect(verified?.fn).toBe("přehled — návrh.pdf");
+  expect(verified?.fn).toBe("přehled - návrh.pdf");
 });
 
 test("isUsableSecret rejects absent and weak secrets", () => {
@@ -70,7 +70,7 @@ test("isUsableSecret rejects absent and weak secrets", () => {
 test("resolveSecret takes the first usable name in preference order", () => {
   const names = ["PREVIEW_SECRET", "FILES_SECRET", "AUTH_SECRET"];
   expect(resolveSecret({ PREVIEW_SECRET: SECRET, AUTH_SECRET: "other-strong-secret-value" }, names)).toBe(SECRET);
-  // A present-but-too-weak value is SKIPPED, not accepted — it would be forgeable.
+  // A present-but-too-weak value is SKIPPED, not accepted: it would be forgeable.
   expect(resolveSecret({ PREVIEW_SECRET: "weak", FILES_SECRET: SECRET }, names)).toBe(SECRET);
   expect(resolveSecret({ AUTH_SECRET: SECRET }, names)).toBe(SECRET);
   expect(resolveSecret({}, names)).toBeUndefined();

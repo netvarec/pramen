@@ -1,18 +1,18 @@
-// The Astro integration — one front door for a @pramen/cms backend (issue #35).
+// The Astro integration: one front door for a @pramen/cms backend (issue #35).
 //
 // Before this, a site hand-wired the kit of parts: instantiate `createCmsClient` in
 // `content.config.ts`, write one `defineCollection({ loader: cmsLoader({ client, type }) })`
 // per content type, then re-instantiate or re-import the client anywhere else that needs
 // `resolve()` for a media URL. Two things drifted: the base URL was repeated at every call
 // site, and the hand-written collection list had to be kept in step with content types that
-// are runtime ROWS — so adding a type in the editor silently did nothing until someone
+// are runtime ROWS, so adding a type in the editor silently did nothing until someone
 // remembered to edit the config.
 //
 // `pramenCms()` owns both. It builds the client once from a typed `backend` descriptor and
 // exposes it (plus the collections) through the `pramen:cms` virtual module.
 //
 // ON REGISTERING COLLECTIONS. Astro has no API for an integration to define content
-// collections — `astro:config:setup` offers routes, scripts, middleware, renderers and Vite
+// collections: `astro:config:setup` offers routes, scripts, middleware, renderers and Vite
 // config, and nothing for the content layer (checked against Astro 7). Collections must be
 // exported from `src/content.config.ts`. So the integration generates them and the site
 // re-exports in one line:
@@ -38,7 +38,7 @@ export interface CmsBackend {
   /** Tenant to read. Default `"main"`. */
   tenant?: string;
   /** Bearer token, for reading a private deployment at build time. The public content API
-   * needs none — pass one only if your ACL does not grant anonymous reads. */
+   * needs none. Pass one only if your ACL does not grant anonymous reads. */
   token?: string;
 }
 
@@ -50,10 +50,10 @@ export interface PramenCmsOptions {
   /**
    * Which collections to generate.
    *
-   * - `"auto"` (default) — one collection per content type in the store, named after the
+   * - `"auto"` (default): one collection per content type in the store, named after the
    *   type's slug. Discovered at config time, so adding a type in the editor takes effect
    *   on the next build with no code change.
-   * - an explicit map — `{ articles: "article", pages: "page" }` — when you want your own
+   * - an explicit map (`{ articles: "article", pages: "page" }`) when you want your own
    *   names, or a subset.
    *
    * `"auto"` costs one request during `astro:config:setup`. If it fails (the CMS is down,
@@ -69,7 +69,7 @@ export interface PramenCmsOptions {
    *
    * `true` mounts it against the same `backend` the collections load from; an object also
    * carries the editor's own configuration (`brand`, `signInUrl`, `hidePages`, `extraNav`).
-   * Omit it and no admin route is injected at all — nothing is added to the site, and
+   * Omit it and no admin route is injected at all: nothing is added to the site, and
    * `@pramen/cms-editor` need not be installed.
    *
    * The route is a real Astro route, so deep links and refreshes are served by this site's
@@ -110,7 +110,7 @@ function assetModuleSource(base: string | undefined): string {
 }
 
 /** Ask the CMS which content types exist. Public and un-gated (`listPublicContentTypes`),
- * because this runs at BUILD time where there is no editor session — and a content type's
+ * because this runs at BUILD time where there is no editor session, and a content type's
  * slug is already public: `listPublishedPages` returns it for every published page. */
 async function discoverTypes(backend: CmsBackend): Promise<string[]> {
   const base = backend.url.replace(/\/+$/, "");
@@ -121,18 +121,18 @@ async function discoverTypes(backend: CmsBackend): Promise<string[]> {
   if (body.ok !== true || !Array.isArray(body.result)) {
     throw new Error(
       `@pramen/cms-astro: collections: "auto" could not read content types from ${base} (HTTP ${res.status}${body.error ? `: ${body.error}` : ""}). ` +
-        `Pass an explicit map instead — collections: { articles: "article" } — or make the CMS reachable from this build.`,
+        `Pass an explicit map instead (collections: { articles: "article" }), or make the CMS reachable from this build.`,
     );
   }
   return body.result.map((t) => t.slug).filter((s) => typeof s === "string" && s !== "");
 }
 
 /** A valid JS identifier-ish collection name. A content-type slug is author-controlled, and
- * it lands in generated source as an object key — quote it, and refuse the ones that cannot
+ * it lands in generated source as an object key: quote it, and refuse the ones that cannot
  * be a collection name at all rather than emitting code that fails to parse. */
 function collectionKey(slug: string): string {
   if (!/^[A-Za-z_][A-Za-z0-9_-]*$/.test(slug)) {
-    throw new Error(`@pramen/cms-astro: content-type slug ${JSON.stringify(slug)} cannot be a collection name — map it explicitly, e.g. collections: { myName: ${JSON.stringify(slug)} }`);
+    throw new Error(`@pramen/cms-astro: content-type slug ${JSON.stringify(slug)} cannot be a collection name. Map it explicitly, e.g. collections: { myName: ${JSON.stringify(slug)} }`);
   }
   return slug;
 }
@@ -144,7 +144,7 @@ function moduleSource(backend: CmsBackend, map: CollectionMap, locale?: string):
   const entries = Object.entries(map)
     .map(([name, type]) => `  ${collectionKey(name)}: defineCollection({ loader: cmsLoader({ client, type: ${JSON.stringify(type)}${locale ? `, locale: ${JSON.stringify(locale)}` : ""} }) }),`)
     .join("\n");
-  return `// GENERATED by @pramen/cms-astro (pramenCms integration) — do not edit.
+  return `// GENERATED by @pramen/cms-astro (pramenCms integration). Do not edit.
 import { defineCollection } from "astro:content";
 import { createCmsClient, cmsLoader } from "@pramen/cms-astro";
 
@@ -161,11 +161,11 @@ ${entries}
 }
 
 /** Generate the admin shell's module: the mount prefix, the runtime config already
- * serialized for an inline script, and the fallback tab title. Values, not logic — the
+ * serialized for an inline script, and the fallback tab title. Values, not logic: the
  * shell is a template. */
 function adminModuleSource(admin: AdminOptions, backend: CmsBackend): string {
   const cfg = adminRuntimeConfig(admin, backend);
-  return `// GENERATED by @pramen/cms-astro (pramenCms integration) — do not edit.
+  return `// GENERATED by @pramen/cms-astro (pramenCms integration). Do not edit.
 export const adminBasePath = ${JSON.stringify(ADMIN_BASE)};
 export const adminConfigScript = ${JSON.stringify(serializeAdminConfig(cfg))};
 export const adminTitle = ${JSON.stringify(adminDocumentTitle(cfg))};
@@ -178,7 +178,7 @@ export const adminEditorAssets = ${JSON.stringify(cfg.editorAssets ?? null)};
 /** The `pramen:cms` module's types, injected so the site gets them with no manual d.ts. */
 const TYPES = `declare module "pramen:cms" {
   import type { CmsClient } from "@pramen/cms-astro";
-  /** The configured CMS client — same instance the collections load through. */
+  /** The configured CMS client: same instance the collections load through. */
   export const client: CmsClient;
   /** Absolute URL for a media path the CMS returned. */
   export function resolve(path: string): string;
@@ -190,7 +190,7 @@ const TYPES = `declare module "pramen:cms" {
 
 /** The admin shell's module types. Injected only when the admin route is. */
 const ADMIN_TYPES = `declare module "pramen:cms/admin" {
-  /** The prefix the admin route was injected at — stamped onto the editor's mount node. */
+  /** The prefix the admin route was injected at, stamped onto the editor's mount node. */
   export const adminBasePath: string;
   /** The editor's runtime config, serialized for an inline <script>. */
   export const adminConfigScript: string;
@@ -198,7 +198,7 @@ const ADMIN_TYPES = `declare module "pramen:cms/admin" {
   export const adminTitle: string;
   /** The shell's <html lang>, from the configured \`locale\`. */
   export const adminLang: string;
-  /** Whether this deployment declares panel bundles — gates the shell's import map. */
+  /** Whether this deployment declares panel bundles: gates the shell's import map. */
   export const adminHasPanels: boolean;
   /** Base URL of a host-built editor's assets, or null for the packaged ones. */
   export const adminEditorAssets: string | null;
@@ -221,11 +221,11 @@ declare module "pramen:cms/admin-assets" {
  *
  *   export { collections } from "pramen:cms";
  *
- * `createCmsClient` / `cmsLoader` stay exported — this is the front door, not a
+ * `createCmsClient` / `cmsLoader` stay exported. This is the front door, not a
  * replacement. A site that wants to define its own collections by hand still can.
  */
 export function pramenCms(opts: PramenCmsOptions): AstroIntegration {
-  if (!opts?.backend?.url) throw new Error("@pramen/cms-astro: pramenCms() needs a backend url — pramenCms({ backend: { url: \"https://cms.example.workers.dev\" } })");
+  if (!opts?.backend?.url) throw new Error("@pramen/cms-astro: pramenCms() needs a backend url. pramenCms({ backend: { url: \"https://cms.example.workers.dev\" } })");
   return {
     name: "@pramen/cms-astro",
     hooks: {
@@ -237,7 +237,7 @@ export function pramenCms(opts: PramenCmsOptions): AstroIntegration {
           // Not an error: a store with no content types yet is a legitimate early state.
           // It IS worth saying out loud, because the symptom otherwise is `getCollection`
           // throwing about a collection the site is sure it configured.
-          logger.warn(`no content types found at ${opts.backend.url} — no collections generated`);
+          logger.warn(`no content types found at ${opts.backend.url}, no collections generated`);
         } else {
           logger.info(`${names.length} collection(s) from ${opts.backend.url}: ${names.join(", ")}`);
         }
@@ -249,12 +249,12 @@ export function pramenCms(opts: PramenCmsOptions): AstroIntegration {
         // below read it and an empty string splits them: `!customAssets` reads it as absent
         // (so dev serves the packaged files) while `customAssets ?? …` reads it as present
         // (`??` does not catch ""), which left the packaged `?url` imports in the graph with
-        // the `assetsInclude` globs switched off — precisely the combination those globs
+        // the `assetsInclude` globs switched off, precisely the combination those globs
         // exist to prevent. Declaring a blank base is a mistake either way, so it is said out
         // loud rather than quietly treated as one of the two.
         const declaredAssets = opts.admin && opts.admin !== true ? opts.admin.editorAssets : undefined;
         if (declaredAssets !== undefined && declaredAssets.trim() === "") {
-          logger.warn("`admin.editorAssets` is empty — ignoring it and serving the packaged editor. Give it the base URL your build emits, or leave it out.");
+          logger.warn("`admin.editorAssets` is empty. Ignoring it and serving the packaged editor. Give it the base URL your build emits, or leave it out.");
         }
         const customAssets = declaredAssets?.trim() ? declaredAssets : undefined;
         const servePackaged = !!opts.admin && !customAssets && command === "dev";
@@ -300,7 +300,7 @@ export function pramenCms(opts: PramenCmsOptions): AstroIntegration {
                     res.setHeader("Cache-Control", "no-cache");
                     // HEAD is answered from a stat, not from an opened-then-destroyed stream.
                     // Opening one meant the open could fail AFTER `res.end()` had finished the
-                    // response — `dist` cleaned while dev is running is enough — and the error
+                    // response (`dist` cleaned while dev is running is enough), and the error
                     // handler then called `next(err)` on an ended response, which reports
                     // "Cannot set headers after they are sent" instead of the real problem.
                     // The stat also gives the length HEAD is supposed to carry.
@@ -325,7 +325,7 @@ export function pramenCms(opts: PramenCmsOptions): AstroIntegration {
         if (adminCode) {
           // One catch-all: every in-app URL is a real server route, so a deep link and a
           // refresh are served like any other page. The pattern and the prefix the shell
-          // stamps on the mount node are the same constant — see admin.ts.
+          // stamps on the mount node are the same constant, see admin.ts.
           injectRoute({ pattern: ADMIN_ROUTE, entrypoint: fileURLToPath(new URL("./PramenAdmin.astro", import.meta.url)) });
           logger.info(`editor mounted at ${ADMIN_BASE}`);
         }

@@ -1,8 +1,8 @@
-// @pramen/cms-editor — the mount seam (`src/mount.ts`).
+// @pramen/cms-editor: the mount seam (`src/mount.ts`).
 //
 // The editor is served by a shell that stamps the mount prefix onto the mount node, so
-// these cover both halves: the normalization rules, and — with a REAL Router over buzola's
-// memory adapter — that a prefixed mount actually routes, and that it does not swallow the
+// these cover both halves: the normalization rules, and, with a REAL Router over buzola's
+// memory adapter, that a prefixed mount actually routes, and that it does not swallow the
 // host site it is co-hosted with. The second half is the point: the prefix is a one-line
 // wiring change whose failure modes all live in the router, where a string test cannot see
 // them.
@@ -14,7 +14,7 @@ import { isWithinBasePath, readBackend, readBasePath, resolveBasePath, scopeToBa
 const BASE = "/__admin";
 
 /** The shape that matters from `buzola.gen.ts`: a layout, a couple of pages, and the
- * catch-all `_404.tsx` registers — which is what makes EVERY same-origin path match. */
+ * catch-all `_404.tsx` registers, which is what makes EVERY same-origin path match. */
 const noop = () => null;
 const routes = buildRouteTree([
   {
@@ -47,7 +47,7 @@ describe("cms-editor mount path", () => {
     expect(resolveBasePath(null)).toBe("");
     expect(resolveBasePath("")).toBe("");
     expect(resolveBasePath("   ")).toBe("");
-    // "/" is the root spelled out, not a prefix — treating it as one would prepend a slash
+    // "/" is the root spelled out, not a prefix; treating it as one would prepend a slash
     // to every already-absolute route.
     expect(resolveBasePath("/")).toBe("");
   });
@@ -68,7 +68,7 @@ describe("cms-editor mount path", () => {
     }
   });
 
-  // Every comparison against a mount path — here and in buzola's own `stripBasePath` — is a
+  // Every comparison against a mount path (here and in buzola's own `stripBasePath`) is a
   // raw `startsWith` against a percent-ENCODED `URL.pathname`. A mount written in characters
   // the parser encodes can therefore never match: `/správa` vs `/spr%C3%A1va/media`, and
   // every in-prefix url reads as off-prefix.
@@ -76,7 +76,7 @@ describe("cms-editor mount path", () => {
     for (const bad of ["/správa", "/admin panel", "/café", "/a^b", "/a{b}", "/a`b", '/a"b', "/a<b"]) {
       expect(resolveBasePath(bad)).toBe("");
     }
-    // The encoded form of the same mount is fine — it is what the pathname will look like.
+    // The encoded form of the same mount is fine: it is what the pathname will look like.
     expect(resolveBasePath("/spr%C3%A1va")).toBe("/spr%C3%A1va");
   });
 
@@ -127,7 +127,7 @@ describe("cms-editor mounted under a prefix", () => {
   });
 
   // The bug this seam exists to prevent. `_404.tsx` registers `/:__notFound+`, so every
-  // same-origin path matches — un-scoped, a click on the co-hosted site's own /blog is
+  // same-origin path matches: un-scoped, a click on the co-hosted site's own /blog is
   // cancelled by `event.intercept` and renders the editor's "Nothing lives here" while the
   // address bar still reads /blog.
   test("navigating OUTSIDE the prefix is left to the browser", async () => {
@@ -189,7 +189,7 @@ describe("cms-editor mounted under a prefix", () => {
 });
 
 describe("cms-editor declared backend", () => {
-  test("absent when the shell declares none — the Setup screen asks for it", () => {
+  test("absent when the shell declares none, so the Setup screen asks for it", () => {
     expect(readBackend(undefined)).toBeUndefined();
     expect(readBackend({})).toBeUndefined();
     expect(readBackend({ PRAMEN_CMS_EDITOR: {} })).toBeUndefined();

@@ -43,7 +43,7 @@ export class ApiError extends Error {
 }
 
 /** Decode a JWT's `exp` claim (seconds) and report whether it has passed. A non-JWT token or
- * one without `exp` is treated as NOT expired (fail open) — the server is the real authority.
+ * one without `exp` is treated as NOT expired (fail open), since the server is the real authority.
  * Used to bounce an expired session to sign-in before/instead of firing doomed requests. */
 export function isTokenExpired(token: string): boolean {
   try {
@@ -58,7 +58,7 @@ export function isTokenExpired(token: string): boolean {
 
 const LS = "pramen.cmsEditor";
 
-/** The columns the page LIST renders — id (to open the row), title, slug, locale, status.
+/** The columns the page LIST renders: id (to open the row), title, slug, locale, status.
  * `typeId` rides along so a caller can tell which type a row belongs to without a join. */
 export const PAGE_LIST_COLUMNS = ["id", "typeId", "title", "slug", "locale", "status"] as const;
 
@@ -95,7 +95,7 @@ export function clearConfig(): void {
 }
 
 export class Api {
-  /** `onExpired` fires when a call is attempted with a locally-expired token — the app wires
+  /** `onExpired` fires when a call is attempted with a locally-expired token; the app wires
    * it to redirect to sign-in. We can't key off HTTP status: an expired token is rejected as
    * anonymous and a role-gated handler then returns 403, indistinguishable from a valid token
    * that merely lacks the role. So expiry is detected client-side from the token's `exp`. */
@@ -112,7 +112,7 @@ export class Api {
   /** Call a CMS RPC handler. Throws ApiError on a non-`ok` envelope. */
   async call<T = unknown>(name: string, input?: RpcInput): Promise<T> {
     // Expired token: hand off to sign-in instead of firing a request that will 403 into an
-    // error banner. The returned promise never settles — navigation is already underway.
+    // error banner. The returned promise never settles, since navigation is already underway.
     if (this.onExpired && this.cfg.token && isTokenExpired(this.cfg.token)) {
       this.onExpired();
       return new Promise<T>(() => {});
@@ -158,7 +158,7 @@ export class Api {
   listContentTypes = () => this.call<ContentType[]>("listContentTypes");
   getContentType = (id: string) => this.call<ContentType | null>("getContentType", { id });
   /** All pages, or just one content type's (by SLUG), one page of them at a time. The server
-   * does the filtering AND the paging — see `listPages` in @pramen/cms; it caps its result,
+   * does the filtering AND the paging (see `listPages` in @pramen/cms; it caps its result,
    * so narrowing or counting client-side would be narrowing an already-truncated list.
    *
    * `PAGE_LIST_COLUMNS` is the projection the list screen actually renders. The full page row
@@ -167,7 +167,7 @@ export class Api {
    * The editor fetches a whole page by id (`getPageById`) when it needs the wide row. */
   listPages = (opts: { contentType?: string; limit?: number; offset?: number } = {}) =>
     this.call<Page[]>("listPages", { ...opts, select: [...PAGE_LIST_COLUMNS] });
-  /** One page, wide, by id — what the page editor opens. Resolving an id against `listPages`
+  /** One page, wide, by id: what the page editor opens. Resolving an id against `listPages`
    * instead can miss: that list is capped, and the editor lists one content type per tab. */
   getPageById = (pageId: string) => this.call<Page | null>("getPageById", { pageId });
   getPagePreview = (slug: string, locale?: string) => this.call<AssembledPage>("getPage", { slug, locale, preview: true });
@@ -175,7 +175,7 @@ export class Api {
 
   // --- media ---
   // `undefined` values are simply not serialized, so the absent narrowings need no
-  // conditional spreading — an omitted key and a key set to undefined reach the server the same.
+  // conditional spreading: an omitted key and a key set to undefined reach the server the same.
   /** Options rather than positionals: the library narrows by four independent things, and
    * `listMedia(60, 0, sort, undefined, undefined, term)` is a call site nobody can read and
    * everybody can get one argument out of step. */
@@ -184,13 +184,13 @@ export class Api {
   getMedia = (id: string) => this.call<Media | null>("getMedia", { id });
   updateMedia = (id: string, alt: string | null) => this.call<Media>("updateMedia", { id, alt });
   /** A signed, expiring url that DOWNLOADS the file under its original name (the server
-   * sets `Content-Disposition: attachment`). Relative, like every signed url pramen mints —
+   * sets `Content-Disposition: attachment`). Relative, like every signed url pramen mints, so
    * `resolve()` it before use. */
   signMediaDownload = (id: string) => this.call<{ url: string; expiresAt: number }>("signMediaDownload", { id });
   deleteMedia = (id: string) => this.call<{ ok: true }>("deleteMedia", { id });
   // Trash is not a UI nicety here: deleteMedia no longer removes the R2 object, so without
   // a reachable purge a file can be "deleted" in the library and still be served on the
-  // live site — the case a takedown request actually needs.
+  // live site, the case a takedown request actually needs.
   listTrash = (limit = 50) => this.call<{ pages: Page[]; media: Media[] }>("listTrash", { limit });
   restoreMedia = (id: string) => this.call<{ ok: true }>("restoreMedia", { id });
   purgeMedia = (id: string) => this.call<{ ok: true }>("purgeMedia", { id });
@@ -198,7 +198,7 @@ export class Api {
   // --- block types & content types (the schema behind pages) ---
   //
   // Read wrappers existed from the start; the WRITE half did not, which is why a fresh CMS
-  // could not be bootstrapped from the editor at all — `createBlockType` / `createContentType`
+  // could not be bootstrapped from the editor at all: `createBlockType` / `createContentType`
   // had to be curled before the editor was usable (GitHub #9). The handlers were already
   // there and already editor-gated; only these and the screens over them were missing.
   createBlockType = (input: BlockTypeInput) => this.call<BlockType>("createBlockType", input as unknown as RpcInput);
@@ -222,7 +222,7 @@ export class Api {
     this.call<Redirect>("updateRedirect", { id, ...patch } as unknown as RpcInput);
   deleteRedirect = (id: string) => this.call<{ ok: true }>("deleteRedirect", { id });
 
-  /** Every vocabulary, or only those that classify `target`. The narrowing is the SERVER's —
+  /** Every vocabulary, or only those that classify `target`. The narrowing is the SERVER's:
    * the page panel, the media panel and the write-side guard read one answer, so they cannot
    * disagree about what a vocabulary applies to. The Taxonomies screen passes nothing: the one
    * place that edits `appliesTo` has to see a vocabulary it has narrowed away. */

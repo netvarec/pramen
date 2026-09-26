@@ -1,7 +1,7 @@
 // What both chromes are made of.
 //
-// The editor ships TWO shapes of the same nav — a sidebar rail (`chrome-sidebar.tsx`) and a
-// Graphic Standard-style topbar (`chrome-topbar.tsx`) — chosen per deployment by
+// The editor ships TWO shapes of the same nav (a sidebar rail, `chrome-sidebar.tsx`, and a
+// Graphic Standard-style topbar, `chrome-topbar.tsx`) chosen per deployment by
 // `CHROME_LAYOUT`. This module is the seam between them: the props `routes/_layout.tsx`
 // hands whichever one is mounted, plus the pieces that are the same in both.
 //
@@ -18,7 +18,7 @@ import { useI18n } from "./i18n";
 import { DarkThemeIcon, LightThemeIcon, NAV_GLYPHS, SettingsIcon, SignOutIcon } from "./icons";
 import type { ExtraNavLink, NavEntry, NavGlyph, NavIcon, NavSection } from "./nav";
 
-/** A nav entry that goes somewhere in the SPA — the half a chrome navigates rather than
+/** A nav entry that goes somewhere in the SPA: the half a chrome navigates rather than
  * links to. Narrowed here so neither chrome has to re-derive the discriminant. */
 export type NavRoute = Extract<NavEntry, { kind: "route" }>;
 
@@ -40,11 +40,11 @@ export interface AccountMenuEntry {
 export interface ChromeProps {
   /** The nav, grouped and in order (`navSections`). */
   sections: NavSection[];
-  /** Whether the groups are worth naming — false on a deployment with a single group. */
+  /** Whether the groups are worth naming; false on a deployment with a single group. */
   labelled: boolean;
   /** The key of the lit entry, or `""` where nothing matches the route. */
   active: string;
-  /** The lit entry, when it is a route — the section half of the breadcrumb and the way
+  /** The lit entry, when it is a route: the section half of the breadcrumb and the way
    * back to its list. Taken from what is LIT rather than re-derived from the path: the nav
    * already answered "where am I", and a second answer computed differently can disagree. */
   sectionCrumb: NavRoute | undefined;
@@ -54,7 +54,7 @@ export interface ChromeProps {
   theme: string;
   onTheme: () => void;
   /** Every one of these is already wrapped in the unsaved-changes guard by `_layout.tsx`,
-   * and each RETURNS whether it actually went — false when the reader answered "stay".
+   * and each RETURNS whether it actually went, so false when the reader answered "stay".
    *
    * The return value is not decoration. A chrome that dismisses itself on click (the
    * topbar's small-viewport dialog) would otherwise close before the prompt is answered, so
@@ -67,7 +67,7 @@ export interface ChromeProps {
   /** The deployment's own account-menu rows, in order. Usually empty. */
   accountItems: AccountMenuEntry[];
   onGo: (entry: NavRoute) => boolean;
-  /** Whether a host link may navigate the CURRENT tab — `opensInSameTab`, applied by the
+  /** Whether a host link may navigate the CURRENT tab (`opensInSameTab`), applied by the
    * layout because it depends on the router's base path. */
   sameTab: (link: ExtraNavLink) => boolean;
   /** The guard itself, for the one navigation a chrome makes directly: a same-tab host link
@@ -86,7 +86,7 @@ export const MD_BREAKPOINT = "(min-width: 48rem)";
  *
  * SSR-safe and paranoid about the API: `matchMedia` is absent in a non-browser render and has
  * been present-but-partial (no `addEventListener`, only the deprecated `addListener`) in
- * browsers this editor still meets. Defaults to TRUE, which is the desktop reading — the same
+ * browsers this editor still meets. Defaults to TRUE, which is the desktop reading, the same
  * direction the layout already fails in, and the one where every control is on screen.
  */
 export function useMediaQuery(query: string): boolean {
@@ -132,7 +132,7 @@ export function NavIconSlot({ icon }: { icon: NavIcon }): ReactNode {
  *
  * podoba's `UserMenu` (a React Aria `Menu`), so the popover, roving focus, typeahead and
  * dismissal are the design system's rather than three more hand-rolled handlers. It carries
- * the session's own affordances — the theme, Settings, the way out, and who you are — which
+ * the session's own affordances (the theme, Settings, the way out, and who you are) which
  * is the half of the chrome that neither a narrowed rail nor a 77px bar has room for inline.
  *
  * `compact` drops the username beside the avatar, which is the Graphic Standard bar's own
@@ -162,7 +162,7 @@ export function AccountMenu({
   // one.
   const { t } = useI18n();
   const byId = new Map(items.map((item) => [item.id, item]));
-  // The server-resolved identity, which is a username rather than a display name — this app
+  // The server-resolved identity, which is a username rather than a display name, since this app
   // has no profile. Falling back to "account" keeps the avatar's initials from reading as "?"
   // in the window between boot and the `me` call landing.
   const who = me?.userId ?? t("account.fallbackName");

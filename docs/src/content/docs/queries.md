@@ -1,7 +1,7 @@
 ---
 title: Queries & Aggregates
 order: 4
-summary: find, cursor pagination, count, and type-inferred aggregates — all ACL-scoped.
+summary: find, cursor pagination, count, and type-inferred aggregates, all ACL-scoped.
 ---
 
 All reads go through `ctx.db`. Values are always parameterized; column names are
@@ -32,7 +32,7 @@ ctx.db.find({
 
 ## Cursor pagination
 
-For large or changing datasets prefer **cursor (keyset) pagination** — stable under
+For large or changing datasets prefer **cursor (keyset) pagination**, stable under
 concurrent inserts/deletes. `db.page()` returns `{ items, cursor, hasMore }`; pass
 the previous `cursor` back as `after`. The primary key is auto-appended to `orderBy`
 as a tiebreaker.
@@ -55,7 +55,7 @@ do {
 ## count & aggregates
 
 `db.count()` and `db.aggregate()` (count/sum/avg/min/max, optional `groupBy`) are
-ACL-scoped — the read `where` applies, and aggregating a column you can't read is
+ACL-scoped: the read `where` applies, and aggregating a column you can't read is
 denied (counting rows you *can* see is always allowed).
 
 The aggregate **result row type is inferred from the spec**: group columns keep

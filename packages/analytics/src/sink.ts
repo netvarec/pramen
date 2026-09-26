@@ -9,7 +9,7 @@
 import type { AnalyticsEvent } from "./events";
 
 /** Where a batch of events goes. `write` is called on the request path, so an
- * implementation must be cheap — the queue sink hands off, the direct sink does not. */
+ * implementation must be cheap: the queue sink hands off, the direct sink does not. */
 export interface AnalyticsSink {
   write(events: readonly AnalyticsEvent[]): Promise<void>;
 }
@@ -27,7 +27,7 @@ export interface AnalyticsQueueMessage {
  * consumer inserts a whole batch as one statement.
  *
  * `send` is awaited rather than fired-and-forgotten: an unawaited promise in a Worker
- * belongs to an invocation that may end before it settles, and its I/O is then canceled —
+ * belongs to an invocation that may end before it settles, and its I/O is then canceled,
  * the same rule that wedged the D1 boot in #51. Awaiting a queue send is sub-millisecond. */
 export class QueueSink implements AnalyticsSink {
   constructor(
@@ -48,7 +48,7 @@ export class QueueSink implements AnalyticsSink {
  *
  * Not merely a fallback: with the DO store this is one in-process SQLite insert, which is
  * genuinely cheaper than a queue round trip. It becomes the wrong choice when the write
- * begins to contend — which is what the seam is for. */
+ * begins to contend, which is what the seam is for. */
 export class DirectSink implements AnalyticsSink {
   constructor(private readonly ingest: (events: readonly AnalyticsEvent[]) => Promise<void>) {}
 
@@ -69,7 +69,7 @@ export class MemorySink implements AnalyticsSink {
 
 /** A sink that swallows everything, loudly once.
  *
- * Analytics must never be able to fail a page request — a broken collector that returns
+ * Analytics must never be able to fail a page request: a broken collector that returns
  * 500 to `sendBeacon` is invisible, but a broken collector wired into the SERVER path
  * would take the page down with it. So the failure mode is deliberately "lose the data,
  * serve the page", and the one-shot log is what stops that from being silent. */
@@ -81,6 +81,6 @@ export class NoopSink implements AnalyticsSink {
   async write(): Promise<void> {
     if (this.warned) return;
     this.warned = true;
-    console.warn(`@pramen/analytics: events are being dropped — ${this.reason}`);
+    console.warn(`@pramen/analytics: events are being dropped. ${this.reason}`);
   }
 }

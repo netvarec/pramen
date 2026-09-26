@@ -1,10 +1,10 @@
-// How a deployment may dress the screen header — the declarative answer to #60.
+// How a deployment may dress the screen header. The declarative answer to #60.
 //
 // A host could already brand the CHROME (`brand`, `layout`) and add whole screens of its own
 // (`panels`, `adminPage`). The one thing it could not touch was the header on the editor's
 // OWN screens: the sticky cover panel with the h1 and the primary action. So a project that
 // needed those headers to match the product the editor sits inside reached for the only hook
-// left — a stylesheet selecting on the header's internal DOM:
+// left, a stylesheet selecting on the header's internal DOM:
 //
 //   div.sticky[class*="max-w-[1200px]"] > div.relative.isolate.overflow-hidden.rounded-panel
 //     > div.relative.grid > :not(h1) { … }
@@ -13,12 +13,12 @@
 // with no error anywhere. Worse, it cannot tell the screens apart or a container from a
 // control, and both of those cost a real bug in the shipped version: an injected `content:
 // "New"` turned Media's `+ Upload` into "New + Upload", and a rule meant for the panel landed
-// on the button too — white on mint, 1.58:1.
+// on the button too (white on mint, 1.58:1).
 //
 // Neither is a mistake about CSS. They are what a structural hook makes unavoidable. So the
 // seam here is TOKENS, in the shape `brand` and `layout` already have: the host supplies
-// presentation, the editor keeps owning the text, the action and — this is the point of
-// deriving rather than accepting — the CONTRAST. A host names ONE colour; the label colour on
+// presentation, the editor keeps owning the text, the action and (this being the point of
+// deriving rather than accepting) the CONTRAST. A host names ONE colour; the label colour on
 // it and the hover shade are computed here, so the readable-text bug above is not reachable
 // through this API at all.
 //
@@ -29,7 +29,7 @@
 /** How the header panel is drawn. */
 export type PageHeaderVariant = "cover" | "flat" | "bare";
 
-/** Every value `variant` accepts — for the warning below, and so the docs stay in step. */
+/** Every value `variant` accepts, for the warning below, and so the docs stay in step. */
 export const PAGE_HEADER_VARIANTS: readonly PageHeaderVariant[] = ["cover", "flat", "bare"];
 
 /** What ships when nothing is configured: the generated Truchet cover every deployment
@@ -50,7 +50,7 @@ export interface PageHeaderConfig {
   variant?: PageHeaderVariant;
   /** The colour the primary action wears, as a hex or `rgb()` literal. */
   accent?: string;
-  /** The family for the `<h1>` — a CSS `font-family` list. */
+  /** The family for the `<h1>`: a CSS `font-family` list. */
   titleFont?: string;
 }
 
@@ -64,7 +64,7 @@ export interface PageHeaderStyle {
   titleFont: string | undefined;
 }
 
-/** The unconfigured header — the shape every existing deployment already has. */
+/** The unconfigured header: the shape every existing deployment already has. */
 export const DEFAULT_PAGE_HEADER_STYLE: PageHeaderStyle = { variant: DEFAULT_VARIANT, vars: {}, titleFont: undefined };
 
 // --- colour ------------------------------------------------------------------------------
@@ -86,13 +86,13 @@ export interface Rgb {
 const HEX = /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
 const RGB_FN = /^rgba?\(([^)]*)\)$/i;
 
-/** podoba's ink and its paper — the two candidates for a label on the accent. They are the
+/** podoba's ink and its paper: the two candidates for a label on the accent. They are the
  * tokens the rest of the editor already sets type in, so a derived foreground still looks
  * like this design system rather than like a contrast calculator's output. */
 export const ON_ACCENT_CANDIDATES: readonly string[] = ["#0d0d0d", "#ffffff"];
 
 /** WCAG AA for the 13px text podoba's `Button` sets. Below this we still pick the better of
- * the two, and warn — the accent itself is the problem and only the host can change it. */
+ * the two, and warn: the accent itself is the problem and only the host can change it. */
 const AA_NORMAL = 4.5;
 
 /**
@@ -104,7 +104,7 @@ const AA_NORMAL = 4.5;
  * behind it, and what is behind it here is a themed surface that changes. Full alpha is
  * accepted and dropped, since it changes nothing.
  *
- * Everything else — `var()`, `oklch()`, a named colour, a gradient — returns undefined and
+ * Everything else (`var()`, `oklch()`, a named colour, a gradient) returns undefined and
  * the caller warns. Named colours are not special-cased on purpose: a 148-entry table to
  * accept `rebeccapurple` buys nothing a hex does not.
  */
@@ -118,7 +118,7 @@ export function parseColor(value: string): Rgb | undefined {
       return Number.parseInt(raw, 16);
     };
     if ((short && hex.length === 4) || hex.length === 8) {
-      if (part(3) !== 255) return undefined; // translucent — see above
+      if (part(3) !== 255) return undefined; // translucent, see above
     }
     return { r: part(0), g: part(1), b: part(2) };
   }
@@ -153,7 +153,7 @@ export function contrastRatio(a: Rgb, b: Rgb): number {
 }
 
 /** Which of podoba's two inks reads on this accent. Ties go to the first candidate, which is
- * the ink — the same direction podoba's own light theme picks. */
+ * the ink, the same direction podoba's own light theme picks. */
 export function onAccent(accent: Rgb): { color: string; ratio: number } {
   let best = { color: ON_ACCENT_CANDIDATES[0]!, ratio: 0 };
   for (const candidate of ON_ACCENT_CANDIDATES) {
@@ -170,7 +170,7 @@ function hex({ r, g, b }: Rgb): string {
 /**
  * The hover shade for an accent.
  *
- * podoba's primary button hovers from `brand-primary` to `neutral-600` — a near-black
+ * podoba's primary button hovers from `brand-primary` to `neutral-600`, a near-black
  * lightening to #333. The INTENT is "visibly shifted, same button", so an accent is shifted
  * the way that stays visible on it: a dark accent lightens, a light one darkens. A fixed
  * direction would take a mint button to a lighter mint nobody can see against the panel.
@@ -192,7 +192,7 @@ export function hoverShade(accent: Rgb): string {
  * The custom properties one accent declares.
  *
  * TOKENS, not a class on the button. The accent has to reach whatever the host's screen puts
- * in that slot — today a podoba `Button`, tomorrow a second one beside it — and re-pointing
+ * in that slot (today a podoba `Button`, tomorrow a second one beside it) and re-pointing
  * `--color-brand-primary` on the header's root is the only version of that which does not
  * require every future control in the header to remember a prop. The three names are podoba's
  * own, read by `bg-brand-primary text-fg-inverted hover:bg-neutral-600`; scoping them to the
@@ -222,7 +222,7 @@ type Configured = PageHeaderConfig | string | null | undefined;
 
 /** One value as it should appear in a warning. `JSON.stringify` returns UNDEFINED for a
  * function or a symbol, which would print the word "undefined" for a value the host can see is
- * not — so those fall back to their own description. */
+ * not, so those fall back to their own description. */
 function show(value: Configured): string {
   return JSON.stringify(value) ?? String(value);
 }
@@ -231,7 +231,7 @@ function show(value: Configured): string {
  * The declared string, if it really is one: trimmed, and empty read as absent.
  *
  * `value === String(value)` rather than a tag check. A string is exactly the value that
- * survives being turned into one, while a number, a boolean, an array or an object does not —
+ * survives being turned into one, while a number, a boolean, an array or an object does not,
  * and that distinction is the point here, because `titleFont: true` (a plausible slip next to
  * `hidePages: true`) has to be refused rather than rendered as a family named "true".
  *
@@ -254,7 +254,7 @@ function isConfigObject(value: Configured): boolean {
 /**
  * Resolve the configured header style, falling back to the shipped default.
  *
- * Every rejection WARNS rather than being silently dropped — `resolveLayout`'s rule. This
+ * Every rejection WARNS rather than being silently dropped, which is `resolveLayout`'s rule. This
  * config is hand-edited and often templated, and the failure it guards against is a
  * deployment that asked for its own colours, got the framework's, and only found out when
  * somebody who knew what to expect happened to look.
@@ -269,12 +269,12 @@ export function resolvePageHeader(cfg?: PageHeaderConfig | null): PageHeaderStyl
   if (cfg === undefined || cfg === null) return DEFAULT_PAGE_HEADER_STYLE;
   try {
     if (!isConfigObject(cfg)) {
-      console.warn(`pramen/cms-editor: ignoring unusable \`pageHeader\` ${show(cfg)} — expected an object like \`{ variant: "flat", accent: "#73e2b2" }\`.`);
+      console.warn(`pramen/cms-editor: ignoring unusable \`pageHeader\` ${show(cfg)}. Expected an object like \`{ variant: "flat", accent: "#73e2b2" }\`.`);
       return DEFAULT_PAGE_HEADER_STYLE;
     }
     return { variant: resolveVariant(cfg.variant), vars: resolveAccent(cfg.accent), titleFont: resolveTitleFont(cfg.titleFont) };
   } catch (cause) {
-    console.warn("pramen/cms-editor: `pageHeader` could not be read — using the default header.", cause);
+    console.warn("pramen/cms-editor: `pageHeader` could not be read, so using the default header.", cause);
     return DEFAULT_PAGE_HEADER_STYLE;
   }
 }
@@ -285,7 +285,7 @@ function resolveVariant(value?: PageHeaderVariant): PageHeaderVariant {
   const declared = PAGE_HEADER_VARIANTS.find((variant) => variant === named);
   if (declared !== undefined) return declared;
   console.warn(
-    `pramen/cms-editor: ignoring unusable \`pageHeader.variant\` ${show(value)} — using "${DEFAULT_VARIANT}". Expected one of ${PAGE_HEADER_VARIANTS.map((v) => JSON.stringify(v)).join(", ")}.`,
+    `pramen/cms-editor: ignoring unusable \`pageHeader.variant\` ${show(value)}, using "${DEFAULT_VARIANT}". Expected one of ${PAGE_HEADER_VARIANTS.map((v) => JSON.stringify(v)).join(", ")}.`,
   );
   return DEFAULT_VARIANT;
 }
@@ -296,14 +296,14 @@ function resolveAccent(value?: string): Record<string, string> {
   const parsed = named === undefined ? undefined : parseColor(named);
   if (parsed === undefined) {
     console.warn(
-      `pramen/cms-editor: ignoring unusable \`pageHeader.accent\` ${show(value)} — expected an opaque hex or rgb() literal like "#73e2b2". The editor derives the label colour on the accent, so a value it cannot read (var(), oklch(), a colour with alpha) would leave that contrast unchecked.`,
+      `pramen/cms-editor: ignoring unusable \`pageHeader.accent\` ${show(value)}. Expected an opaque hex or rgb() literal like "#73e2b2". The editor derives the label colour on the accent, so a value it cannot read (var(), oklch(), a colour with alpha) would leave that contrast unchecked.`,
     );
     return {};
   }
   const { ratio } = onAccent(parsed);
   if (ratio < AA_NORMAL) {
     console.warn(
-      `pramen/cms-editor: \`pageHeader.accent\` ${show(named)} carries no legible label — the best of ${ON_ACCENT_CANDIDATES.join(" / ")} on it is ${ratio.toFixed(2)}:1, under WCAG AA's ${AA_NORMAL}:1 for the button's 13px text. Using it anyway; pick a mid-toned accent to fix it.`,
+      `pramen/cms-editor: \`pageHeader.accent\` ${show(named)} carries no legible label: the best of ${ON_ACCENT_CANDIDATES.join(" / ")} on it is ${ratio.toFixed(2)}:1, under WCAG AA's ${AA_NORMAL}:1 for the button's 13px text. Using it anyway; pick a mid-toned accent to fix it.`,
     );
   }
   return accentVars(parsed);
@@ -325,14 +325,14 @@ function resolveTitleFont(value?: string): string | undefined {
   if (value === undefined || value === null) return undefined;
   const named = text(value);
   if (named === undefined || !FONT_FAMILY_LIST.test(named)) {
-    console.warn(`pramen/cms-editor: ignoring unusable \`pageHeader.titleFont\` ${show(value)} — expected a font-family list like "Inter, system-ui, sans-serif".`);
+    console.warn(`pramen/cms-editor: ignoring unusable \`pageHeader.titleFont\` ${show(value)}. Expected a font-family list like "Inter, system-ui, sans-serif".`);
     return undefined;
   }
   return named;
 }
 
 /** The global the host's shell writes. Declared structurally rather than reaching for
- * `Window`, so this module needs no DOM lib — and so a test can hand it a plain object. */
+ * `Window`, so this module needs no DOM lib, and so a test can hand it a plain object. */
 export interface PageHeaderHost {
   PRAMEN_CMS_EDITOR?: { pageHeader?: PageHeaderConfig };
 }
@@ -344,12 +344,12 @@ export function readPageHeaderConfig(host: PageHeaderHost | undefined): PageHead
 }
 
 /** The header style for THIS page load. Read at module load, like `BRAND` and
- * `CHROME_LAYOUT` — the shell's inline script runs ahead of the bundle, so it is already
+ * `CHROME_LAYOUT`: the shell's inline script runs ahead of the bundle, so it is already
  * set. */
 let current: PageHeaderStyle = resolvePageHeader(readPageHeaderConfig(globalThis as PageHeaderHost));
 
 /** What `page-header.tsx` renders from. A function rather than the const it reads like,
- * purely so `setPageHeaderStyle` below has something to change — the value is resolved ONCE,
+ * purely so `setPageHeaderStyle` below has something to change: the value is resolved ONCE,
  * at module load, and nothing in the running app ever writes it. */
 export function pageHeaderStyle(): PageHeaderStyle {
   return current;
@@ -357,7 +357,7 @@ export function pageHeaderStyle(): PageHeaderStyle {
 
 /** Override the resolved style, and `undefined` restores what the shell declared.
  *
- * Tests only — the same escape hatch, and the same reason, as `resetTheme` in `theme.ts`:
+ * Tests only, the same escape hatch and the same reason as `resetTheme` in `theme.ts`:
  * this is module state resolved before any component renders, so a test that wants to see
  * what `variant: "bare"` actually puts in the DOM has no other way in. The header is the one
  * place where the DOM is the contract (that is the whole of #60), so asserting on the markup

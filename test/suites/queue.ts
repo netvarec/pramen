@@ -1,6 +1,6 @@
 // ctx.queue end-to-end on a native Cloudflare Queue: a mutation PRODUCES a job onto the
 // queue (env.JOBS), and the Worker's queue CONSUMER (app.queues["pramen-jobs"], dispatched
-// by createPramen().queue) processes it — here recording it in KV. Proves the full
+// by createPramen().queue) processes it, here recording it in KV. Proves the full
 // produce → consume round-trip under miniflare, plus that the producer is call-gated.
 
 import { assert, http, token, sleep } from "../lib";
@@ -14,7 +14,7 @@ export async function runQueue(base: string): Promise<void> {
   const produced = await call("enqueueJob", { id }, admin);
   assert(produced.body.ok && produced.body.result?.queued === id, "queue: enqueueJob produced a message onto the queue");
 
-  // the consumer runs asynchronously (batched, maxBatchTimeout: 1s) — poll the KV the
+  // the consumer runs asynchronously (batched, maxBatchTimeout: 1s), so poll the KV the
   // consumer writes until it lands.
   let consumed: string | null = null;
   for (let i = 0; i < 80; i++) {

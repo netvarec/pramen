@@ -23,12 +23,12 @@ export async function runTasks(base: string): Promise<void> {
   assert(ok.body.ok, "tasks: createNoteAndNotify (write + enqueue) succeeds");
 
   // drive a drain (the DO also self-drains via an alarm; this makes the test
-  // deterministic regardless of alarm timing — both paths mark the row done).
+  // deterministic regardless of alarm timing (both paths mark the row done).
   await drain(base, admin);
   const inbox = await call("__notifyInbox", { to: "ann@example.com" }, admin);
   assert(inbox.body.result?.body === "New note: hello", "tasks: the notify task delivered off the write path");
 
-  // atomicity: a mutation that throws AFTER enqueuing rolls BOTH back — the outbox row
+  // atomicity: a mutation that throws AFTER enqueuing rolls BOTH back. The outbox row
   // is part of the same transaction, so no task is left behind.
   const failed = await call("createNoteAndNotify", { title: "ghost", to: "ghost@example.com", fail: true }, admin);
   assert(failed.status >= 400, "tasks: the forced-failure mutation is rejected");
@@ -67,7 +67,7 @@ export async function runTasks(base: string): Promise<void> {
   assert(anonList.status === 403, "tasks: /admin/tasks/list is admin-only (403)");
 
   // declarative $triggers: createNote / updateNote(title) auto-enqueue a `note-changed`
-  // task via the Db write path — no ctx.tasks.enqueue in the handler.
+  // task via the Db write path, with no ctx.tasks.enqueue in the handler.
   const created = await call("createNote", { title: "trig", body: "b" }, admin);
   const noteId = created.body.result.id as number;
   await drain(base, admin);

@@ -1,7 +1,7 @@
 // The editor's mirrors of @pramen/cms constants.
 //
-// `@pramen/cms-editor` is a standalone browser app with no server-package dependency — it
-// speaks to the CMS purely over HTTP — so a handful of constants are DUPLICATED rather than
+// `@pramen/cms-editor` is a standalone browser app with no server-package dependency: it
+// speaks to the CMS purely over HTTP, so a handful of constants are DUPLICATED rather than
 // imported. That is a deliberate trade, and it comes with an obligation: something has to
 // fail when the two copies drift, or the duplication is just a latent bug with a comment on
 // it.
@@ -13,7 +13,7 @@
 // Each mirror is checked for the property that actually matters, which is not always
 // equality: `NAV_ORDER` must agree exactly (a host writes `navOrder: NAV_ORDER.media` on
 // one side and the editor sorts by it on the other), while a cap only has to be no LOOSER
-// on the client — the client cap exists to stop offering an edit the server would reject,
+// on the client, since the client cap exists to stop offering an edit the server would reject,
 // so a client that is stricter is merely conservative, and one that is looser lets a user
 // build something that 400s on save.
 
@@ -71,7 +71,7 @@ describe("mirrors that must match exactly", () => {
     // `listAdminPages` returns one list of two kinds; the editor switches on `kind` to
     // decide whether to render Block Kit from the server's response or to look for a
     // component its panel bundle registered. A kind the server sends and the editor has not
-    // heard of falls back to Block Kit — which then asks the server to render a screen that
+    // heard of falls back to Block Kit, which then asks the server to render a screen that
     // has no server render, so the reader gets an error instead of a blank page. That is the
     // right degradation and still a drift worth failing on.
     expect([...EDITOR_ADMIN_PAGE_KINDS]).toEqual([...ADMIN_PAGE_KINDS]);
@@ -96,7 +96,7 @@ describe("the media library's sort and filter vocabularies", () => {
   test("the type buckets match exactly", () => {
     // The editor renders one chip per kind and sends the string back; the server compiles it
     // into a WHERE. A kind the editor offers and the server does not know is a chip that
-    // silently shows everything — the server treats an unrecognised value as absent, which is
+    // silently shows everything: the server treats an unrecognised value as absent, which is
     // the right failure and still a failure.
     expect([...EDITOR_MEDIA_KINDS]).toEqual([...MEDIA_KINDS]);
   });
@@ -112,7 +112,7 @@ describe("the media library's sort and filter vocabularies", () => {
     // `MediaSort` is a type on the server and a runtime array here, so this is the one place
     // the two can be compared at all. Written out rather than imported from a server-side
     // array, because the server's is a Record's keys and the ORDER of that Record is what the
-    // editor's menu shows — pinning the list pins the menu.
+    // editor's menu shows, so pinning the list pins the menu.
     expect([...EDITOR_MEDIA_SORTS]).toEqual(["newest", "oldest", "name", "name_desc", "largest", "smallest"]);
   });
 });
@@ -121,7 +121,7 @@ describe("what a vocabulary may be scoped to", () => {
   test("the targets match exactly", () => {
     // The editor renders one checkbox per target and sends the array back; the server REFUSES
     // an unknown one rather than dropping it, so a target the editor offers and the server
-    // does not is a 400 on save — and one the server knows and the editor does not is a scope
+    // does not is a 400 on save, and one the server knows and the editor does not is a scope
     // nobody can set from the UI.
     expect([...EDITOR_TAXONOMY_TARGETS]).toEqual([...TAXONOMY_TARGETS]);
   });

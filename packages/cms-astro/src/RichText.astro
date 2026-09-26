@@ -1,6 +1,6 @@
 ---
 // Render a @pramen/cms `richtext` field. The value is a document TREE, not an HTML
-// string, so this walks it into real elements — there is no `set:html` anywhere on the
+// string, so this walks it into real elements: there is no `set:html` anywhere on the
 // path, and nothing to sanitize at render time (the write path already dropped every node
 // and mark outside the allow-list).
 //
@@ -14,7 +14,7 @@ import Self from "./RichText.astro";
 import Marks from "./RichTextMarks.astro";
 
 interface Props {
-  /** A whole document — what a `richtext` field holds. */
+  /** A whole document: what a `richtext` field holds. */
   value?: RichTextDoc | null;
   /** Child nodes, used when this component recurses into itself. */
   nodes?: RichTextNode[];
@@ -29,7 +29,7 @@ const list = nodes ?? value?.content ?? [];
  * ("Unable to assign attributes when using <> Fragment shorthand syntax"). Frontmatter is
  * plain TypeScript, where `<=` means what it says.
  *
- * Integer-checked as well as ranged — `h2.5` is not an element name. */
+ * Integer-checked as well as ranged: `h2.5` is not an element name. */
 function headingTag(level: unknown): string {
   const ok = typeof level === "number" && Number.isInteger(level) && level >= 1 && level <= 6;
   return ok ? `h${level}` : "h2";

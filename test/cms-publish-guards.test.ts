@@ -2,15 +2,15 @@
 // na webu není nic.
 //
 //  1. `required` na poli STRÁNKY se nevynucovalo nikde. Každý zápis draftu posílá
-//     `requireRequired: false` (a je to tak správně — do rozdělaného draftu se nedá uložit,
+//     `requireRequired: false` (a je to tak správně, do rozdělaného draftu se nedá uložit,
 //     kdyby chtěl mít vyplněno všechno), jenže publikace nevalidovala vůbec. `ValidateOpts`
 //     přitom od začátku slibuje „required is only mandatory when publishing". Důsledek
-//     v nasazení, které to našlo: akce bez data, publikovaná, s živou stránkou — a neviditelná
+//     v nasazení, které to našlo: akce bez data, publikovaná, s živou stránkou, a neviditelná
 //     ve všech výpisech, protože front-end akci bez data nemá kam na kalendáři položit.
 //
 //  2. Slug, který si obsluhuje sám front-end. Headless CMS o cizí routovací tabulce neví,
 //     takže stránku na `/kalendar` klidně publikuje. Stránka hlásí `published`, URL vrací 200
-//     a servíruje něco úplně jiného — a z editoru to nejde poznat, protože z jeho strany je
+//     a servíruje něco úplně jiného, a z editoru to nejde poznat, protože z jeho strany je
 //     všechno správně.
 
 import { describe, expect, test } from "bun:test";
@@ -21,7 +21,7 @@ type Row = Record<string, unknown>;
 type Query = { from: string; where?: Record<string, unknown>; limit?: number };
 
 /** Db, která umí jen to, co tyhle dvě brány potřebují: přečíst typ obsahu. Obě se ozvou
- * dřív, než se sáhne na cokoli dalšího — což je samo o sobě součást tvrzení. */
+ * dřív, než se sáhne na cokoli dalšího, což je samo o sobě součást tvrzení. */
 const dbWith = (types: Row[]) =>
   ({
     find: async (q: Query) => types.filter((t) => Object.entries(q.where ?? {}).every(([k, v]) => t[k] === v)),
@@ -58,7 +58,7 @@ describe("publikovat jde jen stránku, která splní vlastní schéma", () => {
   });
 
   test("prázdný řetězec je totéž co nevyplněno", async () => {
-    // Editor ukládá nevyplněné textové pole jako "", ne jako chybějící klíč — kdyby brána
+    // Editor ukládá nevyplněné textové pole jako "", ne jako chybějící klíč. Kdyby brána
     // hlídala jen `undefined`, propustila by přesně ten stav, který v praxi vzniká.
     await expect(assertPublishable(dbWith([AKCE]), page({ startsAt: "" }))).rejects.toThrow(/Začátek/);
     await expect(assertPublishable(dbWith([AKCE]), page({ startsAt: null }))).rejects.toThrow(/Začátek/);
@@ -88,7 +88,7 @@ describe("publikovat jde jen stránku, která splní vlastní schéma", () => {
   });
 
   test("stránka, jejíž typ obsahu už neexistuje, se publikovat DÁ", async () => {
-    // Schéma není, takže není proti čemu měřit — a odmítnout publikaci by tu stránku uvěznilo
+    // Schéma není, takže není proti čemu měřit, a odmítnout publikaci by tu stránku uvěznilo
     // ve stavu, ze kterého ji nemá co dostat ven.
     await expect(assertPublishable(dbWith([]), page({}))).resolves.toBeUndefined();
   });
@@ -103,7 +103,7 @@ describe("slug, který si obsluhuje front-end, se nedá obsadit", () => {
     );
 
   test("rezervovaný slug se odmítne, a hláška řekne PROČ", async () => {
-    // „slug už existuje" by bylo lživé — žádná stránka tam není. Problém je, že tam nikdy
+    // „slug už existuje" by bylo lživé, žádná stránka tam není. Problém je, že tam nikdy
     // nebude vidět.
     const err = (await create("kalendar").catch((e: Error) => e)) as Error;
     expect(err.message).toContain("kalendar");
@@ -119,14 +119,14 @@ describe("slug, který si obsluhuje front-end, se nedá obsadit", () => {
   });
 
   test("volný slug projde branou dál", async () => {
-    // Dojde až na `assertSlugFree`, kterou tahle stub-db neumí — a přesně to je důkaz, že
+    // Dojde až na `assertSlugFree`, kterou tahle stub-db neumí, a přesně to je důkaz, že
     // rezervace nezastavila něco, co zastavit neměla.
     await expect(create("o-nas")).rejects.toThrow(/nemělo se sem vůbec dojít/);
   });
 
   test("bez konfigurace se nerezervuje nic", async () => {
     // Výchozí chování se nesmí změnit: CMS routovací tabulku front-endu nezná a hádat ji
-    // nesmí — seznam, který je z 90 % správně, odmítá slugy, které jsou volné.
+    // nesmí: seznam, který je z 90 % správně, odmítá slugy, které jsou volné.
     const bez = createCmsHandlers();
     await expect(create("kalendar", bez)).rejects.toThrow(/nemělo se sem vůbec dojít/);
   });

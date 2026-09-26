@@ -6,7 +6,7 @@
 //
 // BOTH prefixes occur in the wild and must verify: bcryptjs 2.x emits `$2a$`, while a
 // row checked from a live Contember deployment carried `$2b$` (a newer bcryptjs). An
-// import script must therefore not filter on either prefix — `bcrypt$` is what selects
+// import script must therefore not filter on either prefix: `bcrypt$` is what selects
 // the verifier, and bcrypt.compare handles the rest.
 //
 // This is a unit test on the verification path; upgrade-on-login is covered end-to-end
@@ -47,7 +47,7 @@ test("a frozen $2a$ fixture verifies (guards against a bcryptjs upgrade changing
   expect(await verifyPassword("wrong", imported(FIXTURE_HASH))).toBe(false);
 });
 
-test("the $2b$ variant verifies too — this is what a live Contember tenant DB holds", async () => {
+test("the $2b$ variant verifies too, which is what a live Contember tenant DB holds", async () => {
   // A row read from a production Contember deployment was `$2b$10$…` (60 chars), which
   // also matches what SignUpMutationResolver accepts on its import path.
   const b = (await bcrypt.hash("password123", 10)).replace(/^\$2a\$/, "$2b$");

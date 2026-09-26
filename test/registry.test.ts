@@ -1,7 +1,7 @@
 // Unit test for the DO registry key scheme + enumeration (runtime/registry.ts).
 // The registry is the only source of truth for which (tenant, partition) DOs exist
 // (a DurableObjectNamespace has no list API). The bare-key-for-default rule is a
-// hard backward-compat requirement — existing single-partition data depends on it.
+// hard backward-compat requirement: existing single-partition data depends on it.
 
 import { describe, expect, test } from "bun:test";
 import { listDOs, parseRegistryKey, partitionDoName, registryKey, type KvLister } from "../packages/server/src/runtime/registry";
@@ -39,7 +39,7 @@ describe("registryKey / parseRegistryKey", () => {
 });
 
 describe("partitionDoName", () => {
-  // The DO NAME (idFromName) — distinct from the KV registry key: no `tenant:` prefix.
+  // The DO NAME (idFromName), distinct from the KV registry key: no `tenant:` prefix.
   test("default partition ⇒ bare tenant (byte-for-byte the pre-partition DO name)", () => {
     expect(partitionDoName("acme")).toBe("acme");
     expect(partitionDoName("acme", "default")).toBe("acme");

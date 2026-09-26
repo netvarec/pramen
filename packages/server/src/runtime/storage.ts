@@ -1,4 +1,4 @@
-// File storage — the object-store seam, mirroring the Driver/Dialect seam for SQL.
+// File storage: the object-store seam, mirroring the Driver/Dialect seam for SQL.
 // The sign/upload/download engine is written against a small `StorageAdapter`, so
 // the same flow runs over any object store; R2 is the Cloudflare default.
 //
@@ -13,7 +13,7 @@
 // Why HMAC tokens instead of S3 presigned urls: pramen already owns the edge and a
 // secret; signing is pure WebCrypto over the R2 binding, so it works with the plain
 // R2 binding and stays backend-agnostic. URLs are RELATIVE so the server never
-// needs to know its own public origin — the client resolves them against its base.
+// needs to know its own public origin: the client resolves them against its base.
 
 import { BadRequest, PramenError } from "./errors";
 import type { Files, FileRef, HeadResult } from "../sdk/files";
@@ -47,7 +47,7 @@ export interface StorageAdapter {
   delete(key: string): Promise<void>;
 }
 
-/** R2 — the Cloudflare default. Wraps an R2 bucket binding. Streaming: bytes flow
+/** R2, the Cloudflare default. Wraps an R2 bucket binding. Streaming: bytes flow
  * directly between the client and R2 in the Worker, never through the DO. */
 export class R2Adapter implements StorageAdapter {
   constructor(private readonly bucket: R2Bucket) {}
@@ -157,7 +157,7 @@ function safePrefix(prefix: string): string {
 
 // Sanitize a filename for the QUOTED part of a Content-Disposition header: strip quotes /
 // backslashes (header injection) and everything outside printable ASCII, then bound length.
-// The non-ASCII fold is not cosmetic — `Headers.set` takes a WebIDL ByteString and THROWS on
+// The non-ASCII fold is not cosmetic: `Headers.set` takes a WebIDL ByteString and THROWS on
 // any code point above U+00FF, so an uploaded `报告.pdf` would 500 its own download.
 function safeFilename(name: string): string {
   return codePoints(name, 255).replace(/[^\x20-\x7e]|["\\]/g, "_");
@@ -169,7 +169,7 @@ function rfc5987(name: string): string {
   return encodeURIComponent(codePoints(name, 255)).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
 }
 
-// Truncate by CODE POINT, not UTF-16 unit — a raw slice can cut a surrogate pair in half —
+// Truncate by CODE POINT, not UTF-16 unit (a raw slice can cut a surrogate pair in half)
 // and drop unpaired surrogates, which `encodeURIComponent` throws a URIError on. They can
 // arrive in the INPUT, not just from truncation: JSON admits "\ud800", and one survives the
 // signed token intact (JSON.stringify escapes it back to ASCII, so the TextEncoder never
@@ -182,7 +182,7 @@ function codePoints(name: string, max: number): string {
 }
 
 // The full header value: an ASCII-only quoted fallback for old clients, plus the `filename*`
-// parameter that every current browser prefers — so a non-ASCII name survives the round trip.
+// parameter that every current browser prefers, so a non-ASCII name survives the round trip.
 function contentDisposition(name: string): string {
   return `attachment; filename="${safeFilename(name)}"; filename*=UTF-8''${rfc5987(name)}`;
 }
@@ -199,7 +199,7 @@ export interface FilesConfig {
 
 /** A file token secret must be present and non-trivial, else upload/download tokens
  * would be forgeable (HMAC over an empty/weak key). Below this, file storage is
- * treated as unconfigured — fail closed rather than mint forgeable urls. The dev
+ * treated as unconfigured, failing closed rather than minting forgeable urls. The dev
  * defaults satisfy it; production should set a strong, random FILES_SECRET. */
 export const MIN_FILES_SECRET_LEN = MIN_TOKEN_SECRET_LEN;
 export const isUsableFilesSecret = isUsableSecret;
@@ -250,7 +250,7 @@ const CORS: Record<string, string> = {
   "access-control-allow-methods": "GET, PUT, OPTIONS",
   "access-control-allow-headers": "content-type, authorization",
   // Neither is CORS-safelisted, so without this a browser client that `fetch()`es a download
-  // (rather than navigating to it) reads both as null — and the filename encoding below
+  // (rather than navigating to it) reads both as null, and the filename encoding below
   // would be invisible to exactly the cross-origin SPAs `CORS_ORIGINS` exists for.
   "access-control-expose-headers": "content-disposition, content-length",
 };
@@ -288,7 +288,7 @@ export async function handleFileRequest(
       if (token.op !== "put") return fileError(403, "forbidden", "token is not an upload token");
 
       // Size cap. R2 requires a known length for a streamed body, so a capped upload
-      // must declare a content-length — that closes the "length-less unbounded body"
+      // must declare a content-length, which closes the "length-less unbounded body"
       // hole (an over-declared body would also fail R2's stream-length check, and a
       // mismatched short declaration can't exceed the cap). The post-put check is a
       // safety net for buffering adapters (MemoryAdapter).
@@ -333,7 +333,7 @@ export async function handleFileRequest(
   }
 }
 
-// A media key is `<tenant>/media/<...>` — the `media/` prefix (set by @pramen/cms's
+// A media key is `<tenant>/media/<...>`, and the `media/` prefix (set by @pramen/cms's
 // signMediaUpload) is what makes a blob PUBLIC. This guard ensures the public /media
 // route can only serve media-prefixed blobs, never a signed private attachment.
 const MEDIA_KEY = /^[^/]+\/media\/[^/][^\0]*$/;
@@ -342,19 +342,19 @@ const MEDIA_KEY = /^[^/]+\/media\/[^/][^\0]*$/;
  * auth (published-site assets are public; the random tenant-scoped key is the capability).
  * Returns a Response for any `/media/*` path, or null if not a media request. Restricted
  * to `<tenant>/media/` keys so it can't serve arbitrary (e.g. signed-private) objects. */
-/** Content types the browser treats as an ACTIVE DOCUMENT — one that can run script when
+/** Content types the browser treats as an ACTIVE DOCUMENT: one that can run script when
  * opened at the top level, rather than being rendered as inert media.
  *
  * `nosniff` stops a browser guessing its way INTO one of these; it does nothing when the
  * type is declared outright. And it is declared by the uploader: `signMediaUpload` takes
  * `contentType` from its input with no allow-list, so an editor can upload
- * `image/svg+xml` — a perfectly ordinary thing to want, since SVG is a real image format —
+ * `image/svg+xml` (a perfectly ordinary thing to want, since SVG is a real image format)
  * and that file, opened at `/media/<key>`, runs its own script on THIS origin.
  *
  * Which matters because of the embedded topology: `@pramen/cms-astro` mounts the editor on
  * the same origin that serves `/media`, and the editor keeps its session token in
  * `localStorage` there. So without this, "editor uploads an SVG, admin clicks Preview" is
- * an editor-to-admin token theft — and `setUserRoles` is admin-gated precisely because those
+ * an editor-to-admin token theft, and `setUserRoles` is admin-gated precisely because those
  * roles are not meant to be equivalent. */
 const ACTIVE_TYPES = new Set(["text/html", "application/xhtml+xml", "image/svg+xml", "text/xml", "application/xml"]);
 
@@ -364,12 +364,12 @@ const ACTIVE_TYPES = new Set(["text/html", "application/xhtml+xml", "image/svg+x
  *
  * Applied ONLY to the active types, deliberately. Sandboxing everything would be simpler to
  * describe and would risk the browser's built-in PDF viewer, which is a plugin-ish surface a
- * blanket sandbox can disable — breaking a legitimate preview to defend against a type that
+ * blanket sandbox can disable, breaking a legitimate preview to defend against a type that
  * was never executable. An SVG still RENDERS under this; only its script does not run. */
 const ACTIVE_TYPE_CSP = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
 
 /** Whether a stored content type needs the sandbox above. Parameters after `;` (a charset)
- * are stripped — `text/html; charset=utf-8` is still html. */
+ * are stripped, so `text/html; charset=utf-8` is still html. */
 export function isActiveType(contentType: string | null | undefined): boolean {
   const base = (contentType ?? "").split(";")[0]?.trim().toLowerCase() ?? "";
   return ACTIVE_TYPES.has(base);

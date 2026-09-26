@@ -1,4 +1,4 @@
-// ACL primitives — the portable definition layer: role(), policy(), allow(),
+// ACL primitives: the portable definition layer, role(), policy(), allow(),
 // deny(), $identity(), $now(). Resolution semantics live in runtime/acl.ts.
 //
 // Model: an Identity carries one or more roles. A policy grants a (role) access
@@ -15,7 +15,7 @@ export interface Identity {
   role?: string;
   roles?: string[];
   /** The verified token's `exp` (epoch seconds), when present. Carried so a long-lived
-   * WebSocket — whose identity is fixed at upgrade and never re-verified — can enforce
+   * WebSocket (whose identity is fixed at upgrade and never re-verified) can enforce
    * expiry per message (see durable-object.ts). Absent for non-expiring / synthetic
    * (callPrivileged) identities, which are therefore never treated as expired. */
   exp?: number;
@@ -51,7 +51,7 @@ export interface InputMarker {
 }
 
 /** Reference a request-input field in a policy `where`, resolved per request. The
- * grant matches only the row(s) whose column equals the supplied value — so a
+ * grant matches only the row(s) whose column equals the supplied value, so a
  * caller can read a row only by presenting its unguessable key, without being able
  * to enumerate. An absent input value makes the rule match nothing (safe deny). */
 export function $input(path: string): InputMarker {
@@ -72,21 +72,21 @@ export interface NowMarker {
 }
 
 /** The current UTC instant in a policy `where`, resolved per request, as an ISO-8601
- * string with a `Z` suffix — exactly what `new Date().toISOString()` produces.
+ * string with a `Z` suffix, exactly what `new Date().toISOString()` produces.
  *
  * This is what makes a time boundary an ACL predicate rather than a filter every
  * handler has to remember: `{ publishedAt: { lte: $now() } }` hides a row scheduled
  * for the future from every caller the policy governs, not merely from the queries
- * that thought to ask. `{ publishedAt: { isNull: false } }` cannot express it — a
+ * that thought to ask. `{ publishedAt: { isNull: false } }` cannot express it: a
  * future timestamp is non-null, so a scheduled row would be readable the moment it
  * is saved.
  *
  * Comparison is lexicographic TEXT, which is exact WITHIN one format and wrong across two.
  * Both `'YYYY-MM-DD HH:MM:SS'` and the ISO form open with the same date, so values on
- * different dates still order correctly — it is the SAME date that breaks, where index 10
+ * different dates still order correctly. It is the SAME date that breaks, where index 10
  * decides and a space (0x20) always sorts below `T` (0x54). A space-form value dated today
  * therefore compares as less than this marker whatever its time-of-day, so a row scheduled
- * for later today reads as already past. The column must hold ISO-8601 UTC —
+ * for later today reads as already past. The column must hold ISO-8601 UTC, from
  * `new Date().toISOString()`.
  *
  * `expr.now()` produces exactly that, so a column defaulted with it is directly comparable
@@ -137,7 +137,7 @@ export interface WhereRule {
 }
 
 /** A per-row (cell-level) field grant: `fields` are permitted only for rows that
- * match `when`. Additive over the policy's flat `fields` — a conditional grant can
+ * match `when`. Additive over the policy's flat `fields`: a conditional grant can
  * only ever ADD fields, never remove them. */
 export interface ConditionalFields {
   fields: string[];
@@ -146,7 +146,7 @@ export interface ConditionalFields {
 }
 
 /** Escape hatch for cell-level ACL: a late per-row resolver. Given the identity and
- * the fetched (or candidate, on write) row, returns the extra permitted fields —
+ * the fetched (or candidate, on write) row, returns the extra permitted fields,
  * additive over `fields`; `null` means all fields for that row. */
 export type FieldsFn = (identity: Identity | null, row: Row) => string[] | null;
 
@@ -177,7 +177,7 @@ export interface PolicyRules {
   /** Permitted fields. Omit = all fields. On read = projection; on write = settable columns. */
   fields?: string[];
   /** Cell-level (per-row) field grants applied only to rows matching `when`.
-   * Additive over `fields`. On read = projection; on write = settable columns —
+   * Additive over `fields`. On read = projection; on write = settable columns,
    * evaluated against the candidate (insert) or post-merge (update) row. */
   conditionalFields?: ConditionalFields[];
   /** Escape hatch: a late per-row field resolver. Additive over `fields`. */
@@ -193,7 +193,7 @@ export interface PolicyRules {
 
 // --- dynamic resolvers: a policy whose rule is computed per request ---
 
-/** Read surface given to a resolver — runs in SYSTEM mode (bypasses ACL), so a
+/** Read surface given to a resolver. Runs in SYSTEM mode (bypasses ACL), so a
  * resolver can consult the DB to decide access without recursing into itself. */
 export interface ResolverDb {
   find(spec: {

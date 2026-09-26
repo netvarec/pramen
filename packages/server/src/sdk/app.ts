@@ -1,4 +1,4 @@
-// createApp — binds the handler factories to a concrete schema so `ctx.db` is
+// createApp: binds the handler factories to a concrete schema so `ctx.db` is
 // fully typed (table names, where columns/values, row results, insert shapes).
 //
 //   const schema = defineSchema({ notes: Entity(t => ({ ... })) });

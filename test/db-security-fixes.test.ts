@@ -1,5 +1,5 @@
 // Unit tests for the confirmed security/correctness fixes in the Db read/write
-// engine, ACL resolver, and read-engine — driven directly over a bun:sqlite Driver
+// engine, ACL resolver, and read-engine, driven directly over a bun:sqlite Driver
 // (no server). Covers: C1 marker-operator injection, H1 relation-where nested
 // AND/OR field check, H2 relation-load hidden leak, H3 aggregate hidden leak, H4
 // null-aware keyset pagination, H5 hasMany custom-PK join, H6 relation-traversal

@@ -1,8 +1,8 @@
 // Rewriting timestamps written before `expr.now()` emitted ISO-8601.
 //
-// `expr.now()` used to emit `datetime('now')` — the `CURRENT_TIMESTAMP` space form,
+// `expr.now()` used to emit `datetime('now')`, the `CURRENT_TIMESTAMP` space form,
 // `'2026-09-03 21:33:07'`. It now emits `'2026-09-03T21:33:07.222Z'`. Changing a column's
-// DEFAULT is a MODIFIER change, so `migrate()` rebuilds the table — and a rebuild copies
+// DEFAULT is a MODIFIER change, so `migrate()` rebuilds the table, and a rebuild copies
 // existing values through untouched. New rows would get the new shape and old rows would
 // keep the old one, in the same column.
 //
@@ -11,7 +11,7 @@
 // on DIFFERENT dates the date prefix decides and ordering is still correct. It is values on
 // the SAME date that break: index 10 is ` ` (0x20) in the space form and `T` (0x54) in ISO,
 // so a same-day space-form value always sorts BEFORE a same-day ISO one whatever the
-// time-of-day — 23:00 in the old shape sorts below 01:00 in the new.
+// time-of-day: 23:00 in the old shape sorts below 01:00 in the new.
 //
 // Which makes the deploy window itself the blast radius: the rows written just before and
 // just after the change are exactly the same-day pairs that invert. And a `{ lte: $now() }`
@@ -21,7 +21,7 @@
 //
 // So the format change comes with a rewrite, and the rewrite is a DATA migration: it is
 // imperative, it must run exactly once, and it must fail closed. Declaring it is the app's
-// job — this builds it.
+// job; this builds it.
 
 import { DEFAULT_PARTITION, ISO_NOW_SQL, entitiesInPartition } from "./schema";
 import type { DataMigration, MigrationContext } from "./handlers";
@@ -33,19 +33,19 @@ export const LEGACY_NOW_SQL = "datetime('now')";
 /** Columns to rewrite beyond the ones the schema identifies, as `{ table: [column, …] }`.
  *
  * The schema can only find columns whose DEFAULT is `expr.now()`. A column written by
- * HANDLER code in the same space form — `@pramen/cms` stamped `cms_pages.publishedAt` that
- * way — has no marker on it at all, so the app has to name it. `@pramen/cms` exports its
+ * HANDLER code in the same space form (`@pramen/cms` stamped `cms_pages.publishedAt` that
+ * way) has no marker on it at all, so the app has to name it. `@pramen/cms` exports its
  * own set as `CMS_LEGACY_TIMESTAMP_COLUMNS`. */
 export type ExtraTimestampColumns = Readonly<Record<string, readonly string[]>>;
 
 export interface IsoTimestampBackfillOpts {
   /** Ledger id. Defaults to `pramen:iso-timestamps`. Override only if you have already
-   * used that id for something else — it is the key that makes this run once. */
+   * used that id for something else, since it is the key that makes this run once. */
   id?: string;
   /** Partition to run in. A partition-DO only sees its own tables, so an app with several
    * partitions declares one of these per partition, each with its own id. */
   partition?: string;
-  /** Columns the schema cannot identify — see {@link ExtraTimestampColumns}. */
+  /** Columns the schema cannot identify. See {@link ExtraTimestampColumns}. */
   extraColumns?: ExtraTimestampColumns;
 }
 
@@ -100,7 +100,7 @@ export function isoTimestampBackfill(opts: IsoTimestampBackfillOpts = {}): DataM
 }
 
 /**
- * Which `(table, column)` pairs this migration touches — the schema's `expr.now()` columns
+ * Which `(table, column)` pairs this migration touches: the schema's `expr.now()` columns
  * in `partition`, plus whatever the app named.
  *
  * Exported for the tests and for anyone who wants to see the list before running it. An
@@ -121,7 +121,7 @@ export function timestampColumns(
     const cols = Object.entries(fields)
       // Both spellings: a store written by an older build has the legacy default recorded
       // in its own DDL, and `migrate()` may not have rebuilt the table yet when this runs
-      // (it does — migrations run after — but the check costs nothing and makes the set
+      // (it does, since migrations run after, but the check costs nothing and makes the set
       // independent of that ordering).
       .filter(([, f]) => f.defaultExpr === ISO_NOW_SQL || f.defaultExpr === LEGACY_NOW_SQL)
       .map(([name]) => name);
@@ -141,6 +141,6 @@ export function timestampColumns(
 }
 
 /** Double-quote an identifier for SQLite. Table and column names here come from the app's
- * own schema, never from a request — but the SQL is built by concatenation, so they are
+ * own schema, never from a request, but the SQL is built by concatenation, so they are
  * quoted rather than trusted to be quote-free. */
 const q = (ident: string): string => `"${ident.replace(/"/g, '""')}"`;
