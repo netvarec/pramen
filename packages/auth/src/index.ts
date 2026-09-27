@@ -441,7 +441,8 @@ export const authHandlers = createAuthHandlers();
 //
 // A one-time, single-use, time-boxed link emailed to the user. The flow is two
 // anonymous mutations:
-//   requestMagicLink({ email })  -> mints a token, persists its HASH + expiry, and
+//   requestMagicLink({ email })  -> revokes any pending link and enqueues the send task,
+//                                   which mints a token, persists its HASH + expiry and
 //                                   calls your sendEmail. Always returns { ok: true }
 //                                   (no account enumeration: the response is the
 //                                   same whether or not the email has an account).
@@ -535,14 +536,15 @@ export interface MagicLinkOptions {
  * const tasks    = { ...cmsTasks,    ...magicLink.tasks };
  * ```
  *
- * The `requestMagicLink` handler writes the token and ENQUEUES a task (atomic with
- * the write via the transactional outbox); the drainer runs `sendMagicLinkEmail`
- * AFTER commit, outside the mutation's storage transaction. This avoids the class
+ * The `requestMagicLink` handler revokes any pending link and ENQUEUES a task (atomic
+ * with the write via the transactional outbox); the drainer runs `sendMagicLinkEmail`
+ * AFTER commit, outside the mutation's storage transaction, and that task mints the
+ * token, so it is never at rest in the outbox. This avoids the class
  * of failure where a slow SMTP/API call holds the storage lock long enough for the
  * store to time out and reset the underlying object.
  *
- * You MUST spread `magicLink.tasks` into your app's task map. Without it, tokens
- * get written but the email never sends (the drainer retries then dead-letters).
+ * You MUST spread `magicLink.tasks` into your app's task map. Without it, no link
+ * is ever minted and the email never sends (the drainer retries then dead-letters).
  * Both handlers are anonymous and gate nothing; the token is the capability. */
 export function createMagicLinkAuth(opts: MagicLinkOptions): AuthModule {
   const linkTtlMs = (opts.linkTtlSeconds ?? 900) * 1000;
@@ -585,17 +587,9 @@ export function createMagicLinkAuth(opts: MagicLinkOptions): AuthModule {
         }
         // Reuse magic-link machinery so login flow is identical whether the user was
         // self-signed-up or admin-invited.
-        const token = mintToken();
-        const tokenHash = await sha256Hex(token);
+        // Revoke any pending link now; the task mints the new one (see sendMagicLinkEmail).
         await ctx.db.exec("DELETE FROM auth_magic_links WHERE email = ?", email);
-        await ctx.db.exec(
-          "INSERT INTO auth_magic_links (tokenHash, email, expiresAt, createdAt) VALUES (?, ?, ?, ?)",
-          tokenHash,
-          email,
-          now + linkTtlMs,
-          now,
-        );
-        await ctx.tasks.enqueue({ kind: "sendMagicLinkEmail", payload: { email, token } });
+        await ctx.tasks.enqueue({ kind: "sendMagicLinkEmail", payload: { email } });
         return { ok: true, created: existing.length === 0 };
       },
       { auth: ["admin"] },
@@ -603,23 +597,11 @@ export function createMagicLinkAuth(opts: MagicLinkOptions): AuthModule {
 
     requestMagicLink: mutation(
       async (ctx, input: { email: string }) => {
-        const token = mintToken();
-        const tokenHash = await sha256Hex(token);
-        const now = Date.now();
-        // Invalidate any prior pending links for this email, so only the latest works.
+        // Invalidate any prior pending links for this email, so a request revokes them at
+        // once. The new token is minted by the task, never here: the outbox payload is
+        // stored as plain JSON, and a raw token in it would undo hashing the link row (#73).
         await ctx.db.exec("DELETE FROM auth_magic_links WHERE email = ?", input.email);
-        await ctx.db.exec(
-          "INSERT INTO auth_magic_links (tokenHash, email, expiresAt, createdAt) VALUES (?, ?, ?, ?)",
-          tokenHash,
-          input.email,
-          now + linkTtlMs,
-          now,
-        );
-        // Defer the actual email send. Enqueue is a DB write into the outbox, so it
-        // commits atomically with the token insert. If commit fails, the task never
-        // runs. If the task fails, retries + eventual dead-letter; the token expires
-        // (linkTtl) and the user re-requests.
-        await ctx.tasks.enqueue({ kind: "sendMagicLinkEmail", payload: { email: input.email, token } });
+        await ctx.tasks.enqueue({ kind: "sendMagicLinkEmail", payload: { email: input.email } });
         return { ok: true };
       },
       { input: parseEmail },
@@ -670,9 +652,23 @@ export function createMagicLinkAuth(opts: MagicLinkOptions): AuthModule {
   };
 
   const tasks: AppTaskMap = {
+    // Mints the token itself, so it exists only in memory and in the email. Each attempt
+    // mints afresh and replaces the previous row: a retry after a failed send leaves no
+    // stale-but-valid link behind. An outbox row from before #73 may still carry a
+    // `token`; it is ignored, and that row's link simply expires unsent.
     sendMagicLinkEmail: async (ctx, payload) => {
-      const p = payload as { email: string; token: string };
-      await opts.sendEmail(ctx, { email: p.email, token: p.token });
+      const { email } = payload as { email: string };
+      const token = mintToken();
+      const now = Date.now();
+      await ctx.db.exec("DELETE FROM auth_magic_links WHERE email = ?", email);
+      await ctx.db.exec(
+        "INSERT INTO auth_magic_links (tokenHash, email, expiresAt, createdAt) VALUES (?, ?, ?, ?)",
+        await sha256Hex(token),
+        email,
+        now + linkTtlMs,
+        now,
+      );
+      await opts.sendEmail(ctx, { email, token });
     },
   };
 
@@ -928,20 +924,28 @@ export function authPolicies(opts: {
 // random token, persist only its SHA-256 HASH + an expiry (in the shared
 // `auth_email_tokens` table, spread `emailTokenSchema`), email the raw token from a TASK
 // (off the mutation's storage transaction, so a slow send can't hold the store lock), and
-// redeem it once. Both are transport-agnostic: you supply `sendEmail`; pramen owns the
+// redeem it once. The token is minted INSIDE that task, never in the mutation: the task
+// payload sits in `_pramen_outbox` as plain JSON (and in every backup of it), so a token
+// passed through it would be readable at rest next to its carefully hashed row (#73). Both are transport-agnostic: you supply `sendEmail`; pramen owns the
 // token lifecycle. Wire the returned `tasks` into your app's task map, or the token is
 // written but the email never sends.
 
 const PURPOSE_RESET = "reset";
 const PURPOSE_VERIFY = "verify";
 
+/** Drop every pending token of `purpose` for `username`. A request revokes the old link at
+ * once, before its send task mints the new one. */
+async function revokeEmailTokens(ctx: HandlerContext, purpose: string, username: string): Promise<void> {
+  await ctx.db.exec("DELETE FROM auth_email_tokens WHERE purpose = ? AND username = ?", purpose, username);
+}
+
 /** Mint a one-time token for `username`, invalidate any prior pending token of the same
  * purpose for that user (only the latest works), and persist its hash + expiry. Returns
- * the raw token (the caller enqueues the send task with it). */
+ * the raw token. Called from the send TASK, which hands it straight to `sendEmail`. */
 async function issueEmailToken(ctx: HandlerContext, purpose: string, username: string, email: string, expiresAt: number): Promise<string> {
   const token = mintToken();
   const tokenHash = await sha256Hex(token);
-  await ctx.db.exec("DELETE FROM auth_email_tokens WHERE purpose = ? AND username = ?", purpose, username);
+  await revokeEmailTokens(ctx, purpose, username);
   await ctx.db.exec(
     "INSERT INTO auth_email_tokens (tokenHash, purpose, username, email, expiresAt, createdAt) VALUES (?, ?, ?, ?, ?, ?)",
     tokenHash,
@@ -1003,15 +1007,15 @@ export function createPasswordReset(opts: PasswordResetOptions): AuthModule {
 
   const handlers: HandlerMap = {
     /** Anonymous: request a reset link for `email`. Resolves the address to an ACTIVE
-     * account and, only then, mints a token + enqueues the send, but the response is the
+     * account and, only then, enqueues the send (which mints the token), but the response is the
      * same `{ ok: true }` whether or not any account matched (no enumeration). */
     requestPasswordReset: mutation(
       async (ctx, input: { email: string }) => {
         const rows = await ctx.db.exec(`SELECT username, active FROM ${table} WHERE email = ? LIMIT 1`, input.email);
         const u = rows[0];
         if (u && isActive(u.active)) {
-          const token = await issueEmailToken(ctx, PURPOSE_RESET, String(u.username), input.email, Date.now() + linkTtlMs);
-          await ctx.tasks.enqueue({ kind: "sendPasswordResetEmail", payload: { email: input.email, token, username: String(u.username) } });
+          await revokeEmailTokens(ctx, PURPOSE_RESET, String(u.username));
+          await ctx.tasks.enqueue({ kind: "sendPasswordResetEmail", payload: { email: input.email, username: String(u.username) } });
         }
         return { ok: true };
       },
@@ -1037,8 +1041,9 @@ export function createPasswordReset(opts: PasswordResetOptions): AuthModule {
 
   const tasks: AppTaskMap = {
     sendPasswordResetEmail: async (ctx, payload) => {
-      const p = payload as { email: string; token: string; username: string };
-      await opts.sendEmail(ctx, p);
+      const { email, username } = payload as { email: string; username: string };
+      const token = await issueEmailToken(ctx, PURPOSE_RESET, username, email, Date.now() + linkTtlMs);
+      await opts.sendEmail(ctx, { email, token, username });
     },
   };
 
@@ -1078,8 +1083,8 @@ export function createEmailVerification(opts: EmailVerificationOptions): AuthMod
         const email = u && typeof u.email === "string" ? u.email : "";
         if (!email) throw new BadRequest("no email on file. Set one with changeEmail first");
         if (u.emailVerified != null) return { ok: true, alreadyVerified: true };
-        const token = await issueEmailToken(ctx, PURPOSE_VERIFY, userId, email, Date.now() + linkTtlMs);
-        await ctx.tasks.enqueue({ kind: "sendVerificationEmail", payload: { email, token, username: userId } });
+        await revokeEmailTokens(ctx, PURPOSE_VERIFY, userId);
+        await ctx.tasks.enqueue({ kind: "sendVerificationEmail", payload: { email, username: userId } });
         return { ok: true };
       },
       { auth: "authenticated" },
@@ -1103,8 +1108,9 @@ export function createEmailVerification(opts: EmailVerificationOptions): AuthMod
 
   const tasks: AppTaskMap = {
     sendVerificationEmail: async (ctx, payload) => {
-      const p = payload as { email: string; token: string; username: string };
-      await opts.sendEmail(ctx, p);
+      const { email, username } = payload as { email: string; username: string };
+      const token = await issueEmailToken(ctx, PURPOSE_VERIFY, username, email, Date.now() + linkTtlMs);
+      await opts.sendEmail(ctx, { email, token, username });
     },
   };
 
