@@ -76,15 +76,25 @@ export interface SendEmailBinding {
 export class CloudflareEmailAdapter implements MailAdapter {
   constructor(private readonly binding: SendEmailBinding) {}
   async send(message: MailMessage & { from: MailAddress }): Promise<void> {
-    await this.binding.send({
+    // The binding type-checks every key it is given: `name: undefined` is "not of type
+    // 'string'" and the send throws, so an unset MAIL_FROM_NAME failed every mail (#66).
+    // Absent optionals must be absent keys, at every level.
+    const out: Parameters<SendEmailBinding["send"]>[0] = {
       to: message.to,
-      from: message.from,
+      from: bindingAddress(message.from),
       subject: message.subject,
-      text: message.text,
-      html: message.html,
-      replyTo: message.replyTo,
-    });
+    };
+    if (message.text !== undefined) out.text = message.text;
+    if (message.html !== undefined) out.html = message.html;
+    if (message.replyTo !== undefined) {
+      out.replyTo = typeof message.replyTo === "string" ? message.replyTo : bindingAddress(message.replyTo);
+    }
+    await this.binding.send(out);
   }
+}
+
+function bindingAddress(a: MailAddress): MailAddress {
+  return a.name ? { email: a.email, name: a.name } : { email: a.email };
 }
 
 /** Mailgun: an HTTP transport, for when Cloudflare Email Sending cannot be used.
@@ -183,7 +193,7 @@ export function createMail(env: EnvBag, kv?: Kv): Mail {
   const fromAddr = typeof env.MAIL_FROM === "string" && env.MAIL_FROM ? env.MAIL_FROM : undefined;
   const str = (k: string): string | undefined =>
     typeof env[k] === "string" && (env[k] as string) ? (env[k] as string) : undefined;
-  const name = typeof env.MAIL_FROM_NAME === "string" ? env.MAIL_FROM_NAME : undefined;
+  const name = str("MAIL_FROM_NAME");
 
   const mailgunKey = str("MAILGUN_API_KEY");
   const mailgunDomain = str("MAILGUN_DOMAIN");
