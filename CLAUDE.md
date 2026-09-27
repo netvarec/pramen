@@ -64,7 +64,7 @@ serves a dashboard at `/__dashboard`. The e2e suite still boots real `wrangler d
 (miniflare); run `bun run dev:wrangler` once before deploying to catch any
 Bun-vs-workerd differences.
 
-> pramen uses the published **lopata `^0.19.2`** from npm. It carries the two fixes
+> pramen uses the published **lopata `^0.24.0`** from npm. Since 0.19.2 it carries the two fixes
 > pramen relies on: the proxy-to-DO deadlock (the canonical
 > `stub.fetch(new Request(request, { headers }))` tripped a Bun `new Request(req)`
 > stream-body clone bug) and DO SQLite surfacing `RETURNING` rows from `exec()`.

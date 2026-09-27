@@ -26,9 +26,9 @@
     "test": "bun test"
   },
   "devDependencies": {
-    "@buzola/router": "^0.0.12",
+    "@buzola/router": "^0.0.16",
     "@cloudflare/workers-types": "^4.20250101.0",
-    "@oxlint/plugins": "1.79.0",
+    "@oxlint/plugins": "1.85.0",
     "@pramen/admin": "workspace:*",
     "@pramen/analytics": "workspace:*",
     "@pramen/auth": "workspace:*",
@@ -42,12 +42,12 @@
     "@types/react": "^19.0.0",
     "bcryptjs": "2.4.3",
     "bun-types": "^1.4.0",
-    "lopata": "^0.19.2",
-    "oblaka-iac": "^0.0.16",
-    "oxlint": "1.79.0",
+    "lopata": "^0.24.0",
+    "oblaka-iac": "^0.0.18",
+    "oxlint": "1.85.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "typescript": "^5.7.0",
-    "wrangler": "^4.101.0"
+    "wrangler": "^4.141.0"
   }
 }
