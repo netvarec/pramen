@@ -215,6 +215,23 @@ describe("dashboard statistics", () => {
     expect(await loadCollectionStat(api, "clubs")).toEqual({ value: 2, label: "záznamy celkem", detail: "Publikováno 1 · v konceptu 1" });
   });
 
+  test("a collection without drafts says its rows are live instead of splitting them", async () => {
+    // A plain table's rows carry no status, so the split would read "Publikováno 0 · v konceptu
+    // 0" under a tile of rows that are all on the site.
+    const api = apiWith(async () => [{ id: 1 }, { id: 2 }, { id: 3 }]);
+    expect(await loadCollectionStat(api, "tags", undefined, ["revisions"])).toEqual({
+      value: 3,
+      label: "záznamy celkem",
+      detail: "Změny se na webu projeví hned",
+    });
+    expect(await loadCollectionStat(api, "tags", undefined, [])).toMatchObject({ detail: "Změny se na webu projeví hned" });
+  });
+
+  test("a collection with drafts keeps the split", async () => {
+    const api = apiWith(async () => [{ status: "published" }, { status: "draft" }]);
+    expect((await loadCollectionStat(api, "clubs", undefined, ["drafts", "revisions"])).detail).toBe("Publikováno 1 · v konceptu 1");
+  });
+
   test("the noun agrees with the number, by the language's plural rules", async () => {
     // The dashboard this came from once said "1 záznamů celkem" and "3 souborů v knihovně":
     // one fixed genitive for every count.

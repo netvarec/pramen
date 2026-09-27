@@ -70,10 +70,22 @@ export async function loadContentTypeStat(api: DashboardApi, slug: string, label
   return statusStat(rows, labels);
 }
 
-/** A collection's rows, by its slug. */
-export async function loadCollectionStat(api: DashboardApi, slug: string, labels?: CollectionMeta["labels"]): Promise<DashboardStat> {
+/** A collection's rows, by its slug.
+ *
+ * Pass the collection's `supports`. Only a collection with `"drafts"` has a published / draft
+ * split; the rest are plain tables whose rows carry no status, and splitting them would read
+ * "Published 0 · drafts 0" under a tile of rows that are all live. Those get the count and
+ * "Changes go live at once". Without `supports` (a caller that does not know it) the split is
+ * shown, as before. */
+export async function loadCollectionStat(
+  api: DashboardApi,
+  slug: string,
+  labels?: CollectionMeta["labels"],
+  supports?: CollectionMeta["supports"],
+): Promise<DashboardStat> {
   const rows = await allPages((offset, limit) => api.call<StatusRow[]>("collectionList", { collection: slug, limit, offset }), COLLECTION_BATCH);
-  return statusStat(rows, labels);
+  const stat = statusStat(rows, labels);
+  return supports && !supports.includes("drafts") ? { ...stat, detail: copy.t("home.stat.live") } : stat;
 }
 
 /** The media library. */

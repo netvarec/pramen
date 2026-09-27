@@ -846,6 +846,14 @@ there are no backward-compatibility guarantees yet.
 
 ### Fixed
 
+- **The dashboard split collections that have no drafts (`@pramen/cms-theme-gs`).** Every
+  collection tile read "Published 3 · drafts 1", including plain tables whose rows carry no
+  status and are live the moment they are saved, which then read "Published 0 · drafts 0" under
+  a count of rows that were all on the site. `loadCollectionStat` takes the collection's
+  `supports` now, and a collection without `"drafts"` says "Changes go live at once" instead. A
+  caller that does not pass `supports` gets the split as before. Found on abtsmolen, whose tags,
+  people and references are such tables and which had to replace the `home` slot to say so.
+
 - **`buildEditor({ styles })` failed on a relative path (`@pramen/cms-editor`).** Every other
   path the function takes is read from the working directory, and so was this one, but Tailwind
   is spawned with the stylesheet's own directory as its cwd and looked for the relative path a
