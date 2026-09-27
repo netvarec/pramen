@@ -19,6 +19,7 @@
 // bun resolves out of the box. Under plain Node the extensionless imports don't resolve
 // (a property of the whole @pramen/server dist, not just this file), so run via bun.
 
+import nodeProcess from "node:process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { createTableSql } from "./runtime/ddl";
@@ -28,6 +29,11 @@ import { DEFAULT_PARTITION, entitiesInPartition, partitionsOf, type SchemaDef } 
 import { migrationsForPartition } from "./runtime/data-migrations";
 import type { DataMigration } from "./sdk/handlers";
 import { signDevToken } from "./runtime/dev-token";
+
+// workers-types v5 declares a global `process: any` (for nodejs_compat Workers), which
+// wins over @types/node and erases every type here, `exit(): never` included. This file
+// runs under Bun/Node, so take the Node type back once for the whole module.
+const process: NodeJS.Process = nodeProcess;
 
 /** The dev JWT claims `pramen token` mints. See `runtime/dev-token.ts` for the signer. */
 type TokenClaims = { sub: string; roles: string[]; tenants?: string[] };
