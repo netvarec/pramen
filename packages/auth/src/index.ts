@@ -441,9 +441,10 @@ export const authHandlers = createAuthHandlers();
 //
 // A one-time, single-use, time-boxed link emailed to the user. The flow is two
 // anonymous mutations:
-//   requestMagicLink({ email })  -> revokes any pending link and enqueues the send task,
-//                                   which mints a token, persists its HASH + expiry and
-//                                   calls your sendEmail. Always returns { ok: true }
+//   requestMagicLink({ email })  -> revokes any pending link, records a pending request
+//                                   and enqueues the send task, which mints a token,
+//                                   persists its HASH + expiry and calls your sendEmail.
+//                                   Always returns { ok: true }
 //                                   (no account enumeration: the response is the
 //                                   same whether or not the email has an account).
 //   loginWithMagicLink({ token }) -> validates the token (unexpired, unconsumed),
@@ -463,6 +464,8 @@ export const magicLinkSchema = {
     expiresAt: t.int(), // epoch ms
     consumedAt: t.int(), // epoch ms; NULL until redeemed (single-use)
     createdAt: t.int(),
+    requestId: t.text(), // the request this link answers; its send task finds the row by it
+    sentAt: t.int(), // epoch ms the email went out; NULL while pending
   })),
 };
 
@@ -481,6 +484,8 @@ export const emailTokenSchema = {
     expiresAt: t.int(), // epoch ms
     consumedAt: t.int(), // epoch ms; NULL until redeemed (single-use)
     createdAt: t.int(),
+    requestId: t.text(), // the request this token answers; its send task finds the row by it
+    sentAt: t.int(), // epoch ms the email went out; NULL while pending
   })),
 };
 
@@ -492,6 +497,63 @@ async function sha256Hex(s: string): Promise<string> {
 /** 256 bits of entropy, url-safe: the raw link token. */
 function mintToken(): string {
   return b64url(crypto.getRandomValues(new Uint8Array(32)));
+}
+
+// --- emailed tokens: minted by the send task, never at rest in the outbox (#73) ---------
+//
+// A task payload sits in `_pramen_outbox` as plain JSON (and in every backup of it), so a
+// raw token passed through it would undo hashing the token row. The request instead writes
+// a PENDING row under a random `requestId` and enqueues only that id, which is no secret.
+// The send task mints the token and claims ITS OWN row with it, so:
+//  - a request that was superseded (a newer request deleted its row) or made moot (reset
+//    done, email verified) finds no row and sends nothing;
+//  - a redelivery after a successful send sees `sentAt` and sends nothing, so the link
+//    already in the inbox stays the live one (delivery is at-least-once);
+//  - a retry after a FAILED send re-mints over its own row only, never a newer request's;
+//  - two drainers running the same task race on one conditional UPDATE, and one wins.
+// A pending row's `tokenHash` is `pending:<requestId>`, which no sha256 hex digest can
+// equal, so it is never redeemable.
+
+type TokenTable = "auth_magic_links" | "auth_email_tokens";
+
+const pendingHash = (requestId: string): string => `pending:${requestId}`;
+
+/** Mint the token for `requestId` and claim its row with the hash, or return null when the
+ * request is gone or already delivered. The caller sends, then calls `markSent`. */
+async function mintForRequest(ctx: HandlerContext, table: TokenTable, requestId: string, expiresAt: number): Promise<string | null> {
+  const rows = await ctx.db.exec(`SELECT tokenHash, sentAt FROM ${table} WHERE requestId = ? LIMIT 1`, requestId);
+  const row = rows[0];
+  if (!row || row.sentAt != null) return null;
+  const token = mintToken();
+  const claimed = await ctx.db.exec(
+    `UPDATE ${table} SET tokenHash = ?, expiresAt = ? WHERE requestId = ? AND tokenHash = ? AND sentAt IS NULL RETURNING requestId`,
+    await sha256Hex(token),
+    expiresAt,
+    requestId,
+    row.tokenHash,
+  );
+  return claimed.length > 0 ? token : null;
+}
+
+async function markSent(ctx: HandlerContext, table: TokenTable, requestId: string): Promise<void> {
+  await ctx.db.exec(`UPDATE ${table} SET sentAt = ? WHERE requestId = ?`, Date.now(), requestId);
+}
+
+/** A payload enqueued by 0.0.76 or earlier still carries the raw token and no requestId.
+ * Deliver it exactly as the old task did, but only while its row is still live, so a
+ * request superseded or redeemed since is not resent. The plaintext stays in that outbox
+ * row until the drainer prunes it (a dead-lettered row is never pruned). */
+async function legacyTokenIsLive(ctx: HandlerContext, table: TokenTable, token: string): Promise<boolean> {
+  const rows = await ctx.db.exec(`SELECT expiresAt, consumedAt FROM ${table} WHERE tokenHash = ? LIMIT 1`, await sha256Hex(token));
+  const row = rows[0];
+  return !!row && row.consumedAt == null && Number(row.expiresAt) >= Date.now();
+}
+
+interface SendPayload {
+  email: string;
+  username?: string;
+  requestId?: string;
+  token?: string;
 }
 
 function parseEmail(raw: JsonValue): { email: string } {
@@ -551,6 +613,23 @@ export function createMagicLinkAuth(opts: MagicLinkOptions): AuthModule {
   const sessionTtl = opts.sessionTtlSeconds ?? TOKEN_TTL_SECONDS;
   const defaultRoles = opts.defaultRoles ?? DEFAULT_ROLES;
 
+  /** Revoke every link for `email` (only the latest request works), record the new
+   * request as pending and enqueue its send. The task mints the token (see above). */
+  async function requestLink(ctx: HandlerContext, email: string): Promise<void> {
+    const requestId = crypto.randomUUID();
+    const now = Date.now();
+    await ctx.db.exec("DELETE FROM auth_magic_links WHERE email = ?", email);
+    await ctx.db.exec(
+      "INSERT INTO auth_magic_links (tokenHash, email, expiresAt, createdAt, requestId) VALUES (?, ?, ?, ?, ?)",
+      pendingHash(requestId),
+      email,
+      now + linkTtlMs,
+      now,
+      requestId,
+    );
+    await ctx.tasks.enqueue({ kind: "sendMagicLinkEmail", payload: { email, requestId } });
+  }
+
   const handlers: HandlerMap = {
     // Silent token refresh for magic-link users (same table, keyed on username). Reissues
     // at this factory's configured session TTL. Shared implementation with authHandlers:
@@ -587,9 +666,7 @@ export function createMagicLinkAuth(opts: MagicLinkOptions): AuthModule {
         }
         // Reuse magic-link machinery so login flow is identical whether the user was
         // self-signed-up or admin-invited.
-        // Revoke any pending link now; the task mints the new one (see sendMagicLinkEmail).
-        await ctx.db.exec("DELETE FROM auth_magic_links WHERE email = ?", email);
-        await ctx.tasks.enqueue({ kind: "sendMagicLinkEmail", payload: { email } });
+        await requestLink(ctx, email);
         return { ok: true, created: existing.length === 0 };
       },
       { auth: ["admin"] },
@@ -597,11 +674,7 @@ export function createMagicLinkAuth(opts: MagicLinkOptions): AuthModule {
 
     requestMagicLink: mutation(
       async (ctx, input: { email: string }) => {
-        // Invalidate any prior pending links for this email, so a request revokes them at
-        // once. The new token is minted by the task, never here: the outbox payload is
-        // stored as plain JSON, and a raw token in it would undo hashing the link row (#73).
-        await ctx.db.exec("DELETE FROM auth_magic_links WHERE email = ?", input.email);
-        await ctx.tasks.enqueue({ kind: "sendMagicLinkEmail", payload: { email: input.email } });
+        await requestLink(ctx, input.email);
         return { ok: true };
       },
       { input: parseEmail },
@@ -652,23 +725,16 @@ export function createMagicLinkAuth(opts: MagicLinkOptions): AuthModule {
   };
 
   const tasks: AppTaskMap = {
-    // Mints the token itself, so it exists only in memory and in the email. Each attempt
-    // mints afresh and replaces the previous row: a retry after a failed send leaves no
-    // stale-but-valid link behind. An outbox row from before #73 may still carry a
-    // `token`; it is ignored, and that row's link simply expires unsent.
     sendMagicLinkEmail: async (ctx, payload) => {
-      const { email } = payload as { email: string };
-      const token = mintToken();
-      const now = Date.now();
-      await ctx.db.exec("DELETE FROM auth_magic_links WHERE email = ?", email);
-      await ctx.db.exec(
-        "INSERT INTO auth_magic_links (tokenHash, email, expiresAt, createdAt) VALUES (?, ?, ?, ?)",
-        await sha256Hex(token),
-        email,
-        now + linkTtlMs,
-        now,
-      );
+      const { email, requestId, token: legacy } = payload as SendPayload;
+      if (requestId === undefined) {
+        if (legacy !== undefined && (await legacyTokenIsLive(ctx, "auth_magic_links", legacy))) await opts.sendEmail(ctx, { email, token: legacy });
+        return;
+      }
+      const token = await mintForRequest(ctx, "auth_magic_links", requestId, Date.now() + linkTtlMs);
+      if (token === null) return;
       await opts.sendEmail(ctx, { email, token });
+      await markSent(ctx, "auth_magic_links", requestId);
     },
   };
 
@@ -924,38 +990,55 @@ export function authPolicies(opts: {
 // random token, persist only its SHA-256 HASH + an expiry (in the shared
 // `auth_email_tokens` table, spread `emailTokenSchema`), email the raw token from a TASK
 // (off the mutation's storage transaction, so a slow send can't hold the store lock), and
-// redeem it once. The token is minted INSIDE that task, never in the mutation: the task
-// payload sits in `_pramen_outbox` as plain JSON (and in every backup of it), so a token
-// passed through it would be readable at rest next to its carefully hashed row (#73). Both are transport-agnostic: you supply `sendEmail`; pramen owns the
-// token lifecycle. Wire the returned `tasks` into your app's task map, or the token is
-// written but the email never sends.
+// redeem it once. The token is minted INSIDE that task, never in the mutation (see
+// "emailed tokens" above). Both are transport-agnostic: you supply `sendEmail`; pramen
+// owns the token lifecycle. Wire the returned `tasks` into your app's task map, or the
+// request stays pending, no token is ever minted and the email never sends.
 
 const PURPOSE_RESET = "reset";
 const PURPOSE_VERIFY = "verify";
 
-/** Drop every pending token of `purpose` for `username`. A request revokes the old link at
- * once, before its send task mints the new one. */
-async function revokeEmailTokens(ctx: HandlerContext, purpose: string, username: string): Promise<void> {
+/** Revoke every token of `purpose` for `username` (only the latest request works) and
+ * record a new pending request for `email`. Returns its id for the send task's payload. */
+async function requestEmailToken(ctx: HandlerContext, purpose: string, username: string, email: string, expiresAt: number): Promise<string> {
+  const requestId = crypto.randomUUID();
   await ctx.db.exec("DELETE FROM auth_email_tokens WHERE purpose = ? AND username = ?", purpose, username);
-}
-
-/** Mint a one-time token for `username`, invalidate any prior pending token of the same
- * purpose for that user (only the latest works), and persist its hash + expiry. Returns
- * the raw token. Called from the send TASK, which hands it straight to `sendEmail`. */
-async function issueEmailToken(ctx: HandlerContext, purpose: string, username: string, email: string, expiresAt: number): Promise<string> {
-  const token = mintToken();
-  const tokenHash = await sha256Hex(token);
-  await revokeEmailTokens(ctx, purpose, username);
   await ctx.db.exec(
-    "INSERT INTO auth_email_tokens (tokenHash, purpose, username, email, expiresAt, createdAt) VALUES (?, ?, ?, ?, ?, ?)",
-    tokenHash,
+    "INSERT INTO auth_email_tokens (tokenHash, purpose, username, email, expiresAt, createdAt, requestId) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    pendingHash(requestId),
     purpose,
     username,
     email,
     expiresAt,
     Date.now(),
+    requestId,
   );
-  return token;
+  return requestId;
+}
+
+/** The send task for a reset/verify request: re-check that the account still wants this
+ * email (`eligible`), then mint, send and mark it sent. An ineligible request's row is
+ * dropped, so it can never be minted later. */
+async function sendEmailToken(
+  ctx: HandlerContext,
+  payload: SendPayload,
+  expiresAt: number,
+  eligible: (username: string, email: string) => Promise<boolean>,
+  send: (args: { email: string; token: string; username: string }) => void | Promise<void>,
+): Promise<void> {
+  const { email, username = "", requestId, token: legacy } = payload;
+  if (requestId === undefined) {
+    if (legacy !== undefined && (await legacyTokenIsLive(ctx, "auth_email_tokens", legacy))) await send({ email, token: legacy, username });
+    return;
+  }
+  if (!(await eligible(username, email))) {
+    await ctx.db.exec("DELETE FROM auth_email_tokens WHERE requestId = ?", requestId);
+    return;
+  }
+  const token = await mintForRequest(ctx, "auth_email_tokens", requestId, expiresAt);
+  if (token === null) return;
+  await send({ email, token, username });
+  await markSent(ctx, "auth_email_tokens", requestId);
 }
 
 /** Validate a token (right purpose, unexpired, unconsumed) and CONSUME it (single-use).
@@ -1014,8 +1097,9 @@ export function createPasswordReset(opts: PasswordResetOptions): AuthModule {
         const rows = await ctx.db.exec(`SELECT username, active FROM ${table} WHERE email = ? LIMIT 1`, input.email);
         const u = rows[0];
         if (u && isActive(u.active)) {
-          await revokeEmailTokens(ctx, PURPOSE_RESET, String(u.username));
-          await ctx.tasks.enqueue({ kind: "sendPasswordResetEmail", payload: { email: input.email, username: String(u.username) } });
+          const username = String(u.username);
+          const requestId = await requestEmailToken(ctx, PURPOSE_RESET, username, input.email, Date.now() + linkTtlMs);
+          await ctx.tasks.enqueue({ kind: "sendPasswordResetEmail", payload: { email: input.email, username, requestId } });
         }
         return { ok: true };
       },
@@ -1027,9 +1111,11 @@ export function createPasswordReset(opts: PasswordResetOptions): AuthModule {
      * tokens for the user are dropped on success. */
     resetPassword: mutation(
       async (ctx, input: { token: string; newPassword: string }) => {
-        const { username } = await redeemEmailToken(ctx, PURPOSE_RESET, input.token);
-        const rows = await ctx.db.exec(`SELECT active FROM ${table} WHERE username = ? LIMIT 1`, username);
-        if (!rows[0]) throw new Unauthorized("invalid or expired token");
+        const { username, email } = await redeemEmailToken(ctx, PURPOSE_RESET, input.token);
+        const rows = await ctx.db.exec(`SELECT active, email FROM ${table} WHERE username = ? LIMIT 1`, username);
+        // A link mailed to an address the account no longer holds is dead: after a
+        // changeEmail, whoever reads the OLD inbox must not be able to take the account.
+        if (!rows[0] || rows[0].email !== email) throw new Unauthorized("invalid or expired token");
         if (!isActive(rows[0].active)) throw new Unauthorized("account is deactivated");
         await ctx.db.exec(`UPDATE ${table} SET passwordHash = ? WHERE username = ?`, await hashPassword(input.newPassword), username);
         await ctx.db.exec("DELETE FROM auth_email_tokens WHERE purpose = ? AND username = ?", PURPOSE_RESET, username);
@@ -1040,11 +1126,19 @@ export function createPasswordReset(opts: PasswordResetOptions): AuthModule {
   };
 
   const tasks: AppTaskMap = {
-    sendPasswordResetEmail: async (ctx, payload) => {
-      const { email, username } = payload as { email: string; username: string };
-      const token = await issueEmailToken(ctx, PURPOSE_RESET, username, email, Date.now() + linkTtlMs);
-      await opts.sendEmail(ctx, { email, token, username });
-    },
+    // The account must still be active and still hold this address: after a changeEmail
+    // the old address must not receive a live reset link.
+    sendPasswordResetEmail: async (ctx, payload) =>
+      sendEmailToken(
+        ctx,
+        payload as SendPayload,
+        Date.now() + linkTtlMs,
+        async (username, email) => {
+          const rows = await ctx.db.exec(`SELECT active, email FROM ${table} WHERE username = ? LIMIT 1`, username);
+          return !!rows[0] && isActive(rows[0].active) && rows[0].email === email;
+        },
+        (args) => opts.sendEmail(ctx, args),
+      ),
   };
 
   return { handlers, tasks };
@@ -1083,8 +1177,8 @@ export function createEmailVerification(opts: EmailVerificationOptions): AuthMod
         const email = u && typeof u.email === "string" ? u.email : "";
         if (!email) throw new BadRequest("no email on file. Set one with changeEmail first");
         if (u.emailVerified != null) return { ok: true, alreadyVerified: true };
-        await revokeEmailTokens(ctx, PURPOSE_VERIFY, userId);
-        await ctx.tasks.enqueue({ kind: "sendVerificationEmail", payload: { email, username: userId } });
+        const requestId = await requestEmailToken(ctx, PURPOSE_VERIFY, userId, email, Date.now() + linkTtlMs);
+        await ctx.tasks.enqueue({ kind: "sendVerificationEmail", payload: { email, username: userId, requestId } });
         return { ok: true };
       },
       { auth: "authenticated" },
@@ -1100,6 +1194,8 @@ export function createEmailVerification(opts: EmailVerificationOptions): AuthMod
         const current = rows[0] && typeof rows[0].email === "string" ? String(rows[0].email) : null;
         if (current == null || current !== email) throw new Unauthorized("invalid or expired token");
         await ctx.db.exec(`UPDATE ${table} SET emailVerified = ? WHERE username = ?`, Date.now(), username);
+        // Nothing left to verify: a still-pending request must not mint a link later.
+        await ctx.db.exec("DELETE FROM auth_email_tokens WHERE purpose = ? AND username = ?", PURPOSE_VERIFY, username);
         return { ok: true, email };
       },
       { input: parseLinkToken },
@@ -1107,11 +1203,18 @@ export function createEmailVerification(opts: EmailVerificationOptions): AuthMod
   };
 
   const tasks: AppTaskMap = {
-    sendVerificationEmail: async (ctx, payload) => {
-      const { email, username } = payload as { email: string; username: string };
-      const token = await issueEmailToken(ctx, PURPOSE_VERIFY, username, email, Date.now() + linkTtlMs);
-      await opts.sendEmail(ctx, { email, token, username });
-    },
+    // Still unverified and still this address, or there is nothing to verify.
+    sendVerificationEmail: async (ctx, payload) =>
+      sendEmailToken(
+        ctx,
+        payload as SendPayload,
+        Date.now() + linkTtlMs,
+        async (username, email) => {
+          const rows = await ctx.db.exec(`SELECT email, emailVerified FROM ${table} WHERE username = ? LIMIT 1`, username);
+          return !!rows[0] && rows[0].email === email && rows[0].emailVerified == null;
+        },
+        (args) => opts.sendEmail(ctx, args),
+      ),
   };
 
   return { handlers, tasks };

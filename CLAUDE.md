@@ -284,7 +284,15 @@ log) for independent single-writer serialization and storage.
   **hash** + expiry in the shared `emailTokenSchema` table (`auth_email_tokens`, discriminated
   by `purpose` "reset"|"verify"), email the raw token from a TASK (off the write path), redeem
   once. Spread `emailTokenSchema` if you use either; wire the returned `.tasks` or the email
-  never sends. **`createPasswordReset({ sendEmail, table?, linkTtlSeconds? })`** →
+  never sends. **The token is minted INSIDE the send task, never in the request** (#73, all
+  three flows incl. magic link): a task payload is plain JSON in `_pramen_outbox` and in every
+  backup, so a raw token there undid the hashing. The request writes a PENDING row
+  (`tokenHash = pending:<requestId>`, unredeemable) and enqueues only the `requestId`; the task
+  re-checks eligibility (reset: active + same email; verify: same email + still unverified),
+  mints, claims ITS OWN row with one conditional `UPDATE … RETURNING`, sends, stamps `sentAt`.
+  So a superseded or mooted request sends nothing, a redelivery after a successful send is a
+  no-op (the inbox link stays live), and two drainers on one task send one email. Keep that
+  shape for any future emailed secret. **`createPasswordReset({ sendEmail, table?, linkTtlSeconds? })`** →
   `requestPasswordReset({ email })` (anonymous, enumeration-safe: always `{ ok: true }`,
   sends only when an ACTIVE account matches) + `resetPassword({ token, newPassword })`
   (anonymous, single-use, sets `passwordHash`; account must still exist + be active). Default

@@ -78,15 +78,16 @@ export class CloudflareEmailAdapter implements MailAdapter {
   async send(message: MailMessage & { from: MailAddress }): Promise<void> {
     // The binding type-checks every key it is given: `name: undefined` is "not of type
     // 'string'" and the send throws, so an unset MAIL_FROM_NAME failed every mail (#66).
-    // Absent optionals must be absent keys, at every level.
+    // Absent optionals must be absent keys, at every level. `null` counts as absent: a
+    // message built from JSON or stored data carries it, and the binding rejects it too.
     const out: Parameters<SendEmailBinding["send"]>[0] = {
       to: message.to,
       from: bindingAddress(message.from),
       subject: message.subject,
     };
-    if (message.text !== undefined) out.text = message.text;
-    if (message.html !== undefined) out.html = message.html;
-    if (message.replyTo !== undefined) {
+    if (message.text != null) out.text = message.text;
+    if (message.html != null) out.html = message.html;
+    if (message.replyTo != null) {
       out.replyTo = typeof message.replyTo === "string" ? message.replyTo : bindingAddress(message.replyTo);
     }
     await this.binding.send(out);
