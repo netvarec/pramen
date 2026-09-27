@@ -11,10 +11,16 @@
 //
 // Bun shebang, matching the `pramen` bin: the built dist/ uses extensionless ESM imports.
 
+import nodeProcess from "node:process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { signDevToken } from "@pramen/server/dev";
 import { generateBlockTypes, type FieldDefinition } from "./index";
+
+// workers-types v5 declares a global `process: any` (for nodejs_compat Workers), which
+// wins over @types/node and erases every type here, `exit(): never` included. This file
+// runs under Bun/Node, so take the Node type back once for the whole module.
+const process: NodeJS.Process = nodeProcess;
 
 const argv = process.argv.slice(2);
 

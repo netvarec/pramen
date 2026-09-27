@@ -11,7 +11,7 @@ import { compileAcl } from "../packages/server/src/runtime/acl";
 import { Db } from "../packages/server/src/runtime/db";
 import { migrate } from "../packages/server/src/runtime/migrate";
 import { bunSqliteDriver } from "./sqlite-driver";
-import type { JsonValue } from "@pramen/server";
+import type { HandlerContext, JsonValue } from "@pramen/server";
 import {
   authSchema,
   emailTokenSchema,
@@ -28,15 +28,33 @@ import {
 // se jinak nedá založit tak, jak vzniká v provozu, a test na první heslo by stál na ručním
 // INSERTu, tedy na domněnce o tvaru řádku místo na tom, co ho doopravdy zakládá.
 const schema = defineSchema({ ...authSchema, ...emailTokenSchema, ...magicLinkSchema });
-const reset = createPasswordReset({ sendEmail: async () => {} });
-const verify = createEmailVerification({ sendEmail: async () => {} });
+// Every module's `sendEmail` lands here: the token is minted inside the send TASK (#73), so
+// the email is the only place a test (or a user) can read it from.
+interface Sent {
+  kind: string;
+  email: string;
+  token: string;
+}
+let outbox: Sent[] = [];
+/** How many upcoming sends throw, as a transport outage would. */
+let failSends = 0;
+const deliver = (kind: string) => async (_c: HandlerContext, a: { email: string; token: string }) => {
+  if (failSends > 0) {
+    failSends--;
+    throw new Error("transport down");
+  }
+  outbox.push({ kind, ...a });
+};
+const reset = createPasswordReset({ sendEmail: deliver("reset") });
+const verify = createEmailVerification({ sendEmail: deliver("verify") });
 // Jen kvůli `inviteUser`: účet bez hesla se jinak nedá založit tak, jak vzniká v provozu.
-const magic = createMagicLinkAuth({ sendEmail: async () => {} });
+const magic = createMagicLinkAuth({ sendEmail: deliver("magic") });
+const tasks = { ...reset.tasks, ...verify.tasks, ...magic.tasks };
 const SECRET = "test-secret-at-least-16-chars";
 
 interface Enqueued {
   kind: string;
-  payload: { email: string; token: string; username: string };
+  payload: { email: string; username?: string; requestId?: string; token?: string };
 }
 
 async function harness() {
@@ -44,14 +62,33 @@ async function harness() {
   await migrate(driver, schema);
   const db = new Db(driver, { acl: compileAcl([]), identity: null, schema, system: true }, schema);
   const enqueued: Enqueued[] = [];
+  outbox = [];
+  failSends = 0;
+  const sent = outbox;
+  /** Run a recorded task the way the drainer would. */
+  const runTask = (t: Enqueued) => Promise.resolve(tasks[t.kind](ctx(), t.payload, { id: t.kind, attempts: 1 }));
   // A minimal handler ctx: system Db (the handlers' authorization is the token, not the
-  // ACL), an env with AUTH_SECRET (signup signs a token), a task sink that captures the
-  // payload (so the test can read the token that would have been emailed), and an identity.
-  const ctx = (identity: { userId: string; roles?: string[] } | null = null) =>
-    ({ db, env: { AUTH_SECRET: SECRET }, identity, tasks: { enqueue: async (t: Enqueued) => void enqueued.push(t) } }) as never;
+  // ACL), an env with AUTH_SECRET (signup signs a token), an identity, and a task sink that
+  // records the payload and, unless `drain` is off, runs the task right away, so the
+  // emailed token shows up in `sent`. With `drain: false` a test runs tasks itself, in
+  // whatever order a real outbox could.
+  const ctx = (identity: { userId: string; roles?: string[] } | null = null, { drain = true } = {}): never => {
+    const c = {
+      db,
+      env: { AUTH_SECRET: SECRET },
+      identity,
+      tasks: {
+        enqueue: async (t: Enqueued) => {
+          enqueued.push(t);
+          if (drain) await runTask(t);
+        },
+      },
+    };
+    return c as never;
+  };
   const run = (h: { run: (c: never, i: never) => unknown }, c: never, input?: unknown) => Promise.resolve().then(() => h.run(c, input));
   const rawUser = async (username: string) => (await driver.exec("SELECT * FROM auth_users WHERE username = ?", [username]))[0];
-  return { driver, db, enqueued, ctx, run, rawUser };
+  return { driver, db, enqueued, sent, ctx, run, runTask, rawUser };
 }
 
 // Seed a password user (optionally with an email) via the real signup handler.
@@ -92,7 +129,7 @@ describe("password reset", () => {
     expect(req.ok).toBe(true);
     expect(h.enqueued).toHaveLength(1);
     expect(h.enqueued[0].kind).toBe("sendPasswordResetEmail");
-    const token = h.enqueued[0].payload.token;
+    const token = h.sent[0].token;
 
     const done = (await h.run(reset.handlers.resetPassword, h.ctx(), { token, newPassword: "brandnewpass" })) as { ok: boolean };
     expect(done.ok).toBe(true);
@@ -113,7 +150,7 @@ describe("password reset", () => {
     const h = await harness();
     await seedUser(h, "ada", "oldpassword", "ada@example.com");
     await h.run(reset.handlers.requestPasswordReset, h.ctx(), { email: "ada@example.com" });
-    const token = h.enqueued[0].payload.token;
+    const token = h.sent[0].token;
     await h.run(reset.handlers.resetPassword, h.ctx(), { token, newPassword: "firstchange" });
     await expect(h.run(reset.handlers.resetPassword, h.ctx(), { token, newPassword: "secondchange" })).rejects.toThrow(/invalid or expired/);
   });
@@ -122,7 +159,7 @@ describe("password reset", () => {
     const h = await harness();
     await seedUser(h, "ada", "oldpassword", "ada@example.com");
     await h.run(reset.handlers.requestPasswordReset, h.ctx(), { email: "ada@example.com" });
-    const token = h.enqueued[0].payload.token;
+    const token = h.sent[0].token;
     // Force the stored token to be in the past.
     await h.driver.exec("UPDATE auth_email_tokens SET expiresAt = ? WHERE purpose = 'reset'", [Date.now() - 1000]);
     await expect(h.run(reset.handlers.resetPassword, h.ctx(), { token, newPassword: "whatever1" })).rejects.toThrow(/invalid or expired/);
@@ -132,9 +169,9 @@ describe("password reset", () => {
     const h = await harness();
     await seedUser(h, "ada", "oldpassword", "ada@example.com");
     await h.run(reset.handlers.requestPasswordReset, h.ctx(), { email: "ada@example.com" });
-    const first = h.enqueued[0].payload.token;
+    const first = h.sent[0].token;
     await h.run(reset.handlers.requestPasswordReset, h.ctx(), { email: "ada@example.com" });
-    const second = h.enqueued[1].payload.token;
+    const second = h.sent[1].token;
     expect(second).not.toBe(first);
     await expect(h.run(reset.handlers.resetPassword, h.ctx(), { token: first, newPassword: "whatever1" })).rejects.toThrow(/invalid or expired/);
     const ok = (await h.run(reset.handlers.resetPassword, h.ctx(), { token: second, newPassword: "whatever2" })) as { ok: boolean };
@@ -145,7 +182,7 @@ describe("password reset", () => {
     const h = await harness();
     await seedUser(h, "ada", "oldpassword", "ada@example.com");
     await h.run(reset.handlers.requestPasswordReset, h.ctx(), { email: "ada@example.com" });
-    const token = h.enqueued[0].payload.token;
+    const token = h.sent[0].token;
     await h.driver.exec("UPDATE auth_users SET active = 0 WHERE username = 'ada'", []);
     // a fresh request for the deactivated account enqueues nothing
     h.enqueued.length = 0;
@@ -165,7 +202,7 @@ describe("email verification", () => {
     const req = (await h.run(verify.handlers.requestEmailVerification, h.ctx({ userId: "ada" }))) as { ok: boolean };
     expect(req.ok).toBe(true);
     expect(h.enqueued[0].kind).toBe("sendVerificationEmail");
-    const token = h.enqueued[0].payload.token;
+    const token = h.sent[0].token;
 
     const res = (await h.run(verify.handlers.verifyEmail, h.ctx(), { token })) as { ok: boolean; email: string };
     expect(res.ok).toBe(true);
@@ -183,7 +220,7 @@ describe("email verification", () => {
     const h = await harness();
     await seedUser(h, "ada", "correcthorse", "ada@example.com");
     await h.run(verify.handlers.requestEmailVerification, h.ctx({ userId: "ada" }));
-    const token = h.enqueued[0].payload.token;
+    const token = h.sent[0].token;
     await h.run(verify.handlers.verifyEmail, h.ctx(), { token });
     h.enqueued.length = 0;
     const again = (await h.run(verify.handlers.requestEmailVerification, h.ctx({ userId: "ada" }))) as { ok: boolean; alreadyVerified?: boolean };
@@ -195,7 +232,7 @@ describe("email verification", () => {
     const h = await harness();
     await seedUser(h, "ada", "correcthorse", "ada@example.com");
     await h.run(verify.handlers.requestEmailVerification, h.ctx({ userId: "ada" }));
-    const staleToken = h.enqueued[0].payload.token;
+    const staleToken = h.sent[0].token;
     // Simulate a changeEmail after the request (raw update; the real handler also clears
     // emailVerified, which is exercised in the e2e suite).
     await h.driver.exec("UPDATE auth_users SET email = 'ada2@example.com', emailVerified = NULL WHERE username = 'ada'", []);
@@ -207,7 +244,7 @@ describe("email verification", () => {
     const h = await harness();
     await seedUser(h, "ada", "correcthorse", "ada@example.com");
     await h.run(verify.handlers.requestEmailVerification, h.ctx({ userId: "ada" }));
-    const token = h.enqueued[0].payload.token;
+    const token = h.sent[0].token;
     await h.run(verify.handlers.verifyEmail, h.ctx(), { token });
     await expect(h.run(verify.handlers.verifyEmail, h.ctx(), { token })).rejects.toThrow(/invalid or expired/);
   });
@@ -216,8 +253,154 @@ describe("email verification", () => {
     const h = await harness();
     await seedUser(h, "ada", "correcthorse", "ada@example.com");
     await h.run(reset.handlers.requestPasswordReset, h.ctx(), { email: "ada@example.com" });
-    const resetToken = h.enqueued[0].payload.token;
+    const resetToken = h.sent[0].token;
     await expect(h.run(verify.handlers.verifyEmail, h.ctx(), { token: resetToken })).rejects.toThrow(/invalid or expired/);
+  });
+});
+
+describe("tokens never rest in the outbox (#73)", () => {
+  const admin = { userId: "admin", roles: ["admin"] };
+  const later = { drain: false };
+  const login = (h: Awaited<ReturnType<typeof harness>>, token: string) => h.run(magic.handlers.loginWithMagicLink, h.ctx(), { token });
+
+  test("no send-task payload carries the emailed token, for any of the four flows", async () => {
+    const h = await harness();
+    await seedUser(h, "ada", "correcthorse", "ada@example.com");
+    await h.run(reset.handlers.requestPasswordReset, h.ctx(), { email: "ada@example.com" });
+    await h.run(verify.handlers.requestEmailVerification, h.ctx({ userId: "ada" }));
+    await h.run(magic.handlers.requestMagicLink, h.ctx(), { email: "bob@example.com" });
+    await h.run(magic.handlers.inviteUser, h.ctx(admin), { email: "cy@example.com" });
+
+    expect(h.enqueued.map((t) => t.kind)).toEqual(["sendPasswordResetEmail", "sendVerificationEmail", "sendMagicLinkEmail", "sendMagicLinkEmail"]);
+    expect(h.sent).toHaveLength(4);
+    const payloads = JSON.stringify(h.enqueued.map((t) => t.payload));
+    for (const { token } of h.sent) {
+      expect(token.length).toBeGreaterThan(20);
+      expect(payloads).not.toContain(token);
+    }
+    for (const t of h.enqueued) expect(t.payload).not.toHaveProperty("token");
+  });
+
+  test("a pending request is never redeemable", async () => {
+    const h = await harness();
+    await h.run(magic.handlers.requestMagicLink, h.ctx(null, later), { email: "bob@example.com" });
+    const [row] = await h.driver.exec("SELECT tokenHash, requestId FROM auth_magic_links", []);
+    expect(row.tokenHash).toBe(`pending:${row.requestId}`);
+    await expect(login(h, String(row.requestId))).rejects.toThrow(/invalid or expired/);
+    await expect(login(h, `pending:${row.requestId}`)).rejects.toThrow(/invalid or expired/);
+  });
+
+  test("a new request revokes the pending link before its own send task runs", async () => {
+    const h = await harness();
+    await seedUser(h, "ada", "oldpassword", "ada@example.com");
+    await h.run(reset.handlers.requestPasswordReset, h.ctx(), { email: "ada@example.com" });
+    const first = h.sent[0].token;
+    await h.run(reset.handlers.requestPasswordReset, h.ctx(null, later), { email: "ada@example.com" });
+    await expect(h.run(reset.handlers.resetPassword, h.ctx(), { token: first, newPassword: "whatever1" })).rejects.toThrow(/invalid or expired/);
+  });
+
+  test("an older task running after a newer request sends nothing and leaves the newer link live", async () => {
+    const h = await harness();
+    await h.run(magic.handlers.requestMagicLink, h.ctx(null, later), { email: "bob@example.com" });
+    const older = h.enqueued[0];
+    await h.run(magic.handlers.requestMagicLink, h.ctx(), { email: "bob@example.com" });
+    const newer = h.sent[0].token;
+    await h.runTask(older);
+    expect(h.sent).toHaveLength(1);
+    expect(((await login(h, newer)) as { token: string }).token).toBeString();
+  });
+
+  test("a redelivery after a successful send sends nothing, and the delivered link keeps working", async () => {
+    const h = await harness();
+    await h.run(magic.handlers.requestMagicLink, h.ctx(), { email: "bob@example.com" });
+    await h.runTask(h.enqueued[0]);
+    expect(h.sent).toHaveLength(1);
+    expect(((await login(h, h.sent[0].token)) as { token: string }).token).toBeString();
+  });
+
+  test("a retry after a failed send delivers exactly one working link", async () => {
+    const h = await harness();
+    await h.run(magic.handlers.requestMagicLink, h.ctx(null, later), { email: "bob@example.com" });
+    failSends = 1;
+    await expect(h.runTask(h.enqueued[0])).rejects.toThrow(/transport down/);
+    await h.runTask(h.enqueued[0]);
+    expect(h.sent).toHaveLength(1);
+    expect(((await login(h, h.sent[0].token)) as { token: string }).token).toBeString();
+  });
+
+  test("two drainers running the same task concurrently send one email", async () => {
+    const h = await harness();
+    await h.run(magic.handlers.requestMagicLink, h.ctx(null, later), { email: "bob@example.com" });
+    await Promise.all([h.runTask(h.enqueued[0]), h.runTask(h.enqueued[0])]);
+    expect(h.sent).toHaveLength(1);
+    expect(((await login(h, h.sent[0].token)) as { token: string }).token).toBeString();
+  });
+
+  test("once the password is reset, a late reset task mints nothing", async () => {
+    const h = await harness();
+    await seedUser(h, "ada", "oldpassword", "ada@example.com");
+    await h.run(reset.handlers.requestPasswordReset, h.ctx(), { email: "ada@example.com" });
+    await h.run(reset.handlers.resetPassword, h.ctx(), { token: h.sent[0].token, newPassword: "brandnewpass" });
+    await h.runTask(h.enqueued[0]);
+    expect(h.sent).toHaveLength(1);
+    expect(await h.driver.exec("SELECT tokenHash FROM auth_email_tokens", [])).toHaveLength(0);
+  });
+
+  test("a reset task after changeEmail sends nothing to the old address, and a link already sent there is dead", async () => {
+    const h = await harness();
+    await seedUser(h, "ada", "oldpassword", "ada@example.com");
+    await h.run(reset.handlers.requestPasswordReset, h.ctx(), { email: "ada@example.com" });
+    const mailed = h.sent[0].token;
+    await h.run(reset.handlers.requestPasswordReset, h.ctx(null, later), { email: "ada@example.com" });
+    await h.driver.exec("UPDATE auth_users SET email = 'ada2@example.com' WHERE username = 'ada'", []);
+    await h.runTask(h.enqueued[1]);
+    expect(h.sent).toHaveLength(1);
+    // The first link was revoked by the second request; mint one more to test the guard itself.
+    await h.driver.exec("UPDATE auth_users SET email = 'ada@example.com' WHERE username = 'ada'", []);
+    await h.run(reset.handlers.requestPasswordReset, h.ctx(), { email: "ada@example.com" });
+    await h.driver.exec("UPDATE auth_users SET email = 'ada2@example.com' WHERE username = 'ada'", []);
+    await expect(h.run(reset.handlers.resetPassword, h.ctx(), { token: h.sent[1].token, newPassword: "whatever1" })).rejects.toThrow(/invalid or expired/);
+    expect(mailed).not.toBe(h.sent[1].token);
+  });
+
+  test("a reset task for a since-deactivated account sends nothing", async () => {
+    const h = await harness();
+    await seedUser(h, "ada", "oldpassword", "ada@example.com");
+    await h.run(reset.handlers.requestPasswordReset, h.ctx(null, later), { email: "ada@example.com" });
+    await h.driver.exec("UPDATE auth_users SET active = 0 WHERE username = 'ada'", []);
+    await h.runTask(h.enqueued[0]);
+    expect(h.sent).toHaveLength(0);
+  });
+
+  test("a verification task for an address verified in the meantime sends nothing", async () => {
+    const h = await harness();
+    await seedUser(h, "ada", "correcthorse", "ada@example.com");
+    await h.run(verify.handlers.requestEmailVerification, h.ctx({ userId: "ada" }, later));
+    await h.driver.exec("UPDATE auth_users SET emailVerified = 1 WHERE username = 'ada'", []);
+    await h.runTask(h.enqueued[0]);
+    expect(h.sent).toHaveLength(0);
+    expect(await h.driver.exec("SELECT tokenHash FROM auth_email_tokens", [])).toHaveLength(0);
+  });
+
+  test("verifying drops any other pending verification request", async () => {
+    const h = await harness();
+    await seedUser(h, "ada", "correcthorse", "ada@example.com");
+    await h.run(verify.handlers.requestEmailVerification, h.ctx({ userId: "ada" }));
+    await h.run(verify.handlers.verifyEmail, h.ctx(), { token: h.sent[0].token });
+    expect(await h.driver.exec("SELECT tokenHash FROM auth_email_tokens WHERE purpose = 'verify'", [])).toHaveLength(0);
+  });
+
+  test("a payload enqueued before the fix is delivered while its link is live, and not after", async () => {
+    const h = await harness();
+    const token = "legacy-token-from-an-0.0.76-outbox-row";
+    const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token)))].map((b) => b.toString(16).padStart(2, "0")).join("");
+    await h.driver.exec("INSERT INTO auth_magic_links (tokenHash, email, expiresAt, createdAt) VALUES (?, ?, ?, ?)", [hash, "bob@example.com", Date.now() + 60_000, Date.now()]);
+    const legacy = { kind: "sendMagicLinkEmail", payload: { email: "bob@example.com", token } };
+    await h.runTask(legacy);
+    expect(h.sent.map((m) => m.token)).toEqual([token]);
+    await login(h, token);
+    await h.runTask(legacy);
+    expect(h.sent).toHaveLength(1);
   });
 });
 

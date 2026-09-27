@@ -4,8 +4,9 @@
 // `bcrypt: async (value) => await bcrypt.hash(value, 10)`), so the hashes produced here
 // are byte-identical in format to the ones sitting in a Contember `tenant.person` table.
 //
-// BOTH prefixes occur in the wild and must verify: bcryptjs 2.x emits `$2a$`, while a
-// row checked from a live Contember deployment carried `$2b$` (a newer bcryptjs). An
+// BOTH prefixes occur in the wild and must verify: bcryptjs 2.x emitted `$2a$`, and 3.x
+// (what Contember ships now, `bcryptjs ^3.0.3`) emits `$2b$`, which is also what a row
+// checked from a live Contember deployment carried. Older rows keep their `$2a$`. An
 // import script must therefore not filter on either prefix: `bcrypt$` is what selects
 // the verifier, and bcrypt.compare handles the rest.
 //
@@ -28,9 +29,9 @@ const imported = (contemberHash: string) => `bcrypt$${contemberHash}`;
 const FIXTURE_PASSWORD = "correct horse battery staple";
 const FIXTURE_HASH = "$2a$10$J4J89A6ZuER5a88.ywYGce5vc96LYryHSLAB/LDKVwXVUGT70.946";
 
-test("bcryptjs 2.4.3 at cost 10 emits the $2a$ form Contember stores", () => {
+test("bcryptjs 3 at cost 10 emits the $2b$ form Contember stores today", () => {
   const h = bcrypt.hashSync("password123", 10);
-  expect(h.startsWith("$2a$10$")).toBe(true);
+  expect(h.startsWith("$2b$10$")).toBe(true);
   expect(h.length).toBe(60);
 });
 
@@ -47,10 +48,19 @@ test("a frozen $2a$ fixture verifies (guards against a bcryptjs upgrade changing
   expect(await verifyPassword("wrong", imported(FIXTURE_HASH))).toBe(false);
 });
 
-test("the $2b$ variant verifies too, which is what a live Contember tenant DB holds", async () => {
+test("the older $2a$ variant verifies too, which is what rows hashed before bcryptjs 3 hold", async () => {
+  // Rewriting the prefix is exact: $2a$ and $2b$ differ only in how a >255-byte password
+  // wraps, and bcrypt truncates at 72 bytes before that could matter.
+  const a = (await bcrypt.hash("password123", 10)).replace(/^\$2b\$/, "$2a$");
+  expect(a.startsWith("$2a$")).toBe(true);
+  expect(await verifyPassword("password123", imported(a))).toBe(true);
+  expect(await verifyPassword("nope", imported(a))).toBe(false);
+});
+
+test("the $2b$ form a live Contember tenant DB holds verifies", async () => {
   // A row read from a production Contember deployment was `$2b$10$…` (60 chars), which
   // also matches what SignUpMutationResolver accepts on its import path.
-  const b = (await bcrypt.hash("password123", 10)).replace(/^\$2a\$/, "$2b$");
+  const b = await bcrypt.hash("password123", 10);
   expect(b.startsWith("$2b$")).toBe(true);
   expect(await verifyPassword("password123", imported(b))).toBe(true);
   expect(await verifyPassword("nope", imported(b))).toBe(false);

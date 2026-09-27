@@ -12,10 +12,10 @@
     "build:admin-gs": "bun admin-gs/build.ts"
   },
   "dependencies": {
-    "@astrojs/node": "^9.0.0",
+    "@astrojs/node": "^11.1.6",
     "@pramen/cms-astro": "workspace:*",
     "@pramen/cms-editor": "workspace:*",
-    "astro": "^5.0.0"
+    "astro": "^7.3.5"
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.10",
@@ -24,6 +24,7 @@
     "@podoba/tokens": "0.0.42",
     "@pramen/cms-theme-gs": "workspace:*",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "typescript": "^6.0.3"
   }
 }

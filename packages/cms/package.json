@@ -55,6 +55,6 @@
     "pramen-cms": "./dist/cli.js"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0"
+    "@types/node": "^26.6.2"
   }
 }

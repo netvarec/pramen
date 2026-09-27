@@ -120,9 +120,32 @@ async function waitForReady(url: string, timeoutMs: number): Promise<void> {
   throw new Error(`${url} did not become ready in time`);
 }
 
+/** Start `astro dev` in the foreground, returning a `stop` that takes the server down.
+ *
+ * `--ignore-lock` is load-bearing. Astro 7 detects an AI agent (Claude Code, Codex, ...)
+ * and then backgrounds the dev server as a detached process in its own session, so
+ * `kill()` stopped only the launcher and the server kept the port. The next run's
+ * `waitForReady` then passed against the PREVIOUS run's server, or the fixture's server
+ * drifted to the next free port and never answered. `--ignore-lock` is the switch that
+ * keeps it in the foreground (and skips the lock file, which two servers would share). */
+function spawnAstroDev(astro: string, port: number, cwd: string, env: Record<string, string> = {}) {
+  const proc = Bun.spawn(["bun", astro, "dev", "--port", String(port), "--ignore-lock"], {
+    cwd,
+    env: { ...process.env, ...env },
+    stdout: "ignore",
+    stderr: "inherit",
+  });
+  return {
+    async stop(): Promise<void> {
+      proc.kill();
+      await proc.exited;
+    },
+  };
+}
+
 let cms: ReturnType<typeof stubCms> | undefined;
 let site: ReturnType<typeof Bun.spawn> | undefined;
-let dev: ReturnType<typeof Bun.spawn> | undefined;
+let dev: ReturnType<typeof spawnAstroDev> | undefined;
 /** The shell, fetched once; every assertion below reads the same response. */
 let shell = "";
 let shellHeaders: Headers | undefined;
@@ -151,19 +174,15 @@ beforeAll(async () => {
   shell = await res.text();
 }, 180_000);
 
-afterAll(() => {
+afterAll(async () => {
   site?.kill();
-  dev?.kill();
+  await dev?.stop();
   cms?.stop(true);
 });
 
 describe("admin asset delivery", () => {
   test("astro dev serves actual packaged bytes for all six assets", async () => {
-    dev = Bun.spawn(["bun", "./node_modules/.bin/astro", "dev", "--port", "8792"], {
-      cwd: SITE,
-      env: { ...process.env, PRAMEN_CMS_URL: CMS_URL },
-      stdout: "ignore", stderr: "inherit",
-    });
+    dev = spawnAstroDev("./node_modules/.bin/astro", 8792, SITE, { PRAMEN_CMS_URL: CMS_URL });
     const base = "http://localhost:8792";
     await waitForReady(`${base}${ADMIN}`, 30_000);
     const html = await (await fetch(`${base}${ADMIN}/pages/deep-link`)).text();
@@ -174,8 +193,7 @@ describe("admin asset delivery", () => {
       expect(res.headers.get("content-type")).toContain(file.endsWith(".css") ? "text/css" : "text/javascript");
       expect(await res.text()).toBe(readFileSync(join(ROOT, "packages/cms-editor/dist", file), "utf8"));
     }
-    dev.kill();
-    await dev.exited;
+    await dev.stop();
     dev = undefined;
   }, 60_000);
 
@@ -195,9 +213,9 @@ describe("admin asset delivery", () => {
       });
     `);
     const astro = join(SITE, "node_modules/.bin/astro");
-    let proc: ReturnType<typeof Bun.spawn> | undefined;
+    let proc: ReturnType<typeof spawnAstroDev> | undefined;
     try {
-      proc = Bun.spawn(["bun", astro, "dev", "--port", "8793"], { cwd: fixture, stdout: "ignore", stderr: "inherit" });
+      proc = spawnAstroDev(astro, 8793, fixture);
       await waitForReady("http://localhost:8793/__admin", 30_000);
       const html = await (await fetch("http://localhost:8793/__admin")).text();
       expect(html).toContain('src="/custom/editor.js"');
@@ -205,15 +223,13 @@ describe("admin asset delivery", () => {
       expect(html).not.toContain("cms-editor/dist");
       expect(html).not.toContain("data-vite-dev-id");
       expect(html).toContain("/custom/panel-react.js");
-      proc.kill();
-      await proc.exited;
+      await proc.stop();
       proc = undefined;
       await run(["bun", astro, "build"], fixture, {}, "custom editor build");
       const output = readdirSync(join(fixture, "dist"), { recursive: true }).map(String);
       expect(output.filter((path) => /(?:editor|panel-react|panel-jsx).*\.(?:js|css)$/.test(path))).toEqual([]);
     } finally {
-      proc?.kill();
-      if (proc) await proc.exited;
+      await proc?.stop();
       rmSync(fixture, { recursive: true, force: true });
     }
   }, 120_000);

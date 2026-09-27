@@ -26,9 +26,9 @@
     "test": "bun test"
   },
   "devDependencies": {
-    "@buzola/router": "^0.0.12",
-    "@cloudflare/workers-types": "^4.20250101.0",
-    "@oxlint/plugins": "1.79.0",
+    "@buzola/router": "^0.0.17",
+    "@cloudflare/workers-types": "^5.20260925.1",
+    "@oxlint/plugins": "1.85.0",
     "@pramen/admin": "workspace:*",
     "@pramen/analytics": "workspace:*",
     "@pramen/auth": "workspace:*",
@@ -40,14 +40,14 @@
     "@pramen/react": "workspace:*",
     "@pramen/server": "workspace:*",
     "@types/react": "^19.0.0",
-    "bcryptjs": "2.4.3",
+    "bcryptjs": "3.0.3",
     "bun-types": "^1.4.0",
-    "lopata": "^0.19.2",
-    "oblaka-iac": "^0.0.16",
-    "oxlint": "1.79.0",
+    "lopata": "^0.24.0",
+    "oblaka-iac": "^0.0.19",
+    "oxlint": "1.85.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "typescript": "^5.7.0",
-    "wrangler": "^4.101.0"
+    "typescript": "^7.0.2",
+    "wrangler": "^4.141.0"
   }
 }

@@ -1,7 +1,7 @@
 // Unit test for the ctx.mail facade + its adapter seam (Cloudflare / KV / memory).
 
 import { describe, expect, test } from "bun:test";
-import { Mail, MailgunAdapter, MemoryMailAdapter, KvMailAdapter, createMail } from "../packages/server/src/runtime/mail";
+import { Mail, MailgunAdapter, MemoryMailAdapter, KvMailAdapter, createMail, type MailMessage } from "../packages/server/src/runtime/mail";
 import type { Kv } from "../packages/server/src/runtime/kv";
 
 /** What the Cloudflare Email binding receives from the mail adapter. */
@@ -50,6 +50,36 @@ describe("ctx.mail facade", () => {
     };
     await createMail(env).send({ to: "a@x.com", subject: "Hi", text: "yo" });
     expect(sent[0]).toMatchObject({ to: "a@x.com", from: { email: "hi@acme.com", name: "Acme" }, subject: "Hi" });
+  });
+
+  test("the Cloudflare binding never receives an undefined key (#66)", async () => {
+    const sent: Record<string, unknown>[] = [];
+    // Mirrors the real binding: a present key must have the right type.
+    const strict = (o: Record<string, unknown>, path: string) => {
+      for (const [k, v] of Object.entries(o)) {
+        if (v === undefined || v === null) throw new Error(`Incorrect type for the '${path}${k}' field`);
+        if (v && typeof v === "object" && !Array.isArray(v)) strict(v as Record<string, unknown>, `${k}.`);
+      }
+    };
+    const env = {
+      EMAIL: { send: async (m: Record<string, unknown>) => (strict(m, ""), void sent.push(m)) },
+      MAIL_FROM: "hi@acme.com",
+      MAIL_FROM_NAME: "",
+    };
+    await createMail(env).send({ to: "a@x.com", subject: "Hi", text: "yo" });
+    await createMail(env).send({ to: "a@x.com", subject: "Hi", html: "<b>yo</b>", replyTo: { email: "r@x.com" } });
+    // From JSON or stored data: `null` where the type says optional.
+    const fromJson = JSON.parse('{"to":"a@x.com","subject":"Hi","text":"yo","html":null,"replyTo":null}') as MailMessage;
+    await createMail(env).send(fromJson);
+    expect(sent[0]).toEqual({ to: "a@x.com", from: { email: "hi@acme.com" }, subject: "Hi", text: "yo" });
+    expect(sent[1]).toEqual({
+      to: "a@x.com",
+      from: { email: "hi@acme.com" },
+      subject: "Hi",
+      html: "<b>yo</b>",
+      replyTo: { email: "r@x.com" },
+    });
+    expect(sent[2]).toEqual({ to: "a@x.com", from: { email: "hi@acme.com" }, subject: "Hi", text: "yo" });
   });
 
   test("createMail captures to KV only with the explicit MAIL_CAPTURE opt-in", async () => {

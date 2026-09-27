@@ -268,14 +268,15 @@ describe("buildEditor", () => {
     // `src/` other than the published `./slots` entry. A contract that leaked an internal type
     // (the router's page map, the `Api` class) would fail here, not in a theme's CI. Not
     // `exactOptionalPropertyTypes`: podoba ships TypeScript source that does not compile under
-    // it, so no theme built on podoba can turn it on either.
+    // it, so no theme built on podoba can turn it on either. For the same reason `dom.iterable`
+    // is in: podoba spreads an `HTMLCollection` (0.0.42), and every real theme config has it.
     const dir = await scratch("theme-tsc");
     await writeTheme(dir);
     await writeFile(
       join(dir, "tsconfig.json"),
       JSON.stringify({
         compilerOptions: {
-          target: "es2022", module: "esnext", moduleResolution: "bundler", jsx: "react-jsx", lib: ["es2022", "dom"],
+          target: "es2022", module: "esnext", moduleResolution: "bundler", jsx: "react-jsx", lib: ["es2022", "dom", "dom.iterable"],
           strict: true, noEmit: true, skipLibCheck: true, verbatimModuleSyntax: true, noUncheckedIndexedAccess: true,
           types: [],
         },
