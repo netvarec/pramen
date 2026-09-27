@@ -26,7 +26,7 @@
     "test": "bun test"
   },
   "devDependencies": {
-    "@buzola/router": "^0.0.16",
+    "@buzola/router": "^0.0.17",
     "@cloudflare/workers-types": "^5.20260925.1",
     "@oxlint/plugins": "1.85.0",
     "@pramen/admin": "workspace:*",
@@ -43,7 +43,7 @@
     "bcryptjs": "3.0.3",
     "bun-types": "^1.4.0",
     "lopata": "^0.24.0",
-    "oblaka-iac": "^0.0.18",
+    "oblaka-iac": "^0.0.19",
     "oxlint": "1.85.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

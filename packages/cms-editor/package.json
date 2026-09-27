@@ -34,7 +34,7 @@
     "prepublishOnly": "bun run build"
   },
   "dependencies": {
-    "@buzola/router": "^0.0.16",
+    "@buzola/router": "^0.0.17",
     "@phosphor-icons/react": "^2.1.10",
     "@podoba/react": "^0.0.42",
     "@podoba/tailwind": "^0.0.42",
@@ -51,8 +51,8 @@
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
-    "@buzola/bun-plugin": "^0.0.16",
-    "@buzola/codegen": "^0.0.16",
+    "@buzola/bun-plugin": "^0.0.17",
+    "@buzola/codegen": "^0.0.17",
     "@tailwindcss/cli": "^4.0.0",
     "@tailwindcss/typography": "^0.5.16",
     "@types/react": "^19.0.0",
