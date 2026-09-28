@@ -61,8 +61,9 @@ export const en = {
   "home.stat.entries": { one: "record in total", other: "records in total" },
   /** Deliberately not agreeing with a number: one line for pages, articles and events alike. */
   "home.stat.status": "Published {published} · drafts {draft}",
-  /** Under a collection with no publish workflow: its rows are live the moment they are saved. */
-  "home.stat.live": "Changes go live at once",
+  /** Under a collection with no publish workflow. Says only that there is no publish step: whether
+   * its rows are on the website is the app's ACL, which the dashboard cannot see. */
+  "home.stat.noDrafts": "No drafts, saved changes apply at once",
   "home.stat.files": { one: "file in the library", other: "files in the library" },
   "home.stat.filesDetail": "Images and documents",
 };
@@ -113,7 +114,7 @@ export const cs: Translation<typeof en> = {
   // "Publikováno", not "publikovaných": the neutral form agrees with no number and no gender,
   // and this one line counts Stránky (f.), Články (m.) and Akce (f.) alike.
   "home.stat.status": "Publikováno {published} · v konceptu {draft}",
-  "home.stat.live": "Změny se na webu projeví hned",
+  "home.stat.noDrafts": "Bez konceptů, uložené změny platí hned",
   "home.stat.files": { one: "soubor v knihovně", few: "soubory v knihovně", many: "souboru v knihovně", other: "souborů v knihovně" },
   "home.stat.filesDetail": "Obrázky a dokumenty",
 };

@@ -206,30 +206,71 @@ describe("dashboard statistics", () => {
     expect(offsets).toEqual([0, 200]);
   });
 
-  test("collections use collectionList", async () => {
+  const meta = (supports: string[] | undefined, fields: string[] = ["title"]) => ({
+    slug: "clubs",
+    idField: "id",
+    labels: null,
+    fields: fields.map((name) => ({ name, type: "text" as const })),
+    ...(supports ? { supports: supports as ("drafts" | "revisions")[] } : {}),
+  });
+
+  test("a collection with drafts splits published from drafts, reading only `status`", async () => {
+    const calls: RpcInput[] = [];
     const api = apiWith(async (name, input) => {
       expect(name).toBe("collectionList");
-      expect(input).toMatchObject({ collection: "clubs", limit: 500, offset: 0 });
+      calls.push(input ?? {});
       return [{ status: "published" }, { status: "draft" }];
     });
-    expect(await loadCollectionStat(api, "clubs")).toEqual({ value: 2, label: "záznamy celkem", detail: "Publikováno 1 · v konceptu 1" });
+    expect(await loadCollectionStat(api, meta(["drafts", "revisions"]))).toEqual({ value: 2, label: "záznamy celkem", detail: "Publikováno 1 · v konceptu 1" });
+    expect(calls[0]).toEqual({ collection: "clubs", limit: 500, offset: 0, select: ["status"] });
   });
 
-  test("a collection without drafts says its rows are live instead of splitting them", async () => {
-    // A plain table's rows carry no status, so the split would read "Publikováno 0 · v konceptu
-    // 0" under a tile of rows that are all on the site.
-    const api = apiWith(async () => [{ id: 1 }, { id: 2 }, { id: 3 }]);
-    expect(await loadCollectionStat(api, "tags", undefined, ["revisions"])).toEqual({
+  test("a collection without drafts is counted by its id and says it has no publish step", async () => {
+    // A plain table's rows carry no status, so the split read "Publikováno 0 · v konceptu 0"
+    // under a tile of rows that are all current. The line claims nothing about the website:
+    // whether the rows are public is the app's ACL.
+    const calls: RpcInput[] = [];
+    const api = apiWith(async (_name, input) => {
+      calls.push(input ?? {});
+      return [{ id: 1 }, { id: 2 }, { id: 3 }];
+    });
+    expect(await loadCollectionStat(api, meta(["revisions"]))).toEqual({
       value: 3,
       label: "záznamy celkem",
-      detail: "Změny se na webu projeví hned",
+      detail: "Bez konceptů, uložené změny platí hned",
     });
-    expect(await loadCollectionStat(api, "tags", undefined, [])).toMatchObject({ detail: "Změny se na webu projeví hned" });
+    expect(calls[0]).toMatchObject({ select: ["id"] });
   });
 
-  test("a collection with drafts keeps the split", async () => {
-    const api = apiWith(async () => [{ status: "published" }, { status: "draft" }]);
-    expect((await loadCollectionStat(api, "clubs", undefined, ["drafts", "revisions"])).detail).toBe("Publikováno 1 · v konceptu 1");
+  test("a collection's own status field keeps the split when it holds published / draft", async () => {
+    const own = apiWith(async () => [{ status: "published" }, { status: "draft" }, { status: "draft" }]);
+    expect((await loadCollectionStat(own, meta([], ["title", "status"]))).detail).toBe("Publikováno 1 · v konceptu 2");
+    // Its own status with other values is not a publish workflow.
+    const other = apiWith(async () => [{ status: "active" }, { status: "archived" }]);
+    expect((await loadCollectionStat(other, meta([], ["title", "status"]))).detail).toBe("Bez konceptů, uložené změny platí hned");
+  });
+
+  test("a bare slug is looked up, so a hand-wired tile gets the same answer", async () => {
+    const names: string[] = [];
+    const api = apiWith(async (name, input) => {
+      names.push(name);
+      if (name === "listCollections") return [meta([])];
+      expect(input).toMatchObject({ collection: "clubs", select: ["id"] });
+      return [{ id: 1 }];
+    });
+    expect((await loadCollectionStat(api, "clubs")).detail).toBe("Bez konceptů, uložené změny platí hned");
+    expect(names).toEqual(["listCollections", "collectionList"]);
+    await expect(loadCollectionStat(api, "missing")).rejects.toThrow("no collection 'missing'");
+  });
+
+  test("a meta without `supports` (an older server) reads whole rows and decides from them", async () => {
+    const calls: RpcInput[] = [];
+    const api = apiWith(async (_name, input) => {
+      calls.push(input ?? {});
+      return [{ id: 1, status: "published" }, { id: 2, status: "draft" }];
+    });
+    expect((await loadCollectionStat(api, meta(undefined))).detail).toBe("Publikováno 1 · v konceptu 1");
+    expect(calls[0]).not.toHaveProperty("select");
   });
 
   test("the noun agrees with the number, by the language's plural rules", async () => {

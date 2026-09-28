@@ -79,7 +79,7 @@ export function defaultSections(props: HomeScreenProps): DashboardSection[] {
       href: href("collection", { slug: collection.slug }),
       group: "content",
       description: copy.t("home.tile.collection"),
-      stat: (api) => loadCollectionStat(api, collection.slug, collection.labels, collection.supports),
+      stat: (api) => loadCollectionStat(api, collection),
     })),
     { key: "media", label: getI18n().t("nav.media"), href: href("media"), group: "quick", description: copy.t("home.tile.media"), stat: loadMediaStat },
     ...adminPages.map((page): DashboardSection => ({

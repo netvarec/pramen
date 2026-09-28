@@ -227,6 +227,13 @@ list to the end) and `statusStat` (a row count with its published/draft split, w
 editor's language), so a project's own stat reads like the built-in ones. A loader returns a
 `DashboardStat`: `{ value, label, detail }`, where `label` is the words after the number.
 
+`loadCollectionStat(api, collection)` takes the collection's `CollectionMeta` (a `home` slot has
+them as `props.collections`) or just its slug, which it looks up with `listCollections`. Either
+way the tile says the same thing the theme's own does: a published/draft split for a collection
+with `supports: ["drafts"]` (or its own `status` field holding those values), and "No drafts,
+saved changes apply at once" for a plain table. It reads only the `status` or id column, never
+whole rows.
+
 ### Your own panels
 
 A custom panel that uses podoba's `BrandPageHeader` can add the class `gs-panel-hero` to it to
