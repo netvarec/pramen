@@ -56,12 +56,16 @@ export function statusStat(rows: readonly StatusRow[], nouns?: ContentType["labe
     else if (row.status === "draft") draft++;
   }
   const i18n = getI18n();
-  const count = nouns?.count;
   return {
-    value: rows.length,
-    label: count ? i18n.plural(rows.length, count) : copy.tp("home.stat.entries", rows.length),
+    ...countOf(rows.length, nouns),
     detail: copy.t("home.stat.status", { published: i18n.number(published), draft: i18n.number(draft) }),
   };
+}
+
+/** A number and the words after it, agreeing with it. */
+function countOf(value: number, nouns?: ContentType["labels"]): Omit<DashboardStat, "detail"> {
+  const count = nouns?.count;
+  return { value, label: count ? getI18n().plural(value, count) : copy.tp("home.stat.entries", value) };
 }
 
 /** A content type's pages, by its slug. Needs a server that lists by type (`cms.pagesByType`). */
@@ -70,10 +74,44 @@ export async function loadContentTypeStat(api: DashboardApi, slug: string, label
   return statusStat(rows, labels);
 }
 
-/** A collection's rows, by its slug. */
-export async function loadCollectionStat(api: DashboardApi, slug: string, labels?: CollectionMeta["labels"]): Promise<DashboardStat> {
-  const rows = await allPages((offset, limit) => api.call<StatusRow[]>("collectionList", { collection: slug, limit, offset }), COLLECTION_BATCH);
-  return statusStat(rows, labels);
+/** What {@link loadCollectionStat} needs to know about a collection: the `CollectionMeta` the
+ * editor already holds (a home slot gets them as `props.collections`). */
+export type CollectionStatSource = Pick<CollectionMeta, "slug" | "idField" | "fields"> & Partial<Pick<CollectionMeta, "labels" | "supports">>;
+
+/** A collection's rows.
+ *
+ * Only some collections have a published / draft split: those with `supports: ["drafts"]`
+ * (a CMS-managed `status`), and those whose OWN `status` field holds the same two values.
+ * The rest are plain tables, and splitting them read "Published 0 · drafts 0" under a count of
+ * rows that are all current, so they get the count and a line saying there is no publish step.
+ * Nothing here claims those rows are on the website: that is the app's ACL, not the CMS's.
+ *
+ * Pass the collection's meta. A bare slug is looked up with `listCollections` (one more call),
+ * so a hand-wired tile gets the same answer as the theme's own rather than a wrong default. */
+export async function loadCollectionStat(api: DashboardApi, collection: string | CollectionStatSource): Promise<DashboardStat> {
+  const meta = typeof collection === "string" ? await findCollection(api, collection) : collection;
+  // Only the columns the answer needs, never whole rows: a count over wide json cells is the
+  // D1-over-RPC failure mode (GitHub #22). `status` is selected only where it is a real column
+  // (a managed one, or a declared field), since `find` refuses a column it cannot read. A meta
+  // without `supports` (an older server) cannot say which, so it reads whole rows and decides
+  // from the data.
+  const managed = meta.supports?.includes("drafts") ?? false;
+  const ownStatus = meta.fields.some((f) => f.name === "status");
+  const select = meta.supports === undefined ? undefined : managed || ownStatus ? ["status"] : [meta.idField];
+  const rows = await allPages(
+    (offset, limit) => api.call<StatusRow[]>("collectionList", { collection: meta.slug, limit, offset, ...(select ? { select } : {}) }),
+    COLLECTION_BATCH,
+  );
+  const labels = meta.labels ?? undefined;
+  if (managed || rows.some((row) => row.status === "published" || row.status === "draft")) return statusStat(rows, labels);
+  return { ...countOf(rows.length, labels), detail: copy.t("home.stat.noDrafts") };
+}
+
+async function findCollection(api: DashboardApi, slug: string): Promise<CollectionStatSource> {
+  const metas = await api.call<CollectionStatSource[]>("listCollections");
+  const meta = metas.find((m) => m.slug === slug);
+  if (!meta) throw new Error(`loadCollectionStat: no collection '${slug}' is visible to this session`);
+  return meta;
 }
 
 /** The media library. */

@@ -867,6 +867,21 @@ describe("input validation (the CRUD handlers, not just the workflow ones)", () 
     await expect(run(H.collectionList, ctx, { collection: "talks", limit: "10" } as unknown as JsonValue)).rejects.toThrow(/limit must be a number/);
   });
 
+  // A dashboard count needs one column, not every wide cell of every row (GitHub #22).
+  test("collectionList narrows to `select`", async () => {
+    const ctx = editorCtx(await fresh());
+    for (const t of ["a", "b"]) await create(ctx, { title: t });
+    const rows = (await run(H.collectionList, ctx, { collection: "talks", select: ["status"] } as JsonValue)) as Row[];
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row.status).toBe("draft");
+      expect(row).not.toHaveProperty("title");
+      expect(row).not.toHaveProperty("internalNote");
+    }
+    await expect(run(H.collectionList, ctx, { collection: "talks", select: "status" } as unknown as JsonValue)).rejects.toThrow(/select must be a list/);
+    await expect(run(H.collectionList, ctx, { collection: "talks", select: [1] } as unknown as JsonValue)).rejects.toThrow(/select must be a list/);
+  });
+
   // The default ordering is `createdAt desc`, but that column is not guaranteed to exist,
   // and an ORDER BY over a missing column does not fail: SQLite resolves the quoted
   // identifier to a string constant and every row sorts equal.

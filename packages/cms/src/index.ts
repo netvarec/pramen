@@ -5976,10 +5976,12 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
     ...rowInput(raw),
     values: valuesInput(raw).values,
   });
-  /** `{ collection, limit?, offset? }`, both CLAMPED. `find` binds `limit` straight into
-   * `LIMIT ?`, and SQLite reads a negative limit as UNBOUNDED (so `limit: -1` dumps the
-   * whole table over RPC) while a fractional value reaches the driver as-is and 500s. */
-  const listInput = (raw: unknown): { collection: string; limit?: number; offset?: number } => {
+  /** `{ collection, limit?, offset?, select? }`, the numbers CLAMPED. `find` binds `limit`
+   * straight into `LIMIT ?`, and SQLite reads a negative limit as UNBOUNDED (so `limit: -1`
+   * dumps the whole table over RPC) while a fractional value reaches the driver as-is and 500s.
+   * `select` narrows the columns like `listPages`' (a count needs one, not every wide json
+   * cell over RPC, GitHub #22); `find` still refuses a hidden or unreadable one. */
+  const listInput = (raw: unknown): { collection: string; limit?: number; offset?: number; select?: string[] } => {
     const o = asObj(raw);
     const num = (name: string, v: unknown): number | undefined => {
       if (v === undefined || v === null) return undefined;
@@ -5988,10 +5990,15 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
     };
     const limit = num("limit", o.limit);
     const offset = num("offset", o.offset);
+    const select = o.select;
+    if (select !== undefined && select !== null && !(Array.isArray(select) && select.every((c) => typeof c === "string" && c !== ""))) {
+      throw new BadRequest("select must be a list of column names");
+    }
     return {
       collection: collectionInput(raw),
       limit: limit === undefined ? undefined : Math.max(1, Math.min(limit, MAX_COLLECTION_LIST_LIMIT)),
       offset: offset === undefined ? undefined : Math.max(0, offset),
+      select: Array.isArray(select) ? (select as string[]) : undefined,
     };
   };
   // Validate against the field schema, sanitize richtext, then PROJECT to declared field
@@ -6016,13 +6023,14 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
      * the collection schemas aren't exposed to anonymous callers. */
     listCollections: query((): CollectionMeta[] => metas, editor),
 
-    collectionList: query((ctx, input: { collection: string; limit?: number; offset?: number }) => {
+    collectionList: query((ctx, input: { collection: string; limit?: number; offset?: number; select?: string[] }) => {
       const c = def(input.collection);
       return cdb(ctx).find({
         from: c.entity,
         orderBy: orderBys.get(c.slug) ?? orderByOf(c),
         limit: input.limit ?? DEFAULT_COLLECTION_LIST_LIMIT,
         offset: input.offset,
+        select: input.select,
       });
     }, { ...editor, input: listInput }),
 
