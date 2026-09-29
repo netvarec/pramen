@@ -35,8 +35,16 @@ const app = {
 };
 ```
 
-- **`ctx.tasks.enqueue({ kind, payload?, delayMs? })`**: `delayMs` defers when the
-  task becomes due. Atomic with the surrounding mutation.
+- **`ctx.tasks.enqueue({ kind, payload?, delayMs?, key? })`**: `delayMs` defers when the
+  task becomes due. Atomic with the surrounding mutation. `key` is an idempotency key: a
+  second enqueue with the same non-empty key is an atomic no-op, for a task that must exist
+  once but is requested by callers that cannot coordinate (isolates on D1). It stays taken
+  until the row is pruned, an hour after it completes. **A dead-lettered (`failed`) row does not
+  hold it:** enqueueing again replaces that row, so a fixed deployment can retry. The replacement is a new delivery with a fresh `meta.id`. Do not use a
+  key for "must run at most once, ever".
+- **`mutation(fn, { requiresTasks: ["kind"] })`** declares the task kinds a handler enqueues;
+  `createPramen` warns at boot when `app.tasks` has no handler for one, instead of the task
+  dead-lettering days later.
 - **A task handler** gets a privileged (system-scoped) `ctx`: `ctx.mail`/`ctx.env`/
   `ctx.db`/`ctx.kv`, and `meta` (see idempotency below).
 

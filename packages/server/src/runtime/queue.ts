@@ -135,17 +135,20 @@ export class MemoryQueueAdapter implements QueueAdapter {
  * binding, KV, R2, D1, the DO namespace, …). Returns name → binding. */
 export function discoverQueueBindings(env: EnvBag): Record<string, QueueProducerBinding> {
   const out: Record<string, QueueProducerBinding> = {};
-  for (const [name, value] of Object.entries(env)) {
-    if (
-      value &&
-      typeof value === "object" &&
-      typeof (value as { send?: unknown }).send === "function" &&
-      typeof (value as { sendBatch?: unknown }).sendBatch === "function"
-    ) {
-      out[name] = value as QueueProducerBinding;
-    }
-  }
+  for (const [name, value] of Object.entries(env)) if (isQueueProducer(value)) out[name] = value;
   return out;
+}
+
+/** The one definition of "is this binding a queue producer": BOTH `send` and `sendBatch`.
+ * Exported so a caller that knows the binding's NAME can check just that entry instead of
+ * scanning the whole environment (which `discoverQueueBindings` does). */
+export function isQueueProducer(value: unknown): value is QueueProducerBinding {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    typeof (value as { send?: unknown }).send === "function" &&
+    typeof (value as { sendBatch?: unknown }).sendBatch === "function"
+  );
 }
 
 /** Build `ctx.queue` from the environment: a Cloudflare adapter over the discovered

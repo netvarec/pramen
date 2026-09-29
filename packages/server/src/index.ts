@@ -33,7 +33,7 @@ export type {
 
 // --- app + handlers ---
 export { createApp } from "./sdk/app";
-export { query, mutation, authorizeHandler, validateHandlerAuth } from "./sdk/handlers";
+export { query, mutation, authorizeHandler, validateHandlerAuth, validateHandlerTasks } from "./sdk/handlers";
 export type { EnvBag, Handler, HandlerContext, HandlerKind, HandlerMap, HandlerOpts, HandlerAuth, Tasks, TaskHandler, AppTaskMap, BootstrapContext, BootstrapFn, MigrationContext, DataMigration } from "./sdk/handlers";
 
 // --- ACL ---
@@ -102,7 +102,7 @@ export { Mail, CloudflareEmailAdapter, MailgunAdapter, KvMailAdapter, MemoryMail
 export type { MailMessage, MailAddress, MailAdapter, SendEmailBinding } from "./runtime/mail";
 
 // --- queue (ctx.queue, Cloudflare Queues) ---
-export { Queue, CloudflareQueueAdapter, MemoryQueueAdapter, createQueue, discoverQueueBindings } from "./runtime/queue";
+export { Queue, CloudflareQueueAdapter, MemoryQueueAdapter, createQueue, discoverQueueBindings, isQueueProducer } from "./runtime/queue";
 export type { QueueAdapter, QueueProducerBinding, QueueSendOptions, QueueSendRequest, QueueBatchOptions, QueueContentType } from "./runtime/queue";
 export { routeQueue, dispatchQueueBatch } from "./runtime/queue-consumer";
 export type { QueueContext, QueueHandler, QueueMessage, QueueBatch, AppQueueMap } from "./runtime/queue-consumer";

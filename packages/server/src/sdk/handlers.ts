@@ -135,7 +135,7 @@ export interface DataMigration {
 export interface Tasks {
   /** Enqueue a task to run after commit. `kind` selects the `app.tasks` handler;
    * `payload` is JSON-serialized. `delayMs` defers when it becomes due. */
-  enqueue(opts: { kind: string; payload?: unknown; delayMs?: number }): Promise<void>;
+  enqueue(opts: { kind: string; payload?: unknown; delayMs?: number; key?: string }): Promise<void>;
 }
 
 /** Idempotency metadata for a task delivery. `id` is stable across retries, so record it
@@ -211,6 +211,26 @@ export function validateHandlerAuth(handlers: HandlerMap | undefined): string[] 
   return dead;
 }
 
+/** Warn (never throw, for the same reason as `validateHandlerAuth`) about a handler that
+ * enqueues a task kind `app.tasks` has no handler for. Returns the missing kinds. */
+export function validateHandlerTasks(handlers: HandlerMap | undefined, tasks: AppTaskMap | undefined): string[] {
+  const have = new Set(Object.keys(tasks ?? {}));
+  const missing = new Set<string>();
+  const by: string[] = [];
+  for (const [name, handler] of Object.entries(handlers ?? {})) {
+    const lacking = (handler.requiresTasks ?? []).filter((k) => !have.has(k));
+    if (lacking.length > 0) by.push(name);
+    for (const k of lacking) missing.add(k);
+  }
+  if (missing.size > 0) {
+    console.warn(
+      `pramen: handler(s) ${by.join(", ")} enqueue task(s) ${[...missing].join(", ")} but \`app.tasks\` has no handler for them, ` +
+        `so each queued task will retry and then dead-letter. Add the task handlers to \`app.tasks\`.`,
+    );
+  }
+  return [...missing];
+}
+
 /** Evaluate a handler's `auth` requirement against the caller's identity. */
 export function authorizeHandler(auth: HandlerAuth, identity: Identity | null): boolean {
   if (auth === "authenticated") return identity != null;
@@ -235,6 +255,10 @@ export interface Handler<I = unknown, O = unknown> {
   readonly partition?: string;
   /** Optional call-authorization, enforced before the handler runs (see HandlerAuth). */
   readonly auth?: HandlerAuth;
+  /** Task kinds this handler enqueues and so needs handlers for in `app.tasks`. Checked at
+   * boot by `validateHandlerTasks`: a missing one is otherwise silent until the outbox
+   * dead-letters the task days later. */
+  readonly requiresTasks?: readonly string[];
 }
 
 export interface HandlerOpts<I> {
@@ -243,6 +267,8 @@ export interface HandlerOpts<I> {
   partition?: string;
   /** Authorization to CALL this handler (see HandlerAuth), to gate non-`ctx.db` handlers. */
   auth?: HandlerAuth;
+  /** Task kinds this handler enqueues; see `Handler.requiresTasks`. */
+  requiresTasks?: readonly string[];
 }
 
 // Standalone (schema-agnostic) handler factories. Prefer createApp(schema) for a
@@ -251,14 +277,14 @@ export function query<I = unknown, O = unknown>(
   run: (ctx: HandlerContext, input: I) => O | Promise<O>,
   opts?: HandlerOpts<I>,
 ): Handler<I, O> {
-  return { kind: "query", run, input: opts?.input, partition: opts?.partition, auth: opts?.auth };
+  return { kind: "query", run, input: opts?.input, partition: opts?.partition, auth: opts?.auth, requiresTasks: opts?.requiresTasks };
 }
 
 export function mutation<I = unknown, O = unknown>(
   run: (ctx: HandlerContext, input: I) => O | Promise<O>,
   opts?: HandlerOpts<I>,
 ): Handler<I, O> {
-  return { kind: "mutation", run, input: opts?.input, partition: opts?.partition, auth: opts?.auth };
+  return { kind: "mutation", run, input: opts?.input, partition: opts?.partition, auth: opts?.auth, requiresTasks: opts?.requiresTasks };
 }
 
 // Registry of handlers keyed by RPC name. Uses `any` for the per-handler input/

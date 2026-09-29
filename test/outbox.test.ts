@@ -29,6 +29,106 @@ describe("outbox (substrate-agnostic deferred tasks)", () => {
     expect((await drainOutbox(driver, { email: () => {} }, 2000)).processed).toBe(0);
   });
 
+  // Two callers that cannot coordinate (isolates on D1) both enqueue "the" nightly task.
+  test("a keyed enqueue is an atomic no-op on a repeat", async () => {
+    const driver = await freshDriver();
+    await enqueueTask(driver, 1000, { kind: "nightly", key: "nightly:2026-09-30" });
+    await enqueueTask(driver, 1000, { kind: "nightly", key: "nightly:2026-09-30" });
+    await enqueueTask(driver, 1000, { kind: "nightly", key: "nightly:2026-10-01" });
+    const ran: string[] = [];
+    await drainOutbox(driver, { nightly: (_p, m) => void ran.push(m.id) }, 1000);
+    expect(ran).toHaveLength(2);
+    expect(new Set(ran).size).toBe(2);
+  });
+
+  test("enqueue says whether a row was inserted, and rejects a bad key", async () => {
+    const driver = await freshDriver();
+    expect(await enqueueTask(driver, 1000, { kind: "k", key: "a" })).toBe(true);
+    expect(await enqueueTask(driver, 1001, { kind: "k", key: "a" })).toBe(false);
+    expect(await enqueueTask(driver, 1001, { kind: "k" })).toBe(true);
+    await expect(enqueueTask(driver, 1000, { kind: "k", key: "" })).rejects.toThrow(/non-empty/);
+  });
+
+  // Joining kind and key with a delimiter made these two the same key.
+  test("(kind, key) pairs that share a delimiter do not collide", async () => {
+    const driver = await freshDriver();
+    expect(await enqueueTask(driver, 1000, { kind: "a.b", key: "c:d" })).toBe(true);
+    expect(await enqueueTask(driver, 1001, { kind: "a.b:c", key: "d" })).toBe(true);
+    expect(await enqueueTask(driver, 1002, { kind: "a.b", key: "c:d" })).toBe(false);
+  });
+
+  // The handler's `meta.id` idempotency record must not see the replacement as the failed run.
+  test("a task replacing a dead-lettered one is a new delivery id", async () => {
+    const driver = await freshDriver();
+    await enqueueTask(driver, 0, { kind: "boom", key: "a" });
+    const ids: string[] = [];
+    let now = 0;
+    for (let i = 0; i < 8; i++) {
+      const r = await drainOutbox(driver, { boom: (_p, m) => { ids.push(m.id); throw new Error("nope"); } }, now);
+      if (r.processed === 0) break;
+      now += 10 * 60_000;
+    }
+    await enqueueTask(driver, now, { kind: "boom", key: "a" });
+    await drainOutbox(driver, { boom: (_p, m) => void ids.push(m.id) }, now + 1);
+    expect(new Set(ids).size).toBe(2);
+    expect(ids[ids.length - 1]).not.toBe(ids[0]);
+  });
+
+  test("a table created before keys existed is upgraded in place", async () => {
+    const db = new Database(":memory:");
+    db.exec(`CREATE TABLE "_pramen_outbox" (id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, runAt INTEGER NOT NULL, createdAt INTEGER NOT NULL, claimedAt INTEGER, lastError TEXT)`);
+    const driver = bunSqliteDriver(db);
+    await ensureOutbox(driver);
+    await ensureOutbox(driver); // idempotent
+    expect(await enqueueTask(driver, 1000, { kind: "k", key: "a" })).toBe(true);
+    expect(await enqueueTask(driver, 1001, { kind: "k", key: "a" })).toBe(false);
+  });
+
+  test("a dead-lettered row gives its key back", async () => {
+    const driver = await freshDriver();
+    await enqueueTask(driver, 0, { kind: "boom", key: "a" });
+    let now = 0;
+    for (let i = 0; i < 8; i++) {
+      const r = await drainOutbox(driver, { boom: () => { throw new Error("nope"); } }, now);
+      if (r.processed === 0) break;
+      now += 10 * 60_000;
+    }
+    expect((await listTasks(driver, { status: "failed" })).length).toBe(1);
+    expect(await enqueueTask(driver, now, { kind: "boom", key: "a" })).toBe(true);
+    expect((await listTasks(driver, { status: "failed" })).length).toBe(0);
+    // ...but a live pending row still holds it.
+    expect(await enqueueTask(driver, now + 1, { kind: "boom", key: "a" })).toBe(false);
+  });
+
+  test("an unkeyed enqueue reports true without depending on RETURNING", async () => {
+    const driver = await freshDriver();
+    const real = driver.exec.bind(driver);
+    // A driver that never surfaces RETURNING rows.
+    driver.exec = (async (sql: string, params: never) => { const rows = await real(sql, params); return /RETURNING/i.test(sql) ? [] : rows; }) as typeof driver.exec;
+    expect(await enqueueTask(driver, 1000, { kind: "k" })).toBe(true);
+  });
+
+  test("a keyed enqueue still reports correctly on a dialect with no RETURNING, and keys are per kind", async () => {
+    const driver = await freshDriver();
+    // The dialect says so, and the statement then omits RETURNING altogether.
+    Object.defineProperty(driver, "dialect", { value: { ...driver.dialect, returning: false } });
+    expect(await enqueueTask(driver, 5000, { kind: "k", key: "a" })).toBe(true);
+    expect(await enqueueTask(driver, 6000, { kind: "k", key: "a" })).toBe(false);
+    // Another kind with the same key string is a different task.
+    expect(await enqueueTask(driver, 6000, { kind: "other", key: "a" })).toBe(true);
+  });
+
+  // A task delayed past the retention window must keep its key after it runs.
+  test("a key is held for the retention window after COMPLETION, not creation", async () => {
+    const driver = await freshDriver();
+    const base = Date.now();
+    // Created two hours ago, due now: pruning on createdAt would delete it as soon as it is done.
+    await enqueueTask(driver, base - 7_200_000, { kind: "k", key: "a", delayMs: 7_200_000 });
+    await drainOutbox(driver, { k: () => {} }, base);
+    await drainOutbox(driver, { k: () => {} }, base); // a prune pass; the row completed just now
+    expect(await enqueueTask(driver, base + 1, { kind: "k", key: "a" })).toBe(false);
+  });
+
   test("a delayed task isn't due until runAt", async () => {
     const driver = await freshDriver();
     await enqueueTask(driver, 1000, { kind: "k", delayMs: 5000 }); // due at 6000
@@ -201,10 +301,13 @@ describe("outbox (substrate-agnostic deferred tasks)", () => {
 
     // a delivered row is pruned once it's older than the retention window
     const d2 = await freshDriver();
-    await enqueueTask(d2, 0, { kind: "k" });
-    await drainOutbox(d2, { k: () => {} }, 1000); // done (createdAt 0)
+    const base = Date.now(); // a done row is stamped with the wall clock
+    await enqueueTask(d2, base, { kind: "k" });
+    await drainOutbox(d2, { k: () => {} }, base); // done
     expect((await listTasks(d2, {})).length).toBe(1); // still within retention
-    await drainOutbox(d2, { k: () => {} }, 1000 + 3_600_001); // a drain past retention prunes it
+    // Age the completion stamp instead of waiting an hour: pruning counts from completion.
+    await d2.exec(`UPDATE "_pramen_outbox" SET claimedAt = claimedAt - 3700000 WHERE status = 'done'`, []);
+    await drainOutbox(d2, { k: () => {} }, base); // a drain past retention prunes it
     expect((await listTasks(d2, {})).length).toBe(0);
   });
 });

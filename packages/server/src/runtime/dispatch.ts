@@ -36,8 +36,8 @@ export interface DispatchResult {
 export function tasksFacade(driver: Driver, onEnqueue?: () => void): Tasks {
   return {
     enqueue: async (opts) => {
-      await enqueueTask(driver, Date.now(), opts);
-      onEnqueue?.();
+      // Only a row that was really inserted wakes the drainer: a keyed repeat is a no-op.
+      if (await enqueueTask(driver, Date.now(), opts)) onEnqueue?.();
     },
   };
 }
