@@ -457,7 +457,8 @@ handlers = { ...createAdminPageHandlers([desk]) };
 
 The server describes the UI as JSON and the editor renders it, so **no project JavaScript
 runs in the admin**. Blocks: `header`, `section`, `context`, `divider`, `fields`, `table`,
-`stats`, `image`, `columns`, `accordion`, `empty`, `actions`, `form`. Inputs: `text_input`,
+`stats`, `chart`, `image`, `columns`, `accordion`, `empty`, `actions`, `form`. `chart` draws one series of labelled numbers (`bar` or `line`, up to 400 non-negative points).
+Inputs: `text_input`,
 `number_input`, `select`, `toggle`, `secret_input`.
 
 **A row can act.** A table cell holds either a value or an *element*, so the control lives

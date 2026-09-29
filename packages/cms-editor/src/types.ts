@@ -525,6 +525,7 @@ export type AdminBlock =
   | { type: "fields"; fields: { label: string; value: string }[] }
   | { type: "table"; block_id?: string; columns: { key: string; label: string }[]; rows: Record<string, AdminCell>[]; empty?: string }
   | { type: "stats"; stats: { label: string; value: string; hint?: string }[] }
+  | { type: "chart"; chart?: "bar" | "line"; title?: string; points: { label: string; value: number; title?: string }[]; unit?: string; empty?: string }
   | { type: "actions"; block_id?: string; elements: AdminElement[] }
   | { type: "form"; block_id: string; fields: AdminInput[]; submit: { label: string; action_id: string } }
   | { type: "image"; url: string; alt?: string; caption?: string }

@@ -155,6 +155,11 @@ export type AdminBlock =
    * does, so a page with two tables can tell which one a shared `action_id` came from. */
   | { type: "table"; block_id?: string; columns: { key: string; label: AdminText }[]; rows: Record<string, AdminCell>[]; empty?: AdminText }
   | { type: "stats"; stats: { label: AdminText; value: AdminText; hint?: AdminText }[] }
+  /** A single-series chart over labelled points. Server-described like every other block:
+   * the page sends numbers, the editor draws them. `bar` suits counts per bucket, `line`
+   * a series over time. `unit` is a suffix for the axis and tooltips ("ms", "%"), not a
+   * scale factor. */
+  | { type: "chart"; chart?: "bar" | "line"; title?: AdminText; points: { label: AdminText; value: number; title?: AdminText }[]; unit?: AdminText; empty?: AdminText }
   | { type: "actions"; block_id?: string; elements: AdminElement[] }
   | { type: "form"; block_id: string; fields: AdminInput[]; submit: { label: AdminText; action_id: string } }
   | { type: "image"; url: string; alt?: AdminText; caption?: AdminText }
@@ -190,6 +195,10 @@ export interface AdminPageResponse {
   /** A transient message shown over the page. */
   toast?: { text: AdminText; tone?: "info" | "success" | "error" };
 }
+
+/** The most points one `chart` block may carry. A range of a year of days fits; anything
+ * larger is a table's job, and the SVG is one element per point. */
+export const MAX_ADMIN_CHART_POINTS = 400;
 
 /** How deep `columns` / `accordion` may nest blocks. Rendering is recursive and the
  * response is server-authored but not necessarily hand-written, so it is capped. */
@@ -422,6 +431,27 @@ function normalizeAdminBlock(block: AdminBlock, depth: number, inputIds: Set<str
       const url = normalizeHref(block.url);
       if (!isSafeHref(url)) throw new Error(`pramen/cms: admin page image url ${JSON.stringify(block.url)} is not an allowed href`);
       return { ...block, url };
+    }
+    case "chart": {
+      // A NaN or Infinity would not throw in the browser: it would draw an SVG path with
+      // `NaN` coordinates, which renders as nothing and reads as "no traffic".
+      if (!Array.isArray(block.points)) throw new Error("pramen/cms: a `chart` block needs `points: [{ label, value }]`");
+      if (block.points.length > MAX_ADMIN_CHART_POINTS) throw new Error(`pramen/cms: a \`chart\` block carries at most ${MAX_ADMIN_CHART_POINTS} points (got ${block.points.length}). Aggregate first, or use a table`);
+      // Text a page builds from data: an object or a number here would reach React as a child
+      // and throw, taking the whole admin page down instead of naming the bad block.
+      for (const k of ["title", "unit", "empty"] as const) {
+        if (block[k] !== undefined && typeof block[k] !== "string") throw new Error(`pramen/cms: a \`chart\` block's \`${k}\` must be a string (got ${typeof block[k]})`);
+      }
+      if (block.chart !== undefined && block.chart !== "bar" && block.chart !== "line") throw new Error(`pramen/cms: a \`chart\` block's \`chart\` must be "bar" or "line" (got ${JSON.stringify(block.chart)})`);
+      for (const [i, p] of block.points.entries()) {
+        if (typeof p?.label !== "string") throw new Error(`pramen/cms: chart point ${i} needs a string \`label\` (got ${typeof p?.label})`);
+        if (p.title !== undefined && typeof p.title !== "string") throw new Error(`pramen/cms: chart point ${i} \`title\` must be a string (got ${typeof p.title})`);
+        if (typeof p?.value !== "number" || !Number.isFinite(p.value)) throw new Error(`pramen/cms: chart point ${i} has a non-finite value (${String(p?.value)})`);
+        // The axis starts at zero, so a negative would be drawn at the baseline while its
+        // tooltip said otherwise: the picture and the data would disagree.
+        if (p.value < 0) throw new Error(`pramen/cms: chart point ${i} is negative (${p.value}). A \`chart\` block draws from zero; use a table for signed values`);
+      }
+      return block;
     }
     case "columns":
       return { ...block, columns: block.columns.map((col) => col.map((b) => normalizeAdminBlock(b, depth + 1, inputIds))) };

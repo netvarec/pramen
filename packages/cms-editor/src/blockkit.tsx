@@ -18,6 +18,7 @@
 import { Button, Heading } from "@podoba/react";
 import { useCallback, useEffect, useState } from "react";
 import type { Api } from "./api";
+import { ChartBlockView } from "./chart";
 import { CONTROL } from "./fields";
 import { WRAP } from "./chrome";
 import { getI18n, useI18n } from "./i18n";
@@ -190,6 +191,8 @@ function BlockView({ block, values, setValue, disabled, onFire }: { block: Admin
           ))}
         </div>
       );
+    case "chart":
+      return <ChartBlockView block={block} />;
     case "table":
       // The only interactive-capable block that used NOT to get the value bag. A row could
       // show that a venue is hidden and could not offer the switch, so a list of 800 rows

@@ -1385,6 +1385,7 @@ export {
   ADMIN_ELEMENT_TYPES,
   ADMIN_PAGE_KINDS,
   MAX_ADMIN_BLOCK_DEPTH,
+  MAX_ADMIN_CHART_POINTS,
 } from "./blockkit";
 export type {
   AdminBlock,
