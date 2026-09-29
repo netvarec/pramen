@@ -10,23 +10,31 @@
 //
 // TWO COLLECTORS, ONE PIPELINE. See `tracker.ts` for why: a Worker records the pageview
 // when it served the page, the beacon records it when nothing did, and the beacon always
-// reports the engagement a server cannot observe. The slice shipped here is the beacon and
-// the pipeline behind it; the Worker-side hook is a separate change.
+// reports the engagement a server cannot observe. The Worker-side half is `recordView` /
+// `analyticsMiddleware` (server.ts); the daily rollup schedules itself (schedule.ts).
 
-import { mutation, query, type EnvBag, type HandlerContext, type JsonValue } from "@pramen/server";
+import { isQueueProducer, mutation, query, type EnvBag, type HandlerContext, type JsonValue } from "@pramen/server";
 import type { QueueContext, QueueMessage } from "@pramen/server";
 import type { RouteContext } from "@pramen/server/worker";
-import { adb, INGEST_HANDLER, INGEST_ROLE, runIngest } from "./ingest";
+import { adb } from "./db";
+import { INGEST_HANDLER, INGEST_ROLE, runIngest } from "./ingest";
 import { metricsForRange, topPages } from "./queries";
 import { pruneRawEvents, rollupPending } from "./rollup";
+import { assertKeepDays, ROLLUP_TASK, runScheduledRollup, type ScheduledRollupOpts } from "./schedule";
 import { DirectSink, NoopSink, QueueSink, type AnalyticsQueueMessage, type AnalyticsSink } from "./sink";
 
 export { analyticsSchema, ANALYTICS_PARTITION } from "./schema";
 export { analyticsPolicies, type AnalyticsPolicyOpts } from "./policies";
 export { collectRoute, trackerRoute, sessionId, type CollectOptions } from "./collect";
+export {
+  analyticsMiddleware, PAGE_ID_HEADER, recordView, shouldRecord, stripPageId,
+  type AnalyticsMiddlewareOptions, type MiddlewareContext, type RecordViewOptions,
+} from "./server";
+export { assertKeepDays, ensureRollupScheduled, nextRollupAt, ROLLUP_TASK, runScheduledRollup, scheduleRollup, type ScheduledRollupOpts } from "./schedule";
 export { trackerScript, VIEW_META, type TrackerOptions } from "./tracker";
 export { analyticsDashboard, type AnalyticsDashboardOpts } from "./dashboard";
-export { adb, ingestEvents, INGEST_HANDLER, INGEST_ROLE, type AnalyticsDb, type IngestInput } from "./ingest";
+export { adb, type AnalyticsDb } from "./db";
+export { ingestEvents, INGEST_HANDLER, INGEST_ROLE, type IngestInput } from "./ingest";
 export { computeDays, daysInRange, metricsForRange, topPages, type DayMetrics, type PageMetrics, type RangeMetrics } from "./queries";
 export { previousDay, pruneRawEvents, rollupPending, type RollupResult } from "./rollup";
 export { DirectSink, MemorySink, NoopSink, QueueSink, type AnalyticsQueueMessage, type AnalyticsSink } from "./sink";
@@ -57,6 +65,41 @@ export interface AnalyticsOptions {
   queueName?: string;
 }
 
+/** The queue producer bound under `name`, or null. Looked up by name and checked with the
+ * core's own definition of a producer, so the two cannot disagree, and a per-request caller
+ * (the edge middleware) does not scan the whole environment each time. */
+function queueProducer(env: EnvBag, name: string): { send(body: unknown): Promise<void> } | null {
+  const binding = (env as Record<string, unknown>)[name];
+  return isQueueProducer(binding) ? binding : null;
+}
+
+/** The one place a producer becomes a `QueueSink`, so the two sink factories cannot drift. */
+function queueSinkFor(producer: { send(body: unknown): Promise<void> }, binding: string, tenant: string): AnalyticsSink {
+  return new QueueSink({ send: (_q, body) => producer.send(body) }, binding, tenant);
+}
+
+/** The sink for a Worker that is NOT the pramen one, such as an Astro site rendering on its
+ * own Worker. It has no store and no `callPrivileged`, so the only way to reach the
+ * analytics tables is the queue: bind the same `ANALYTICS` producer here and the pramen
+ * Worker's consumer (`createAnalyticsQueues`) writes the batch. Without the binding it drops
+ * events and says so once, since a silent no-op would look like a site with no visitors. */
+export function createEdgeSink(env: EnvBag, opts: { tenant?: string; queueBinding?: string } = {}): AnalyticsSink {
+  const name = opts.queueBinding ?? ANALYTICS_QUEUE_BINDING;
+  const producer = queueProducer(env, name);
+  if (producer) return queueSinkFor(producer, name, opts.tenant ?? "main");
+  // One Noop per binding NAME, not per env object: a middleware builds its sink per REQUEST and
+  // each instance warns once, and an `env` that is a fresh object every request (a proxy, a
+  // spread) would defeat a cache keyed on identity.
+  let noop = missingProducer.get(name);
+  if (!noop) {
+    noop = new NoopSink(`no "${name}" queue producer is bound to this Worker, so server-side pageviews cannot reach the analytics store.`);
+    missingProducer.set(name, noop);
+  }
+  return noop;
+}
+
+const missingProducer = new Map<string, AnalyticsSink>();
+
 /**
  * Build the sink for a request.
  *
@@ -73,19 +116,8 @@ export function createAnalyticsSink(
   const tenant = opts.tenant ?? "main";
   const bindingName = opts.queueBinding === undefined ? ANALYTICS_QUEUE_BINDING : opts.queueBinding;
 
-  if (bindingName) {
-    const binding = (env as Record<string, unknown>)[bindingName];
-    // The same duck-test `createQueue` uses: a producer has BOTH `send` and `sendBatch`,
-    // which is what distinguishes it from the send-only email binding.
-    const isProducer =
-      typeof binding === "object" && binding !== null &&
-      typeof (binding as { send?: unknown }).send === "function" &&
-      typeof (binding as { sendBatch?: unknown }).sendBatch === "function";
-    if (isProducer) {
-      const producer = binding as { send(body: unknown): Promise<void> };
-      return new QueueSink({ send: (_q, body) => producer.send(body) }, bindingName, tenant);
-    }
-  }
+  const producer = bindingName ? queueProducer(env, bindingName) : null;
+  if (producer) return queueSinkFor(producer, bindingName as string, tenant);
 
   return new DirectSink(async (events) => {
     const res = await routeCtx.callPrivileged({
@@ -107,6 +139,27 @@ export function noopSink(reason: string): AnalyticsSink {
   return new NoopSink(reason);
 }
 
+/** The two fields the admin mutation may set, checked. Everything else in the request is
+ * dropped: `rollupPending` also takes `days`, which skips the pending-day guards, so an
+ * unfiltered pass-through let a caller recompute a pruned day from zero raw rows and overwrite
+ * its aggregate with zeros (or roll a future day). Today is allowed, and safe: ingest flags today's aggregate dirty as soon as another event arrives (see `markLateDays`). */
+function rollupInput(input: { through?: unknown; maxDays?: unknown } | undefined): { through?: string; maxDays?: number } {
+  const out: { through?: string; maxDays?: number } = {};
+  if (input?.through !== undefined) {
+    if (typeof input.through !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(input.through) || input.through > new Date().toISOString().slice(0, 10)) {
+      throw new Error("runAnalyticsRollup: `through` must be a YYYY-MM-DD day no later than today (UTC)");
+    }
+    out.through = input.through;
+  }
+  if (input?.maxDays !== undefined) {
+    if (typeof input.maxDays !== "number" || !Number.isInteger(input.maxDays) || input.maxDays < 1 || input.maxDays > 60) {
+      throw new Error("runAnalyticsRollup: `maxDays` must be an integer from 1 to 60");
+    }
+    out.maxDays = input.maxDays;
+  }
+  return out;
+}
+
 /** Handlers to spread into `app.handlers`. */
 export function createAnalyticsHandlers(opts: AnalyticsOptions = {}) {
   const viewerRoles = [...(opts.viewerRoles ?? DEFAULT_VIEWER_ROLES)];
@@ -117,7 +170,7 @@ export function createAnalyticsHandlers(opts: AnalyticsOptions = {}) {
      * see the note there for why the obvious `auth: []` does not work. */
     [INGEST_HANDLER]: mutation(
       (ctx: HandlerContext, input: { events: [] }) => runIngest(ctx, input as never),
-      { auth: [INGEST_ROLE] },
+      { auth: [INGEST_ROLE], requiresTasks: [ROLLUP_TASK] },
     ),
 
     /** Headline metrics for a range. Role-gated: this reads `ctx.kv`-free but ALSO reads
@@ -138,26 +191,32 @@ export function createAnalyticsHandlers(opts: AnalyticsOptions = {}) {
      * without one can catch up, and so the job can be exercised in a test without waiting
      * for a schedule. */
     runAnalyticsRollup: mutation(
-      (ctx: HandlerContext, input: { through?: string; maxDays?: number }) => rollupPending(adb(ctx), input ?? {}),
+      (ctx: HandlerContext, input: { through?: string; maxDays?: number }) => rollupPending(adb(ctx), rollupInput(input)),
       { auth: adminRoles },
     ),
 
     /** Delete raw events for days that have been rolled up. Separate from the rollup and
      * separately gated, because it is the only destructive operation here. */
     pruneAnalytics: mutation(
-      (ctx: HandlerContext, input: { keepDays?: number }) => pruneRawEvents(adb(ctx), input ?? {}),
+      (ctx: HandlerContext, input: { keepDays?: number }) => {
+        // Refuse rather than clamp: a caller who typed 0 or NaN is not asking for the default.
+        if (input?.keepDays !== undefined) assertKeepDays(input.keepDays);
+        return pruneRawEvents(adb(ctx), { keepDays: input?.keepDays });
+      },
       { auth: adminRoles },
     ),
   };
 }
 
-/** Tasks to spread into `app.tasks`: the rollup as a deferred job, for a deployment that
- * drives it from `ctx.tasks.enqueue` rather than a cron. */
-export function createAnalyticsTasks() {
+/** Tasks to spread into `app.tasks`. REQUIRED for the daily rollup: ingest queues it, and a
+ * task with no handler here is a task that never runs. */
+export function createAnalyticsTasks(opts: ScheduledRollupOpts = {}) {
+  assertKeepDays(opts.keepDays);
   return {
-    "analytics.rollup": async (ctx: HandlerContext) => {
-      await rollupPending(adb(ctx));
-    },
+    // Rolls up, optionally prunes (`keepDays`; never by default), and queues tomorrow's run,
+    // so it keeps itself going. The first ingest on a store starts the chain
+    // (`ensureRollupScheduled`); nothing needs a cron of its own.
+    [ROLLUP_TASK]: async (ctx: HandlerContext, payload?: unknown) => runScheduledRollup(ctx, payload, opts),
   };
 }
 
@@ -192,5 +251,22 @@ export function createAnalyticsQueues(opts: { queueName?: string } = {}) {
       // not recoverable.
       if (!res.ok) throw new Error(`analytics ingest failed: ${res.status}`);
     },
+  };
+}
+
+/** Everything a deployment spreads, from one call, so the halves that must agree cannot be
+ * configured apart: the ingest handler queues the rollup task, and the task handler is
+ * what runs it. Forgetting `tasks` while taking `handlers` was a silent dead-letter loop.
+ *
+ *   const analytics = createAnalytics({ keepDays: 90 });
+ *   // handlers: { ...analytics.handlers }, tasks: { ...analytics.tasks },
+ *   // queues: { ...analytics.queues }
+ *
+ * The individual factories stay exported for a deployment that composes them itself. */
+export function createAnalytics(opts: AnalyticsOptions & ScheduledRollupOpts = {}) {
+  return {
+    handlers: createAnalyticsHandlers(opts),
+    tasks: createAnalyticsTasks(opts),
+    queues: createAnalyticsQueues({ queueName: opts.queueName }),
   };
 }

@@ -11,7 +11,11 @@ import type { AnalyticsEvent } from "./events";
 /** Where a batch of events goes. `write` is called on the request path, so an
  * implementation must be cheap: the queue sink hands off, the direct sink does not. */
 export interface AnalyticsSink {
-  write(events: readonly AnalyticsEvent[]): Promise<void>;
+  /** Resolves `false` when the sink DROPPED the events without storing them (and without
+   * failing). Anything else, `void` included, means accepted. The Worker collector stamps a
+   * page only for an accepted event: a stamp on a dropped one would silence the beacon's
+   * pageview and the visit would be counted nowhere. */
+  write(events: readonly AnalyticsEvent[]): Promise<boolean | void>;
 }
 
 /** The queue message the consumer expects. `tenant` rides ON THE MESSAGE because a queue
@@ -78,9 +82,11 @@ export class NoopSink implements AnalyticsSink {
 
   constructor(private readonly reason: string) {}
 
-  async write(): Promise<void> {
-    if (this.warned) return;
-    this.warned = true;
-    console.warn(`@pramen/analytics: events are being dropped. ${this.reason}`);
+  async write(): Promise<false> {
+    if (!this.warned) {
+      this.warned = true;
+      console.warn(`@pramen/analytics: events are being dropped. ${this.reason}`);
+    }
+    return false;
   }
 }

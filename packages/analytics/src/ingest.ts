@@ -7,23 +7,8 @@
 
 import type { HandlerContext } from "@pramen/server";
 import { EVENT_KINDS, EVENT_ORIGINS, type AnalyticsEvent } from "./events";
-import type { analyticsSchema } from "./schema";
-
-/** A `ctx.db` narrowed to this package's tables. The handler that calls `ingestEvents` is
- * privileged, so the ACL is not what bounds this; the type is. */
-// Reached through `HandlerContext` rather than by importing the `Db` class, which
-// `@pramen/server` does not export, and should not have to, for a consumer that only ever
-// sees a db through a handler anyway.
-export type AnalyticsDb = HandlerContext<typeof analyticsSchema>["db"];
-
-/** Narrow a handler's `ctx.db` to the analytics tables.
- *
- * The same shape `@pramen/cms` uses (`cdb`), and for the same reason: `query`/`mutation`
- * imported from `@pramen/server` are typed against the DEFAULT `SchemaDef`, so annotating a
- * handler's `ctx` with a concrete schema makes it unassignable. `createApp(schema)` is the
- * other way, but a library ships handlers to be spread into someone ELSE's app, and so
- * cannot call it. Coercing the db is the seam that leaves the handler signature alone. */
-export const adb = (ctx: HandlerContext): AnalyticsDb => ctx.db as unknown as AnalyticsDb;
+import { ensureRollupScheduled } from "./schedule";
+import { adb, chunked, type AnalyticsDb } from "./db";
 
 /** The columns written by an insert, in statement order. `id` is minted here (the raw
  * path skips the `generated()` helper, which runs at the `Db` layer) and `createdAt` is
@@ -62,7 +47,7 @@ function isWellFormed(e: AnalyticsEvent): boolean {
  * TRAFFIC rather than with editorial activity, and a per-row round trip is what makes a
  * collector fall over. The statement is fully parameterized, so no value is interpolated. */
 export async function ingestEvents(db: AnalyticsDb, events: readonly AnalyticsEvent[]): Promise<number> {
-  const rows = events.filter(isWellFormed);
+  const rows = await dropPrunedDays(db, events.filter(isWellFormed));
   if (rows.length === 0) return 0;
 
   const cols = COLUMNS.map((c) => `"${c}"`).join(", ");
@@ -98,7 +83,65 @@ export async function ingestEvents(db: AnalyticsDb, events: readonly AnalyticsEv
     written += slice.length;
   }
 
+  await markLateDays(db, rows.map((e) => e.day));
+
   return written;
+}
+
+const todayUtc = (): string => new Date().toISOString().slice(0, 10);
+
+/** Events for a day whose raw rows were PRUNED are refused.
+ *
+ * Such a day has an aggregate and no raw rows, so it cannot be recomputed: letting a
+ * straggler in would flag it `dirty`, and reads and the next rollup would then trust the
+ * straggler alone and replace the real history with one event. Dropping the event loses one
+ * pageview (and says so); admitting it loses the day. `LATE_EVENT_DAYS` is the grace that
+ * keeps this to a queue outage longer than that. */
+async function dropPrunedDays(db: AnalyticsDb, rows: AnalyticsEvent[]): Promise<AnalyticsEvent[]> {
+  const today = todayUtc();
+  const late = [...new Set(rows.map((e) => e.day).filter((d) => d < today))];
+  if (late.length === 0) return rows;
+
+  const pruned = new Set<string>();
+  for (const chunk of chunked(late)) {
+    const rolled = new Set((await db.find({ from: "analytics_daily", where: { day: { in: chunk }, dirty: false }, select: ["day"] })).map((r) => r.day));
+    if (rolled.size === 0) continue;
+    const raw = new Set((await db.aggregate({ from: "analytics_events", where: { day: { in: [...rolled] } }, groupBy: "day", aggregations: { n: { fn: "count" } } })).map((r) => String(r.day)));
+    for (const d of rolled) if (!raw.has(d)) pruned.add(d);
+  }
+  if (pruned.size === 0) return rows;
+  const kept = rows.filter((e) => !pruned.has(e.day));
+  console.warn(`@pramen/analytics: dropped ${rows.length - kept.length} event(s) for already-pruned day(s) ${[...pruned].sort().join(", ")}`);
+  return kept;
+}
+
+/** Flag every already-past day in a batch as `dirty`, so its aggregate is recomputed.
+ *
+ * A queue outage or a retry can deliver an event stamped D long after D was rolled up, and a
+ * rollup of a finished day is otherwise never revisited. Marking it here, where the event
+ * lands, is exact and costs nothing for the common case (an event for TODAY marks nothing),
+ * unlike rescanning old raw rows to find stragglers. An upsert, because the day may have no
+ * aggregate row yet (older than the newest rolled day): the stub carries the flag, and reads
+ * ignore a dirty row's counts. One multi-row statement per chunk, since a batch after an
+ * outage can span many days and each was a round trip. */
+async function markLateDays(db: AnalyticsDb, days: readonly string[]): Promise<void> {
+  const today = todayUtc();
+  // TODAY too, but update-only: a today row exists only if someone rolled the unfinished day
+  // early (the admin mutation allows it), and once more events arrive that aggregate is stale.
+  // No row means nothing to flag, and the statement is then a cheap indexed no-op.
+  if (days.includes(today)) {
+    await db.exec(`UPDATE "analytics_daily" SET "dirty"=1, "dirtyToken"=? WHERE "day"=?`, crypto.randomUUID(), today);
+  }
+  const late = [...new Set(days.filter((d) => d < today))];
+  for (const chunk of chunked(late, 30)) {
+    const values = chunk.map(() => "(?,?,1,?)").join(", ");
+    const params = chunk.flatMap((day) => [crypto.randomUUID(), day, crypto.randomUUID()]);
+    await db.exec(
+      `INSERT INTO "analytics_daily" ("id","day","dirty","dirtyToken") VALUES ${values}
+       ON CONFLICT("day") DO UPDATE SET "dirty"=1, "dirtyToken"=excluded."dirtyToken"`,
+      ...params,
+    );
+  }
 }
 
 /** The privileged handler both sinks reach. */
@@ -133,5 +176,8 @@ export interface IngestInput {
 
 export async function runIngest(ctx: HandlerContext, input: IngestInput): Promise<{ written: number }> {
   const events = Array.isArray(input?.events) ? input.events : [];
-  return { written: await ingestEvents(adb(ctx), events) };
+  const written = await ingestEvents(adb(ctx), events);
+  // Traffic is what makes a rollup worth running, so it is also what starts the chain.
+  if (written > 0) await ensureRollupScheduled(ctx);
+  return { written };
 }

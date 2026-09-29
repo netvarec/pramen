@@ -99,7 +99,7 @@ export interface CollectOptions {
   selfHost?: (request: Request, env: EnvBag) => string | null;
 }
 
-const defaultSalt = (env: EnvBag): string | null => {
+export const defaultSalt = (env: EnvBag): string | null => {
   const v = (env as Record<string, unknown>).ANALYTICS_SALT ?? (env as Record<string, unknown>).AUTH_SECRET;
   return typeof v === "string" && v.length > 0 ? v : null;
 };

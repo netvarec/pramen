@@ -13,7 +13,7 @@
 // story: two isolates racing produce one row with the correct contents, where a lease
 // would only have made one of them wait to compute the same thing.
 
-import type { AnalyticsDb } from "./ingest";
+import { chunked, type AnalyticsDb } from "./db";
 import { computeDays } from "./queries";
 
 /** Yesterday, UTC. A day is rolled up only once it can no longer change. */
@@ -21,19 +21,58 @@ export function previousDay(today = new Date()): string {
   return new Date(today.getTime() - 86_400_000).toISOString().slice(0, 10);
 }
 
-/** Days with raw events at or before `through` that have no `analytics_daily` row yet. */
-async function pendingDays(db: AnalyticsDb, through: string, maxDays: number): Promise<string[]> {
-  const seen = await db.aggregate({
+/** Days a raw event is kept after its day is rolled up, at the very least. A pruned day can no
+ * longer be recomputed, so an event that arrives for one is dropped (see `ingest.ts`); the
+ * grace is what keeps that to a queue outage longer than this many days. `keepDays` below it
+ * is refused (`assertKeepDays`) and clamped here. */
+export const LATE_EVENT_DAYS = 3;
+
+/** Days that need (re)rolling, oldest first: those after the newest cleanly rolled day (the
+ * unrolled tail; on a first run, all of it), and those flagged `dirty` because an event
+ * arrived after they were rolled (see `markLateDays`). Neither groups the whole raw table, so
+ * a nightly run does not read more as the store grows. */
+export async function pendingDays(db: AnalyticsDb, through: string, maxDays: number): Promise<string[]> {
+  const [latest] = await db.aggregate({ from: "analytics_daily", where: { dirty: false }, aggregations: { newest: { fn: "max", column: "day" } } });
+  const newestClean = typeof latest?.newest === "string" ? latest.newest : null;
+
+  const tailRows = await db.aggregate({
     from: "analytics_events",
-    where: { day: { lte: through } },
+    where: { day: newestClean ? { lte: through, gt: newestClean } : { lte: through } },
     groupBy: "day",
     aggregations: { n: { fn: "count" } },
   });
-  const candidates = seen.map((r) => String(r.day)).sort();
-  if (candidates.length === 0) return [];
-  const rolled = await db.find({ from: "analytics_daily", where: { day: { in: candidates } } });
-  const done = new Set(rolled.map((r) => r.day));
-  return candidates.filter((d) => !done.has(d)).slice(0, maxDays);
+  const tail = tailRows.map((r) => String(r.day));
+
+  const flagged = (await db.find({ from: "analytics_daily", where: { dirty: true, day: { lte: through } }, select: ["day"] })).map((r) => r.day);
+  // A flagged day whose raw rows are gone has nothing to recompute from: rolling it would
+  // overwrite a good aggregate with zeros.
+  const stillRaw = new Set<string>();
+  for (const chunk of chunked(flagged)) {
+    for (const r of await db.aggregate({ from: "analytics_events", where: { day: { in: chunk } }, groupBy: "day", aggregations: { n: { fn: "count" } } })) stillRaw.add(String(r.day));
+  }
+
+  return [...new Set([...tail, ...flagged.filter((d) => stillRaw.has(d))])].sort().slice(0, maxDays);
+}
+
+/** Flag every day that has raw events but no aggregate row and is OLDER than the newest
+ * cleanly rolled day.
+ *
+ * Such a day is invisible to `pendingDays`, which looks only at the tail after the newest
+ * clean day and at flagged days. New stragglers are flagged by ingest; this is for the ones
+ * that arrived before flagging existed (an upgraded store), so they are rolled, and their raw
+ * rows can eventually be pruned. One scan, done once per store (see `runScheduledRollup`).
+ * Returns how many days it flagged. */
+export async function flagUnrolledDays(db: AnalyticsDb): Promise<number> {
+  const rows = await db.exec(
+    `INSERT INTO "analytics_daily" ("id","day","dirty","dirtyToken")
+     SELECT lower(hex(randomblob(4))||'-'||hex(randomblob(2))||'-4'||substr(hex(randomblob(2)),2)||'-a'||substr(hex(randomblob(2)),2)||'-'||hex(randomblob(6))),
+            e."day", 1, lower(hex(randomblob(16)))
+     FROM (SELECT DISTINCT "day" FROM "analytics_events"
+           WHERE "day" < (SELECT MAX("day") FROM "analytics_daily" WHERE "dirty" = 0)
+             AND "day" NOT IN (SELECT "day" FROM "analytics_daily")) e
+     RETURNING "day"`,
+  );
+  return rows.length;
 }
 
 export interface RollupResult {
@@ -47,11 +86,19 @@ export interface RollupResult {
  * button), and a store that has gone months without a cron must not try to catch up in one
  * invocation and hit the wall-clock limit. Falling behind is recoverable: each run makes
  * progress and the next one continues. */
-export async function rollupPending(db: AnalyticsDb, opts: { through?: string; maxDays?: number } = {}): Promise<RollupResult> {
+export async function rollupPending(db: AnalyticsDb, opts: { through?: string; maxDays?: number; days?: readonly string[] } = {}): Promise<RollupResult> {
   const through = opts.through ?? previousDay();
-  const days = await pendingDays(db, through, opts.maxDays ?? 14);
+  // `days`: a caller that already asked what is pending (the scheduled task does, to decide
+  // whether to re-queue) passes it in instead of paying for the same scan twice.
+  const days = opts.days ? [...opts.days] : await pendingDays(db, through, opts.maxDays ?? 14);
   if (days.length === 0) return { days: [], pages: 0 };
 
+  // The flag tokens as they are NOW. A day is unflagged only if its token is unchanged when
+  // the numbers are written, so an event that flags it in between keeps it flagged.
+  const seen = new Map<string, string | null>();
+  for (const chunk of chunked(days)) {
+    for (const r of await db.find({ from: "analytics_daily", where: { day: { in: chunk } }, select: ["day", "dirtyToken"] })) seen.set(r.day, r.dirtyToken ?? null);
+  }
   const metrics = await computeDays(db, days);
   let pages = 0;
 
@@ -67,12 +114,14 @@ export async function rollupPending(db: AnalyticsDb, opts: { through?: string; m
          ("id","day","pageviews","sessions","bounces","engagedViews","totalDurationMs","totalScrollDepth","byDevice","bySource","byCountry")
        VALUES (?,?,?,?,?,?,?,?,?,?,?)
        ON CONFLICT("day") DO UPDATE SET
+         "dirty"=CASE WHEN "analytics_daily"."dirtyToken" IS ? THEN 0 ELSE "analytics_daily"."dirty" END,
          "pageviews"=excluded."pageviews", "sessions"=excluded."sessions", "bounces"=excluded."bounces",
          "engagedViews"=excluded."engagedViews", "totalDurationMs"=excluded."totalDurationMs",
          "totalScrollDepth"=excluded."totalScrollDepth", "byDevice"=excluded."byDevice",
          "bySource"=excluded."bySource", "byCountry"=excluded."byCountry"`,
       crypto.randomUUID(), day, m.pageviews, m.sessions, m.bounces, m.engagedViews, m.totalDurationMs, m.totalScrollDepth,
       JSON.stringify(m.byDevice), JSON.stringify(m.bySource), JSON.stringify(m.byCountry),
+      seen.get(day) ?? null,
     );
 
     // Per-path totals for the same day. Read straight from raw, since this is the last chance,
@@ -83,12 +132,24 @@ export async function rollupPending(db: AnalyticsDb, opts: { through?: string; m
       groupBy: ["path", "pageId"],
       aggregations: { n: { fn: "count" } },
     });
+    // Folded to ONE row per path before writing. The groups are (path, pageId), but the table
+    // is unique on (day, path): a path seen by the server (pageId set) and by the beacon alone
+    // (pageId null) is two groups, and upserting each would have the second overwrite the first
+    // instead of adding to it.
+    const byPath = new Map<string, { pageId: string | null; n: number }>();
     for (const r of perPath) {
+      const path = String(r.path);
+      const cur = byPath.get(path) ?? { pageId: null, n: 0 };
+      cur.n += r.n;
+      cur.pageId = cur.pageId ?? ((r.pageId as string | null) ?? null);
+      byPath.set(path, cur);
+    }
+    for (const [path, { pageId, n }] of byPath) {
       await db.exec(
         `INSERT INTO "analytics_pages" ("id","day","path","pageId","pageviews","engagedViews","totalDurationMs","totalScrollDepth")
          VALUES (?,?,?,?,?,0,0,0)
          ON CONFLICT("day","path") DO UPDATE SET "pageviews"=excluded."pageviews", "pageId"=excluded."pageId"`,
-        crypto.randomUUID(), day, String(r.path), (r.pageId as string | null) ?? null, r.n,
+        crypto.randomUUID(), day, path, pageId, n,
       );
       pages += 1;
     }
@@ -104,7 +165,8 @@ export async function rollupPending(db: AnalyticsDb, opts: { through?: string; m
  * week in a chart nobody cross-checks. So the delete names only days present in
  * `analytics_daily`. */
 export async function pruneRawEvents(db: AnalyticsDb, opts: { keepDays?: number } = {}): Promise<{ deletedDays: string[] }> {
-  const keep = opts.keepDays ?? 90;
+  // Never inside the grace period: see LATE_EVENT_DAYS.
+  const keep = Math.max(opts.keepDays ?? 90, LATE_EVENT_DAYS + 1);
   const cutoff = new Date(Date.now() - keep * 86_400_000).toISOString().slice(0, 10);
 
   const stale = await db.aggregate({
@@ -114,13 +176,16 @@ export async function pruneRawEvents(db: AnalyticsDb, opts: { keepDays?: number 
     aggregations: { n: { fn: "count" } },
   });
   const candidates = stale.map((r) => String(r.day));
-  if (candidates.length === 0) return { deletedDays: [] };
+  const deleted: string[] = [];
 
-  const rolled = await db.find({ from: "analytics_daily", where: { day: { in: candidates } } });
-  const deletable = rolled.map((r) => r.day);
-  if (deletable.length === 0) return { deletedDays: [] };
-
-  const placeholders = deletable.map(() => "?").join(", ");
-  await db.exec(`DELETE FROM "analytics_events" WHERE "day" IN (${placeholders})`, ...deletable);
-  return { deletedDays: deletable };
+  // In chunks: two years of rolled days is ~730 bound values, past the DO SQLite cap.
+  for (const chunk of chunked(candidates)) {
+    // A dirty day is still to be recomputed from these very rows.
+    const rolled = await db.find({ from: "analytics_daily", where: { day: { in: chunk }, dirty: false }, select: ["day"] });
+    const deletable = rolled.map((r) => r.day);
+    if (deletable.length === 0) continue;
+    await db.exec(`DELETE FROM "analytics_events" WHERE "day" IN (${deletable.map(() => "?").join(", ")})`, ...deletable);
+    deleted.push(...deletable);
+  }
+  return { deletedDays: deleted };
 }

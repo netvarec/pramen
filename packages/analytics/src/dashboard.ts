@@ -14,7 +14,7 @@
 import type { AdminBlock, AdminPageDef, AdminPageResponse } from "@pramen/cms";
 import type { HandlerContext, SchemaDef } from "@pramen/server";
 import { metricsForRange, topPages, type RangeMetrics } from "./queries";
-import type { AnalyticsDb } from "./ingest";
+import type { AnalyticsDb } from "./db";
 import { analyticsSchema } from "./schema";
 
 /** The offered periods, in days. `1` is today. */
@@ -63,25 +63,40 @@ function breakdownTable(label: string, counts: Record<string, number>, limit = 8
   ];
 }
 
-/** The traffic series, until Block Kit grows a chart block.
+/** The traffic series: a chart for the shape, and the exact numbers folded underneath.
  *
- * A table and not a picture, deliberately: the alternatives were to render a chart as an
- * `image` (a server-side SVG, which the editor would have to be allowed to inline) or to
- * make this the project's first `adminPanel`. Both are larger decisions than the first
- * slice should be making on its own, and a numeric series is honest about what it is,
- * where an ASCII bar chart in a monospace column only looks like one. */
-function seriesTable(days: { day: string; pageviews: number }[]): AdminBlock[] {
+ * The table stays because a chart answers "is it going up" and cannot answer "how many on
+ * Tuesday" without hovering. It is an accordion rather than a second block in the flow so the
+ * page reads chart-first, with the figures one click away. */
+function seriesBlocks(days: { day: string; pageviews: number }[]): AdminBlock[] {
   const rows = [...days].reverse().map((d) => ({ day: d.day, views: String(d.pageviews) }));
   return [
     { type: "header", text: "By day", level: 3 },
     {
-      type: "table",
-      columns: [
-        { key: "day", label: "Day" },
-        { key: "views", label: "Pageviews" },
-      ],
-      rows,
+      type: "chart",
+      // One day is a single bar, which a line cannot draw.
+      chart: days.length > 1 ? "line" : "bar",
+      title: "Pageviews per day",
+      // `MM-DD`: the year is in the range caption above, and a full ISO date overprints.
+      // The axis label is `MM-DD`; the tooltip carries the full date, so a range that crosses a
+      // year boundary is not ambiguous.
+      points: days.map((d) => ({ label: d.day.slice(5), value: d.pageviews, title: d.day })),
       empty: "No traffic recorded in this period.",
+    },
+    {
+      type: "accordion",
+      title: "Numbers",
+      blocks: [
+        {
+          type: "table",
+          columns: [
+            { key: "day", label: "Day" },
+            { key: "views", label: "Pageviews" },
+          ],
+          rows,
+          empty: "No traffic recorded in this period.",
+        },
+      ],
     },
   ];
 }
@@ -183,7 +198,7 @@ export function analyticsDashboard(opts: AnalyticsDashboardOpts = {}): AdminPage
           empty: "No pageviews recorded in this period.",
         },
         { type: "divider" },
-        ...seriesTable(metrics.days),
+        ...seriesBlocks(metrics.days),
         { type: "divider" },
         { type: "columns", columns: [breakdownTable("Source", metrics.bySource), breakdownTable("Device", metrics.byDevice)] },
         ...breakdownTable("Country", metrics.byCountry),

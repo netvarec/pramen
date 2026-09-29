@@ -104,6 +104,17 @@ export const analyticsSchema = {
       bySource: t.json(),
       byCountry: t.json(),
       rolledAt: notNull(defaultTo(t.text(), expr.now())),
+      /** Set when an event for this day arrived AFTER the day was rolled up (or before it was
+       * rolled at all, for a day older than the newest rolled one). The aggregate is then not
+       * to be trusted: reads compute the day from raw events, the rollup recomputes it and
+       * clears the flag, and pruning refuses to delete its raw rows. A stub row (all counts
+       * zero) may exist only to carry this flag. */
+      dirty: notNull(defaultTo(t.bool(), false)),
+      /** A fresh random value written with every `dirty = 1`. The rollup remembers the token it
+       * SAW when it read the day and clears the flag only if the token is still the same, so
+       * a late event that flagged the day between the rollup's read and its write (D1 has no
+       * single writer) leaves the flag standing instead of being wiped by stale numbers. */
+      dirtyToken: t.text(),
     }),
     undefined,
     { partition: ANALYTICS_PARTITION },

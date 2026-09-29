@@ -57,8 +57,7 @@ import {
   analyticsSchema,
   analyticsPolicies,
   analyticsDashboard,
-  createAnalyticsHandlers,
-  createAnalyticsQueues,
+  createAnalytics,
   createAnalyticsSink,
   collectRoute,
   trackerRoute,
@@ -360,6 +359,10 @@ const lectureDesk = adminPage<typeof schema>("lecture-desk", {
   },
 });
 
+// @pramen/analytics: handlers, the self-scheduling rollup task and the queue consumer, from one
+// call so the ingest handler and the task it queues cannot be wired apart.
+const analytics = createAnalytics({ queueName: ANALYTICS_QUEUE });
+
 const handlers = {
   // @pramen/auth: signup / login / me (issue + use HS256 tokens, no third-party IdP).
   ...authHandlers,
@@ -462,7 +465,7 @@ const handlers = {
   ...createAdminPageHandlers([lectureDesk, analyticsDashboard()]),
   // @pramen/analytics: the privileged ingest sink plus the role-gated metric reads. The
   // dashboard above renders from the same queries these expose.
-  ...createAnalyticsHandlers(),
+  ...analytics.handlers,
   // The PUBLIC read for the `lectures` collection. Deliberately un-gated (no `auth`), so
   // anonymous can call it: what limits the result is the ACL, not this query. Anonymous
   // holds only `collectionPublicPolicies`, which scopes `lectures` reads to
@@ -1021,6 +1024,11 @@ const tasks = {
   // @pramen/auth: sendPasswordResetEmail + sendVerificationEmail, the same deferred-send shape.
   ...passwordReset.tasks,
   ...emailVerification.tasks,
+  // @pramen/analytics: the daily rollup. It re-queues itself, so this line is the whole
+  // schedule: the first ingested batch starts the chain, and no analytics-specific cron is
+  // needed. (The D1 store still needs the core's Cron Trigger to drain any delayed task.)
+  // Pruning raw events is opt-in: `createAnalytics({ keepDays: 90 })`.
+  ...analytics.tasks,
 };
 
 // Cloudflare Queues consumers, keyed by QUEUE name (the oblaka `Queue` name,
@@ -1036,7 +1044,7 @@ const queues = {
   // @pramen/analytics: drains a batch of events into the store. Declared even though this
   // example binds no analytics queue: the handler is what a deployment ADDS the binding
   // for, and `createPramen` would reject a queue message it had no route for.
-  ...createAnalyticsQueues({ queueName: ANALYTICS_QUEUE }),
+  ...analytics.queues,
 };
 
 // @pramen/cms code-defined types: declare block + content types in code and have every

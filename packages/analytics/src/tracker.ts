@@ -39,7 +39,9 @@ export function trackerScript(opts: TrackerOptions = {}): string {
   if (typeof navigator === "undefined" || !navigator.sendBeacon) return;
   // Respect an explicit opt-out. Cheap to honour, and this endpoint sets no identifier
   // that a visitor could clear themselves.
-  if (navigator.doNotTrack === "1" || window.doNotTrack === "1") return;
+  // Global Privacy Control too: the server collector honours it, and a visitor it skipped
+  // would otherwise be recorded by the beacon instead, which is the opposite of the signal.
+  if (navigator.doNotTrack === "1" || window.doNotTrack === "1" || navigator.globalPrivacyControl === true) return;
 
   var URL_ = ${collect};
   var meta = document.querySelector('meta[name="${VIEW_META}"]');

@@ -11,7 +11,7 @@
 // with nine hundred. Counts sum; rates are computed at the end, once.
 
 import type { JsonValue } from "@pramen/server";
-import type { AnalyticsDb } from "./ingest";
+import { chunked, type AnalyticsDb } from "./db";
 
 /** A breakdown: one count per bucket (device, source, country). */
 export type Counts = Record<string, number>;
@@ -97,6 +97,13 @@ function asCounts(v: JsonValue | null | undefined): Counts {
  * session id already encodes its day, so the pair is the natural key, and counting the groups
  * is how distinct sessions are obtained without a COUNT(DISTINCT) the engine does not have. */
 export async function computeDays(db: AnalyticsDb, days: readonly string[]): Promise<Map<string, DayMetrics>> {
+  // In chunks: the day list is bound as `IN (...)`, and a wide range exceeds the parameter cap.
+  const out = new Map<string, DayMetrics>();
+  for (const chunk of chunked(days)) for (const [k, v] of await computeChunk(db, chunk)) out.set(k, v);
+  return out;
+}
+
+async function computeChunk(db: AnalyticsDb, days: readonly string[]): Promise<Map<string, DayMetrics>> {
   const out = new Map<string, DayMetrics>();
   if (days.length === 0) return out;
   for (const d of days) out.set(d, EMPTY_DAY(d));
@@ -162,7 +169,9 @@ export async function computeDays(db: AnalyticsDb, days: readonly string[]): Pro
 async function rolledDays(db: AnalyticsDb, days: readonly string[]): Promise<Map<string, DayMetrics>> {
   const out = new Map<string, DayMetrics>();
   if (days.length === 0) return out;
-  const rows = await db.find({ from: "analytics_daily", where: { day: { in: [...days] } } });
+  // A dirty row's counts are stale (or a zero stub): the day is recomputed from raw instead.
+  const rows = [];
+  for (const chunk of chunked(days)) rows.push(...(await db.find({ from: "analytics_daily", where: { day: { in: chunk }, dirty: false } })));
   for (const r of rows) {
     out.set(r.day, {
       day: r.day,
@@ -238,15 +247,21 @@ export async function topPages(db: AnalyticsDb, from: string, to: string, limit 
     }
   };
 
-  const rolledRows = await db.find({ from: "analytics_pages", where: { day: { in: days } } });
+  const dirty = new Set<string>();
+  const pageRows = [];
+  for (const chunk of chunked(days)) {
+    for (const r of await db.find({ from: "analytics_daily", where: { day: { in: chunk }, dirty: true }, select: ["day"] })) dirty.add(r.day);
+    pageRows.push(...(await db.find({ from: "analytics_pages", where: { day: { in: chunk } } })));
+  }
+  const rolledRows = pageRows.filter((r) => !dirty.has(r.day));
   const rolledDaysSeen = new Set(rolledRows.map((r) => r.day));
   for (const r of rolledRows) add(r.path, r.pageId ?? null, r.pageviews);
 
   const missing = days.filter((d) => !rolledDaysSeen.has(d));
-  if (missing.length > 0) {
+  for (const chunk of chunked(missing)) {
     const rows = await db.aggregate({
       from: "analytics_events",
-      where: { day: { in: missing }, kind: "pageview" },
+      where: { day: { in: chunk }, kind: "pageview" },
       groupBy: ["path", "pageId"],
       aggregations: { n: { fn: "count" } },
     });
