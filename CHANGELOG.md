@@ -16,6 +16,44 @@ there are no backward-compatibility guarantees yet.
 
 ### Added
 
+- **`ctx.tasks.enqueue({ key })` (`@pramen/server`).** An idempotency key (stored in its own
+  `dedupKey` column, scoped by kind); a repeat enqueue with the same key is an atomic no-op while the row is live or recently done
+  (a dead-lettered row gives the key back, see below), for a task
+  requested from callers that cannot coordinate, such as two isolates on D1. `createApp`'s
+  `query`/`mutation` now also keep `requiresTasks`, which they dropped.
+- **Outbox keys, precisely (`@pramen/server`).** A keyed repeat no longer wakes the drainer (`enqueueTask`
+  reports whether it inserted), a key must be a non-empty string, and done rows are pruned an hour
+  after they COMPLETED rather than after creation, so a key on a long-delayed task holds, and a
+  dead-lettered row gives its key back (re-enqueueing replaces it).
+- **Late events, outbox keys and bound lists.** Ingest flags a past day it receives an event for
+  (`analytics_daily.dirty` + `dirtyToken`, additive columns), so events a queue delivers after the
+  day was rolled are counted whatever their age, and a concurrent rollup cannot wipe the flag; an
+  event for an already-pruned day is dropped rather than replacing its history. `keepDays` must
+  exceed three. The rollup chain stops when nothing is pending, long catch-ups continue in
+  follow-up tasks, and every list of days is bound in chunks (DO SQLite caps parameters).
+  A store upgraded from an older version has its stranded unrolled days flagged once (`flagUnrolledDays`).
+  `runAnalyticsRollup` accepts only `through` (up to today) and `maxDays`.
+  `@pramen/server`: outbox idempotency keys live in a `dedupKey` column (added in place to an
+  existing outbox table), scoped by kind as a pair so no delimiter can collide, and a task that
+  replaces a dead-lettered one gets a fresh `meta.id`. `isQueueProducer` is exported.
+- **`createAnalytics()` (`@pramen/analytics`)** returns `{ handlers, tasks, queues }` in one call, so the
+  ingest handler and the rollup task that it queues cannot be configured apart. `keepDays` is
+  validated when the tasks are built (finite, greater than 3: the last three days are recomputed).
+- **`requiresTasks` on a handler (`@pramen/server`).** `mutation(fn, { requiresTasks: [...] })` declares
+  the task kinds it enqueues; `createPramen` warns at boot when `app.tasks` lacks a handler.
+
+- **`@pramen/analytics`: a chart, a server-side collector, and a rollup that schedules itself.**
+  The dashboard's traffic series is now a chart (a new `chart` Block Kit block in
+  `@pramen/cms` and `@pramen/cms-editor`: `bar` or `line`, inline SVG, theme colours,
+  refused server-side past 400 points or on a non-finite value), with the exact numbers folded
+  underneath. `recordView` / `analyticsMiddleware` record a pageview in the Worker that served
+  the page, which adds country and device and counts visitors with a blocker or JavaScript off,
+  and stamp the page with `pramen-view` so the beacon reports only engagement. It skips bots,
+  prefetches, Do Not Track and shared-cacheable responses. `createEdgeSink` is the sink for a
+  site on its own Worker. The daily rollup is now the `analytics.rollup` task (spread
+  `createAnalyticsTasks()` into `app.tasks`): it re-queues itself for the next 00:10
+  UTC (pruning raw events is opt-in via `keepDays`), and is started by the first ingested batch, so no cron needs wiring by hand.
+
 - **Deleting a content type or a block type that nothing uses (`@pramen/cms`,
   `@pramen/cms-editor`).** A type authored by mistake, or one whose section a site dropped, had
   no way out of the store: the builders could create and edit but never remove, so the Types
