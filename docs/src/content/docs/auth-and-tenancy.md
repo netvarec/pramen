@@ -106,14 +106,18 @@ and the browser lands on `successRedirect#token=…` as usual. When the provider
 user (no session there, consent, account choice), it answers with an OIDC error instead of a
 screen, and the browser lands on `successRedirect#error=login_required` (or
 `interaction_required`, `consent_required`, `account_selection_required`) with **no token**.
-Show your ordinary sign-in button then. Any `prompt` other than `none` is refused.
+Show your ordinary sign-in button then. A silent attempt that fails on pramen's side after the
+provider said yes lands there too, with a pramen code: `account_deactivated`,
+`email_not_verified`, `invalid_token` or `server_error`. Any other provider code (a
+misconfigured client, an outage) is handed back the same way and logged as an error on the
+server. Treat every `error=` as "show sign-in". Any `prompt` other than `none` is refused.
 
 ```ts
 // On load, when there is no stored session:
 const hash = new URLSearchParams(location.hash.slice(1));
 if (!hash.has("token") && !hash.has("error") && !sessionStorage.getItem("oidcSilentTried")) {
   sessionStorage.setItem("oidcSilentTried", "1");
-  location.assign(`/auth/oidc/start?prompt=none&returnTo=${encodeURIComponent(location.pathname)}`);
+  location.assign(`/auth/oidc/start?prompt=none&returnTo=${encodeURIComponent(location.pathname + location.search)}`);
 }
 ```
 
@@ -146,12 +150,14 @@ change but will not link up with accounts created another way.
 Deactivating a user in pramen still holds: `active = false` blocks the login even though the
 IdP knows nothing about that flag.
 
-**The flow sets one cookie**, `pramen_oidc`: HttpOnly, SameSite=Lax, scoped to the callback
-path, cleared when the login completes. It binds the `state` to the browser that started the
+**The flow sets one cookie per sign-in attempt**, `pramen_oidc_<hash of the state>`: HttpOnly,
+SameSite=Lax, scoped to the callback path, cleared when the attempt ends. Per attempt, not
+per browser, because silent sign-in runs in every tab and overlapping attempts must not
+overwrite each other's binder. It binds the `state` to the browser that started the
 login, which is what stops login CSRF: an attacker holding a valid `state` + `code` from
 their own login can otherwise feed them to a victim's browser and sign that victim in **as
-the attacker**, so everything the victim then writes lands in the attacker's account. This
-is the only cookie pramen uses; sessions remain bearer tokens. `Secure` is set on https and
+the attacker**, so everything the victim then writes lands in the attacker's account. These are
+the only cookies pramen uses; sessions remain bearer tokens. `Secure` is set on https and
 omitted on plain http, so local dev still completes.
 
 If your frontend **already** holds an IdP token, you do not need any of this. Set

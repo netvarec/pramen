@@ -23,7 +23,11 @@ there are no backward-compatibility guarantees yet.
   sends the browser to `successRedirect#error=<code>` with no token rather than to an error
   page, so an unattended attempt on page load falls back to the app's own sign-in. The state is
   consumed and the binder cookie checked on that path too; any other `prompt` value is refused.
-  The app must try silently once per visit (see `auth-and-tenancy.md`) or it loops.
+  A silent attempt that fails on pramen's side after the provider said yes (deactivated
+  account, unverified email, bad ID token, failed exchange) is handed back the same way, as
+  `#error=account_deactivated` / `email_not_verified` / `invalid_token` / `server_error`; an
+  unexpected provider code is handed back too and logged. The app must try silently once per
+  visit (see `auth-and-tenancy.md`) or it loops.
 
 - **`ctx.tasks.enqueue({ key })` (`@pramen/server`).** An idempotency key (stored in its own
   `dedupKey` column, scoped by kind); a repeat enqueue with the same key is an atomic no-op while the row is live or recently done
@@ -542,6 +546,9 @@ there are no backward-compatibility guarantees yet.
 
 ### Changed
 
+- **OIDC binder cookie is per attempt (`@pramen/auth`).** `pramen_oidc` became
+  `pramen_oidc_<hash of the state>`, so overlapping sign-ins in two tabs no longer overwrite
+  each other's binder. A login in flight across the deploy has to be restarted.
 - **English copy without em dashes, and real plurals (`@pramen/cms-editor`).** Moving the copy
   into the catalog changed a few English strings on purpose: every em dash in UI text became a
   colon, a comma, parentheses or a full stop (e.g. "Example cms: home", "Account: …", "A URL
@@ -893,6 +900,10 @@ there are no backward-compatibility guarantees yet.
 
 ### Fixed
 
+- **OIDC `returnTo` open redirect (`@pramen/auth`).** `/\evil.com` passed the
+  path check and browsers resolve it to `//evil.com`. `returnTo` is now resolved against a
+  placeholder origin and dropped unless it stays there; backslashes and control characters are
+  refused outright.
 - **The dashboard split collections that have no drafts (`@pramen/cms-theme-gs`).** Every
   collection tile read "Published 3 · drafts 1", including plain tables whose rows carry no
   status, which then read "Published 0 · drafts 0" under a count of rows that were all current.
