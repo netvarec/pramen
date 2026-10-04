@@ -16,6 +16,15 @@ there are no backward-compatibility guarantees yet.
 
 ### Added
 
+- **Silent OIDC sign-in (`@pramen/auth`).** `/auth/oidc/start?prompt=none` forwards
+  `prompt=none` to the provider, so a browser with a provider session is signed in without
+  seeing a screen. When the provider answers with an OIDC error instead (`login_required`,
+  `interaction_required`, `consent_required`, `account_selection_required`), the callback
+  sends the browser to `successRedirect#error=<code>` with no token rather than to an error
+  page, so an unattended attempt on page load falls back to the app's own sign-in. The state is
+  consumed and the binder cookie checked on that path too; any other `prompt` value is refused.
+  The app must try silently once per visit (see `auth-and-tenancy.md`) or it loops.
+
 - **`ctx.tasks.enqueue({ key })` (`@pramen/server`).** An idempotency key (stored in its own
   `dedupKey` column, scoped by kind); a repeat enqueue with the same key is an atomic no-op while the row is live or recently done
   (a dead-lettered row gives the key back, see below), for a task
