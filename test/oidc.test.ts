@@ -222,6 +222,114 @@ describe("createOidcAuth: the callback", () => {
   });
 });
 
+describe("createOidcAuth: silent sign-in (prompt=none)", () => {
+  /** Start a login, optionally silent, and hand back what the callback needs. */
+  async function begin(h: ReturnType<typeof harness>, startQuery = "?prompt=none&returnTo=/pages") {
+    const [start, callback] = createOidcAuth(opts).routes;
+    const started = await start!.handler(new Request(`https://app.example.com/auth/oidc/start${startQuery}`), env(h.KV), {} as never);
+    const authUrl = new URL(started.headers.get("location")!);
+    h.asked.nonce = authUrl.searchParams.get("nonce")!;
+    const state = authUrl.searchParams.get("state")!;
+    const hit = (query: string, cookie: string | null = cookieFrom(started)) =>
+      callback!.handler(
+        new Request(`https://app.example.com/auth/oidc/callback?${query}`, { headers: cookie === null ? {} : { cookie } }),
+        env(h.KV),
+        upsert(),
+      );
+    return { started, authUrl, state, hit };
+  }
+
+  test("forwards prompt=none to the provider", async () => {
+    const h = harness(); active = h;
+    const { authUrl } = await begin(h);
+    expect(authUrl.searchParams.get("prompt")).toBe("none");
+  });
+
+  test("an ordinary start sends no prompt at all", async () => {
+    const h = harness(); active = h;
+    const { authUrl } = await begin(h, "");
+    expect(authUrl.searchParams.has("prompt")).toBe(false);
+  });
+
+  // `login`, `consent` and `select_account` each change what the provider does in ways the
+  // app would have to handle; passing them through unannounced is how a flow breaks quietly.
+  test("any other prompt value is refused", async () => {
+    const h = harness(); active = h;
+    const [start] = createOidcAuth(opts).routes;
+    const res = await start!.handler(new Request("https://app.example.com/auth/oidc/start?prompt=login"), env(h.KV), {} as never);
+    expect(res.status).toBe(400);
+    expect(h.store.size).toBe(0); // nothing started
+  });
+
+  test("with a provider session it completes like any login", async () => {
+    const h = harness(); active = h;
+    const { state, hit } = await begin(h);
+    const res = await hit(`state=${state}&code=auth-code`);
+    const target = new URL(res.headers.get("location")!);
+    expect(target.hash).toMatch(/^#token=/);
+    expect(target.searchParams.get("returnTo")).toBe("/pages");
+  });
+
+  // The whole point: an unattended attempt on page load must not strand the user on an
+  // error page. The app reads `#error=` and shows its own sign-in.
+  test("login_required goes back to the app as #error=, with no token", async () => {
+    const h = harness(); active = h;
+    const { state, hit } = await begin(h);
+    const res = await hit(`error=login_required&state=${state}`);
+    expect(res.status).toBe(302);
+    const target = new URL(res.headers.get("location")!);
+    expect(target.origin + target.pathname).toBe("https://app.example.com/signed-in");
+    expect(target.hash).toBe("#error=login_required");
+    expect(target.searchParams.get("returnTo")).toBe("/pages");
+    expect(res.headers.get("set-cookie")).toContain("Max-Age=0"); // binder spent
+  });
+
+  test("the other prompt=none answers are handed back the same way", async () => {
+    for (const error of ["interaction_required", "consent_required", "account_selection_required"]) {
+      const h = harness(); active = h;
+      const { state, hit } = await begin(h);
+      const res = await hit(`error=${error}&state=${state}`);
+      expect(new URL(res.headers.get("location")!).hash).toBe(`#error=${error}`);
+      h.restore();
+    }
+    active = null;
+  });
+
+  test("the error is still sanitized before it reaches the URL", async () => {
+    const h = harness(); active = h;
+    const { state, hit } = await begin(h);
+    const res = await hit(`error=${encodeURIComponent("x\"><script>")}&state=${state}`);
+    expect(new URL(res.headers.get("location")!).hash).toBe("#error=unspecified");
+  });
+
+  // The state is spent on the error path too, so it cannot be replayed into a code exchange.
+  test("the state is consumed by an error answer", async () => {
+    const h = harness(); active = h;
+    const { state, hit } = await begin(h);
+    await hit(`error=login_required&state=${state}`);
+    expect(h.store.has(`oidc:${state}`)).toBe(false);
+    expect((await hit(`state=${state}&code=auth-code`)).status).toBe(400);
+  });
+
+  // Only the browser that started the silent attempt gets the redirect. Anyone else crafting
+  // the URL gets the ordinary error page.
+  test("without the binder cookie the error is an error page, not a redirect", async () => {
+    const h = harness(); active = h;
+    const { state, hit } = await begin(h);
+    const res = await hit(`error=login_required&state=${state}`, null);
+    expect(res.status).toBe(400);
+  });
+
+  // An interactive sign-in the provider refused is a real failure the user should see.
+  test("an error answer to an ORDINARY start stays an error page", async () => {
+    const h = harness(); active = h;
+    const { state, hit } = await begin(h, "");
+    const res = await hit(`error=access_denied&state=${state}`);
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain("access_denied");
+  });
+});
+
 describe("the privileged upsert handler", () => {
   // This test used to assert `auth` was `[]` (the declaration) and so it passed while every
   // OIDC sign-in was failing. `callPrivileged` does NOT bypass the handler gate: it sends an

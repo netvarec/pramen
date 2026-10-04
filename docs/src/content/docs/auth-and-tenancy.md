@@ -100,6 +100,29 @@ The browser hits `/auth/oidc/start`, comes back to `/auth/oidc/callback`, and la
 `successRedirect#token=<session>`. The token arrives in the URL **fragment**, which is never
 sent to a server, so it stays out of access logs, proxies and `Referer` headers.
 
+**Silent sign-in.** `/auth/oidc/start?prompt=none` signs in a browser that already has a
+session at the provider without showing it anything: the provider redirects straight back
+and the browser lands on `successRedirect#token=…` as usual. When the provider would need the
+user (no session there, consent, account choice), it answers with an OIDC error instead of a
+screen, and the browser lands on `successRedirect#error=login_required` (or
+`interaction_required`, `consent_required`, `account_selection_required`) with **no token**.
+Show your ordinary sign-in button then. Any `prompt` other than `none` is refused.
+
+```ts
+// On load, when there is no stored session:
+const hash = new URLSearchParams(location.hash.slice(1));
+if (!hash.has("token") && !hash.has("error") && !sessionStorage.getItem("oidcSilentTried")) {
+  sessionStorage.setItem("oidcSilentTried", "1");
+  location.assign(`/auth/oidc/start?prompt=none&returnTo=${encodeURIComponent(location.pathname)}`);
+}
+```
+
+The `sessionStorage` flag is not optional: try silently **once per visit**, and never when the
+fragment already carries `error=`. Without it a user with no provider session bounces between
+your app and the provider forever. The error redirect is only issued to the browser that
+started the attempt (the binder cookie below); a crafted callback URL gets the ordinary error
+page.
+
 **Where roles come from** is the part that differs per provider, and the part that fails
 quietly if you get it wrong:
 

@@ -20,6 +20,16 @@
 // So roles resolve in this order: `mapRoles(claims)` if you supply one (the IdP is
 // authoritative), else the roles stored on the user's row (pramen is authoritative, the
 // only workable answer for Google), else `defaultRoles` for a first login.
+//
+// SILENT SIGN-IN (`/auth/oidc/start?prompt=none`). A browser that already holds a session at
+// the provider can be signed in here without seeing anything: the provider redirects straight
+// back with a code. When it cannot (no session there, or a step would need the user), OIDC
+// Core §3.1.2.6 says it answers with an `error` instead of showing a screen. A silent attempt
+// runs on page load, unattended, so that answer must not strand the user on an error page:
+// the callback sends the browser on to `successRedirect` with `#error=<code>` and no token,
+// and the app shows its ordinary sign-in. The app must try silently at most ONCE per visit
+// (a `sessionStorage` flag) and never when the fragment already carries `error=`: otherwise
+// a user with no provider session loops between the two origins forever.
 
 import { isSystemRole, JwksStrategy, Kv, mutation } from "@pramen/server";
 import type { EnvBag, HandlerContext, HandlerMap, JsonObject, Row } from "@pramen/server";
@@ -131,6 +141,9 @@ interface PendingLogin {
   verifier: string;
   nonce: string;
   returnTo?: string;
+  /** Started with `prompt=none`. A provider error then goes back to the app as `#error=`,
+   * not to an error page: see SILENT SIGN-IN at the top of this file. */
+  silent?: boolean;
   /** SHA-256 of the binder cookie handed to the browser that STARTED this login.
    *
    * Without it, `state` is just a random string an attacker can obtain by starting a login
@@ -187,7 +200,9 @@ const safeErrorCode = (raw: string): string => (/^[a-z_]{1,64}$/.test(raw) ? raw
  *   export const app = { schema, handlers, acl, routes: [...oidc.routes] };
  *
  * The browser goes to `/auth/oidc/start`, comes back to `/auth/oidc/callback`, and lands on
- * `successRedirect#token=<pramen session>`.
+ * `successRedirect#token=<pramen session>`. `/auth/oidc/start?prompt=none` tries silently and
+ * lands on `successRedirect#error=login_required` (or another OIDC error code) when the
+ * provider would need the user: see SILENT SIGN-IN above.
  */
 export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
   const scopes = opts.scopes ?? ["openid", "email", "profile"];
@@ -199,6 +214,14 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
   const stateTtl = opts.stateTtlSeconds ?? 600;
   const sessionTtl = opts.sessionTtlSeconds ?? 3600;
 
+  /** `successRedirect`, carrying the path the user was headed for. Only ever a PATH: an
+   * absolute or protocol-relative `returnTo` would make this an open redirect. */
+  const successTarget = (pending: PendingLogin): URL => {
+    const target = new URL(opts.successRedirect);
+    if (pending.returnTo?.startsWith("/") && !pending.returnTo.startsWith("//")) target.searchParams.set("returnTo", pending.returnTo);
+    return target;
+  };
+
   // One verifier per issuer, so the JWKS cache and its key-rotation handling are shared
   // across logins rather than rebuilt per request.
   let verifier: JwksStrategy | undefined;
@@ -209,6 +232,12 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
     method: "GET",
     path: startPath,
     handler: async (request: Request, env: EnvBag) => {
+      const query = new URL(request.url).searchParams;
+      // Only `none` is passed through. `login`, `consent` and `select_account` would each need
+      // the app to know what the provider supports and to handle its answer; refusing them is
+      // clearer than forwarding a value whose failure the app was never written to expect.
+      const prompt = query.get("prompt");
+      if (prompt !== null && prompt !== "none") return html(400, "Unsupported sign-in option.");
       const doc = await discover(opts.issuer);
       const kv = new Kv((env as EnvBag & { KV: KVNamespace }).KV);
       const state = randomB64();
@@ -219,7 +248,8 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
         binderHash: await sha256Hex(binder),
         // Where the user was going before they were bounced to sign in. Only ever a PATH:
         // an absolute URL here would make this an open redirect.
-        returnTo: new URL(request.url).searchParams.get("returnTo") ?? undefined,
+        returnTo: query.get("returnTo") ?? undefined,
+        silent: prompt === "none" || undefined,
       };
       await kv.put(`oidc:${state}`, JSON.stringify(pending), { expirationTtl: stateTtl });
 
@@ -232,6 +262,7 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
       url.searchParams.set("nonce", pending.nonce);
       url.searchParams.set("code_challenge", await challengeFor(pending.verifier));
       url.searchParams.set("code_challenge_method", "S256");
+      if (pending.silent) url.searchParams.set("prompt", "none");
       return new Response(null, {
         status: 302,
         headers: {
@@ -253,7 +284,27 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
       // A provider that refuses (consent declined, unauthorized client) redirects back with
       // `error` rather than `code`. Surface it instead of reporting "no code".
       const providerError = url.searchParams.get("error");
-      if (providerError) return html(400, `Sign-in was refused by the provider (${safeErrorCode(providerError)}).`);
+      if (providerError) {
+        const code = safeErrorCode(providerError);
+        // A SILENT attempt that the provider answered with an error is the expected outcome
+        // for a user with no session there, not a failure: hand it back to the app (see
+        // SILENT SIGN-IN). The state is still consumed and the binder still checked, so this
+        // branch can only be reached by the browser that started the attempt; a crafted URL
+        // falls through to the error page like any other provider error.
+        const errorState = url.searchParams.get("state");
+        const errorPending = errorState ? ((await kv.get(`oidc:${errorState}`, "json")) as PendingLogin | null) : null;
+        if (errorState) await kv.delete(`oidc:${errorState}`);
+        const binder = readCookie(request, BINDER_COOKIE);
+        if (errorPending?.silent && binder && (await sha256Hex(binder)) === errorPending.binderHash) {
+          const target = successTarget(errorPending);
+          target.hash = `error=${code}`;
+          return new Response(null, {
+            status: 302,
+            headers: { location: target.toString(), "cache-control": "no-store", "set-cookie": binderCookie(url, callbackPath, "", 0) },
+          });
+        }
+        return html(400, `Sign-in was refused by the provider (${code}).`);
+      }
 
       const state = url.searchParams.get("state");
       const code = url.searchParams.get("code");
@@ -339,8 +390,7 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
         return html(500, "Sign-in could not be completed.");
       }
       const token = await signToken({ sub: username, roles: upserted.result.roles ?? [] }, secret, { ttlSeconds: sessionTtl });
-      const target = new URL(opts.successRedirect);
-      if (pending.returnTo?.startsWith("/") && !pending.returnTo.startsWith("//")) target.searchParams.set("returnTo", pending.returnTo);
+      const target = successTarget(pending);
       // FRAGMENT, not query: a fragment is never sent to a server, so the session token
       // stays out of access logs, proxies and `Referer`.
       target.hash = `token=${encodeURIComponent(token)}`;
