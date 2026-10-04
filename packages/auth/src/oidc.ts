@@ -20,6 +20,21 @@
 // So roles resolve in this order: `mapRoles(claims)` if you supply one (the IdP is
 // authoritative), else the roles stored on the user's row (pramen is authoritative, the
 // only workable answer for Google), else `defaultRoles` for a first login.
+//
+// SILENT SIGN-IN (`/auth/oidc/start?prompt=none`). A browser that already holds a session at
+// the provider can be signed in here without seeing anything: the provider redirects straight
+// back with a code. When it cannot (no session there, or a step would need the user), OIDC
+// Core §3.1.2.6 says it answers with an `error` instead of showing a screen. A silent attempt
+// runs on page load, unattended, so that answer must not strand the user on an error page:
+// the callback sends the browser on to `successRedirect` with `#error=<code>` and no token,
+// and the app shows its ordinary sign-in. The same goes for OUR side failing after the
+// provider said yes (a deactivated account, an unverified email, a failed exchange): every
+// failure past the state check of a silent attempt redirects, with a pramen code
+// (`account_deactivated`, `email_not_verified`, `invalid_token`, `server_error`). A provider
+// code outside the four that `prompt=none` exists to produce is redirected too, but LOGGED,
+// since it means a misconfigured client or an outage. The app must try silently at most ONCE per visit
+// (a `sessionStorage` flag) and never when the fragment already carries `error=`: otherwise
+// a user with no provider session loops between the two origins forever.
 
 import { isSystemRole, JwksStrategy, Kv, mutation } from "@pramen/server";
 import type { EnvBag, HandlerContext, HandlerMap, JsonObject, Row } from "@pramen/server";
@@ -131,6 +146,9 @@ interface PendingLogin {
   verifier: string;
   nonce: string;
   returnTo?: string;
+  /** Started with `prompt=none`. A provider error then goes back to the app as `#error=`,
+   * not to an error page: see SILENT SIGN-IN at the top of this file. */
+  silent?: boolean;
   /** SHA-256 of the binder cookie handed to the browser that STARTED this login.
    *
    * Without it, `state` is just a random string an attacker can obtain by starting a login
@@ -144,7 +162,11 @@ interface PendingLogin {
 const sha256Hex = async (v: string): Promise<string> =>
   [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(v)))].map((b) => b.toString(16).padStart(2, "0")).join("");
 
-const BINDER_COOKIE = "pramen_oidc";
+/** One binder cookie PER STATE, not one per browser. Silent sign-in runs unattended on page
+ * load in every tab, so two tabs start overlapping attempts; under a single cookie name the
+ * second start overwrote the first's binder and the first came back as a mismatch. The name
+ * carries a hash of the state (bounded length, cookie-name-safe), never the state itself. */
+const binderCookieName = async (state: string): Promise<string> => `pramen_oidc_${(await sha256Hex(state)).slice(0, 16)}`;
 
 function readCookie(request: Request, name: string): string | null {
   const raw = request.headers.get("cookie");
@@ -160,8 +182,22 @@ function readCookie(request: Request, name: string): string | null {
  * from the provider's origin, which Lax allows, while a cross-site POST or subresource would
  * not carry it. `Secure` is set whenever the request is https, and omitted on plain-http local
  * dev, where the browser would otherwise drop the cookie entirely. */
-const binderCookie = (url: URL, path: string, value: string, maxAge: number): string =>
-  `${BINDER_COOKIE}=${encodeURIComponent(value)}; Path=${path}; Max-Age=${maxAge}; HttpOnly; SameSite=Lax${url.protocol === "https:" ? "; Secure" : ""}`;
+const binderCookie = (name: string, url: URL, path: string, value: string, maxAge: number): string =>
+  `${name}=${encodeURIComponent(value)}; Path=${path}; Max-Age=${maxAge}; HttpOnly; SameSite=Lax${url.protocol === "https:" ? "; Secure" : ""}`;
+
+/** `returnTo` as a same-origin PATH, or undefined. `startsWith("/") && !startsWith("//")` was
+ * not enough: browsers normalize `\` to `/` in special-scheme URLs, so `/\evil.com` became the
+ * protocol-relative `//evil.com`. Resolving against a placeholder origin and requiring it to
+ * survive catches every spelling of that, and the explicit `\`/control-character refusal
+ * covers what an app might do with the raw string before it ever resolves it. */
+const safeReturnTo = (raw: string | null | undefined): string | undefined => {
+  if (!raw?.startsWith("/") || /[\\\x00-\x1f\x7f]/.test(raw)) return undefined;
+  const base = "https://return-to.invalid";
+  return new URL(raw, base).origin === base ? raw : undefined;
+};
+
+/** What `prompt=none` exists to produce (OIDC Core §3.1.2.6): the provider needs the user. */
+const SILENT_EXPECTED = new Set(["login_required", "interaction_required", "consent_required", "account_selection_required"]);
 
 const ESCAPES: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 
@@ -187,7 +223,9 @@ const safeErrorCode = (raw: string): string => (/^[a-z_]{1,64}$/.test(raw) ? raw
  *   export const app = { schema, handlers, acl, routes: [...oidc.routes] };
  *
  * The browser goes to `/auth/oidc/start`, comes back to `/auth/oidc/callback`, and lands on
- * `successRedirect#token=<pramen session>`.
+ * `successRedirect#token=<pramen session>`. `/auth/oidc/start?prompt=none` tries silently and
+ * lands on `successRedirect#error=login_required` (or another OIDC error code) when the
+ * provider would need the user: see SILENT SIGN-IN above.
  */
 export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
   const scopes = opts.scopes ?? ["openid", "email", "profile"];
@@ -199,6 +237,16 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
   const stateTtl = opts.stateTtlSeconds ?? 600;
   const sessionTtl = opts.sessionTtlSeconds ?? 3600;
 
+  /** `successRedirect`, carrying the path the user was headed for. Only ever a PATH: an
+   * absolute or protocol-relative `returnTo` would make this an open redirect. Checked again
+   * here, not only at start, because a silent error hands it back with no sign-in at all. */
+  const successTarget = (pending: PendingLogin): URL => {
+    const target = new URL(opts.successRedirect);
+    const returnTo = safeReturnTo(pending.returnTo);
+    if (returnTo) target.searchParams.set("returnTo", returnTo);
+    return target;
+  };
+
   // One verifier per issuer, so the JWKS cache and its key-rotation handling are shared
   // across logins rather than rebuilt per request.
   let verifier: JwksStrategy | undefined;
@@ -209,6 +257,12 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
     method: "GET",
     path: startPath,
     handler: async (request: Request, env: EnvBag) => {
+      const query = new URL(request.url).searchParams;
+      // Only `none` is passed through. `login`, `consent` and `select_account` would each need
+      // the app to know what the provider supports and to handle its answer; refusing them is
+      // clearer than forwarding a value whose failure the app was never written to expect.
+      const prompt = query.get("prompt");
+      if (prompt !== null && prompt !== "none") return html(400, "Unsupported sign-in option.");
       const doc = await discover(opts.issuer);
       const kv = new Kv((env as EnvBag & { KV: KVNamespace }).KV);
       const state = randomB64();
@@ -219,7 +273,8 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
         binderHash: await sha256Hex(binder),
         // Where the user was going before they were bounced to sign in. Only ever a PATH:
         // an absolute URL here would make this an open redirect.
-        returnTo: new URL(request.url).searchParams.get("returnTo") ?? undefined,
+        returnTo: safeReturnTo(query.get("returnTo")),
+        silent: prompt === "none" || undefined,
       };
       await kv.put(`oidc:${state}`, JSON.stringify(pending), { expirationTtl: stateTtl });
 
@@ -232,12 +287,13 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
       url.searchParams.set("nonce", pending.nonce);
       url.searchParams.set("code_challenge", await challengeFor(pending.verifier));
       url.searchParams.set("code_challenge_method", "S256");
+      if (pending.silent) url.searchParams.set("prompt", "none");
       return new Response(null, {
         status: 302,
         headers: {
           location: url.toString(),
           "cache-control": "no-store",
-          "set-cookie": binderCookie(new URL(request.url), callbackPath, binder, stateTtl),
+          "set-cookie": binderCookie(await binderCookieName(state), new URL(request.url), callbackPath, binder, stateTtl),
         },
       });
     },
@@ -249,110 +305,144 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
     handler: async (request: Request, env: EnvBag, ctx: RouteContext) => {
       const url = new URL(request.url);
       const kv = new Kv((env as EnvBag & { KV: KVNamespace }).KV);
-
+      const state = url.searchParams.get("state");
       // A provider that refuses (consent declined, unauthorized client) redirects back with
       // `error` rather than `code`. Surface it instead of reporting "no code".
-      const providerError = url.searchParams.get("error");
-      if (providerError) return html(400, `Sign-in was refused by the provider (${safeErrorCode(providerError)}).`);
-
-      const state = url.searchParams.get("state");
-      const code = url.searchParams.get("code");
-      if (!state || !code) return html(400, "Sign-in link is incomplete. Start again.");
-
-      // SINGLE USE: read and delete before anything else, so a replayed callback, or two
-      // tabs racing the same code, cannot both proceed.
-      const pending = (await kv.get(`oidc:${state}`, "json")) as PendingLogin | null;
-      await kv.delete(`oidc:${state}`);
-      if (!pending) return html(400, "Sign-in expired or was already used. Start again.");
+      const rawError = url.searchParams.get("error");
+      const providerError = rawError ? safeErrorCode(rawError) : null;
+      const refused = () => html(400, `Sign-in was refused by the provider (${providerError}).`);
+      if (!state) return providerError ? refused() : html(400, "Sign-in link is incomplete. Start again.");
 
       // The state must belong to THIS browser. An attacker who starts their own login holds
       // a perfectly valid state+code; without this check, feeding them to a victim's browser
-      // signs the victim in as the attacker.
-      const binder = readCookie(request, BINDER_COOKIE);
-      if (!binder || (await sha256Hex(binder)) !== pending.binderHash) {
-        return html(400, "This sign-in did not start in this browser. Start again.");
-      }
+      // signs the victim in as the attacker. The cookie is read BEFORE KV: a request without
+      // one can never complete, so it costs no KV round trip.
+      const cookieName = await binderCookieName(state);
+      const binder = readCookie(request, cookieName);
+      if (!binder) return providerError ? refused() : html(400, "This sign-in did not start in this browser. Start again.");
 
-      const doc = await discover(opts.issuer);
-      const body = new URLSearchParams({
-        grant_type: "authorization_code",
-        code,
-        redirect_uri: opts.redirectUri,
-        client_id: opts.clientId,
-        code_verifier: pending.verifier,
-      });
-      if (opts.clientSecret) body.set("client_secret", opts.clientSecret);
-      const tokenRes = await fetch(doc.token_endpoint, {
-        method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
-        body,
-      });
-      const tokens = (await tokenRes.json().catch(() => ({}))) as { id_token?: string; error?: string };
-      if (!tokenRes.ok || typeof tokens.id_token !== "string") {
-        console.error(`pramen/auth: OIDC token exchange failed (HTTP ${tokenRes.status}${tokens.error ? `, ${tokens.error}` : ""})`);
-        return html(502, "Sign-in could not be completed. Try again.");
-      }
+      // SINGLE USE: read and delete before anything else, so a replayed callback, or two
+      // tabs racing the same code, cannot both proceed. Not run concurrently: KV gives no
+      // ordering between two in-flight operations, and a delete landing first would fail a
+      // legitimate login.
+      const pending = (await kv.get(`oidc:${state}`, "json")) as PendingLogin | null;
+      await kv.delete(`oidc:${state}`);
+      const clearBinder = binderCookie(cookieName, url, callbackPath, "", 0);
+      if (!pending) return html(400, "Sign-in expired or was already used. Start again.");
+      if ((await sha256Hex(binder)) !== pending.binderHash) return html(400, "This sign-in did not start in this browser. Start again.");
 
-      // Signature, issuer, audience and expiry, then the nonce, which is what binds this
-      // ID token to the authorization request WE started. Without it a token minted for a
-      // different session of the same client would be accepted here.
-      const claims = await idTokenVerifier(doc.jwks_uri, doc.issuer).verify(tokens.id_token);
-      if (!claims) return html(401, "Sign-in token could not be verified.");
-      if (claims.nonce !== pending.nonce) return html(401, "Sign-in token does not match this sign-in attempt.");
-
-      const sub = typeof claims.sub === "string" ? claims.sub : "";
-      const email = typeof claims.email === "string" ? claims.email.toLowerCase() : "";
-      const emailVerified = claims.email_verified === true;
-      if (!sub) return html(401, "Sign-in token carries no subject.");
-
-      // See `accountKey`: keying on an UNVERIFIED email would let a provider that permits
-      // arbitrary addresses take over an existing account. Fail rather than silently
-      // falling back to `sub`, which would quietly create a second account for the user.
-      let username: string;
-      if (accountKey === "email") {
-        if (!email || !emailVerified) {
-          return html(401, "This provider did not assert a verified email address, which this app uses to identify accounts.");
+      // From here the attempt is known to be this browser's own. Every failure goes through
+      // `fail`, so a SILENT attempt can never strand the user on an error page, whichever
+      // step refused it: see SILENT SIGN-IN.
+      const redirect = (hash: string): Response => {
+        const target = successTarget(pending);
+        // FRAGMENT, not query: a fragment is never sent to a server, so the session token
+        // stays out of access logs, proxies and `Referer`.
+        target.hash = hash;
+        // The binder is spent with the state it protected.
+        return new Response(null, { status: 302, headers: { location: target.toString(), "cache-control": "no-store", "set-cookie": clearBinder } });
+      };
+      const fail = (status: number, message: string, errorCode: string): Response => {
+        if (!pending.silent) {
+          const res = html(status, message);
+          res.headers.set("set-cookie", clearBinder);
+          return res;
         }
-        username = email;
-      } else {
-        username = `${doc.issuer}#${sub}`;
-      }
+        console.warn(`pramen/auth: silent OIDC sign-in failed (${errorCode}): ${message}`);
+        return redirect(`error=${errorCode}`);
+      };
 
-      // A SYSTEM role can never be held by a session (the verifier strips it), so an IdP
-      // group that happens to be named like one must not be stored as if it meant something.
-      // `mapRoles` hands the provider's claim straight through, so this is where it lands.
-      const mapped = opts.mapRoles?.(claims)?.filter((r) => !isSystemRole(r));
-      const res = await ctx.callPrivileged({
-        name: OIDC_UPSERT_HANDLER,
-        input: { table, username, email: email || null, roles: mapped ? [...mapped] : null, defaultRoles: [...defaultRoles] },
-        roles: [OIDC_SYSTEM_ROLE],
-      });
-      const upserted = (await res.json().catch(() => ({}))) as { ok?: boolean; result?: { roles?: string[]; active?: boolean } };
-      if (upserted.ok !== true || !upserted.result) return html(500, "Sign-in could not be completed.");
-      // A deactivated account must not be revived by logging in through the IdP: the
-      // provider knows nothing about pramen's `active` flag.
-      if (upserted.result.active === false) return html(403, "This account is deactivated.");
-
-      const secret = (env as EnvBag).AUTH_SECRET;
-      if (typeof secret !== "string" || secret.length === 0) {
-        console.error("pramen/auth: OIDC callback cannot mint a session, because AUTH_SECRET is not configured");
-        return html(500, "Sign-in could not be completed.");
+      if (providerError) {
+        // A silent attempt the provider answered with one of its expected codes is the normal
+        // outcome for a user with no session there, not a failure. Any OTHER code still goes
+        // back to the app (the user must not be stranded) but is logged as an error: it means
+        // a misconfigured client or a provider outage that nobody would otherwise see.
+        if (pending.silent) {
+          if (!SILENT_EXPECTED.has(providerError)) console.error(`pramen/auth: silent OIDC sign-in got an unexpected provider error (${providerError})`);
+          return redirect(`error=${providerError}`);
+        }
+        return fail(400, `Sign-in was refused by the provider (${providerError}).`, providerError);
       }
-      const token = await signToken({ sub: username, roles: upserted.result.roles ?? [] }, secret, { ttlSeconds: sessionTtl });
-      const target = new URL(opts.successRedirect);
-      if (pending.returnTo?.startsWith("/") && !pending.returnTo.startsWith("//")) target.searchParams.set("returnTo", pending.returnTo);
-      // FRAGMENT, not query: a fragment is never sent to a server, so the session token
-      // stays out of access logs, proxies and `Referer`.
-      target.hash = `token=${encodeURIComponent(token)}`;
-      return new Response(null, {
-        status: 302,
-        headers: {
-          location: target.toString(),
-          "cache-control": "no-store",
-          // The binder is spent with the state it protected.
-          "set-cookie": binderCookie(url, callbackPath, "", 0),
-        },
-      });
+      const code = url.searchParams.get("code");
+      if (!code) return fail(400, "Sign-in link is incomplete. Start again.", "invalid_request");
+
+      // Discovery, the exchange and the upsert can THROW (network, a provider outage), which
+      // would otherwise surface as a bare 500 and strand a silent attempt all the same.
+      const complete = async (): Promise<Response> => {
+        const doc = await discover(opts.issuer);
+        const body = new URLSearchParams({
+          grant_type: "authorization_code",
+          code,
+          redirect_uri: opts.redirectUri,
+          client_id: opts.clientId,
+          code_verifier: pending.verifier,
+        });
+        if (opts.clientSecret) body.set("client_secret", opts.clientSecret);
+        const tokenRes = await fetch(doc.token_endpoint, {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
+          body,
+        });
+        const tokens = (await tokenRes.json().catch(() => ({}))) as { id_token?: string; error?: string };
+        if (!tokenRes.ok || typeof tokens.id_token !== "string") {
+          console.error(`pramen/auth: OIDC token exchange failed (HTTP ${tokenRes.status}${tokens.error ? `, ${tokens.error}` : ""})`);
+          return fail(502, "Sign-in could not be completed. Try again.", "server_error");
+        }
+
+        // Signature, issuer, audience and expiry, then the nonce, which is what binds this
+        // ID token to the authorization request WE started. Without it a token minted for a
+        // different session of the same client would be accepted here.
+        const claims = await idTokenVerifier(doc.jwks_uri, doc.issuer).verify(tokens.id_token);
+        if (!claims) return fail(401, "Sign-in token could not be verified.", "invalid_token");
+        if (claims.nonce !== pending.nonce) return fail(401, "Sign-in token does not match this sign-in attempt.", "invalid_token");
+
+        const sub = typeof claims.sub === "string" ? claims.sub : "";
+        const email = typeof claims.email === "string" ? claims.email.toLowerCase() : "";
+        const emailVerified = claims.email_verified === true;
+        if (!sub) return fail(401, "Sign-in token carries no subject.", "invalid_token");
+
+        // See `accountKey`: keying on an UNVERIFIED email would let a provider that permits
+        // arbitrary addresses take over an existing account. Fail rather than silently
+        // falling back to `sub`, which would quietly create a second account for the user.
+        let username: string;
+        if (accountKey === "email") {
+          if (!email || !emailVerified) {
+            return fail(401, "This provider did not assert a verified email address, which this app uses to identify accounts.", "email_not_verified");
+          }
+          username = email;
+        } else {
+          username = `${doc.issuer}#${sub}`;
+        }
+
+        // A SYSTEM role can never be held by a session (the verifier strips it), so an IdP
+        // group that happens to be named like one must not be stored as if it meant something.
+        // `mapRoles` hands the provider's claim straight through, so this is where it lands.
+        const mapped = opts.mapRoles?.(claims)?.filter((r) => !isSystemRole(r));
+        const res = await ctx.callPrivileged({
+          name: OIDC_UPSERT_HANDLER,
+          input: { table, username, email: email || null, roles: mapped ? [...mapped] : null, defaultRoles: [...defaultRoles] },
+          roles: [OIDC_SYSTEM_ROLE],
+        });
+        const upserted = (await res.json().catch(() => ({}))) as { ok?: boolean; result?: { roles?: string[]; active?: boolean } };
+        if (upserted.ok !== true || !upserted.result) return fail(500, "Sign-in could not be completed.", "server_error");
+        // A deactivated account must not be revived by logging in through the IdP: the
+        // provider knows nothing about pramen's `active` flag.
+        if (upserted.result.active === false) return fail(403, "This account is deactivated.", "account_deactivated");
+
+        const secret = (env as EnvBag).AUTH_SECRET;
+        if (typeof secret !== "string" || secret.length === 0) {
+          console.error("pramen/auth: OIDC callback cannot mint a session, because AUTH_SECRET is not configured");
+          return fail(500, "Sign-in could not be completed.", "server_error");
+        }
+        const token = await signToken({ sub: username, roles: upserted.result.roles ?? [] }, secret, { ttlSeconds: sessionTtl });
+        return redirect(`token=${encodeURIComponent(token)}`);
+      };
+      try {
+        return await complete();
+      } catch (err) {
+        console.error("pramen/auth: OIDC callback failed", err);
+        return fail(500, "Sign-in could not be completed.", "server_error");
+      }
     },
   };
 

@@ -250,7 +250,13 @@ log) for independent single-writer serialization and storage.
   (signature/iss/aud/exp) plus a nonce match. Exchanges for a PRAMEN session, not a
   passthrough of the IdP token, and that keeps `refreshSession`, the KV denylist and
   role-in-token ACL working. The session lands in the redirect's URL FRAGMENT (never sent to
-  a server). Roles: `mapRoles(claims)` when the IdP is authoritative (Entra `roles`,
+  a server). `start?prompt=none` is a silent attempt: a provider error answer (`login_required`
+  etc.) lands on `successRedirect#error=<code>` with no token instead of an error page, but only
+  for the browser holding the binder, and so does every LATER failure of a silent attempt
+  (deactivated, unverified email, bad token, a thrown step), as `#error=<pramen code>` via the
+  callback's one `fail` helper. A provider code outside the four `prompt=none` exists for is
+  redirected too but `console.error`ed. The app must try it once per visit or it loops. Any other
+  `prompt` is refused (400). Roles: `mapRoles(claims)` when the IdP is authoritative (Entra `roles`,
   Auth0/Okta namespaced claim), where it overwrites stored roles on every login, removals
   included, minus any `__`-prefixed system role (filtered out; see below), else the row's
   stored roles (Google Workspace ships none), else `defaultRoles`.
@@ -272,8 +278,9 @@ log) for independent single-writer serialization and storage.
   the provider's claim into the minted session, and on the verify-only path the `roles` claim
   is the external IdP's entirely). `setUserRoles` refuses to grant one, and `mapRoles` output
   is filtered, so the store never holds a role that silently does nothing. Use the prefix for
-  any future server-only handler. The callback sets ONE cookie (`pramen_oidc`, HttpOnly/SameSite=Lax/callback-path,
-  cleared on completion) binding `state` to the browser that started the login. Without it
+  any future server-only handler. The callback sets one cookie PER ATTEMPT (`pramen_oidc_<sha256(state)[0:16]>`,
+  HttpOnly/SameSite=Lax/callback-path, cleared on completion; per attempt because silent
+  sign-in runs in every tab and a single name let tabs overwrite each other's binder) binding `state` to the browser that started the login. Without it
   an attacker's valid state+code fed to a victim's browser signs the victim in AS THE
   ATTACKER; sessions themselves stay bearer tokens. The error page escapes centrally and
   echoes only RFC 6749-shaped codes: it is public, pre-auth and reachable with arbitrary
