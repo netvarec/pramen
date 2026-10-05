@@ -48,6 +48,11 @@ export interface AdminRuntimeConfig {
    * EXISTS: the editor clears the session before redirecting, so a path that lands back
    * inside the editor is a loop with nothing to recover from. */
   signInUrl?: string;
+  /** Where signing out sends the browser, instead of `signInUrl`. For a deployment that signs
+   * in through an OIDC provider silently: its sign-in page would sign the user straight back
+   * in, so this page ends the provider session first (`endSession` in `@pramen/auth`). The
+   * stored session is cleared before the redirect, exactly as for sign-in. Must EXIST. */
+  signOutUrl?: string;
   /** Hide the Pages tab, for deployments that use collections only. */
   hidePages?: boolean;
   /**

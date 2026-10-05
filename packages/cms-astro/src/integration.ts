@@ -68,7 +68,7 @@ export interface PramenCmsOptions {
    * Serve the visual editor from this site, at `/__admin`.
    *
    * `true` mounts it against the same `backend` the collections load from; an object also
-   * carries the editor's own configuration (`brand`, `signInUrl`, `hidePages`, `extraNav`).
+   * carries the editor's own configuration (`brand`, `signInUrl`, `signOutUrl`, `hidePages`, `extraNav`).
    * Omit it and no admin route is injected at all: nothing is added to the site, and
    * `@pramen/cms-editor` need not be installed.
    *
