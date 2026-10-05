@@ -150,6 +150,26 @@ change but will not link up with accounts created another way.
 Deactivating a user in pramen still holds: `active = false` blocks the login even though the
 IdP knows nothing about that flag.
 
+**The profile.** Every sign-in also stores what the provider says about the person on the
+user's row (`auth_users.profile`, JSON), and `me` returns it as `profile` next to `userId` and
+`roles` (`null` for a user without one; an anonymous `me` is unchanged). By default it is the
+standard `name` and `picture` claims, with `picture` kept only as an absolute `https:` URL;
+`mapProfile` replaces that when your provider sends something else worth showing:
+
+```ts
+createOidcAuth({
+  // ...
+  mapProfile: (c) => ({ ...defaultOidcProfile(c), team: c["https://acme.com/team"] ?? null }),
+});
+```
+
+Like roles under `mapRoles`, the provider is authoritative: each sign-in overwrites the stored
+profile, and a mapper returning `null` clears it. A mapper that throws is logged and stores no
+profile rather than blocking the sign-in. The editor shows `profile.name` and
+`profile.picture` in its account menu (see the `account` slot in `@pramen/cms-editor`). The
+profile is visible to the user and to admins, so keep tokens and secrets out of it. The column
+is additive: an existing `auth_users` table gains it on the next migrate.
+
 **The flow sets one cookie per sign-in attempt**, `pramen_oidc_<hash of the state>`: HttpOnly,
 SameSite=Lax, scoped to the callback path, cleared when the attempt ends. Per attempt, not
 per browser, because silent sign-in runs in every tab and overlapping attempts must not

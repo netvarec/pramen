@@ -82,6 +82,21 @@ export interface OidcOptions {
    */
   mapRoles?: (claims: JsonObject) => readonly string[] | undefined;
   /**
+   * What to remember about the person from the ID token's claims, stored on the user's row
+   * (`auth_users.profile`) at EVERY sign-in and returned by `me` as `profile`. The provider is
+   * authoritative here as it is for roles: each sign-in overwrites the stored value, and
+   * `null` (or `undefined`) clears it.
+   *
+   * Default: {@link defaultOidcProfile}, the standard `name` and `picture` claims. Map more
+   * when your provider sends something the app should show:
+   *
+   *   mapProfile: (c) => ({ ...defaultOidcProfile(c), team: c["https://acme.com/team"] })
+   *
+   * The value is shown to the signed-in user and to admins listing users; keep secrets and
+   * tokens out of it.
+   */
+  mapProfile?: (claims: JsonObject) => JsonObject | null | undefined;
+  /**
    * What identifies the account across logins.
    *
    * `"email"` (default) matches how the rest of `@pramen/auth` keys users, so an OIDC login
@@ -101,6 +116,27 @@ export interface OidcOptions {
   /** How long an in-flight login may take. Default 600s. */
   stateTtlSeconds?: number;
 }
+
+/**
+ * The profile `createOidcAuth` stores when `mapProfile` is not given: the standard `name` and
+ * `picture` claims (OpenID Connect Core 5.1), strings only, and `picture` only as an absolute
+ * `https:` URL, since the editor puts it straight into an `<img src>`. `null` when neither is
+ * there, so a provider that stops sending them clears what an earlier sign-in stored.
+ */
+export function defaultOidcProfile(claims: JsonObject): JsonObject | null {
+  const out: JsonObject = {};
+  if (typeof claims.name === "string" && claims.name.trim() !== "") out.name = claims.name.trim();
+  if (typeof claims.picture === "string" && isHttpsUrl(claims.picture)) out.picture = claims.picture;
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+const isHttpsUrl = (v: string): boolean => {
+  try {
+    return new URL(v).protocol === "https:";
+  } catch {
+    return false;
+  }
+};
 
 const b64url = (bytes: ArrayBuffer | Uint8Array): string => {
   const b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
@@ -418,9 +454,19 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
         // group that happens to be named like one must not be stored as if it meant something.
         // `mapRoles` hands the provider's claim straight through, so this is where it lands.
         const mapped = opts.mapRoles?.(claims)?.filter((r) => !isSystemRole(r));
+        // Not a reason to refuse the sign-in: a profile is decoration, and a mapper that throws
+        // on a claim it did not expect must not lock the person out. It is logged and stored as
+        // no profile.
+        let profile: JsonObject | null;
+        try {
+          profile = (opts.mapProfile ?? defaultOidcProfile)(claims) ?? null;
+        } catch (err) {
+          console.error("pramen/auth: OIDC mapProfile threw; storing no profile", err);
+          profile = null;
+        }
         const res = await ctx.callPrivileged({
           name: OIDC_UPSERT_HANDLER,
-          input: { table, username, email: email || null, roles: mapped ? [...mapped] : null, defaultRoles: [...defaultRoles] },
+          input: { table, username, email: email || null, roles: mapped ? [...mapped] : null, defaultRoles: [...defaultRoles], profile },
           roles: [OIDC_SYSTEM_ROLE],
         });
         const upserted = (await res.json().catch(() => ({}))) as { ok?: boolean; result?: { roles?: string[]; active?: boolean } };
@@ -472,7 +518,10 @@ export const OIDC_SYSTEM_ROLE = "__oidc_system";
  * cannot be called over `/rpc` by anyone, admins included. */
 export const oidcHandlers: HandlerMap = {
   [OIDC_UPSERT_HANDLER]: mutation(
-    async (ctx: HandlerContext, input: { table: string; username: string; email: string | null; roles: string[] | null; defaultRoles: string[] }) => {
+    async (ctx: HandlerContext, input: { table: string; username: string; email: string | null; roles: string[] | null; defaultRoles: string[]; profile?: JsonObject | null }) => {
+      // `undefined` from a caller that predates the profile (it is optional in the input) is
+      // treated as "nothing to say", which on this path means clearing it, the same as `null`.
+      const profile = input.profile ? JSON.stringify(input.profile) : null;
       const rows = (await ctx.db.exec(`SELECT username, roles, active FROM ${quoteIdent(input.table)} WHERE username = ? LIMIT 1`, input.username)) as Row[];
       const existing = rows[0];
       if (!existing) {
@@ -480,7 +529,7 @@ export const oidcHandlers: HandlerMap = {
         // an empty hash never verifies, which is exactly how a magic-link user is created.
         const roles = input.roles ?? input.defaultRoles;
         await ctx.db.exec(
-          `INSERT INTO ${quoteIdent(input.table)} (username, passwordHash, roles, email, emailVerified, active, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO ${quoteIdent(input.table)} (username, passwordHash, roles, email, emailVerified, active, createdAt, profile) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
           input.username,
           "",
           JSON.stringify(roles),
@@ -490,6 +539,7 @@ export const oidcHandlers: HandlerMap = {
           input.email ? Date.now() : null,
           1,
           Date.now(),
+          profile,
         );
         return { roles, active: true };
       }
@@ -502,6 +552,9 @@ export const oidcHandlers: HandlerMap = {
       if (input.roles && JSON.stringify(roles) !== JSON.stringify(stored)) {
         await ctx.db.exec(`UPDATE ${quoteIdent(input.table)} SET roles = ? WHERE username = ?`, JSON.stringify(roles), input.username);
       }
+      // The provider is authoritative for the profile too: every sign-in rewrites it, so a
+      // changed name or picture shows up at the next sign-in and a removed one disappears.
+      await ctx.db.exec(`UPDATE ${quoteIdent(input.table)} SET profile = ? WHERE username = ?`, profile, input.username);
       return { roles, active };
     },
     // Gated on a role NO issued token can carry, because `callPrivileged` does not bypass

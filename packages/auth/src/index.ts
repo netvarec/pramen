@@ -44,6 +44,10 @@ export const authSchema = {
     emailVerified: t.int(), // epoch ms the current `email` was confirmed; NULL = unverified (additive)
     active: defaultTo(t.bool(), true), // deactivation flag; false blocks login (additive, backfills 1)
     createdAt: t.int(),
+    // What the identity provider says about the person ({ name, picture } by default), written
+    // on every OIDC sign-in and read back by `me`. NULL for users who never signed in through
+    // OIDC. Additive: an existing table gains the column on the next migrate.
+    profile: t.json(),
   })),
 };
 
@@ -322,6 +326,36 @@ export interface AuthHandlerOptions {
 
 /** Build signup / login / me / refreshSession. Roles are assigned server-side (default
  * `["user"]`): the client never picks its own roles. Spread into your handler map. */
+/**
+ * The caller's stored OIDC profile (see `profile` in {@link authSchema}), or `null`.
+ *
+ * Never throws: `me` is how the editor learns that a session is real, so a deployment whose
+ * identities do not live in `auth_users` (an external JWT, a table without the column yet)
+ * must still get its identity back, just without a profile.
+ */
+async function readProfile(ctx: HandlerContext, username: string): Promise<JsonObject | null> {
+  try {
+    const rows = (await ctx.db.exec("SELECT profile FROM auth_users WHERE username = ? LIMIT 1", username)) as Row[];
+    return parseProfile(rows[0]?.profile);
+  } catch {
+    return null;
+  }
+}
+
+/** A `profile` cell as an object, or `null`. The column is JSON text on SQLite; a value that is
+ * not an object (a hand-edited row, a future shape) is treated as no profile. */
+export function parseProfile(cell: unknown): JsonObject | null {
+  let value = cell;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as JsonObject) : null;
+}
+
 export function createAuthHandlers(opts: AuthHandlerOptions = {}) {
   const loginBy = opts.loginBy ?? "username";
 
@@ -425,7 +459,14 @@ export function createAuthHandlers(opts: AuthHandlerOptions = {}) {
       { input: parseCreds },
     ),
 
-    me: query((ctx) => ctx.identity),
+    me: query(async (ctx) => {
+      const identity = ctx.identity;
+      // Anonymous stays exactly what it was: the editor reads a missing identity as "this
+      // session is not real", and an object with a `profile` key would look like one.
+      const userId = identity?.userId;
+      if (typeof userId !== "string" || userId === "") return identity;
+      return { ...identity, profile: await readProfile(ctx, userId) };
+    }),
 
     // Re-read roles/active for the caller and reissue a token at the env-configured session
     // TTL (AUTH_SESSION_TTL_SECONDS). Lets a short TTL bound revocation lag without logging
@@ -1221,4 +1262,4 @@ export function createEmailVerification(opts: EmailVerificationOptions): AuthMod
 }
 
 // --- OIDC (authorization code + PKCE) ---------------------------------------
-export { createOidcAuth, oidcHandlers, OIDC_UPSERT_HANDLER, type OidcOptions } from "./oidc.js";
+export { createOidcAuth, defaultOidcProfile, oidcHandlers, OIDC_UPSERT_HANDLER, type OidcOptions } from "./oidc.js";
