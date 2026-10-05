@@ -20,10 +20,12 @@ there are no backward-compatibility guarantees yet.
   signing out end the provider session too, so a silent sign-in page no longer signs the user
   straight back in. The success fragment then also carries `id_token=`, and `routes` gains
   `POST /auth/oidc/logout` (`logoutPath`): body `{ idToken }`, verified against the provider's
-  JWKS, issuer and audience (expiry ignored), then sent to `end_session_endpoint` as
-  `id_token_hint` server to server. Answers `{ ok: true, provider: "signed_out" | "unsupported"
-  | "failed" }` or 400 `{ ok: false, error: "invalid_token" }`. Off by default, and off is
-  unchanged. `VerifyOptions.ignoreExpiry` (`@pramen/server`) is what lets that route accept an
+  JWKS, issuer and audience (expiry ignored, but the token must be issued within the session
+  TTL plus 5 min) and served only to the app's own `Origin`, then sent to
+  `end_session_endpoint` as `id_token_hint` server to server. Success is only
+  `{ ok: true, provider: "signed_out" }`; everything else is `ok: false` with `error`
+  (`forbidden_origin`, `invalid_token`, `stale_token`, `unsupported`, `provider_failed`,
+  `server_error`). Off by default, and off is unchanged. `VerifyOptions.ignoreExpiry` (`@pramen/server`) is what lets that route accept an
   expired token; never use it to authenticate a request.
 - **`signOutUrl` (`@pramen/cms-editor`, `@pramen/cms-astro`).** Where a deliberate sign-out
   sends the browser, next to `signInUrl`. The stored session is cleared first and the

@@ -135,14 +135,27 @@ Connect RP-Initiated Logout fixes that, and `endSession` wires it:
 - the success fragment also carries `id_token=<the provider's ID token>` next to `token=`; keep
   it with the session (it is the provider's proof of this sign-in, needed to end it);
 - `routes` gains a third route, `POST /auth/oidc/logout` (`logoutPath` to move it), with body
-  `{ "idToken": "…" }`. It verifies the token's signature, issuer and audience against the
-  provider (not its expiry: it is hours old by then), then calls the provider's
-  `end_session_endpoint` server to server with it as `id_token_hint`. The answer is
-  `{ ok: true, provider: "signed_out" }`, `{ ok: true, provider: "unsupported" }` (no
-  `end_session_endpoint` in discovery), `{ ok: true, provider: "failed", status }` (the
-  provider refused or timed out, see `endSessionTimeoutMs`, logged without the token), or 400
-  `{ ok: false, error: "invalid_token" }`. The pramen session is untouched: drop it in the
-  browser as before.
+  `{ "idToken": "…" }`. It serves only the app's own pages (the `Origin` header must be the
+  origin of `successRedirect` or `redirectUri`; a missing one is refused) and only a token
+  issued within `sessionTtlSeconds` plus five minutes, so an old ID token is not a lasting
+  "sign this person out" capability. It verifies the token's signature, issuer and audience
+  (not `exp`: by logout it has usually expired), then calls the provider's
+  `end_session_endpoint` server to server with it as `id_token_hint`. The pramen session is
+  untouched: drop it in the browser as before.
+
+| Answer | Meaning |
+| --- | --- |
+| 200 `{ ok: true, provider: "signed_out" }` | the provider ended its session (2xx or 3xx) |
+| 403 `{ ok: false, error: "forbidden_origin" }` | not a page of this app |
+| 400 `{ ok: false, error: "invalid_token" }` | missing, forged, or for another client or issuer |
+| 400 `{ ok: false, error: "stale_token" }` | older than any session it could belong to, or no `iat` |
+| 501 `{ ok: false, error: "unsupported" }` | no `end_session_endpoint` in discovery |
+| 502 `{ ok: false, error: "provider_failed", status }` | the provider refused or was unreachable (`status: 0`), see `endSessionTimeoutMs` |
+| 502 `{ ok: false, error: "server_error" }` | anything else, e.g. discovery down |
+
+Only `signed_out` means the provider session is gone. Treat every `ok: false` as "still signed
+in at the provider" and tell the user, rather than sending them to a sign-in page that would
+sign them straight back in. Failures are logged without the token.
 
 The provider decides which of its sessions ends from the token's `sid` claim, so the client
 must be registered with logout enabled there. Point the editor's `signOutUrl` (see

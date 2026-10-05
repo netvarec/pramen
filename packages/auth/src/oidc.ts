@@ -126,10 +126,13 @@ export interface OidcOptions {
    * to `token=`, for the browser to keep with its session, and `routes` gains a third route,
    * `POST {logoutPath}` with body `{ "idToken": "…" }`. It verifies that ID token (signature,
    * issuer, audience; NOT expiry, since it is hours old by then) and calls the provider's
-   * `end_session_endpoint` server to server with it as `id_token_hint`. It answers
-   * `{ ok: true, provider: "signed_out" | "unsupported" | "failed" }`, or 400
-   * `{ ok: false, error: "invalid_token" }`. The pramen session is not touched: it is a
-   * stateless token the browser drops. Default false.
+   * `end_session_endpoint` server to server with it as `id_token_hint`. Only a request from
+   * the app's own origin (`Origin` = that of `successRedirect`/`redirectUri`) is served, and
+   * only a token issued within `sessionTtlSeconds` (+5 min). It answers `{ ok: true, provider:
+   * "signed_out" }` and nothing else as success; every other outcome is `ok: false` with
+   * `error`: `forbidden_origin` (403), `invalid_token` / `stale_token` (400), `unsupported`
+   * (501, no `end_session_endpoint`), `provider_failed` with `status` or `server_error` (502).
+   * The pramen session is not touched: it is a stateless token the browser drops. Default false.
    */
   endSession?: boolean;
   /** Where the logout route is mounted when `endSession` is on. Default `/auth/oidc/logout`. */
@@ -527,6 +530,17 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
     new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
   const endSessionTimeout = opts.endSessionTimeoutMs ?? 5000;
 
+  // Only pages of THIS app may ask: the route ends a session at the provider, so a foreign
+  // page posting a token it got hold of must not be able to. Browsers always send `Origin` on
+  // a POST with a JSON body, so a missing one is refused too (a server-side caller has no
+  // business here). The app's origin is where the callback lands and where the browser is.
+  const appOrigins = new Set([new URL(opts.successRedirect).origin, new URL(opts.redirectUri).origin]);
+  // How old an ID token may be and still name a live sign-in: a pramen session lives
+  // `sessionTtl`, so a token older than that (plus clock skew) belongs to a session that is
+  // already gone. Without the bound, an `exp`-ignoring check would make every ID token ever
+  // issued a permanent "sign this person out" capability.
+  const maxTokenAge = sessionTtl + 300;
+
   const logout: PublicRoute = {
     // POST, not GET: the ID token is in the BODY, so it never lands in an access log or a
     // browser history entry on our side. It goes to the provider as a query parameter only
@@ -534,28 +548,42 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
     method: "POST",
     path: opts.logoutPath ?? "/auth/oidc/logout",
     handler: async (request: Request) => {
-      const body = (await request.json().catch(() => null)) as { idToken?: unknown } | null;
-      const idToken = typeof body?.idToken === "string" ? body.idToken : "";
-      if (!idToken) return json(400, { ok: false, error: "invalid_token" });
-      const doc = await discover(opts.issuer);
-      // Verified BEFORE it goes anywhere: this route is public, and without the check it would
-      // relay whatever a caller posted to the provider under our client id.
-      const claims = await hintVerifier(doc.jwks_uri, doc.issuer).verify(idToken);
-      if (!claims) return json(400, { ok: false, error: "invalid_token" });
-      if (!doc.end_session_endpoint) return json(200, { ok: true, provider: "unsupported" });
-
-      const url = new URL(doc.end_session_endpoint);
-      url.searchParams.set("id_token_hint", idToken);
-      url.searchParams.set("client_id", opts.clientId);
+      // Every answer but `signed_out` is `ok: false`: the page must never read a failure as
+      // "the provider session is gone", or it would hand the user to a sign-in page that
+      // silently signs them straight back in while claiming they were signed out.
       try {
-        const res = await fetch(url.toString(), { method: "GET", redirect: "manual", signal: AbortSignal.timeout(endSessionTimeout) });
+        const origin = request.headers.get("origin");
+        if (!origin || !appOrigins.has(origin)) return json(403, { ok: false, error: "forbidden_origin" });
+        const body = (await request.json().catch(() => null)) as { idToken?: unknown } | null;
+        const idToken = typeof body?.idToken === "string" ? body.idToken : "";
+        if (!idToken) return json(400, { ok: false, error: "invalid_token" });
+        const doc = await discover(opts.issuer);
+        // Verified BEFORE it goes anywhere: this route is public, and without the check it would
+        // relay whatever a caller posted to the provider under our client id.
+        const claims = await hintVerifier(doc.jwks_uri, doc.issuer).verify(idToken);
+        if (!claims) return json(400, { ok: false, error: "invalid_token" });
+        const iat = typeof claims.iat === "number" ? claims.iat : null;
+        if (iat === null || Math.floor(Date.now() / 1000) - iat > maxTokenAge) return json(400, { ok: false, error: "stale_token" });
+        if (!doc.end_session_endpoint) return json(501, { ok: false, error: "unsupported" });
+
+        const url = new URL(doc.end_session_endpoint);
+        url.searchParams.set("id_token_hint", idToken);
+        url.searchParams.set("client_id", opts.clientId);
+        let res: Response;
+        try {
+          res = await fetch(url.toString(), { method: "GET", redirect: "manual", signal: AbortSignal.timeout(endSessionTimeout) });
+        } catch (err) {
+          console.error("pramen/auth: OIDC end_session_endpoint could not be reached", err instanceof Error ? err.name : "error");
+          return json(502, { ok: false, error: "provider_failed", status: 0 });
+        }
         if (res.status >= 200 && res.status < 400) return json(200, { ok: true, provider: "signed_out" });
         // Logged without the URL: it carries the ID token.
         console.error(`pramen/auth: OIDC end_session_endpoint answered HTTP ${res.status}`);
-        return json(200, { ok: true, provider: "failed", status: res.status });
+        return json(502, { ok: false, error: "provider_failed", status: res.status });
       } catch (err) {
-        console.error("pramen/auth: OIDC end_session_endpoint could not be reached", err instanceof Error ? err.name : "error");
-        return json(200, { ok: true, provider: "failed", status: 0 });
+        // Discovery down, JWKS unreachable, anything unexpected. Never a 200.
+        console.error("pramen/auth: OIDC logout failed", err instanceof Error ? err.message : "error");
+        return json(502, { ok: false, error: "server_error" });
       }
     },
   };

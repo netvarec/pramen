@@ -69,7 +69,8 @@ async function signIn(h: ReturnType<typeof harness>, endSession: boolean): Promi
 }
 
 const logoutRoute = (over: Record<string, unknown> = {}) => createOidcAuth({ ...base, endSession: true, ...over }).routes[2]!;
-const post = (body: unknown) => new Request("https://app.example.com/auth/oidc/logout", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+const post = (body: unknown, origin: string | null = "https://app.example.com") =>
+  new Request("https://app.example.com/auth/oidc/logout", { method: "POST", headers: { "content-type": "application/json", ...(origin ? { origin } : {}) }, body: JSON.stringify(body) });
 
 describe("endSession: the sign-in fragment", () => {
   test("carries the ID token next to the session only when enabled", async () => {
@@ -102,10 +103,37 @@ describe("endSession: the logout route", () => {
     expect(ended.searchParams.get("id_token_hint")!.split(".")).toHaveLength(3);
   });
 
-  test("an EXPIRED but genuine ID token still signs out (it is hours old by then)", async () => {
+  test("an EXPIRED but genuine ID token from a still-possible session signs out", async () => {
     const h = harness(); active = h;
-    const old = await idToken({ exp: Math.floor(Date.now() / 1000) - 8 * 3600 });
+    const now = Math.floor(Date.now() / 1000);
+    // Issued 50 min ago, expired 45 min ago: within the default 1 h session TTL.
+    const old = await idToken({ iat: now - 3000, exp: now - 2700 });
     expect(await (await logoutRoute().handler(post({ idToken: old }), env(h.KV), {} as never)).json()).toEqual({ ok: true, provider: "signed_out" });
+  });
+
+  test("a token older than any session it could belong to is refused (not a lasting capability)", async () => {
+    const h = harness(); active = h;
+    const now = Math.floor(Date.now() / 1000);
+    const ancient = await idToken({ iat: now - 2 * 3600, exp: now - 2 * 3600 + 300 });
+    const res = await logoutRoute().handler(post({ idToken: ancient }), env(h.KV), {} as never);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ ok: false, error: "stale_token" });
+    // The window follows sessionTtlSeconds.
+    const long = logoutRoute({ sessionTtlSeconds: 8 * 3600 });
+    expect(await (await long.handler(post({ idToken: ancient }), env(h.KV), {} as never)).json()).toEqual({ ok: true, provider: "signed_out" });
+    const noIat = await idToken({ iat: undefined });
+    expect(await (await logoutRoute().handler(post({ idToken: noIat }), env(h.KV), {} as never)).json()).toEqual({ ok: false, error: "stale_token" });
+  });
+
+  test("only the app's own origin may ask; a missing Origin is refused too", async () => {
+    const h = harness(); active = h;
+    const token = await idToken({});
+    for (const origin of ["https://evil.example.com", "http://app.example.com", null]) {
+      const res = await logoutRoute().handler(post({ idToken: token }, origin), env(h.KV), {} as never);
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ ok: false, error: "forbidden_origin" });
+    }
+    expect(h.calls.some((u) => u.startsWith(`${ISSUER}/end-session`))).toBe(false);
   });
 
   test("a forged, foreign or missing token is refused and never reaches the provider", async () => {
@@ -130,7 +158,8 @@ describe("endSession: the logout route", () => {
     const issuer = "https://idp-no-logout.example.com";
     const h = harness({ endSession: false, issuer }); active = h;
     const res = await createOidcAuth({ ...base, issuer, endSession: true }).routes[2]!.handler(post({ idToken: await idToken({ iss: issuer }) }), env(h.KV), {} as never);
-    expect(await res.json()).toEqual({ ok: true, provider: "unsupported" });
+    expect(res.status).toBe(501);
+    expect(await res.json()).toEqual({ ok: false, error: "unsupported" });
   });
 
   test("a provider error is reported, logged without the token", async () => {
@@ -138,8 +167,30 @@ describe("endSession: the logout route", () => {
     const log = spyOn(console, "error").mockImplementation(() => {});
     const token = await idToken({});
     const res = await logoutRoute().handler(post({ idToken: token }), env(h.KV), {} as never);
-    expect(await res.json()).toEqual({ ok: true, provider: "failed", status: 500 });
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ ok: false, error: "provider_failed", status: 500 });
     expect(JSON.stringify(log.mock.calls)).not.toContain(token);
+    log.mockRestore();
+  });
+
+  test("an unreachable provider is a failure, never signed out", async () => {
+    const h = harness({ answer: () => { throw new TypeError("network down"); } }); active = h;
+    const log = spyOn(console, "error").mockImplementation(() => {});
+    const res = await logoutRoute().handler(post({ idToken: await idToken({}) }), env(h.KV), {} as never);
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ ok: false, error: "provider_failed", status: 0 });
+    log.mockRestore();
+  });
+
+  test("a discovery failure is a non-OK answer, not a thrown 500 or a success", async () => {
+    const issuer = "https://idp-down.example.com";
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () => new Response("down", { status: 503 })) as unknown as typeof fetch;
+    active = { restore: () => { globalThis.fetch = original; } };
+    const log = spyOn(console, "error").mockImplementation(() => {});
+    const res = await createOidcAuth({ ...base, issuer, endSession: true }).routes[2]!.handler(post({ idToken: "a.b.c" }), env({} as KVNamespace), {} as never);
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ ok: false, error: "server_error" });
     log.mockRestore();
   });
 
