@@ -49,6 +49,8 @@ interface Discovery {
   authorization_endpoint: string;
   token_endpoint: string;
   jwks_uri: string;
+  /** RP-Initiated Logout 1.0. Optional: a provider without it cannot end its session for us. */
+  end_session_endpoint?: string;
 }
 
 export interface OidcOptions {
@@ -115,6 +117,25 @@ export interface OidcOptions {
   callbackPath?: string;
   /** How long an in-flight login may take. Default 600s. */
   stateTtlSeconds?: number;
+  /**
+   * Let signing out here end the session at the provider too (OpenID Connect RP-Initiated
+   * Logout 1.0). Without it, an app that signs in through the provider silently, as soon as
+   * its sign-in page loads, signs the user straight back in after they sign out.
+   *
+   * When true, the success fragment also carries `id_token=<the provider's ID token>` next
+   * to `token=`, for the browser to keep with its session, and `routes` gains a third route,
+   * `POST {logoutPath}` with body `{ "idToken": "…" }`. It verifies that ID token (signature,
+   * issuer, audience; NOT expiry, since it is hours old by then) and calls the provider's
+   * `end_session_endpoint` server to server with it as `id_token_hint`. It answers
+   * `{ ok: true, provider: "signed_out" | "unsupported" | "failed" }`, or 400
+   * `{ ok: false, error: "invalid_token" }`. The pramen session is not touched: it is a
+   * stateless token the browser drops. Default false.
+   */
+  endSession?: boolean;
+  /** Where the logout route is mounted when `endSession` is on. Default `/auth/oidc/logout`. */
+  logoutPath?: string;
+  /** How long the logout route waits for the provider. Default 5000 ms. */
+  endSessionTimeoutMs?: number;
 }
 
 /**
@@ -288,6 +309,12 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
   let verifier: JwksStrategy | undefined;
   const idTokenVerifier = (jwksUri: string, issuer: string): JwksStrategy =>
     (verifier ??= new JwksStrategy(jwksUri, undefined, { requireExp: true, issuer, audience: opts.clientId }));
+  // Logout verifies the SAME tokens as evidence of a past sign-in, hours later, so expiry is
+  // not checked. A separate instance because the options differ; it never authenticates a
+  // request, and nothing it accepts is trusted beyond "this provider issued it to us".
+  let logoutVerifier: JwksStrategy | undefined;
+  const hintVerifier = (jwksUri: string, issuer: string): JwksStrategy =>
+    (logoutVerifier ??= new JwksStrategy(jwksUri, undefined, { ignoreExpiry: true, issuer, audience: opts.clientId }));
 
   const start: PublicRoute = {
     method: "GET",
@@ -481,7 +508,9 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
           return fail(500, "Sign-in could not be completed.", "server_error");
         }
         const token = await signToken({ sub: username, roles: upserted.result.roles ?? [] }, secret, { ttlSeconds: sessionTtl });
-        return redirect(`token=${encodeURIComponent(token)}`);
+        // With `endSession`, the ID token rides along so the browser can hand it back to the
+        // logout route. Same fragment, so it stays out of logs and `Referer` like the session.
+        return redirect(`token=${encodeURIComponent(token)}${opts.endSession ? `&id_token=${encodeURIComponent(tokens.id_token)}` : ""}`);
       };
       try {
         return await complete();
@@ -492,7 +521,46 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
     },
   };
 
-  return { routes: [start, callback] };
+  if (!opts.endSession) return { routes: [start, callback] };
+
+  const json = (status: number, body: JsonObject): Response =>
+    new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
+  const endSessionTimeout = opts.endSessionTimeoutMs ?? 5000;
+
+  const logout: PublicRoute = {
+    // POST, not GET: the ID token is in the BODY, so it never lands in an access log or a
+    // browser history entry on our side. It goes to the provider as a query parameter only
+    // because RP-Initiated Logout defines it that way, and only server to server.
+    method: "POST",
+    path: opts.logoutPath ?? "/auth/oidc/logout",
+    handler: async (request: Request) => {
+      const body = (await request.json().catch(() => null)) as { idToken?: unknown } | null;
+      const idToken = typeof body?.idToken === "string" ? body.idToken : "";
+      if (!idToken) return json(400, { ok: false, error: "invalid_token" });
+      const doc = await discover(opts.issuer);
+      // Verified BEFORE it goes anywhere: this route is public, and without the check it would
+      // relay whatever a caller posted to the provider under our client id.
+      const claims = await hintVerifier(doc.jwks_uri, doc.issuer).verify(idToken);
+      if (!claims) return json(400, { ok: false, error: "invalid_token" });
+      if (!doc.end_session_endpoint) return json(200, { ok: true, provider: "unsupported" });
+
+      const url = new URL(doc.end_session_endpoint);
+      url.searchParams.set("id_token_hint", idToken);
+      url.searchParams.set("client_id", opts.clientId);
+      try {
+        const res = await fetch(url.toString(), { method: "GET", redirect: "manual", signal: AbortSignal.timeout(endSessionTimeout) });
+        if (res.status >= 200 && res.status < 400) return json(200, { ok: true, provider: "signed_out" });
+        // Logged without the URL: it carries the ID token.
+        console.error(`pramen/auth: OIDC end_session_endpoint answered HTTP ${res.status}`);
+        return json(200, { ok: true, provider: "failed", status: res.status });
+      } catch (err) {
+        console.error("pramen/auth: OIDC end_session_endpoint could not be reached", err instanceof Error ? err.name : "error");
+        return json(200, { ok: true, provider: "failed", status: 0 });
+      }
+    },
+  };
+
+  return { routes: [start, callback, logout] };
 }
 
 /** The name of the privileged handler the callback route calls. A route has no `ctx.db`: it

@@ -127,6 +127,29 @@ your app and the provider forever. The error redirect is only issued to the brow
 started the attempt (the binder cookie below); a crafted callback URL gets the ordinary error
 page.
 
+**Signing out at the provider too (`endSession: true`).** An app that signs in silently on
+page load has a catch: signing out of the app only drops the pramen session, the provider
+session lives on, and the very next sign-in page signs the user straight back in. OpenID
+Connect RP-Initiated Logout fixes that, and `endSession` wires it:
+
+- the success fragment also carries `id_token=<the provider's ID token>` next to `token=`; keep
+  it with the session (it is the provider's proof of this sign-in, needed to end it);
+- `routes` gains a third route, `POST /auth/oidc/logout` (`logoutPath` to move it), with body
+  `{ "idToken": "…" }`. It verifies the token's signature, issuer and audience against the
+  provider (not its expiry: it is hours old by then), then calls the provider's
+  `end_session_endpoint` server to server with it as `id_token_hint`. The answer is
+  `{ ok: true, provider: "signed_out" }`, `{ ok: true, provider: "unsupported" }` (no
+  `end_session_endpoint` in discovery), `{ ok: true, provider: "failed", status }` (the
+  provider refused or timed out, see `endSessionTimeoutMs`, logged without the token), or 400
+  `{ ok: false, error: "invalid_token" }`. The pramen session is untouched: drop it in the
+  browser as before.
+
+The provider decides which of its sessions ends from the token's `sid` claim, so the client
+must be registered with logout enabled there. Point the editor's `signOutUrl` (see
+`@pramen/cms-astro`) at a page of yours that posts the stored ID token here and then goes on
+to your sign-in page; expiry still goes to `signInUrl`, so only a deliberate sign-out ends the
+provider session.
+
 **Where roles come from** is the part that differs per provider, and the part that fails
 quietly if you get it wrong:
 
