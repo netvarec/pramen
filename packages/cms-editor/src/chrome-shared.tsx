@@ -11,12 +11,11 @@
 // there is exactly one place that decides where a nav entry goes and what happens when it is
 // clicked, and adding a third shape means writing markup, not re-deriving state.
 
-import { Avatar, UserMenu, UserMenuItem } from "@podoba/react";
 import { useEffect, useState, type ReactNode } from "react";
 import type { Me } from "./app-context";
-import { useI18n } from "./i18n";
-import { DarkThemeIcon, LightThemeIcon, NAV_GLYPHS, SettingsIcon, SignOutIcon } from "./icons";
-import type { ExtraNavLink, NavEntry, NavGlyph, NavIcon, NavSection } from "./nav";
+import { NAV_GLYPHS } from "./icons";
+import type { ExtraNavLink, NavEntry, NavIcon, NavSection } from "./nav";
+import type { AccountMenuRow } from "./slots";
 
 /** A nav entry that goes somewhere in the SPA: the half a chrome navigates rather than
  * links to. Narrowed here so neither chrome has to re-derive the discriminant. */
@@ -24,17 +23,10 @@ export type NavRoute = Extract<NavEntry, { kind: "route" }>;
 
 /** A deployment's own row in the account menu (`accountMenu` in the shell config, or
  * `navHooks.accountMenu` in a theme), resolved by the layout: already filtered for this
- * session, already wrapped in the unsaved-changes guard. A chrome renders it and calls
- * `onSelect`, and never needs to know what any particular row is for. That is the difference
- * from how the first one was added, as an `onStructure`/`showStructure` pair threaded by hand
- * through the layout, this module and both chromes. */
-export interface AccountMenuEntry {
-  id: string;
-  label: string;
-  icon?: NavGlyph;
-  /** Navigates, through the guard. Returns whether it went, like the callbacks below. */
-  onSelect: () => boolean;
-}
+ * session, already wrapped in the unsaved-changes guard. A chrome hands it to the account menu,
+ * which renders it and calls `onSelect`, and never needs to know what any particular row is
+ * for. The contract is `AccountMenuRow` in `slots.ts`, since the account menu is a slot. */
+export type AccountMenuEntry = AccountMenuRow;
 
 /** Everything a chrome is handed. */
 export interface ChromeProps {
@@ -127,81 +119,3 @@ export function NavIconSlot({ icon }: { icon: NavIcon }): ReactNode {
   return <Glyph className="h-[15px] w-[15px] shrink-0" />;
 }
 
-/**
- * The account cluster.
- *
- * podoba's `UserMenu` (a React Aria `Menu`), so the popover, roving focus, typeahead and
- * dismissal are the design system's rather than three more hand-rolled handlers. It carries
- * the session's own affordances (the theme, Settings, the way out, and who you are) which
- * is the half of the chrome that neither a narrowed rail nor a 77px bar has room for inline.
- *
- * `compact` drops the username beside the avatar, which is the Graphic Standard bar's own
- * shape: a bare avatar circle at the right end of the nav. The sidebar's app bar has the
- * width to name the session, and does.
- */
-export function AccountMenu({
-  me,
-  theme,
-  compact = false,
-  items,
-  onTheme,
-  onSettings,
-  onSignOut,
-}: {
-  me: Me | null;
-  theme: string;
-  compact?: boolean;
-  /** The deployment's own rows, between the theme toggle and Settings. */
-  items: AccountMenuEntry[];
-  onTheme: () => void;
-  onSettings: () => void;
-  onSignOut: () => void;
-}) {
-  // Looked up by id rather than switched on, because the rows are data: the built-in keys can
-  // never collide with them (`extra:` prefix), and nothing here changes when a deployment adds
-  // one.
-  const { t } = useI18n();
-  const byId = new Map(items.map((item) => [item.id, item]));
-  // The server-resolved identity, which is a username rather than a display name, since this app
-  // has no profile. Falling back to "account" keeps the avatar's initials from reading as "?"
-  // in the window between boot and the `me` call landing.
-  const who = me?.userId ?? t("account.fallbackName");
-  return (
-    <UserMenu
-      triggerLabel={t("account.trigger", { who })}
-      trigger={
-        <>
-          <Avatar name={who} size="sm" ring={false} />
-          {compact ? null : <span className="max-w-[180px] truncate text-compact text-fg-muted max-[560px]:hidden">{who}</span>}
-        </>
-      }
-      onAction={(key) => {
-        if (key === "theme") onTheme();
-        else if (key === "settings") onSettings();
-        else if (key === "signout") onSignOut();
-        else byId.get(String(key))?.onSelect();
-      }}
-    >
-      <UserMenuItem id="theme" className="gap-2.5">
-        {theme === "dark" ? <LightThemeIcon className="h-[15px] w-[15px]" /> : <DarkThemeIcon className="h-[15px] w-[15px]" />}
-        {theme === "dark" ? t("theme.light") : t("theme.dark")}
-      </UserMenuItem>
-      {items.map((item) => (
-        <UserMenuItem key={item.id} id={item.id} className="gap-2.5">
-          {/* An empty 15px box when there is no glyph, so the label still lines up with the
-              built-in rows' labels. */}
-          {item.icon ? <NavIconSlot icon={{ kind: "glyph", name: item.icon }} /> : <span aria-hidden="true" className="h-[15px] w-[15px] shrink-0" />}
-          {item.label}
-        </UserMenuItem>
-      ))}
-      <UserMenuItem id="settings" className="gap-2.5">
-        <SettingsIcon className="h-[15px] w-[15px]" />
-        {t("account.settings")}
-      </UserMenuItem>
-      <UserMenuItem id="signout" className="gap-2.5">
-        <SignOutIcon className="h-[15px] w-[15px]" />
-        {t("account.signOut")}
-      </UserMenuItem>
-    </UserMenu>
-  );
-}

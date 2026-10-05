@@ -22,7 +22,7 @@
 // account-menu item from the shell) has to be checked against something that exists at runtime.
 
 import type { ReactNode } from "react";
-import type { AdminPageMeta, CmsCapabilities, CollectionMeta, ContentType, RpcInput } from "./types";
+import type { AdminPageMeta, CmsCapabilities, CollectionMeta, ContentType, JsonValue, RpcInput } from "./types";
 import type { NavGlyph, NavSection } from "./nav";
 
 export type { AdminPageMeta, CmsCapabilities, CollectionMeta, ContentType } from "./types";
@@ -227,6 +227,69 @@ export interface MediaGridProps {
 export interface MediaLibraryEmptyProps {
   title: string;
   description: string;
+}
+
+// --- account -------------------------------------------------------------------------------
+
+/**
+ * What the identity provider said about the signed-in person: the `profile` an OIDC sign-in
+ * stores (`mapProfile` in `@pramen/auth`), as `me` returns it.
+ *
+ * Parsed once, where `me` arrives, so a slot reads it without checking it again: `name` is a
+ * non-empty string or absent, and `picture` an absolute `https:` URL (safe for `<img src>`) or
+ * absent. Anything else a deployment mapped is passed through under its own key, as JSON.
+ * Absent altogether for a session that never signed in through OIDC.
+ */
+export interface AccountProfile {
+  name?: string;
+  picture?: string;
+  [key: string]: JsonValue | undefined;
+}
+
+/** The signed-in identity, as the server resolved it (`me`). `userId` is the account key,
+ * which is a username or an email, not a display name: prefer `profile.name` for that. */
+export interface AccountIdentity {
+  userId?: string;
+  roles?: string[];
+  profile?: AccountProfile | null;
+}
+
+/** One deployment row of the account menu (`accountMenu` in the shell config, or
+ * `navHooks.accountMenu`), already filtered for this session and wrapped in the unsaved-changes
+ * guard. Render it and call `onSelect`; `id` is stable, use it as the key. */
+export interface AccountMenuRow {
+  id: string;
+  label: string;
+  icon?: NavGlyph;
+  /** Navigates, through the guard. Returns whether it went (false when the reader chose to
+   * stay on a screen with unsaved changes), so a menu that closes itself can stay open. */
+  onSelect: () => boolean;
+}
+
+/**
+ * `slots.account`: the account cluster at the end of the chrome, the avatar and what opens
+ * from it. Export `AccountMenu`.
+ *
+ * Both chromes render it: the topbar at the right end of the bar (`compact`) and in its
+ * small-viewport menu, the sidebar at the foot of the rail. Whatever it renders, it owns the
+ * session's way to the theme, Settings and sign-out, so a replacement that drops one of them
+ * drops it from the editor.
+ */
+export interface AccountMenuProps {
+  /** `null` until the `me` call has answered. */
+  me: AccountIdentity | null;
+  /** The current theme, as the editor names it. */
+  theme: string;
+  /** The topbar's shape: a bare avatar, no name beside it. */
+  compact: boolean;
+  /** The deployment's own rows, in order. Usually empty. */
+  items: readonly AccountMenuRow[];
+  /** Toggle light and dark. */
+  onTheme: () => void;
+  /** Open Settings, through the guard. Returns whether it went. */
+  onSettings: () => boolean;
+  /** Sign out. Returns whether it went. */
+  onSignOut: () => boolean;
 }
 
 // --- nav -----------------------------------------------------------------------------------

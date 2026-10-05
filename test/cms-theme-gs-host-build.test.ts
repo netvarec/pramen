@@ -59,10 +59,10 @@ describe("the GS theme in a host build", () => {
 
   test("every slot is the theme's module, and none of the editor's defaults is linked", () => {
     // An unminified bundle opens each module with a `// <path>` comment.
-    for (const file of ["page-header.tsx", "home.tsx", "detail-header.tsx", "media-detail.tsx", "media-grid.tsx", "nav.ts", "copy.ts", "dashboard-data.ts"]) {
+    for (const file of ["page-header.tsx", "home.tsx", "detail-header.tsx", "media-detail.tsx", "media-grid.tsx", "nav.ts", "account.tsx", "copy.ts", "dashboard-data.ts"]) {
       expect(js, file).toContain(`cms-theme-gs/src/${file}\n`);
     }
-    for (const file of ["page-header.tsx", "home-screen.tsx", "detail-header.tsx", "media-detail.tsx", "media-grid.tsx", "nav-hooks.ts"]) {
+    for (const file of ["page-header.tsx", "home-screen.tsx", "detail-header.tsx", "media-detail.tsx", "media-grid.tsx", "nav-hooks.ts", "account-menu.tsx"]) {
       expect(js, file).not.toContain(`cms-editor/src/${file}\n`);
     }
   });

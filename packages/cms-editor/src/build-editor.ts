@@ -59,6 +59,9 @@ const PKG = resolve(dirname(fileURLToPath(import.meta.url)), "..");
  *   (`MediaGridProps`, `MediaLibraryEmptyProps`).
  * - `nav`: not a component but an object of hooks over the nav (`NavHooks`): transform the
  *   sections and the lit key, add account-menu rows. Applied upstream of both chromes.
+ * - `account`: the avatar at the end of the chrome and the menu it opens (`AccountMenuProps`),
+ *   for a deployment inside a product whose avatar opens an account menu of its own. It is
+ *   handed the theme, Settings and sign-out, so a replacement keeps all three reachable.
  *
  * What is deliberately NOT here:
  *
@@ -87,6 +90,8 @@ export const EDITOR_SLOTS = {
   mediaGrid: { specifier: "./media-grid", from: "src" },
   /** Hooks over the nav and the account menu. Export `navHooks`. */
   nav: { specifier: "../nav-hooks", from: "src/routes" },
+  /** The avatar and the account menu it opens, in both chromes. Export `AccountMenu`. */
+  account: { specifier: "./account-menu", from: "src" },
 } as const;
 
 export type EditorSlot = keyof typeof EDITOR_SLOTS;

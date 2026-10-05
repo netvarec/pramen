@@ -32,7 +32,8 @@
 import { useEffect, useState } from "react";
 import { Button, Card, Text } from "@podoba/react";
 import { APP_BAR_H, BELOW_CHROME_PAD } from "./chrome";
-import { AccountMenu, MD_BREAKPOINT, NavIconSlot, useMediaQuery, type ChromeProps } from "./chrome-shared";
+import { AccountMenu } from "./account-menu";
+import { MD_BREAKPOINT, NavIconSlot, useMediaQuery, type ChromeProps } from "./chrome-shared";
 import { BRAND } from "./brand";
 import { useI18n } from "./i18n";
 import {
@@ -322,7 +323,7 @@ export function SidebarChrome({
             ) : null}
           </nav>
           <div className="ml-auto pl-4">
-            <AccountMenu me={me} theme={theme} items={accountItems} onTheme={onTheme} onSettings={onSettings} onSignOut={onSignOut} />
+            <AccountMenu me={me} theme={theme} compact={false} items={accountItems} onTheme={onTheme} onSettings={onSettings} onSignOut={onSignOut} />
           </div>
         </div>
         {/* `BELOW_CHROME_PAD` is 0 here: the header meets the bar directly, which is the

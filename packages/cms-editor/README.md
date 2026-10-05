@@ -366,6 +366,7 @@ declared against the same type, so a contract that changes is a compile error on
 | `mediaDetail` | the dialog frame around one media file | `MediaDetailFrame` | `MediaDetailFrameProps` |
 | `mediaGrid` | the media library's grid and its empty state | `MediaGrid`, `MediaLibraryEmpty` | `MediaGridProps`, `MediaLibraryEmptyProps` |
 | `nav` | hooks over the nav and the account menu, for both chromes | `navHooks` | `NavHooks` |
+| `account` | the avatar at the end of the chrome and the menu it opens, in both chromes; it is handed the theme, Settings and sign-out, and `me.profile` (`name`, an https `picture`) when the session signed in through OIDC | `AccountMenu` | `AccountMenuProps` |
 
 ```ts
 await buildEditor({

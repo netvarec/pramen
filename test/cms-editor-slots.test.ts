@@ -272,3 +272,27 @@ describe("keys used above", () => {
     for (const k of ["type:page", "type:akce", "app:akce", "types", "users", "settings", "media"]) expect(all).toContain(k);
   });
 });
+
+describe("account menu: the profile is parsed where `me` arrives", () => {
+  test("a name and an https picture survive, other mapped keys pass through", async () => {
+    const { parseAccountProfile } = await import("../packages/cms-editor/src/app-context");
+    expect(parseAccountProfile({ name: " Ada ", picture: "https://idp.example.com/a.svg", avatar: { background: "#ffd700" } })).toEqual({
+      name: "Ada",
+      picture: "https://idp.example.com/a.svg",
+      avatar: { background: "#ffd700" },
+    });
+  });
+
+  test("anything that would end up in an <img src> unchecked is dropped", async () => {
+    const { parseAccountProfile } = await import("../packages/cms-editor/src/app-context");
+    for (const picture of ["javascript:alert(1)", "http://idp.example.com/a.png", "/avatar.svg", "data:image/svg+xml,<svg/>", 7]) {
+      expect(parseAccountProfile({ name: "Ada", picture })).toEqual({ name: "Ada" });
+    }
+    expect(parseAccountProfile({ name: " ", picture: null })).toEqual({});
+  });
+
+  test("no profile, or not an object, is null", async () => {
+    const { parseAccountProfile } = await import("../packages/cms-editor/src/app-context");
+    for (const raw of [undefined, null, "Ada", [], 3]) expect(parseAccountProfile(raw)).toBeNull();
+  });
+});
