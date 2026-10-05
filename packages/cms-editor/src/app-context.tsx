@@ -24,6 +24,9 @@ declare global {
        * nothing else. `url: ""` means the CMS is on this same origin. */
       backend?: { url?: string; tenant?: string };
       signInUrl?: string;
+      /** Where SIGNING OUT goes, instead of `signInUrl`: a page that ends the identity
+       * provider's session too. Unset = signing out goes to `signInUrl` as before. */
+      signOutUrl?: string;
       /** Hide the Pages tab for deployments that use collections only, with no block/page
        * building. The tab is otherwise always shown and lands on an empty list, which
        * reads as "the CMS is broken" rather than "this site has no pages". */
@@ -79,10 +82,39 @@ const BACKEND = readBackend(globalThis as BackendHost);
 const SIGN_IN_URL: string | undefined =
   typeof window !== "undefined" && !new URLSearchParams(window.location.search).has("setup") ? window.PRAMEN_CMS_EDITOR?.signInUrl : undefined;
 
+/**
+ * Where a deliberate sign-out sends the browser, or `undefined` for the built-in Setup screen.
+ * `signOutUrl` when the shell sets one, else `signInUrl`; neither under `?setup`, the same
+ * escape hatch as sign-in, and `signOutUrl` alone means nothing (it only replaces an external
+ * sign-in). Pure, so the rule is tested as the editor applies it.
+ */
+export function signOutDestination(config: { signInUrl?: string; signOutUrl?: string } | undefined, search: string): string | undefined {
+  if (!config?.signInUrl || new URLSearchParams(search).has("setup")) return undefined;
+  return config.signOutUrl || config.signInUrl;
+}
+
+/** Wrap a navigation in the unsaved-changes guard: run it only if `confirm` lets it, and
+ * report whether it went (a chrome that dismisses itself on click needs to know). */
+export function guardNavigation(confirm: () => boolean, go: () => void): () => boolean {
+  return () => {
+    if (!confirm()) return false;
+    go();
+    return true;
+  };
+}
+
 /** Drop the stale session and hand off to the external sign-in page. */
 function redirectToSignIn(): void {
   clearConfig();
   location.replace(SIGN_IN_URL!);
+}
+
+/** Signing out ON PURPOSE: the session is dropped the same way, but the browser goes to the
+ * sign-out page when there is one. Expiry still goes to sign-in (`redirectToSignIn`): only a
+ * deliberate sign-out should end the identity provider's session. */
+function signOutToShell(): void {
+  clearConfig();
+  location.replace(signOutDestination(window.PRAMEN_CMS_EDITOR, window.location.search) ?? SIGN_IN_URL!);
 }
 
 export interface Me {
@@ -363,7 +395,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     confirmNavigation,
     setNavGuard,
     reconfigure: () => {
-      if (SIGN_IN_URL) { redirectToSignIn(); return; }
+      if (SIGN_IN_URL) { signOutToShell(); return; }
       setMe(null); setError(""); setCfg({ ...cfg, token: "" });
     },
   };

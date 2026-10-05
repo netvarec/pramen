@@ -53,6 +53,10 @@ export interface VerifyOptions {
   audience?: string | string[];
   /** Required issuer. `payload.iss` must equal this exactly. Unset ⇒ `iss` not checked. */
   issuer?: string;
+  /** Skip the `exp`/`nbf` time checks (signature, `aud` and `iss` still apply). Only for
+   * verifying a token as EVIDENCE of a past sign-in, never for authenticating a request:
+   * OIDC logout passes a long-expired ID token as `id_token_hint`. Ignores `requireExp`. */
+  ignoreExpiry?: boolean;
 }
 
 /** Does the token's `aud` claim satisfy the required audience? Token aud may be a
@@ -99,9 +103,11 @@ async function verifyJwt(
 
   const now = Math.floor(Date.now() / 1000);
   const hasExp = typeof payload.exp === "number";
-  if (opts.requireExp && !hasExp) return null;
-  if (hasExp && now >= (payload.exp as number)) return null;
-  if (typeof payload.nbf === "number" && now < payload.nbf) return null;
+  if (!opts.ignoreExpiry) {
+    if (opts.requireExp && !hasExp) return null;
+    if (hasExp && now >= (payload.exp as number)) return null;
+    if (typeof payload.nbf === "number" && now < payload.nbf) return null;
+  }
   if (opts.audience !== undefined && !audienceMatches(payload.aud, opts.audience)) return null;
   if (opts.issuer !== undefined && payload.iss !== opts.issuer) return null;
   return payload;

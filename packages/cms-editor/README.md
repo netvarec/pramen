@@ -93,6 +93,7 @@ from typed options (`admin: { … }`), so there is no file to edit:
 admin: {
   brand: { name: "Acme", suffix: "cms" },            // the wordmark; see below
   // signInUrl: "/signin/",                          // ONLY once that page exists; see the warning
+  // signOutUrl: "/signout/",                        // where a deliberate sign-out goes; see the warning
   // hidePages: true,                                // collections-only deployments
   // layout: "topbar",                               // horizontal nav instead of the sidebar; see below
   // locale: "cs",                                   // the editor's language, "en" (default) or "cs"; see below
@@ -264,6 +265,12 @@ progress.
 > editor bouncing between the redirect and itself with no session to recover from. Point it
 > at a page you have already deployed. `?setup=1` always forces the built-in screen, for
 > pasting a first-admin JWT.
+>
+> **`signOutUrl`** replaces `signInUrl` for a DELIBERATE sign-out only (the stored session is
+> cleared first, and the unsaved-changes guard still runs). Use it when signing in is silent
+> through an OIDC provider: that page should end the provider session (`endSession` in
+> `@pramen/auth`) before going on to sign-in. It must exist too, and is ignored without
+> `signInUrl` or under `?setup=1`.
 
 **Each screen's header is a cover panel with generated artwork** (`src/cover.tsx`), derived
 from the screen's name: a hash seeds a PRNG that lays out a Truchet arc field under a colour

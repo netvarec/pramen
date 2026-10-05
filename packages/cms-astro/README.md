@@ -106,6 +106,7 @@ pramenCms({
   admin: {
     brand: { name: "Acme", suffix: "cms" },   // the wordmark; `suffix: null` drops the second half
     signInUrl: "/signin/",                     // must be a page that EXISTS
+    signOutUrl: "/signout/",                   // optional: where signing out goes; also must EXIST
     hidePages: true,                           // collections-only deployments
     layout: "topbar",                          // horizontal nav (Graphic Standard bar); default "sidebar"
     locale: "cs",                              // the editor's language: "en" (default) or "cs"; see below
@@ -235,6 +236,11 @@ route, wired in one `pramenCms()` call. It doubles as this package's end-to-end 
 > `signInUrl` must be a page that already exists. An unauthenticated load calls it *after*
 > clearing the stored session, so a path that lands back inside the editor is a loop with
 > nothing to recover from. `?setup=1` always forces the built-in screen.
+>
+> `signOutUrl` is where a deliberate sign-out goes instead of `signInUrl` (expiry still goes
+> to `signInUrl`). It exists for OIDC deployments that sign in silently: that page ends the
+> provider session first (`endSession` in `@pramen/auth`), or the sign-in page signs the user
+> straight back in. Same rule: it must exist, and it means nothing without `signInUrl`.
 
 ### `editorAssets`: serve an editor you built yourself
 

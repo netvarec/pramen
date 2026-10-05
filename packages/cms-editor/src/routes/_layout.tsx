@@ -16,7 +16,7 @@
 
 import { Outlet, useNavigate, useRoute, useRouter, type BuzolaPageMap } from "@buzola/router";
 import { useState } from "react";
-import { useApp } from "../app-context";
+import { guardNavigation, useApp } from "../app-context";
 import { BreadcrumbProvider } from "../breadcrumb";
 import { CHROME_LAYOUT } from "../chrome";
 import { ErrorBanner, SidebarChrome } from "../chrome-sidebar";
@@ -80,11 +80,7 @@ export default function RootLayout() {
   // CollectionEditor form would otherwise be discarded with no prompt of any kind.
   // Returns whether it went, which a chrome that dismisses itself on click needs. See the
   // note on `ChromeProps`.
-  const guarded = (go: () => void) => (): boolean => {
-    if (!confirmNavigation()) return false;
-    go();
-    return true;
-  };
+  const guarded = (go: () => void) => guardNavigation(confirmNavigation, go);
 
   // Dark mode. The choice lives in `theme.ts` rather than here: podoba's tokens flip under
   // `[data-theme="dark"]` on the document root, `main.tsx` applies the stored one before the
