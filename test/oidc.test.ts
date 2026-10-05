@@ -5,7 +5,7 @@
 // parts that actually go wrong (signature and nonce verification, PKCE, single-use state,
 // and the account-key rules) without a network or a real IdP.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { createOidcAuth, oidcHandlers, OIDC_SYSTEM_ROLE, OIDC_UPSERT_HANDLER } from "../packages/auth/src/oidc";
 import { authorizeHandler, validateHandlerAuth, type HandlerAuth } from "../packages/server/src/sdk/handlers";
 import { isSystemRole } from "../packages/server/src/auth";
@@ -493,6 +493,67 @@ describe("the privileged upsert handler", () => {
     expect(res.status).toBe(302);
     expect(res.headers.get("location")).toContain("#token=");
     expect(seen).toEqual([[OIDC_SYSTEM_ROLE]]);
+  });
+});
+
+describe("createOidcAuth: the profile", () => {
+  /** A privileged-call stub that records what the callback sent to the upsert. */
+  const recording = () => {
+    const inputs: Record<string, unknown>[] = [];
+    const ctx = {
+      callPrivileged: async (o: { input: Record<string, unknown> }) => {
+        inputs.push(o.input);
+        return Response.json({ ok: true, result: { roles: ["user"], active: true } });
+      },
+    };
+    return { inputs, ctx: ctx as never };
+  };
+  const withClaims = (extra: Record<string, unknown>) =>
+    harness({ tokenResponse: async (n) => ({ id_token: await idToken({ sub: "idp-sub-1", email: "ada@acme.com", email_verified: true, nonce: n, ...extra }) }) });
+
+  async function run(h: ReturnType<typeof harness>, ctx: never, over: Partial<Parameters<typeof createOidcAuth>[0]> = {}) {
+    const [start, callback] = createOidcAuth({ ...opts, ...over }).routes;
+    const started = await start!.handler(new Request("https://app.example.com/auth/oidc/start"), env(h.KV), {} as never);
+    const authUrl = new URL(started.headers.get("location")!);
+    h.asked.nonce = authUrl.searchParams.get("nonce")!;
+    const cb = new Request(`https://app.example.com/auth/oidc/callback?state=${authUrl.searchParams.get("state")}&code=c`, { headers: { cookie: cookieFrom(started) } });
+    return callback!.handler(cb, env(h.KV), ctx);
+  }
+
+  test("by default the standard name and picture claims go to the upsert", async () => {
+    const h = withClaims({ name: "Ada", picture: "https://idp.example.com/a.svg" }); active = h;
+    const r = recording();
+    const res = await run(h, r.ctx);
+    expect(res.headers.get("location")).toContain("#token=");
+    expect(r.inputs[0]!.profile).toEqual({ name: "Ada", picture: "https://idp.example.com/a.svg" });
+  });
+
+  test("without them the upsert is told null, which clears what an earlier sign-in stored", async () => {
+    const h = harness(); active = h;
+    const r = recording();
+    await run(h, r.ctx);
+    expect(r.inputs[0]!.profile).toBeNull();
+  });
+
+  test("mapProfile decides what is stored", async () => {
+    const h = withClaims({ name: "Ada", gs_avatar: { background: "#ffd700" } }); active = h;
+    const r = recording();
+    await run(h, r.ctx, { mapProfile: (c) => ({ name: c.name ?? null, avatar: c.gs_avatar ?? null }) });
+    expect(r.inputs[0]!.profile).toEqual({ name: "Ada", avatar: { background: "#ffd700" } });
+  });
+
+  test("a mapProfile that throws stores no profile and does not block the sign-in", async () => {
+    const h = withClaims({ name: "Ada" }); active = h;
+    const r = recording();
+    const logged = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const res = await run(h, r.ctx, { mapProfile: () => { throw new Error("unexpected claim"); } });
+      expect(res.headers.get("location")).toContain("#token=");
+      expect(r.inputs[0]!.profile).toBeNull();
+      expect(logged).toHaveBeenCalled();
+    } finally {
+      logged.mockRestore();
+    }
   });
 });
 

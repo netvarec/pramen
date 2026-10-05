@@ -30,6 +30,7 @@ export const GS_SLOTS = {
   mediaDetail: "./media-detail.tsx",
   mediaGrid: "./media-grid.tsx",
   nav: "./nav.ts",
+  account: "./account.tsx",
 } as const satisfies Record<EditorSlot, string>;
 
 /** The specifier a host stylesheet imports the theme's CSS by. */

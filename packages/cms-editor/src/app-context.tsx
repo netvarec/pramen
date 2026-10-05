@@ -10,6 +10,7 @@ import { BRAND, SETUP_TITLE, type BrandConfig } from "./brand";
 import { getI18n, useI18n } from "./i18n";
 import { rich } from "./i18n/rich";
 import { readBackend, type BackendHost } from "./mount";
+import type { AccountProfile } from "./slots";
 import { DEFAULT_CAPABILITIES, type AdminPageMeta, type CmsCapabilities, type CollectionMeta, type ContentType, type JsonValue } from "./types";
 
 declare global {
@@ -87,7 +88,38 @@ function redirectToSignIn(): void {
 export interface Me {
   userId?: string;
   roles?: string[];
-  [k: string]: JsonValue | undefined;
+  /** What the identity provider said about the person (`mapProfile` in `@pramen/auth`), as
+   * `me` returns it. Absent on an older server and for a session that never signed in
+   * through OIDC. Read by the account menu (`slots.account`). */
+  profile?: AccountProfile | null;
+  // `AccountProfile` is JSON too, but its optional keys keep it from being assignable to
+  // `JsonValue` as written, hence the union.
+  [k: string]: JsonValue | AccountProfile | undefined;
+}
+
+/**
+ * `me`'s `profile`, parsed at the boundary it crosses (see `AccountProfile` in `slots.ts`).
+ *
+ * The value is whatever the deployment's `mapProfile` stored, from claims the provider sent,
+ * so nothing about it is trusted: `name` survives only as a non-empty string and `picture`
+ * only as an absolute `https:` URL, since the account menu puts it straight into an
+ * `<img src>`. Every other key passes through untouched for a slot that knows what it mapped.
+ */
+export function parseAccountProfile(raw: unknown): AccountProfile | null {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const { name, picture, ...rest } = raw as Record<string, JsonValue>;
+  const out: AccountProfile = { ...rest };
+  if (typeof name === "string" && name.trim() !== "") out.name = name.trim();
+  if (typeof picture === "string" && isHttpsUrl(picture)) out.picture = picture;
+  return out;
+}
+
+function isHttpsUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -263,7 +295,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     api
       .call<Me>("me")
       .then((identity) => {
-        if (hasIdentity(identity)) { setMe(identity); return; }
+        if (hasIdentity(identity)) { setMe({ ...identity, profile: parseAccountProfile(identity.profile) }); return; }
         // Same handoff the expiry poll makes: to the sign-in page when the host configured
         // one, otherwise drop the token so the built-in Setup screen comes back.
         if (SIGN_IN_URL) redirectToSignIn();

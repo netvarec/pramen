@@ -28,7 +28,8 @@
 import { Button, Dialog, DialogTrigger, Topbar, UserMenu, UserMenuItem } from "@podoba/react";
 import type { ReactNode } from "react";
 import { APP_BAR_H, BELOW_CHROME_PAD } from "./chrome";
-import { AccountMenu, NavIconSlot, type ChromeProps, type NavRoute } from "./chrome-shared";
+import { AccountMenu } from "./account-menu";
+import { NavIconSlot, type ChromeProps, type NavRoute } from "./chrome-shared";
 import { BRAND } from "./brand";
 import { useI18n } from "./i18n";
 import { GroupFoldedIcon as CrumbSeparatorIcon, GroupOpenIcon, MenuToggleIcon } from "./icons";
@@ -203,7 +204,8 @@ export function TopbarChrome({
                       // the dialog with it.
                       items={accountItems.map((item) => ({ ...item, onSelect: () => { const went = item.onSelect(); if (went) close(); return went; } }))}
                       onTheme={onTheme}
-                      onSettings={() => { if (onSettings()) close(); }}
+                      compact={false}
+                      onSettings={() => { const went = onSettings(); if (went) close(); return went; }}
                       onSignOut={onSignOut}
                     />
                   </div>

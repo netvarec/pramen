@@ -16,6 +16,23 @@ there are no backward-compatibility guarantees yet.
 
 ### Added
 
+- **OIDC profile (`@pramen/auth`).** Every OIDC sign-in stores what the provider says about
+  the person in a new nullable `auth_users.profile` column (JSON), and `me` returns it as
+  `profile` next to the identity (`null` when there is none; anonymous `me` is unchanged).
+  The default is the standard `name` and `picture` claims (`defaultOidcProfile`, exported),
+  with `picture` kept only as an absolute `https:` URL; `OidcOptions.mapProfile` replaces it.
+  The provider is authoritative, so each sign-in overwrites the value and `null` clears it; a
+  mapper that throws stores no profile instead of blocking the sign-in. The column is
+  additive, so existing deployments gain it on the next migrate.
+- **`account` slot (`@pramen/cms-editor`).** The avatar at the end of the chrome and the menu
+  it opens are now a slot (`slots.account`, module exporting `AccountMenu`, contract
+  `AccountMenuProps` in `@pramen/cms-editor/slots` together with `AccountIdentity`,
+  `AccountProfile` and `AccountMenuRow`). Both chromes render it, the topbar's small-viewport
+  menu included, and it is handed the theme, Settings, sign-out and the deployment's account
+  rows. `me.profile` is parsed once where `me` arrives: `name` as a non-empty string and
+  `picture` as an https URL, other mapped keys passed through. The default menu now shows the
+  provider's picture and name when there are any. `@pramen/cms-theme-gs` fills the slot with
+  GS's bar avatar (podoba's default size, the provider's picture).
 - **Silent OIDC sign-in (`@pramen/auth`).** `/auth/oidc/start?prompt=none` forwards
   `prompt=none` to the provider, so a browser with a provider session is signed in without
   seeing a screen. When the provider answers with an OIDC error instead (`login_required`,

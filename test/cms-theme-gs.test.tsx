@@ -21,6 +21,7 @@ import { gsEditor, GS_SLOTS, GS_STYLESHEET } from "../packages/cms-theme-gs/src/
 import { gsAdmin } from "../packages/cms-theme-gs/src/config.js";
 import { cs, en } from "../packages/cms-theme-gs/src/copy";
 import { allPages, loadCollectionStat, loadContentTypeStat, loadMediaStat } from "../packages/cms-theme-gs/src/dashboard-data";
+import { AccountMenu } from "../packages/cms-theme-gs/src/account";
 import { DetailHeader } from "../packages/cms-theme-gs/src/detail-header";
 import { createHomeScreen, HomeScreen } from "../packages/cms-theme-gs/src/home";
 import { MediaGrid, MediaLibraryEmpty } from "../packages/cms-theme-gs/src/media-grid";
@@ -419,6 +420,23 @@ describe("DetailHeader", () => {
     expect(html).toContain('href="/cms/types/page"');
     expect(html.indexOf("Stránky")).toBeLessThan(html.indexOf("O nás"));
     expect(html).toContain("/o-nas");
+  });
+});
+
+describe("AccountMenu", () => {
+  const render = (me: Parameters<typeof AccountMenu>[0]["me"]) =>
+    renderToStaticMarkup(<AccountMenu me={me} theme="light" compact items={[]} onTheme={() => {}} onSettings={() => true} onSignOut={() => true} />);
+
+  test("shows the picture the provider sent, at GS's avatar size", () => {
+    const html = render({ userId: "ada@acme.com", profile: { name: "Ada", picture: "https://auth.example.com/a.svg" } });
+    expect(html).toContain('src="https://auth.example.com/a.svg"');
+    expect(html).toContain("Ada");
+  });
+
+  test("without a profile it names the account key", () => {
+    const html = render({ userId: "ada@acme.com" });
+    expect(html).toContain("ada@acme.com");
+    expect(html).not.toContain("<img");
   });
 });
 

@@ -13,6 +13,7 @@ editor's public seams only:
   | `mediaDetail` | GS's asset preview modal: the file on a muted stage, facts and actions in a 300px column. |
   | `mediaGrid` | `AssetMasonryGrid` of `AssetLibraryPreview` cards, and `AssetSelectionEmpty` for an empty library. |
   | `nav` | Schema editor and account settings out of the bar ("Content structure" goes to the account menu), Users promoted into the first group, empty groups dropped. |
+  | `account` | GS's bar avatar: podoba's `Avatar` at its default size, with the picture the provider sent (`me.profile.picture`) and the editor's own menu behind it. |
 - **A stylesheet** (`@pramen/cms-theme-gs/theme.css`) your own Tailwind entry imports.
 - **A build helper** (`gsEditor()`) that returns the theme's `buildEditor` options, and the
   **recommended shell settings** (`gsAdmin`) for `pramenCms({ admin })`.
