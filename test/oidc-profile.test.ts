@@ -12,7 +12,8 @@ import { compileAcl } from "../packages/server/src/runtime/acl";
 import { Db } from "../packages/server/src/runtime/db";
 import { migrate } from "../packages/server/src/runtime/migrate";
 import { bunSqliteDriver } from "./sqlite-driver";
-import { authHandlers, authSchema, parseProfile } from "../packages/auth/src/index";
+import { authHandlers, authSchema, authPolicies, createAuthHandlers, userHandlers, parseProfile } from "../packages/auth/src/index";
+import { role } from "../packages/server/src/sdk/acl";
 import { defaultOidcProfile, oidcHandlers, OIDC_UPSERT_HANDLER } from "../packages/auth/src/oidc";
 import { Entity } from "../packages/server/src/sdk/schema";
 
@@ -107,6 +108,29 @@ describe("the upsert stores the profile at every sign-in", () => {
 });
 
 describe("me", () => {
+  test("a custom table is used throughout auth, even with a matching default-table username", async () => {
+    const schema = defineSchema({ ...authSchema, members: authSchema.auth_users });
+    const driver = bunSqliteDriver(new Database(":memory:"));
+    await migrate(driver, schema);
+    const db = new Db(driver, { acl: compileAcl([]), identity: null, schema, system: true }, schema);
+    const ctx = { db, env: { AUTH_SECRET: "test-secret-for-custom-table" }, identity: { userId: "ada", roles: ["user"] } } as never;
+    const handlers = createAuthHandlers({ table: "members" });
+    await handlers.signup.run(ctx, { username: "ada", password: "password123", email: "ada@acme.com" });
+    await driver.exec("INSERT INTO auth_users (username, profile) VALUES (?, ?)", ["ada", JSON.stringify({ name: "Wrong Ada" })]);
+    await oidcHandlers[OIDC_UPSERT_HANDLER]!.run(ctx, {
+      table: "members", username: "ada", email: "ada@acme.com", roles: ["editor"], defaultRoles: ["user"], profile: { name: "Ada" },
+    });
+    expect(await handlers.me.run(ctx, {})).toMatchObject({ profile: { name: "Ada" } });
+    expect(await handlers.login.run(ctx, { username: "ada", password: "password123" })).toMatchObject({ user: { username: "ada", roles: ["editor"] } });
+    expect(await handlers.refreshSession.run(ctx, {})).toMatchObject({ user: { username: "ada", roles: ["editor"] } });
+    await driver.exec("DELETE FROM members WHERE username = ?", ["ada"]);
+    expect(await handlers.me.run(ctx, {})).toMatchObject({ profile: null });
+  });
+
+  test("a custom table identifier is validated at construction", () => {
+    expect(() => createAuthHandlers({ table: "members; DROP TABLE auth_users" })).toThrow("invalid table name");
+  });
+
   test("returns the identity plus the stored profile", async () => {
     const h = await harness();
     await h.upsert({ username: "ada@acme.com", profile: { name: "Ada", picture: "https://idp.example.com/a.svg" } });
@@ -138,4 +162,15 @@ describe("me", () => {
     const res = await (authHandlers.me as { run: (c: unknown, i: unknown) => Promise<unknown> }).run({ db, env: {}, identity: { userId: "ext", roles: ["user"] } }, {});
     expect(res).toEqual({ userId: "ext", roles: ["user"], profile: null });
   });
+});
+
+test("the default admin policy exposes profiles through listUsers without exposing password hashes", async () => {
+  const h = await harness();
+  await h.upsert({ username: "ada", profile: { name: "Ada" } });
+  const identity = { userId: "admin", roles: ["admin"] };
+  const db = new Db(h.driver, { acl: compileAcl([role("admin", authPolicies().admin)]), identity, schema }, schema);
+  const rows = await userHandlers.listUsers.run({ db, identity } as never, {});
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).toMatchObject({ username: "ada", profile: { name: "Ada" } });
+  expect(rows[0]).not.toHaveProperty("passwordHash");
 });

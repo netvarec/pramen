@@ -309,6 +309,9 @@ function buildRefreshSession(ttlOf: (ctx: HandlerContext) => number, table = "au
 }
 
 export interface AuthHandlerOptions {
+  /** Users table, default `auth_users`. Pass the same table as `createOidcAuth` and
+   * `createUserHandlers`; it must have the `authSchema.auth_users` shape. */
+  table?: string;
   /** Which column `login` resolves the submitted identifier against.
    *
    * - `"username"` (default): the PK only, the historical behaviour.
@@ -324,8 +327,6 @@ export interface AuthHandlerOptions {
   loginBy?: "username" | "email" | "either";
 }
 
-/** Build signup / login / me / refreshSession. Roles are assigned server-side (default
- * `["user"]`): the client never picks its own roles. Spread into your handler map. */
 /**
  * The caller's stored OIDC profile (see `profile` in {@link authSchema}), or `null`.
  *
@@ -333,9 +334,9 @@ export interface AuthHandlerOptions {
  * identities do not live in `auth_users` (an external JWT, a table without the column yet)
  * must still get its identity back, just without a profile.
  */
-async function readProfile(ctx: HandlerContext, username: string): Promise<JsonObject | null> {
+async function readProfile(ctx: HandlerContext, username: string, table: string): Promise<JsonObject | null> {
   try {
-    const rows = (await ctx.db.exec("SELECT profile FROM auth_users WHERE username = ? LIMIT 1", username)) as Row[];
+    const rows = (await ctx.db.exec(`SELECT profile FROM ${table} WHERE username = ? LIMIT 1`, username)) as Row[];
     return parseProfile(rows[0]?.profile);
   } catch {
     return null;
@@ -356,13 +357,16 @@ export function parseProfile(cell: unknown): JsonObject | null {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as JsonObject) : null;
 }
 
+/** Build signup / login / me / refreshSession. Roles are assigned server-side (default
+ * `["user"]`): the client never picks its own roles. Spread into your handler map. */
 export function createAuthHandlers(opts: AuthHandlerOptions = {}) {
+  const table = `"${assertIdentifier(opts.table ?? "auth_users")}"`;
   const loginBy = opts.loginBy ?? "username";
 
   /** Resolve the submitted identifier to a row, per `loginBy`. Returns undefined when
    * nothing matches; the caller still runs a dummy verify so the timing is flat. */
   async function findLoginRow(ctx: HandlerContext, identifier: string): Promise<Row | undefined> {
-    const cols = "SELECT username, passwordHash, roles, active FROM auth_users";
+    const cols = `SELECT username, passwordHash, roles, active FROM ${table}`;
     if (loginBy !== "email") {
       const byName = await ctx.db.exec(`${cols} WHERE username = ? LIMIT 1`, identifier);
       if (byName[0]) return byName[0];
@@ -388,7 +392,7 @@ export function createAuthHandlers(opts: AuthHandlerOptions = {}) {
     // which keys on the email and always returns the same `{ ok: true }`.
     signup: mutation(
       async (ctx, input: { username: string; password: string; email?: string }) => {
-        const existing = await ctx.db.exec("SELECT 1 FROM auth_users WHERE username = ? LIMIT 1", input.username);
+        const existing = await ctx.db.exec(`SELECT 1 FROM ${table} WHERE username = ? LIMIT 1`, input.username);
         if (existing.length > 0) {
           // Equalize timing with the available path (which hashes below) so the taken vs.
           // available decision isn't a fast timing oracle on top of the response-body one.
@@ -398,7 +402,7 @@ export function createAuthHandlers(opts: AuthHandlerOptions = {}) {
         // A supplied email must be free (the column is unique). Same clean-400 shape as
         // changeEmail rather than surfacing the DB constraint as a 500.
         if (input.email) {
-          const emailTaken = await ctx.db.exec("SELECT 1 FROM auth_users WHERE email = ? LIMIT 1", input.email);
+          const emailTaken = await ctx.db.exec(`SELECT 1 FROM ${table} WHERE email = ? LIMIT 1`, input.email);
           if (emailTaken.length > 0) throw new BadRequest("email already in use");
         }
         const roles = DEFAULT_ROLES;
@@ -407,7 +411,7 @@ export function createAuthHandlers(opts: AuthHandlerOptions = {}) {
         // createEmailVerification (requestEmailVerification runs right after signup, when the
         // client already holds the returned session token).
         await ctx.db.exec(
-          "INSERT INTO auth_users (username, passwordHash, roles, email, createdAt) VALUES (?, ?, ?, ?, ?)",
+          `INSERT INTO ${table} (username, passwordHash, roles, email, createdAt) VALUES (?, ?, ?, ?, ?)`,
           input.username,
           passwordHash,
           JSON.stringify(roles),
@@ -444,7 +448,7 @@ export function createAuthHandlers(opts: AuthHandlerOptions = {}) {
         if (isForeignHash(String(u.passwordHash))) {
           try {
             await ctx.db.exec(
-              "UPDATE auth_users SET passwordHash = ? WHERE username = ?",
+              `UPDATE ${table} SET passwordHash = ? WHERE username = ?`,
               await hashPassword(input.password),
               String(u.username),
             );
@@ -465,13 +469,13 @@ export function createAuthHandlers(opts: AuthHandlerOptions = {}) {
       // session is not real", and an object with a `profile` key would look like one.
       const userId = identity?.userId;
       if (typeof userId !== "string" || userId === "") return identity;
-      return { ...identity, profile: await readProfile(ctx, userId) };
+      return { ...identity, profile: await readProfile(ctx, userId, table) };
     }),
 
     // Re-read roles/active for the caller and reissue a token at the env-configured session
     // TTL (AUTH_SESSION_TTL_SECONDS). Lets a short TTL bound revocation lag without logging
     // the user out, and picks up role grants without re-login. See buildRefreshSession.
-    refreshSession: buildRefreshSession(sessionTtlOf),
+    refreshSession: buildRefreshSession(sessionTtlOf, table),
   };
 }
 
@@ -980,7 +984,7 @@ export const userHandlers = createUserHandlers();
 // Fields a self-service caller may see of their own row (never passwordHash/roles).
 const SELF_READ_FIELDS = ["username", "email", "emailVerified", "active", "createdAt"];
 // Fields an admin may see of any user (never passwordHash).
-const ADMIN_READ_FIELDS = ["username", "roles", "email", "emailVerified", "active", "createdAt"];
+const ADMIN_READ_FIELDS = ["username", "roles", "email", "emailVerified", "active", "createdAt", "profile"];
 
 /** ACL policy fragments that turn on the user-management handlers. Spread `admin`
  * into your admin role and `self` into your authenticated-user role:

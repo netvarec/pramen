@@ -206,6 +206,13 @@ profile rather than blocking the sign-in. The editor shows `profile.name` and
 profile is visible to the user and to admins, so keep tokens and secrets out of it. The column
 is additive: an existing `auth_users` table gains it on the next migrate.
 
+When using a custom users table, pass the same `table` to `createOidcAuth`,
+`createAuthHandlers`, `createUserHandlers` and `authPolicies`. For example,
+`createAuthHandlers({ table: "members" })` uses `members` for signup, login, `me`
+and session refresh. The table must have the `authSchema.auth_users` shape, including
+the `profile` column. The default admin read policy includes `profile`; a custom
+`adminReadFields` list must include it explicitly to expose it through `listUsers`.
+
 **The flow sets one cookie per sign-in attempt**, `pramen_oidc_<hash of the state>`: HttpOnly,
 SameSite=Lax, scoped to the callback path, cleared when the attempt ends. Per attempt, not
 per browser, because silent sign-in runs in every tab and overlapping attempts must not
