@@ -21,7 +21,7 @@
 // The one runtime value is `EDITOR_PAGES`, because a route named in RUNTIME config (an
 // account-menu item from the shell) has to be checked against something that exists at runtime.
 
-import type { ReactNode } from "react";
+import type { ComponentType, ReactNode } from "react";
 import type { AdminPageMeta, CmsCapabilities, CollectionMeta, ContentType, JsonValue, RpcInput } from "./types";
 import type { NavGlyph, NavSection } from "./nav";
 
@@ -227,6 +227,50 @@ export interface MediaGridProps {
 export interface MediaLibraryEmptyProps {
   title: string;
   description: string;
+}
+
+// --- mediaSources --------------------------------------------------------------------------
+
+/**
+ * What a media source's browser is handed. See {@link MediaSource}.
+ *
+ * The source does its own work through its own handlers: it lists what the external system
+ * has, and IMPORTS one (the backend copies the file into the deployment's storage and creates
+ * an ordinary `cms_media` row), then reports the row's id. The editor never sees the external
+ * system, only the id it ends up with, so a field holds exactly what it holds for an upload.
+ */
+export interface MediaSourceProps {
+  /** Call a backend handler as the signed-in editor: the editor's own transport, the same
+   * `call` a slot's {@link EditorApi} has. Throws on a refusal, like every editor call. */
+  call: EditorApi["call"];
+  /** Where it is shown: `"pick"` inside a media field's picker, `"library"` in a dialog opened
+   * from the Media screen. */
+  mode: "pick" | "library";
+  /** The source finished: it created (or found) this `cms_media` id. In `"pick"` the field
+   * takes it and the picker closes, exactly as if the file had been chosen from the library; in
+   * `"library"` the dialog closes and the library reloads from the top. */
+  onDone: (mediaId: string) => void;
+  /** Leave without a result. Closes the picker (`"pick"`) or the dialog (`"library"`). */
+  onCancel: () => void;
+}
+
+/**
+ * One place files can come from besides an upload: a DAM, a stock library, another product's
+ * asset store. `slots.mediaSources` is a module exporting `mediaSources: readonly MediaSource[]`.
+ *
+ * Each source is offered wherever an upload is: as a tab beside the library in a media field's
+ * picker, and as an action beside Upload on the Media screen, which opens its browser in a
+ * dialog. The editor owns those frames (the tabs, the dialog, closing and reloading); the source
+ * owns what is inside them. An empty list, the default, is the editor with no sources at all.
+ */
+export interface MediaSource {
+  /** Stable and unique among the sources: the React key and the tab's id. */
+  id: string;
+  /** The tab's and the action's label, already in the deployment's language. */
+  label: string;
+  /** The source's browser. Rendered inside an error boundary, so a throw in it costs that tab
+   * or dialog, not the editor. */
+  Browser: ComponentType<MediaSourceProps>;
 }
 
 // --- account -------------------------------------------------------------------------------

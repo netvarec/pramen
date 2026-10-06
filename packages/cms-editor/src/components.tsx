@@ -16,10 +16,12 @@ import { PageHeader } from "./page-header";
 import { DetailHeader } from "./detail-header";
 import { MediaGrid, MediaLibraryEmpty } from "./media-grid";
 import { MediaDetailFrame } from "./media-detail";
+import { editorCall, libraryImported, mediaSourceActions, MediaSourceDialog } from "./media-source-ui";
+import { mediaSources } from "./media-sources";
 import { controlShown } from "./controls";
 import { pagePreviewHref, sitePreviewUrl } from "./preview";
 import type { Config } from "./api";
-import type { HomeLanding, MediaTile } from "./slots";
+import type { HomeLanding, MediaSource, MediaTile } from "./slots";
 import { useApp, type Me } from "./app-context";
 import { isRichTextDoc, richTextToPlainText } from "./rich-text";
 import { flattenTerms } from "./furniture";
@@ -1857,6 +1859,10 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
   // The file input the header's Upload button drives. It stays in the DOM (hidden) rather
   // than being created per click, so the picker's `change` handler is the ordinary React one.
   const fileInput = useRef<HTMLInputElement>(null);
+  // The media source whose browser is open (`slots.mediaSources`), or `null`. Each source is an
+  // action beside Upload and opens in a dialog of its own; an import closes it and reloads.
+  const [source, setSource] = useState<MediaSource | null>(null);
+  const call = useMemo(() => editorCall(api), [api]);
   // Trashed files. Deleting no longer removes the R2 object, so without this the bytes stay
   // publicly fetchable with no way to reach purgeMedia: the case a takedown request needs.
   const [trash, setTrash] = useState<Media[]>([]);
@@ -1970,6 +1976,10 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
         <Button className="shrink-0" isDisabled={busy} onPress={() => fileInput.current?.click()}>
           {busy ? t("media.uploading") : t("media.upload")}
         </Button>
+        {/* One action per media source, beside Upload and under the same gate. Direct children
+            of the header, as the upload button is, so a header slot that restyles or moves the
+            editor's `Button`s (the GS upload hub) treats them alike. None by default. */}
+        {mediaSourceActions(mediaSources, setSource, busy)}
       </Hero>
       <div className={WRAP}>
         {/* Order and type, above the grid rather than in the header: the header is the
@@ -2108,6 +2118,14 @@ export function MediaLibrary({ api, onError }: { api: Api; onError: (s: string) 
             // a file the filter excludes. Unfiltered, nothing on screen changed.
             onTermsSaved={() => { if (term) list.reload(); }}
             onError={onError}
+          />
+        ) : null}
+        {source ? (
+          <MediaSourceDialog
+            source={source}
+            call={call}
+            onClose={() => setSource(null)}
+            onImported={libraryImported({ close: () => setSource(null), reload: list.reload })}
           />
         ) : null}
       </div>

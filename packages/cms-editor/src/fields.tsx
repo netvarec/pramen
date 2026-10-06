@@ -8,12 +8,14 @@ import Highlight from "@tiptap/extension-highlight";
 import TaskItem from "@tiptap/extension-task-item";
 import TaskList from "@tiptap/extension-task-list";
 import StarterKit from "@tiptap/starter-kit";
-import { useCallback, useEffect, useId, useRef, useState, type DragEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
 import type { Api } from "./api";
 import { controlShown } from "./controls";
 import { getI18n, useI18n } from "./i18n";
 import { rich } from "./i18n/rich";
 import { LoadFailed, usePagedList } from "./list-state";
+import { editorCall, MediaPickerContent } from "./media-source-ui";
+import { mediaSources } from "./media-sources";
 import { isRichTextDoc, richTextToPlainText } from "./rich-text";
 import type { FieldDefinition, FieldValue, FieldValues, Media, ReferenceOption, ReferenceResult, RichTextDoc } from "./types";
 
@@ -834,6 +836,10 @@ const PICKER_PAGE_SIZE = 60;
  *
  * The tiles are buttons. They were `<div onClick>`, so a keyboard could open the picker and
  * then do nothing in it: Tab went from the upload input straight to the close button.
+ *
+ * A deployment's media sources (`slots.mediaSources`) appear as tabs beside the library, and a
+ * source's result is picked like a tile (`MediaPickerContent`). With none, there are no tabs and
+ * the dialog is what it always was.
  */
 export function MediaPicker({ api, onClose, onPick }: { api: Api; onClose: () => void; onPick: (id: string) => void }) {
   const { t } = useI18n();
@@ -841,6 +847,7 @@ export function MediaPicker({ api, onClose, onPick }: { api: Api; onClose: () =>
   const [err, setErr] = useState("");
   const fetchPage = useCallback((offset: number, limit: number) => api.listMedia({ limit, offset }), [api]);
   const list = usePagedList(fetchPage, PICKER_PAGE_SIZE, setErr);
+  const call = useMemo(() => editorCall(api), [api]);
   const upload = async (file: File) => {
     setBusy(true);
     setErr("");
@@ -862,38 +869,48 @@ export function MediaPicker({ api, onClose, onPick }: { api: Api; onClose: () =>
       closeLabel={t("common.close")}
       onOpenChange={(open) => !open && onClose()}
     >
-      {err ? (
-        <div className="my-2 rounded-lg border border-danger bg-surface-card px-3.5 py-2.5 text-small text-danger">{err}</div>
-      ) : null}
-      <label className="mb-4 flex w-full flex-col gap-2">
-        <Text size="small" weight="medium">
-          {t("picker.media.upload")}
-        </Text>
-        <input type="file" className="text-small text-fg-muted" disabled={busy} onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
-      </label>
-      {list.phase === "loading" ? <p className="text-sm text-fg-subtle">{t("common.loading")}</p> : null}
-      {list.phase === "failed" ? <LoadFailed onRetry={list.reload} /> : null}
-      {list.phase === "ready" && list.rows.length === 0 ? <p className="text-sm text-fg-subtle">{t("picker.media.empty")}</p> : null}
-      <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-2.5">
-        {list.rows.map((m) => (
-          <button
-            type="button"
-            key={m.id}
-            className="block w-full cursor-pointer overflow-hidden rounded-lg border border-border bg-surface-card text-left outline-none transition-colors hover:border-fg focus-visible:ring-2 focus-visible:ring-ring"
-            onClick={() => onPick(m.id)}
-          >
-            {/* The filename is the button's name; the thumbnail adds nothing a screen reader
-                can use, and the file's own alt text describes the image, not the choice. */}
-            {(m.file.contentType ?? "").startsWith("image/") ? <img loading="lazy" decoding="async" className="block h-[130px] w-full object-cover" src={api.resolve(`/media/${m.file.key}`)} alt="" /> : <div className="h-[130px] bg-surface-muted" />}
-            <div className="truncate px-2 py-1.5 text-caption text-fg-muted">{m.file.filename ?? m.id}</div>
-          </button>
-        ))}
-      </div>
-      {list.hasMore ? (
-        <div className="mt-3 text-center">
-          <Button variant="secondary" size="sm" isDisabled={list.loading} onPress={list.loadMore}>{t("common.loadMore")}</Button>
-        </div>
-      ) : null}
+      <MediaPickerContent
+        sources={mediaSources}
+        call={call}
+        onPick={onPick}
+        onCancel={onClose}
+        library={
+          <>
+            {err ? (
+              <div className="my-2 rounded-lg border border-danger bg-surface-card px-3.5 py-2.5 text-small text-danger">{err}</div>
+            ) : null}
+            <label className="mb-4 flex w-full flex-col gap-2">
+              <Text size="small" weight="medium">
+                {t("picker.media.upload")}
+              </Text>
+              <input type="file" className="text-small text-fg-muted" disabled={busy} onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
+            </label>
+            {list.phase === "loading" ? <p className="text-sm text-fg-subtle">{t("common.loading")}</p> : null}
+            {list.phase === "failed" ? <LoadFailed onRetry={list.reload} /> : null}
+            {list.phase === "ready" && list.rows.length === 0 ? <p className="text-sm text-fg-subtle">{t("picker.media.empty")}</p> : null}
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-2.5">
+              {list.rows.map((m) => (
+                <button
+                  type="button"
+                  key={m.id}
+                  className="block w-full cursor-pointer overflow-hidden rounded-lg border border-border bg-surface-card text-left outline-none transition-colors hover:border-fg focus-visible:ring-2 focus-visible:ring-ring"
+                  onClick={() => onPick(m.id)}
+                >
+                  {/* The filename is the button's name; the thumbnail adds nothing a screen reader
+                      can use, and the file's own alt text describes the image, not the choice. */}
+                  {(m.file.contentType ?? "").startsWith("image/") ? <img loading="lazy" decoding="async" className="block h-[130px] w-full object-cover" src={api.resolve(`/media/${m.file.key}`)} alt="" /> : <div className="h-[130px] bg-surface-muted" />}
+                  <div className="truncate px-2 py-1.5 text-caption text-fg-muted">{m.file.filename ?? m.id}</div>
+                </button>
+              ))}
+            </div>
+            {list.hasMore ? (
+              <div className="mt-3 text-center">
+                <Button variant="secondary" size="sm" isDisabled={list.loading} onPress={list.loadMore}>{t("common.loadMore")}</Button>
+              </div>
+            ) : null}
+          </>
+        }
+      />
       <div className="mt-3 text-right">
         <Button variant="ghost" onPress={onClose}>
           {t("picker.close")}
