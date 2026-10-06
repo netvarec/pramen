@@ -16,6 +16,20 @@ there are no backward-compatibility guarantees yet.
 
 ### Added
 
+- **`mediaSources` slot (`@pramen/cms-editor`).** Where files can come from besides an upload:
+  a module exporting `mediaSources: readonly MediaSource[]`, contracts `MediaSource`
+  (`{ id, label, Browser }`) and `MediaSourceProps` (`call`, `mode: "pick" | "library"`,
+  `onDone(mediaId)`, `onCancel()`) in `@pramen/cms-editor/slots`. The deployment's own handlers
+  list the external store and import a file (a normal `cms_media` row); the editor puts each
+  source beside the library as a tab in a media field's picker, where `onDone` picks the id like
+  a tile, and beside Upload on the Media screen as a `Button` that opens the browser in a dialog,
+  where `onDone` closes it and reloads the library. The buttons are direct children of the page
+  header like Upload, so a `pageHeader` slot receives them in `children`. The browser renders
+  inside an error boundary. New catalog keys `picker.media.library` and `picker.media.sources`
+  (English and Czech). Empty or absent is unchanged: no tabs, no extra actions. The default page
+  header now groups its actions into one cell when it is handed more than one. `@pramen/cms-theme-gs`
+  leaves the slot to the deployment (`GS_UNTHEMED_SLOTS`) and passes a project's own module
+  through `gsEditor({ slots })`; its upload hub lays several actions out in a row.
 - **RP-Initiated Logout (`@pramen/auth`).** `createOidcAuth({ endSession: true })` lets
   signing out end the provider session too, so a silent sign-in page no longer signs the user
   straight back in. The success fragment then also carries `id_token=`, and `routes` gains
