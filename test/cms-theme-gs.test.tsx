@@ -17,7 +17,7 @@ import type { HomeScreenProps, NavContext, NavSection } from "@pramen/cms-editor
 import { buildNav, navSections } from "../packages/cms-editor/src/nav";
 import { DEFAULT_CAPABILITIES, type AdminPageMeta, type ContentType, type RpcInput } from "../packages/cms-editor/src/types";
 import { EDITOR_SLOTS } from "../packages/cms-editor/src/build-editor";
-import { gsEditor, GS_SLOTS, GS_STYLESHEET } from "../packages/cms-theme-gs/src/build";
+import { gsEditor, GS_SLOTS, GS_STYLESHEET, GS_UNTHEMED_SLOTS } from "../packages/cms-theme-gs/src/build";
 import { gsAdmin } from "../packages/cms-theme-gs/src/config.js";
 import { cs, en } from "../packages/cms-theme-gs/src/copy";
 import { allPages, loadCollectionStat, loadContentTypeStat, loadMediaStat } from "../packages/cms-theme-gs/src/dashboard-data";
@@ -459,12 +459,19 @@ describe("media", () => {
 // --- build and config ------------------------------------------------------------------------
 
 describe("gsEditor", () => {
-  test("fills every slot the editor has, with the theme's own modules", () => {
-    expect(Object.keys(GS_SLOTS).sort()).toEqual(Object.keys(EDITOR_SLOTS).sort());
+  test("fills every slot the editor has but the deployment's own, with the theme's own modules", () => {
+    const themed = Object.keys(EDITOR_SLOTS).filter((name) => !(GS_UNTHEMED_SLOTS as readonly string[]).includes(name)).sort();
+    expect(Object.keys(GS_SLOTS).sort()).toEqual(themed);
     const { slots, styles } = gsEditor();
-    expect(Object.keys(slots).sort()).toEqual(Object.keys(EDITOR_SLOTS).sort());
+    expect(Object.keys(slots).sort()).toEqual(themed);
     for (const file of Object.values(slots)) expect(file).toContain("/cms-theme-gs/src/");
     expect(styles).toBeUndefined();
+  });
+
+  test("a slot the theme leaves alone takes the project's module as it is", () => {
+    expect(GS_UNTHEMED_SLOTS).toEqual(["mediaSources"]);
+    expect(gsEditor({ slots: { mediaSources: "/project/src/admin/media-sources.ts" } }).slots.mediaSources).toBe("/project/src/admin/media-sources.ts");
+    expect(gsEditor({ slots: { mediaSources: false } }).slots.mediaSources).toBeUndefined();
   });
 
   test("a project's own module replaces one slot, and `false` gives it back to the editor", () => {

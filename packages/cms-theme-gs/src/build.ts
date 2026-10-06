@@ -21,8 +21,14 @@ import type { EditorSlot } from "@pramen/cms-editor/build";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-/** The theme's module for each slot it fills. Every slot the editor has, so a release that adds
- * one is a type error here (`satisfies`), not a slot the theme silently leaves at the default. */
+/** Slots that carry a deployment's own CONTENT rather than a look, so a theme has nothing to put
+ * in them: `mediaSources` is the deployment's external stores. Named here, so leaving one out is
+ * a decision on record rather than an omission. A project passes its own through `slots`. */
+export const GS_UNTHEMED_SLOTS = ["mediaSources"] as const satisfies readonly EditorSlot[];
+
+/** The theme's module for each slot it fills. Every slot the editor has except
+ * {@link GS_UNTHEMED_SLOTS}, so a release that adds one is a type error here (`satisfies`), not a
+ * slot the theme silently leaves at the default. */
 export const GS_SLOTS = {
   pageHeader: "./page-header.tsx",
   home: "./home.tsx",
@@ -31,7 +37,7 @@ export const GS_SLOTS = {
   mediaGrid: "./media-grid.tsx",
   nav: "./nav.ts",
   account: "./account.tsx",
-} as const satisfies Record<EditorSlot, string>;
+} as const satisfies Record<Exclude<EditorSlot, (typeof GS_UNTHEMED_SLOTS)[number]>, string>;
 
 /** The specifier a host stylesheet imports the theme's CSS by. */
 export const GS_STYLESHEET = "@pramen/cms-theme-gs/theme.css";
@@ -47,7 +53,8 @@ export interface GsEditorOptions {
    * working directory like every path `buildEditor` takes. The usual one is `nav`, a module
    * that wraps `gsTransformNav` (see `@pramen/cms-theme-gs/nav`), or `home` built with
    * `createHomeScreen` (`@pramen/cms-theme-gs/home`). `false` leaves that slot to the editor's
-   * own default.
+   * own default. A slot the theme does not fill (`mediaSources`) is only ever yours: pass it here
+   * and it goes through untouched.
    */
   slots?: Partial<Record<EditorSlot, string | false>>;
 }
@@ -64,6 +71,11 @@ export function gsEditor(options: GsEditorOptions = {}): GsEditorBuild {
     const own = options.slots?.[name];
     if (own === false) continue;
     slots[name] = own ?? fileURLToPath(new URL(file, import.meta.url));
+  }
+  // The project's module for a slot the theme does not fill, passed through as it is.
+  for (const name of GS_UNTHEMED_SLOTS) {
+    const own = options.slots?.[name];
+    if (own) slots[name] = own;
   }
   if (options.styles === undefined) return { slots };
   // A substring, not a CSS parse: a comment mentioning the name would pass, and that is a fine

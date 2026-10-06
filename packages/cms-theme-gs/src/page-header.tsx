@@ -94,7 +94,7 @@ export function PageHeader({ lead, em, children }: PageHeaderProps) {
             <div className="flex flex-col gap-3 p-5 pr-14 text-fg-on-brand">
               <h2 className="text-heading4">{copy.t("media.hubTitle")}</h2>
               <p className="text-small">{copy.t("media.hubBody")}</p>
-              <div>{actions}</div>
+              <div className="flex flex-wrap gap-2">{actions}</div>
             </div>
           }
         />
