@@ -121,6 +121,12 @@ export function AccountMenu({ me, compact, items, onTheme, onSettings, onSignOut
   return <div data-theme-slot="account" data-compact={compact}>{picture ? <img src={picture} alt="" /> : null}{items.map((i) => <button key={i.id} onClick={i.onSelect}>{i.label}</button>)}<button onClick={onTheme}>t</button><button onClick={onSettings}>s</button><button onClick={onSignOut}>o</button></div>;
 }
 `],
+  mediaSources: ["media-sources.tsx", `import type { MediaSource, MediaSourceProps } from "@pramen/cms-editor/slots";
+function Browser({ call, mode, onDone, onCancel }: MediaSourceProps) {
+  return <div data-theme-slot="mediaSources" data-mode={mode}><button onClick={async () => onDone(await call<string>("importFromDam", { assetId: "a1" }))}>i</button><button onClick={onCancel}>x</button></div>;
+}
+export const mediaSources: readonly MediaSource[] = [{ id: "dam", label: "theme-slot-media-source", Browser }];
+`],
   nav: ["nav.ts", `import { EDITOR_PAGES, type NavHooks } from "@pramen/cms-editor/slots";
 export const navHooks: NavHooks = {
   transformNav: ({ sections, active }) => ({ sections: sections.map((s) => ({ ...s, label: "theme-slot-nav:" + s.label })), active }),
@@ -225,15 +231,16 @@ describe("buildEditor", () => {
     expect(Object.keys(THEME).sort()).toEqual(Object.keys(EDITOR_SLOTS).sort());
     const slots = await writeTheme(dir);
     const js = await build({ slots });
-    for (const marker of ["pageHeader", "home", "detailHeader", "mediaDetail", "mediaGrid", "mediaLibraryEmpty", "account"]) {
+    for (const marker of ["pageHeader", "home", "detailHeader", "mediaDetail", "mediaGrid", "mediaLibraryEmpty", "account", "mediaSources"]) {
       expect(js, marker).toContain(`"data-theme-slot": "${marker}"`);
     }
     expect(js).toContain("theme-slot-nav:");
     expect(js).toContain("theme-slot-account");
+    expect(js).toContain("theme-slot-media-source");
     // And the defaults are GONE, which is what shows the slot replaced rather than joined.
     // An unminified bundle opens each module with a `// <path>` comment, so a default that was
     // still linked for some importer would still be named here.
-    for (const file of ["page-header.tsx", "home-screen.tsx", "detail-header.tsx", "media-detail.tsx", "media-grid.tsx", "nav-hooks.ts", "account-menu.tsx"]) {
+    for (const file of ["page-header.tsx", "home-screen.tsx", "detail-header.tsx", "media-detail.tsx", "media-grid.tsx", "nav-hooks.ts", "account-menu.tsx", "media-sources.ts"]) {
       expect(js, file).not.toContain(`cms-editor/src/${file}\n`);
     }
     expect(js).not.toContain("useCondensed");

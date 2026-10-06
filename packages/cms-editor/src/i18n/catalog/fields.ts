@@ -50,6 +50,11 @@ export const en = {
   "picker.media.title": "Choose <dim>a file</dim> from the library",
   "picker.media.upload": "Upload a new file",
   "picker.media.empty": "The library is empty. Upload a file above.",
+  /** The picker's first tab, beside one per media source (`slots.mediaSources`). Shown only
+   * when a deployment has a source. */
+  "picker.media.library": "Library",
+  /** The accessible name of that tab strip. */
+  "picker.media.sources": "Where the file comes from",
   /** The relation picker's title. `{title}` is the field's label, lower-cased; `<dim>…</dim>`
    * is rendered dimmed. */
   "picker.relation.title": "Choose <dim>{title}</dim>",
@@ -118,6 +123,8 @@ export const cs: Translation<typeof en> = {
   "picker.media.title": "Vybrat <dim>soubor</dim>",
   "picker.media.upload": "Nahrát nový soubor",
   "picker.media.empty": "Knihovna je prázdná. Nahrajte soubor výše.",
+  "picker.media.library": "Knihovna",
+  "picker.media.sources": "Odkud soubor vzít",
   "picker.relation.title": "Vybrat: <dim>{title}</dim>",
   "picker.selected": "vybráno",
   "picker.noMatches": "Nic nenalezeno.",

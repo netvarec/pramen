@@ -62,6 +62,11 @@ const PKG = resolve(dirname(fileURLToPath(import.meta.url)), "..");
  * - `account`: the avatar at the end of the chrome and the menu it opens (`AccountMenuProps`),
  *   for a deployment inside a product whose avatar opens an account menu of its own. It is
  *   handed the theme, Settings and sign-out, so a replacement keeps all three reachable.
+ * - `mediaSources`: not a component but a LIST of sources (`MediaSource`), each a deployment's
+ *   browser for an external store that imports a file and reports its `cms_media` id. The
+ *   editor puts each one beside the library in a media field's picker (a tab) and beside Upload
+ *   on the Media screen (an action opening a dialog). Content, not a look, so a theme leaves it
+ *   to the deployment. Imported by two files, `fields.tsx` and `components.tsx`, both in `src`.
  *
  * What is deliberately NOT here:
  *
@@ -92,6 +97,8 @@ export const EDITOR_SLOTS = {
   nav: { specifier: "../nav-hooks", from: "src/routes" },
   /** The avatar and the account menu it opens, in both chromes. Export `AccountMenu`. */
   account: { specifier: "./account-menu", from: "src" },
+  /** Where files can come from besides an upload. Export `mediaSources`. */
+  mediaSources: { specifier: "./media-sources", from: "src" },
 } as const;
 
 export type EditorSlot = keyof typeof EDITOR_SLOTS;

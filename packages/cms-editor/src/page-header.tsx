@@ -26,7 +26,7 @@
 // viewport on every scroll. So it condenses: same panel, same artwork, same button, a third
 // of the height, which is the only version of "keep it" that a long list can afford.
 
-import { useEffect, useState, type CSSProperties } from "react";
+import { Children, isValidElement, useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { BELOW_APP_BAR, CONTENT } from "./chrome";
 import { CoverArt } from "./cover";
 import { pageHeaderStyle } from "./page-header-style";
@@ -85,6 +85,19 @@ function useCondensed(): boolean {
  * which is a cover you cannot see; `/70` clears the type (which ends around 26% of the width)
  * and lets the field read across the rest.
  */
+/**
+ * The header's actions, as ONE cell of its two-column grid (title, actions).
+ *
+ * Every screen hands one action, and that one goes in as it is. More than one (the Media screen
+ * with a media source beside Upload) would otherwise each take a grid cell, and the second would
+ * wrap onto a row of its own under the title, so they are grouped. Counted without `hidden`
+ * elements, since the upload button's file input is one and takes no cell.
+ */
+export function headerActions(children: ReactNode): ReactNode {
+  const shown = Children.toArray(children).filter((c) => !(isValidElement<{ hidden?: boolean }>(c) && c.props.hidden));
+  return shown.length > 1 ? <div className="flex flex-wrap items-center justify-end gap-2 max-[820px]:justify-start">{children}</div> : children;
+}
+
 export function PageHeader({ lead, em, children }: PageHeaderProps) {
   const condensed = useCondensed();
   // A deployment's own dressing (`pageHeader` in the shell config; see `page-header-style.ts`).
@@ -151,7 +164,7 @@ export function PageHeader({ lead, em, children }: PageHeaderProps) {
             <span className={condensed ? "text-fg-subtle" : "block text-fg-subtle"}>{lead}</span>
             <span className={condensed ? "text-fg" : "block text-fg"}>{em}</span>
           </h1>
-          {children}
+          {headerActions(children)}
         </div>
       </div>
     </div>

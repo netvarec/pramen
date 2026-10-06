@@ -374,6 +374,7 @@ declared against the same type, so a contract that changes is a compile error on
 | `mediaGrid` | the media library's grid and its empty state | `MediaGrid`, `MediaLibraryEmpty` | `MediaGridProps`, `MediaLibraryEmptyProps` |
 | `nav` | hooks over the nav and the account menu, for both chromes | `navHooks` | `NavHooks` |
 | `account` | the avatar at the end of the chrome and the menu it opens, in both chromes; it is handed the theme, Settings and sign-out, and `me.profile` (`name`, an https `picture`) when the session signed in through OIDC | `AccountMenu` | `AccountMenuProps` |
+| `mediaSources` | where files can come from besides an upload (a DAM, another product's assets): a tab per source in a media field's picker, and an action per source beside Upload on the Media screen | `mediaSources` (a `readonly MediaSource[]`) | `MediaSource`, `MediaSourceProps` |
 
 ```ts
 await buildEditor({
@@ -494,6 +495,31 @@ A few things the contracts decide for you, so a theme does not have to rediscove
   `AssetLibraryPreview` and `AssetSelectionEmpty` (podoba 0.0.35+) fit this slot; they are not
   the default because the stored media carry no dimensions for a masonry layout to use and the
   look is the Graphic Standard's rather than this editor's.
+- **`mediaSources` brings files in; the editor frames them.** A source is `{ id, label, Browser }`,
+  and its `Browser` gets `call` (the editor's own handler transport, as the signed-in editor),
+  `mode` (`"pick"` in a field's picker, `"library"` from the Media screen), `onDone(mediaId)` and
+  `onCancel()`. The source does the import itself, through handlers of your own: copy the file
+  into storage, create an ordinary `cms_media` row, and hand its id to `onDone`. In the picker
+  each source is a tab beside "Library", and `onDone` picks the id exactly as choosing a tile
+  does. On the Media screen each source is a `Button` beside Upload (a direct child of the page
+  header, like Upload, so a `pageHeader` slot receives it in `children` and should render every
+  `Button` it is given), and it opens the browser in a dialog that `onDone` closes before
+  reloading the library. Sources appear wherever upload does. The browser renders inside an
+  error boundary, so a throw costs its tab or dialog. With no sources (the default) the picker
+  has no tabs and the Media screen no extra actions.
+
+  ```tsx
+  // src/admin/media-sources.tsx
+  import type { MediaSource, MediaSourceProps } from "@pramen/cms-editor/slots";
+
+  function DamBrowser({ call, onDone, onCancel }: MediaSourceProps) {
+    // List with your own handler, then import one and report the cms_media id it created.
+    const pick = async (assetId: string) => onDone(await call<string>("importFromDam", { assetId }));
+    return <YourAssetGrid onPick={pick} onCancel={onCancel} />;
+  }
+
+  export const mediaSources: readonly MediaSource[] = [{ id: "dam", label: "DAM", Browser: DamBrowser }];
+  ```
 - **`nav` runs upstream of both chromes.** The sidebar, the topbar, the breadcrumb and the
   account menu all read the one transformed nav. `requiresNav` is checked against the nav as
   BUILT, so hiding an entry does not hide the account-menu row that replaces it. A
