@@ -2,15 +2,15 @@
 // route modules under `routes/` are thin adapters: they pull `api`/`me`/`setError` from
 // the app context and wire URL params + navigation into these components.
 
-import { Button, Dialog, type DialogSize, DropdownMenu, DropdownMenuItem, DropdownMenuTrigger, Input, SearchField, Textarea } from "@podoba/react";
+import { Button, Dialog, type DialogSize, DropdownMenu, DropdownMenuItem, DropdownMenuTrigger, Input, SearchField, Table, type TableColumn, Textarea } from "@podoba/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Api, ApiError } from "./api";
 import { CONTROL, FieldForm, formatWhen, fromLocalInput, slugify, toLocalInput } from "./fields";
-import { BELOW_APP_BAR, BELOW_PAGE_TOOLBAR, CONTENT, INSPECTOR_MAX_H, PAGE_TOOLBAR_H, ROW, ROW_BUTTON, WRAP } from "./chrome";
+import { BELOW_APP_BAR, BELOW_PAGE_TOOLBAR, CONTENT, INSPECTOR_MAX_H, PAGE_TOOLBAR_H, ROW, WRAP } from "./chrome";
 import { getI18n, t, useI18n, type TextKey } from "./i18n";
 import { rich } from "./i18n/rich";
 import { collectionCountForms, collectionNewButton, declaredNewItem, pageCountForms, pageNewButton } from "./entry-labels";
-import { listSummary, LoadFailed, usePagedList, type ListPhase } from "./list-state";
+import { listSummary, LoadFailed, rowLabel, usePagedList, type ListPhase } from "./list-state";
 import { useCrumb } from "./breadcrumb";
 import { PageHeader } from "./page-header";
 import { DetailHeader } from "./detail-header";
@@ -352,6 +352,14 @@ export function PageList({ api, type, onOpen, onError }: { api: Api; type?: Cont
   // (often plural, it labels the tab), so it heads the screen and is never bent into a noun
   // phrase: "+ New Articles" is what guessing at grammar produces.
   const count = listSummary(list.phase, pages.length, { empty: t("common.noneYet"), forms: pageCountForms(wording) }, list.hasMore);
+  // No client-side sorting: the rows are one server page of a longer list, and sorting what
+  // happens to be loaded would present a partial order as the whole one.
+  const pageColumns: TableColumn<Page>[] = [
+    { key: "title", header: t("table.title"), render: (p) => <span className="font-medium">{p.title || <Dim>{t("common.untitled")}</Dim>}</span> },
+    { key: "slug", header: t("table.slug"), render: (p) => <span className="text-fg-subtle">/{p.slug}</span> },
+    ...(multilingual ? [{ key: "locale", header: t("table.language"), render: (p: Page) => <span className="text-fg-subtle">{p.locale}</span> }] : []),
+    { key: "status", header: t("table.status"), render: (p) => <Pill status={p.status}>{statusLabel(p.status)}</Pill> },
+  ];
   return (
     <>
       <Hero lead={type?.name ?? t("pages.lead")} em={count}>
@@ -359,14 +367,16 @@ export function PageList({ api, type, onOpen, onError }: { api: Api; type?: Cont
       </Hero>
       <div className={WRAP}>
         <div className="flex flex-col gap-2">
-          {pages.map((p) => (
-            <button type="button" className={`${ROW} ${ROW_BUTTON}`} key={p.id} onClick={() => onOpen(p)}>
-              <span className="flex-1 truncate font-medium">{p.title}</span>
-              <span className="text-fg-subtle">/{p.slug}</span>
-              {multilingual ? <span className="text-fg-subtle">{p.locale}</span> : null}
-              <Pill status={p.status}>{statusLabel(p.status)}</Pill>
-            </button>
-          ))}
+          {pages.length > 0 ? (
+            <Table
+              columns={pageColumns}
+              data={pages}
+              getRowKey={(p) => p.id}
+              getRowProps={(p) => ({ "aria-label": rowLabel(p.title || t("common.untitled"), `/${p.slug}`, multilingual ? p.locale : null, statusLabel(p.status)) })}
+              onRowClick={onOpen}
+              aria-label={type?.name ?? t("pages.lead")}
+            />
+          ) : null}
           {list.phase === "ready" && pages.length === 0 ? <p className="text-fg-subtle">{blockTypes.length === 0 ? t("pages.emptyNoTypes") : t("pages.empty")}</p> : null}
           {list.phase === "failed" ? <LoadFailed onRetry={list.reload} /> : null}
         </div>
@@ -509,6 +519,14 @@ export function CollectionList({ api, def, onOpen, onNew, onError }: { api: Api;
   const { t } = useI18n();
   const labelOf = (col: string) => def.fields.find((f) => f.name === col)?.label ?? col;
   const count = listSummary(list.phase, rows.length, { empty: t("common.noneYet"), forms: collectionCountForms(def) }, list.hasMore);
+  const idOf = (row: FieldValues) => String(row[def.idField] ?? "");
+  const [first = def.titleField, ...rest] = def.list;
+  const titleOf = (row: FieldValues) => cellText(row[first]);
+  // Unsorted for the same reason as the page list: the rows are one server page.
+  const columns: TableColumn<FieldValues>[] = [
+    { key: first, header: labelOf(first), render: (row) => <span className="font-medium">{titleOf(row) || <Dim>{t("common.untitled")}</Dim>}</span> },
+    ...rest.map((col): TableColumn<FieldValues> => ({ key: col, header: labelOf(col), render: (row) => <span className="text-fg-subtle">{cellText(row[col])}</span> })),
+  ];
   return (
     <>
       <Hero lead={def.pluralLabel} em={count}>
@@ -516,18 +534,16 @@ export function CollectionList({ api, def, onOpen, onNew, onError }: { api: Api;
       </Hero>
       <div className={WRAP}>
         <div className="flex flex-col gap-2">
-          {rows.map((row) => {
-            const id = String(row[def.idField] ?? "");
-            const [first, ...rest] = def.list;
-            return (
-              <button type="button" className={`${ROW} ${ROW_BUTTON}`} key={id} onClick={() => onOpen(id)}>
-                <span className="flex-1 truncate font-medium">{cellText(row[first ?? def.titleField]) || <Dim>{t("common.untitled")}</Dim>}</span>
-                {rest.map((col) => (
-                  <span className="truncate text-fg-subtle" key={col} title={labelOf(col)}>{cellText(row[col])}</span>
-                ))}
-              </button>
-            );
-          })}
+          {rows.length > 0 ? (
+            <Table
+              columns={columns}
+              data={rows}
+              getRowKey={idOf}
+              getRowProps={(row) => ({ "aria-label": rowLabel(titleOf(row) || t("common.untitled"), ...rest.map((col) => cellText(row[col]))) })}
+              onRowClick={(row) => onOpen(idOf(row))}
+              aria-label={def.pluralLabel}
+            />
+          ) : null}
           {list.phase === "ready" && rows.length === 0 ? <p className="text-fg-subtle">{t("collection.empty", { pluralLabel: def.pluralLabel.toLowerCase() })}</p> : null}
           {list.phase === "failed" ? <LoadFailed onRetry={list.reload} /> : null}
           {list.loading ? <p className="text-fg-subtle">{t("common.loading")}</p> : null}
@@ -2401,6 +2417,36 @@ export function UsersView({ api, me, onError }: { api: Api; me: Me | null; onErr
     finally { setBusy(""); }
   };
 
+  const isActive = (u: UserRow) => (u.active === undefined || u.active === null ? true : Boolean(Number(u.active)));
+  const isMe = (u: UserRow) => me?.userId === u.username;
+  // Rows are not pressable: a user has no detail screen, the row's controls ARE the editing.
+  const userColumns: TableColumn<UserRow>[] = [
+    {
+      key: "user",
+      header: t("table.user"),
+      render: (u) => (
+        <div className="flex min-w-[200px] flex-col gap-0.5">
+          <span className="font-semibold">{u.username}{isMe(u) ? <span className="ml-1.5 font-normal text-fg-subtle">{t("users.you")}</span> : null}</span>
+          {u.email && u.email !== u.username ? <span className="text-xs text-fg-subtle">{u.email}</span> : null}
+          {u.createdAt ? <span className="text-[11px] text-fg-subtle">{t("users.joined", { date: i18n.date(Number(u.createdAt)) })}</span> : null}
+        </div>
+      ),
+    },
+    { key: "roles", header: t("table.roles"), render: (u) => <RolesInput value={rolesOf(u)} disabled={busy === u.username} onSave={(next) => setRoles(u, next)} /> },
+    { key: "status", header: t("table.status"), render: (u) => <Pill status={isActive(u) ? "active" : "inactive"}>{isActive(u) ? t("users.active") : t("users.inactive")}</Pill> },
+    {
+      key: "actions",
+      header: <span className="sr-only">{t("table.actions")}</span>,
+      align: "right",
+      render: (u) => (
+        <div className="flex justify-end gap-1">
+          <Button variant="ghost" size="sm" isDisabled={busy === u.username || isMe(u)} onPress={() => setActive(u, !isActive(u))}>{isActive(u) ? t("users.deactivate") : t("users.activate")}</Button>
+          <Button variant="ghost" size="sm" className="text-danger" isDisabled={busy === u.username || isMe(u)} onPress={() => del(u)}>{t("common.delete")}</Button>
+        </div>
+      ),
+    },
+  ];
+
   return (
     <>
       <Hero lead={t("users.lead")} em={listSummary(list.phase, users.length, { empty: t("common.noneYet"), forms: i18n.forms("users.count") }, list.hasMore)}>
@@ -2408,24 +2454,7 @@ export function UsersView({ api, me, onError }: { api: Api; me: Me | null; onErr
       </Hero>
       <div className={WRAP}>
         <div className="flex flex-col gap-2">
-          {users.map((u) => {
-            const roles = rolesOf(u);
-            const isMe = me?.userId === u.username;
-            const active = u.active === undefined || u.active === null ? true : Boolean(Number(u.active));
-            return (
-              <div className={`${ROW} flex-wrap items-start`} key={u.username}>
-                <div className="flex min-w-[200px] flex-1 flex-col gap-0.5">
-                  <span className="font-semibold">{u.username}{isMe ? <span className="ml-1.5 font-normal text-fg-subtle">{t("users.you")}</span> : null}</span>
-                  {u.email && u.email !== u.username ? <span className="text-xs text-fg-subtle">{u.email}</span> : null}
-                  {u.createdAt ? <span className="text-[11px] text-fg-subtle">{t("users.joined", { date: i18n.date(Number(u.createdAt)) })}</span> : null}
-                </div>
-                <RolesInput value={roles} disabled={busy === u.username} onSave={(next) => setRoles(u, next)} />
-                <Pill status={active ? "active" : "inactive"}>{active ? t("users.active") : t("users.inactive")}</Pill>
-                <Button variant="ghost" size="sm" isDisabled={busy === u.username || isMe} onPress={() => setActive(u, !active)}>{active ? t("users.deactivate") : t("users.activate")}</Button>
-                <Button variant="ghost" size="sm" className="text-danger" isDisabled={busy === u.username || isMe} onPress={() => del(u)}>{t("common.delete")}</Button>
-              </div>
-            );
-          })}
+          {users.length > 0 ? <Table columns={userColumns} data={users} getRowKey={(u) => u.username} aria-label={t("users.lead")} /> : null}
           {list.phase === "ready" && users.length === 0 ? <p className="text-fg-subtle">{t("users.empty")}</p> : null}
           {list.phase === "loading" ? <p className="text-fg-subtle">{t("common.loading")}</p> : null}
           {list.phase === "failed" ? <LoadFailed onRetry={list.reload} /> : null}

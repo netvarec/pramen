@@ -9,16 +9,16 @@
 // one thing that is actually a document (a menu tree, a term hierarchy, a widget list).
 // Redirects are the exception and stay a single table, because a redirect IS a row.
 
-import { Button, Heading, Input } from "@podoba/react";
+import { Button, Heading, Input, Table } from "@podoba/react";
 import { useCallback, useEffect, useState } from "react";
 import { useApp, useUnsavedGuard } from "./app-context";
 import type { Api } from "./api";
 import { CONTROL, RichText, slugify } from "./fields";
-import { ROW, ROW_BUTTON, WRAP } from "./chrome";
+import { ROW, WRAP } from "./chrome";
 import { DetailHeader } from "./detail-header";
 import { getI18n, useI18n, type TextKey } from "./i18n";
 import { rich } from "./i18n/rich";
-import { LoadFailed, nullableSummary } from "./list-state";
+import { LoadFailed, nullableSummary, rowLabel } from "./list-state";
 import { useCrumb } from "./breadcrumb";
 import { PageHeader } from "./page-header";
 import type { CollectionMeta, Menu, MenuItem, MenuItemKind, Page, Redirect, RichTextDoc, Taxonomy, Term, Widget, WidgetArea } from "./types";
@@ -121,13 +121,20 @@ export function MenusView({ api, onOpen, onError, canEdit }: { api: Api; onOpen:
         {menus === null && !failed ? <p className="text-fg-subtle">{t("common.loading")}</p> : null}
         {failed ? <LoadFailed onRetry={refresh} /> : null}
         {menus?.length === 0 ? <p className="text-fg-subtle">{rich(t("menus.empty"), { code: (s) => <code>{s}</code> })}</p> : null}
-        {(menus ?? []).map((m) => (
-          <button type="button" key={m.id} className={`${ROW} ${ROW_BUTTON}`} onClick={() => onOpen(m.name)}>
-            <span className="min-w-0 flex-1 truncate font-medium">{m.label}</span>
-            <span className="shrink-0 truncate text-fg-subtle">{m.name}</span>
-            <span className="shrink-0 text-caption text-fg-subtle">{i18n.tp("menus.itemCount", countItems(m.items ?? []))}</span>
-          </button>
-        ))}
+        {menus?.length ? (
+          <Table
+            columns={[
+              { key: "label", header: t("table.name"), render: (m) => <span className="font-medium">{m.label}</span> },
+              { key: "name", header: t("table.key"), render: (m) => <span className="text-fg-subtle">{m.name}</span> },
+              { key: "items", header: t("table.items"), align: "right", render: (m) => countItems(m.items ?? []) },
+            ]}
+            data={menus}
+            getRowKey={(m) => m.id}
+            getRowProps={(m) => ({ "aria-label": rowLabel(m.label, m.name, `${t("table.items")} ${countItems(m.items ?? [])}`) })}
+            onRowClick={(m) => onOpen(m.name)}
+            aria-label={t("nav.menus")}
+          />
+        ) : null}
       </div>
       {canEdit ? (
         <div className="mt-6 max-w-[720px] rounded-lg border border-border bg-surface-muted p-4">
@@ -472,6 +479,9 @@ export function RedirectsView({ api, onError, canEdit }: { api: Api; onError: (s
   const patch = async (r: Redirect, p: Parameters<Api["updateRedirect"]>[1]) => {
     try { await api.updateRedirect(r.id, p); refresh(); } catch (e) { onError(errText(e)); }
   };
+  // A disabled redirect is dimmed cell by cell: the row's own opacity would fade the rules
+  // between rows with it.
+  const dim = (r: Redirect) => (r.enabled ? "" : "opacity-60");
   const del = async (r: Redirect) => {
     if (!confirm(t("redirects.confirmDelete", { from: r.fromPath }))) return;
     try { await api.deleteRedirect(r.id); refresh(); } catch (e) { onError(errText(e)); }
@@ -488,20 +498,33 @@ export function RedirectsView({ api, onError, canEdit }: { api: Api; onError: (s
         {rows === null && !failed ? <p className="text-fg-subtle">{t("common.loading")}</p> : null}
         {failed ? <LoadFailed onRetry={refresh} /> : null}
         {rows?.length === 0 ? <p className="text-fg-subtle">{t("redirects.empty")}</p> : null}
-        {(rows ?? []).map((r) => (
-          <div key={r.id} className={`${ROW} ${r.enabled ? "" : "opacity-60"}`}>
-            <span className="min-w-0 flex-1 truncate font-medium">{r.fromPath}</span>
-            <span className="shrink-0 text-fg-subtle">→</span>
-            <span className="min-w-0 flex-1 truncate text-fg-muted">{r.toPath}</span>
-            <span className="shrink-0 text-caption text-fg-subtle">{r.status}</span>
-            {canEdit ? (
-              <>
-                <Button variant="ghost" size="sm" onPress={() => patch(r, { enabled: !r.enabled })}>{r.enabled ? t("redirects.disable") : t("redirects.enable")}</Button>
-                <Button variant="ghost" size="sm" className="text-danger" onPress={() => del(r)}>{t("furniture.delete")}</Button>
-              </>
-            ) : null}
-          </div>
-        ))}
+        {rows?.length ? (
+          <Table
+            columns={[
+              // A path is capped and truncated (full value on hover): a table cell grows to fit
+              // its content, so one long external URL would push the row's buttons off screen.
+              { key: "from", header: t("table.from"), render: (r) => <span className={`block max-w-[32ch] truncate font-medium ${dim(r)}`} title={r.fromPath}>{r.fromPath}</span> },
+              { key: "to", header: t("table.to"), render: (r) => <span className={`block max-w-[32ch] truncate text-fg-muted ${dim(r)}`} title={r.toPath}>{r.toPath}</span> },
+              { key: "status", header: t("table.code"), align: "right", render: (r) => <span className={`text-fg-subtle ${dim(r)}`}>{r.status}</span> },
+              ...(canEdit
+                ? [{
+                    key: "actions",
+                    header: <span className="sr-only">{t("table.actions")}</span>,
+                    align: "right" as const,
+                    render: (r: Redirect) => (
+                      <div className="flex justify-end gap-1">
+                        <Button variant="ghost" size="sm" onPress={() => patch(r, { enabled: !r.enabled })}>{r.enabled ? t("redirects.disable") : t("redirects.enable")}</Button>
+                        <Button variant="ghost" size="sm" className="text-danger" onPress={() => del(r)}>{t("furniture.delete")}</Button>
+                      </div>
+                    ),
+                  }]
+                : []),
+            ]}
+            data={rows}
+            getRowKey={(r) => r.id}
+            aria-label={t("nav.redirects")}
+          />
+        ) : null}
       </div>
       {canEdit ? (
         <div className="mt-6 max-w-[860px] rounded-lg border border-border bg-surface-muted p-4">
@@ -621,14 +644,21 @@ export function TaxonomiesView({ api, onOpen, onError, canEdit }: { api: Api; on
         {taxa === null && !failed ? <p className="text-fg-subtle">{tr("common.loading")}</p> : null}
         {failed ? <LoadFailed onRetry={refresh} /> : null}
         {taxa?.length === 0 ? <p className="text-fg-subtle">{tr("taxonomies.empty")}</p> : null}
-        {(taxa ?? []).map((t) => (
-          <button type="button" key={t.id} className={`${ROW} ${ROW_BUTTON}`} onClick={() => onOpen(t.slug)}>
-            <span className="min-w-0 flex-1 truncate font-medium">{t.label}</span>
-            <span className="shrink-0 truncate text-fg-subtle">{t.slug}</span>
-            <span className="shrink-0 text-caption text-fg-subtle">{t.hierarchical ? tr("taxonomies.nested") : tr("taxonomies.flat")}</span>
-            {scopable ? <span className="shrink-0 text-caption text-fg-subtle">{appliesToText(t)}</span> : null}
-          </button>
-        ))}
+        {taxa?.length ? (
+          <Table
+            columns={[
+              { key: "label", header: tr("table.name"), render: (t) => <span className="font-medium">{t.label}</span> },
+              { key: "slug", header: tr("table.slug"), render: (t) => <span className="text-fg-subtle">{t.slug}</span> },
+              { key: "structure", header: tr("table.structure"), render: (t) => <span className="text-fg-subtle">{t.hierarchical ? tr("taxonomies.nested") : tr("taxonomies.flat")}</span> },
+              ...(scopable ? [{ key: "appliesTo", header: tr("taxonomies.appliesTo"), render: (t: Taxonomy) => <span className="text-fg-subtle">{appliesToText(t)}</span> }] : []),
+            ]}
+            data={taxa}
+            getRowKey={(t) => t.id}
+            getRowProps={(t) => ({ "aria-label": rowLabel(t.label, t.slug, t.hierarchical ? tr("taxonomies.nested") : tr("taxonomies.flat"), scopable ? appliesToText(t) : null) })}
+            onRowClick={(t) => onOpen(t.slug)}
+            aria-label={tr("nav.taxonomies")}
+          />
+        ) : null}
       </div>
       {canEdit ? (
         <div className="mt-6 max-w-[720px] rounded-lg border border-border bg-surface-muted p-4">
@@ -818,8 +848,7 @@ export function flattenTerms(tree: readonly Term[], depth = 0): FlatTerm[] {
 // --- widget areas ---------------------------------------------------------------------
 
 export function WidgetAreasView({ api, onOpen, onError, canEdit }: { api: Api; onOpen: (name: string) => void; onError: (s: string) => void; canEdit: boolean }) {
-  const i18n = useI18n();
-  const { t } = i18n;
+  const { t } = useI18n();
   const { rows: areas, failed, refresh } = useFurnitureList(useCallback(() => api.listWidgetAreas(), [api]), onError);
   const [label, setLabel] = useState("");
   const [name, setName] = useState("");
@@ -846,13 +875,20 @@ export function WidgetAreasView({ api, onOpen, onError, canEdit }: { api: Api; o
         {areas === null && !failed ? <p className="text-fg-subtle">{t("common.loading")}</p> : null}
         {failed ? <LoadFailed onRetry={refresh} /> : null}
         {areas?.length === 0 ? <p className="text-fg-subtle">{t("widgets.empty")}</p> : null}
-        {(areas ?? []).map((a) => (
-          <button type="button" key={a.id} className={`${ROW} ${ROW_BUTTON}`} onClick={() => onOpen(a.name)}>
-            <span className="min-w-0 flex-1 truncate font-medium">{a.label}</span>
-            <span className="shrink-0 truncate text-fg-subtle">{a.name}</span>
-            <span className="shrink-0 text-caption text-fg-subtle">{i18n.tp("widgets.count", (a.widgets ?? []).length)}</span>
-          </button>
-        ))}
+        {areas?.length ? (
+          <Table
+            columns={[
+              { key: "label", header: t("table.name"), render: (a) => <span className="font-medium">{a.label}</span> },
+              { key: "name", header: t("table.key"), render: (a) => <span className="text-fg-subtle">{a.name}</span> },
+              { key: "widgets", header: t("table.widgets"), align: "right", render: (a) => (a.widgets ?? []).length },
+            ]}
+            data={areas}
+            getRowKey={(a) => a.id}
+            getRowProps={(a) => ({ "aria-label": rowLabel(a.label, a.name, `${t("table.widgets")} ${(a.widgets ?? []).length}`) })}
+            onRowClick={(a) => onOpen(a.name)}
+            aria-label={t("nav.widgets")}
+          />
+        ) : null}
       </div>
       {canEdit ? (
         <div className="mt-6 max-w-[720px] rounded-lg border border-border bg-surface-muted p-4">

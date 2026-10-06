@@ -34,10 +34,6 @@ export const en = {
   "schema.contentTypes": "Content types",
   "schema.contentTypesEmpty": "No content types yet. A page needs one: it is what declares the regions blocks go into.",
   "schema.newContentType": "+ New content type",
-  /** A block type row's field count. */
-  "schema.fieldCount": { one: "{count} field", other: "{count} fields" },
-  /** A content type row's region count. */
-  "schema.regionCount": { one: "{count} region", other: "{count} regions" },
 
   // --- code-defined types --------------------------------------------------------------------
   /** The badge on a type declared in code. */
@@ -180,8 +176,6 @@ export const cs: Translation<typeof en> = {
   "schema.contentTypes": "Typy obsahu",
   "schema.contentTypesEmpty": "Zatím žádné typy obsahu. Stránka potřebuje typ obsahu: ten určuje oblasti, do kterých se vkládají bloky.",
   "schema.newContentType": "+ Nový typ obsahu",
-  "schema.fieldCount": { one: "{count} pole", few: "{count} pole", many: "{count} pole", other: "{count} polí" },
-  "schema.regionCount": { one: "{count} oblast", few: "{count} oblasti", many: "{count} oblasti", other: "{count} oblastí" },
 
   "schema.codeBadge": "kód",
   "schema.codeBadgeTitle": "Definováno v kódu, zde jen pro čtení",

@@ -32,10 +32,10 @@ Published in lockstep with the other `@pramen/*` packages; use the same version 
 ## Install
 
 ```bash
-bun add @pramen/cms-theme-gs @podoba/react@0.0.42 @podoba/tailwind@0.0.42 @podoba/tokens@0.0.42 react react-dom
+bun add @pramen/cms-theme-gs @podoba/react@0.0.49 @podoba/tailwind@0.0.49 @podoba/tokens@0.0.49 react react-dom
 ```
 
-Peer dependencies: `@pramen/cms-editor` (the same version), `@podoba/react` 0.0.42 or newer
+Peer dependencies: `@pramen/cms-editor` (the same version), `@podoba/react` 0.0.49 or newer
 (`BrandPageHeader`, `CtaPill`, `DashboardGrid`, `DashboardTile`, `Tile`, `AssetMasonryGrid`,
 `AssetLibraryPreview`, `AssetSelectionEmpty`, `ModalOverlay`), and React 19. Your project is the
 editor's `designSystem`: the editor and the theme link your podoba and your React, one copy of
@@ -250,14 +250,14 @@ get the theme's phone and tablet CTA behaviour (and the bottom room for the dock
 yet) makes `@podoba/tokens` match GS's token values and moves two of the theme's workarounds into
 podoba. The theme does not depend on it; this is what changes once it ships:
 
-- **Tokens.** Until then `@podoba/tokens` 0.0.42 is podoba's own palette, not GS's (for example
+- **Tokens.** Until then `@podoba/tokens` 0.0.49 is podoba's own palette, not GS's (for example
   `--color-danger` and the tracking scale differ, and in dark mode a `Tile` sits on the same
   colour as the page). A host that needs exact GS values now may add its own overrides after
   `@podoba/tokens/variables.css` in `editor.css`. The theme deliberately ships no token
   snapshot: a copy here would be a second source that drifts.
-- **Tracking.** `theme.css` sets `letter-spacing: normal` on `body` because 0.0.42's tracking is
+- **Tracking.** `theme.css` sets `letter-spacing: normal` on `body` because 0.0.49's tracking is
   tuned for NC Fontina. After #37 the scale follows the face; drop the line.
-- **CTA dock breakpoint.** 0.0.42 docks a header's CTA to the bottom of the screen below 768px;
+- **CTA dock breakpoint.** 0.0.49 docks a header's CTA to the bottom of the screen below 768px;
   `theme.css` keeps it inline from 640px up. After #37 `BrandPageHeader` does that itself; delete
   the `@media (min-width: 640px) and (max-width: 767px)` block.
 - **Room for the dock.** `theme.css` pads the page by a measured 100px on phones. After #37,
@@ -272,11 +272,11 @@ The package is TypeScript source, bundled into the host's editor by `buildEditor
 build step of its own. In this repo:
 
 - `bun run typecheck` checks it (`tsconfig.json` for the slots, `tsconfig.build.json` for
-  `gsEditor`), against podoba 0.0.42 from its own devDependencies. The editor itself stays on the
+  `gsEditor`), against podoba 0.0.49 from its own devDependencies. The editor itself stays on the
   podoba it pins.
 - `test/cms-theme-gs.test.tsx` covers the copy, the nav rules and their composition, the
   dashboard statistics and the components' markup. `test/cms-theme-gs-host-build.test.ts` runs a
-  real `buildEditor` with every theme slot against podoba 0.0.42 and checks the bundle and the
+  real `buildEditor` with every theme slot against podoba 0.0.49 and checks the bundle and the
   stylesheet.
 - `example/site` builds a themed editor with `bun run --cwd example/site build:admin-gs` and
   serves it with `PRAMEN_ADMIN_THEME=gs bun run --cwd example/site dev` (its `admin-gs/` folder

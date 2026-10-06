@@ -591,6 +591,19 @@ there are no backward-compatibility guarantees yet.
 
 ### Changed
 
+- **Editor listings are podoba `Table`s (`@pramen/cms-editor`, `@pramen/admin`,
+  `@pramen/cms-theme-gs`).** podoba 0.0.49 unified its table into one look (mono header labels,
+  row and cell rules, pressable rows), and every list screen now renders through it instead of
+  hand-drawn card rows: pages, collection rows, block and content types, menus, taxonomies,
+  widget areas, redirects, users, and Block Kit's `table` block (built from the table parts,
+  since it has no sorting or row press). Rows that open something are pressable `TableRow`s
+  (`role="button"`, named by `aria-label`, Enter/Space); redirects and users keep their row
+  buttons in a trailing column. Lists stay unsorted because they are paged from the server.
+  New catalog keys `table.*` for the column headers (English and Czech); the per-row count
+  strings `schema.fieldCount`, `schema.regionCount`, `menus.itemCount` and `widgets.count` are
+  gone, since a count now sits under its column's header. `ROW_BUTTON` is removed from
+  `chrome.ts`. All packages require podoba 0.0.49.
+
 - **OIDC binder cookie is per attempt (`@pramen/auth`).** `pramen_oidc` became
   `pramen_oidc_<hash of the state>`, so overlapping sign-ins in two tabs no longer overwrite
   each other's binder. A login in flight across the deploy has to be restarted.
