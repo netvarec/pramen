@@ -30,19 +30,11 @@ export const WRAP =
 /** One row in a list: a card-surfaced strip with the standard inset. */
 export const ROW = "flex items-center gap-3 rounded-[14px] border border-transparent bg-surface-card px-[18px] py-3.5";
 
-/** What a `<button>` that opens something needs on top of its own look: full width and
- * left-aligned like the `<div>` it replaced, the hover every clickable row had, and a focus
- * ring for the keyboard.
- *
- * The rows and tiles that open a page, a collection row, a menu or a file were `<div
- * onClick>`: reachable by mouse, invisible to Tab, and announced as plain text. A real button
- * is focusable and answers Enter and Space with no key handler of ours. `focus-visible`
- * rather than `focus`, so a mouse click does not leave a ring behind. */
-export const ROW_BUTTON =
-  "w-full cursor-pointer text-left outline-none transition-colors hover:bg-surface-muted focus-visible:ring-2 focus-visible:ring-ring";
-
-/** The same for a grid tile (the media library, the media picker): no row hover fill, since
- * the tile is mostly thumbnail and a tinted card behind an image reads as a selection. */
+/** What a `<button>` grid tile that opens something needs on top of its own look (the media
+ * library, the media picker): full width, left-aligned, and a focus ring for the keyboard.
+ * `focus-visible` rather than `focus`, so a mouse click does not leave a ring behind. No hover
+ * fill, since the tile is mostly thumbnail and a tinted card behind an image reads as a
+ * selection. List rows are podoba `Table` rows, which bring their own press behaviour. */
 export const TILE_BUTTON = "block w-full cursor-pointer text-left outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
 // --- which chrome ------------------------------------------------------------------------

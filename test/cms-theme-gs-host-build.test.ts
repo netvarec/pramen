@@ -1,6 +1,5 @@
 // @pramen/cms-theme-gs, built for real: `buildEditor` with the theme's slots and stylesheet,
-// against a design-system root that has the podoba the theme needs (0.0.42), while the editor
-// package itself still pins 0.0.34.
+// against a design-system root that has the podoba the theme needs (its devDependency).
 //
 // The same method as `cms-editor-host-build.test.ts`: a build exiting zero proves little,
 // because every way this goes wrong still produces a working editor. The theme's slot quietly
@@ -27,7 +26,7 @@ afterAll(async () => {
 
 /** A host's Tailwind entry, the one the README tells a host to write. Under the theme's own
  * `node_modules` so its bare imports resolve the way they do from a host project that has the
- * theme and podoba 0.0.42 installed. */
+ * theme and podoba 0.0.49 installed. */
 async function hostStyles(dir: string): Promise<string> {
   const file = join(dir, "editor.css");
   await writeFile(
@@ -67,9 +66,14 @@ describe("the GS theme in a host build", () => {
     }
   });
 
-  test("one podoba, the host's 0.0.42, with the GS components the slots use", () => {
-    expect(js).toContain("@podoba+react@0.0.42");
-    expect(js).not.toContain("@podoba+react@0.0.34");
+  test("one podoba, the theme's generation, with the GS components the slots use", async () => {
+    // Every podoba module in the bundle is the ONE version the theme is written against. That
+    // the host's copy (not the editor's) is the one linked is proven with a marker package in
+    // `cms-editor-host-build.test.ts`: here the editor and the theme pin the same version, so
+    // the version string alone could not tell the two apart.
+    const pkg = JSON.parse(await readFile(join(THEME, "package.json"), "utf8")) as { devDependencies: Record<string, string> };
+    const linked = new Set([...js.matchAll(/@podoba\+react@([0-9.]+)/g)].map((m) => m[1]));
+    expect([...linked]).toEqual([pkg.devDependencies["@podoba/react"]!]);
     for (const name of ["BrandPageHeader", "CtaPill", "DashboardGrid", "DashboardTile", "AssetMasonryGrid", "AssetLibraryPreview", "AssetSelectionEmpty"]) {
       expect(js, name).toContain(`function ${name}(`);
     }

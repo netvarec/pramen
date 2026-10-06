@@ -211,3 +211,11 @@ export function LoadFailed({ onRetry }: { onRetry: () => void }) {
     </div>
   );
 }
+
+/** The accessible name of a pressable table row. podoba's `TableRow` with `onPress` is a
+ * `role="button"`, which hides its cells from assistive tech, so the name has to say what the
+ * cells say: a page named only by its title can't be told apart as a draft or a live page.
+ * Empty cells are skipped rather than read as pauses. */
+export function rowLabel(...parts: Array<string | null | undefined>): string {
+  return parts.filter((p) => p != null && p !== "").join(", ");
+}

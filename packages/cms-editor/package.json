@@ -36,9 +36,9 @@
   "dependencies": {
     "@buzola/router": "^0.0.17",
     "@phosphor-icons/react": "^2.1.10",
-    "@podoba/react": "^0.0.42",
-    "@podoba/tailwind": "^0.0.42",
-    "@podoba/tokens": "^0.0.42",
+    "@podoba/react": "^0.0.49",
+    "@podoba/tailwind": "^0.0.49",
+    "@podoba/tokens": "^0.0.49",
     "@tiptap/core": "^3.27.4",
     "@tiptap/extension-highlight": "^3.27.4",
     "@tiptap/extension-placeholder": "^3.27.4",
