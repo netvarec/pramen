@@ -1328,12 +1328,15 @@ function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, o
   const name = blockType?.name ?? block.block_type;
 
   return (
-    // One inline document row (no card chrome). The row is the drop target; the ⠿
-    // handle in the hover gutter is the only draggable element, so dragging never
-    // fights the inline text selection. Its drag image is the whole row.
+    // One card per block. It used to be a chrome-less inline row, which read as one long
+    // form: editors could not tell where a block ended and the next began, with a page of
+    // eight blocks being eight runs of fields under a faded type label. The border and card
+    // surface are that boundary. The card is the drop target; the ⠿ handle in the hover
+    // gutter is the only draggable element, so dragging never fights the inline text
+    // selection. Its drag image is the whole card.
     <div
       ref={cardRef}
-      className={`group relative rounded-lg px-2 py-1 transition-colors ${isOver ? "ring-2 ring-brand-green" : ""} ${dragging ? "opacity-40" : ""} ${block.pending ? "pointer-events-none opacity-60" : ""}`}
+      className={`group relative rounded-lg border border-border bg-surface-card px-3 py-2 transition-colors ${isOver ? "ring-2 ring-brand-green" : ""} ${dragging ? "opacity-40" : ""} ${block.pending ? "pointer-events-none opacity-60" : ""}`}
       onDragOver={(e) => { e.preventDefault(); onDragOverBlock(); }}
       onDrop={(e) => { e.preventDefault(); onDropBlock(); }}
     >
@@ -1351,10 +1354,11 @@ function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, o
         title={t("blocks.dragToReorder")}
       >⠿</span>
 
-      {/* Header: subtle type label + state + actions, mostly revealed on hover. */}
-      <div className="flex items-center gap-2 opacity-60 transition-opacity group-hover:opacity-100">
-        <button type="button" className="w-4 shrink-0 text-fg-subtle hover:text-fg" title={collapsed ? t("blocks.expand") : t("blocks.collapse")} aria-label={collapsed ? t("blocks.expand") : t("blocks.collapse")} onClick={() => setCollapsed((c) => !c)}>{collapsed ? "▸" : "▾"}</button>
-        <span className="text-caption font-medium uppercase tracking-wide text-fg-subtle">{name}</span>
+      {/* Header: the block's type label is the card's title, so it is at full strength; the
+          state and the actions stay quieter beside it. */}
+      <div className="flex items-center gap-2">
+        <button type="button" className="w-4 shrink-0 text-fg-muted hover:text-fg" title={collapsed ? t("blocks.expand") : t("blocks.collapse")} aria-label={collapsed ? t("blocks.expand") : t("blocks.collapse")} onClick={() => setCollapsed((c) => !c)}>{collapsed ? "▸" : "▾"}</button>
+        <span className="text-caption font-semibold uppercase tracking-wide text-fg">{name}</span>
         {block.is_shared ? <span className="text-caption text-accent-strong">{t("blocks.shared")}</span> : null}
         <span className={`text-caption ${dirty && saveState !== "saving" ? "text-accent-strong" : "text-fg-subtle"}`}>{saveState === "saving" ? t("blocks.saving") : saveState === "saved" ? t("blocks.saved") : dirty ? t("blocks.unsaved") : ""}</span>
         <span className="flex-1" />
@@ -1395,8 +1399,9 @@ function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, o
 // Notion-style block inserter, the page-canvas analogue of the BlockEditor's `/`
 // palette. A slim "＋ Add block" affordance expands into a searchable list of the
 // region's allowed block types (type to filter; ↑/↓ + Enter to pick, Esc/blur to
-// close). Insertion appends to the region; reorder via drag to position.
-function Inserter({ allowed, btBySlug, onAdd, compact }: { allowed: string[]; btBySlug: Map<string, BlockType>; onAdd: (slug: string) => void; compact?: boolean }) {
+// close). The full one appends to the region; the `compact` one between two blocks
+// inserts at that index. Exported for tests.
+export function Inserter({ allowed, btBySlug, onAdd, compact }: { allowed: string[]; btBySlug: Map<string, BlockType>; onAdd: (slug: string) => void; compact?: boolean }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
@@ -1416,20 +1421,23 @@ function Inserter({ allowed, btBySlug, onAdd, compact }: { allowed: string[]; bt
   const pick = (slug?: string) => { if (slug) onAdd(slug); close(); };
 
   if (!open) {
-    // Compact: a thin between-blocks divider that reveals a centered "+" on hover.
+    // Compact: the between-blocks divider. It is always THERE, faint, with its label: it
+    // used to be a 12px strip at opacity 0 that showed only under a pointer resting exactly
+    // in the gap, so editors concluded a block could only be added at the end. Hover and
+    // keyboard focus bring it to full strength.
     if (compact) {
       return (
         <button
           type="button"
           onClick={() => setOpen(true)}
-          aria-label={t("blocks.insertHere")}
-          className="group/ins flex h-3 w-full items-center justify-center opacity-0 transition-opacity hover:opacity-100"
+          className="group/ins flex h-8 w-full items-center gap-2 text-fg-muted opacity-80 transition-opacity hover:text-brand-green hover:opacity-100 focus-visible:opacity-100"
         >
-          <span className="flex h-full w-full items-center">
-            <span className="h-px flex-1 bg-brand-green/40" />
-            <span className="mx-1 rounded bg-brand-green/15 px-1 text-caption leading-none text-brand-green">＋</span>
-            <span className="h-px flex-1 bg-brand-green/40" />
+          <span className="h-px flex-1 bg-current opacity-40" />
+          <span className="flex items-center gap-1 text-caption leading-none">
+            <span aria-hidden="true">＋</span>
+            {t("blocks.insertHere")}
           </span>
+          <span className="h-px flex-1 bg-current opacity-40" />
         </button>
       );
     }
