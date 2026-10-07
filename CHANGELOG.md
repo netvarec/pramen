@@ -605,6 +605,27 @@ there are no backward-compatibility guarantees yet.
   IdP's `name` and `picture`, or whatever a custom `mapProfile` stores). A deployment whose
   `mapProfile` keeps claims admins should not see must pass its own `adminReadFields` to
   `authPolicies`.
+- **Editor listings are podoba `Table`s (`@pramen/cms-editor`, `@pramen/admin`,
+  `@pramen/cms-theme-gs`).** podoba 0.0.49 unified its table into one look (mono header labels,
+  row and cell rules, pressable rows), and every list screen now renders through it instead of
+  hand-drawn card rows: pages, collection rows, block and content types, menus, taxonomies,
+  widget areas, redirects, users, and Block Kit's `table` block (built from the table parts,
+  since it has no sorting or row press). Rows that open something are pressable `TableRow`s
+  (`role="button"`, named by `aria-label`, Enter/Space); redirects and users keep their row
+  buttons in a trailing column. Lists stay unsorted because they are paged from the server.
+  New catalog keys `table.*` for the column headers (English and Czech); the per-row count
+  strings `schema.fieldCount`, `schema.regionCount`, `menus.itemCount` and `widgets.count` are
+  gone, since a count now sits under its column's header. `ROW_BUTTON` is removed from
+  `chrome.ts`. All packages require podoba 0.0.49.
+- **podoba 0.0.50, and the GS theme drops its podoba#37 workarounds (`@pramen/cms-editor`,
+  `@pramen/admin`, `@pramen/cms-theme-gs`).** 0.0.50 ships GS's token values (tracking
+  included), docks a `BrandPageHeader` CTA only below 640px, and marks a docked CTA with
+  `data-mobile-cta-dock`. So `theme.css` no longer resets `letter-spacing` on `body`, no longer
+  forces the CTA back into the header between 640px and 767px, and reserves the dock's room with
+  podoba's `mobile-cta-dock-inset` on any page that has a docked CTA, instead of a measured 100px
+  on a list of known headers. The `gs-panel-hero` class is gone: a host's own `BrandPageHeader`
+  gets the same behaviour with no class. The theme's peer range is `>=0.0.50`.
+
 - **OIDC binder cookie is per attempt (`@pramen/auth`).** `pramen_oidc` became
   `pramen_oidc_<hash of the state>`, so overlapping sign-ins in two tabs no longer overwrite
   each other's binder. A login in flight across the deploy has to be restarted.

@@ -62,6 +62,29 @@ export const en = {
   "entries.collection.countLabelled": "{count} {noun}",
   /** A create button built from a declared `newItem` ("New article"). */
   "entries.newLabelled": "+ {newItem}",
+  // --- list tables: column headers -----------------------------------------------------------
+  //
+  // Every library screen lists its rows in podoba's `Table`, so the headers are said once here.
+  "table.name": "Name",
+  "table.title": "Title",
+  "table.slug": "Slug",
+  "table.key": "Key",
+  "table.status": "Status",
+  "table.language": "Language",
+  "table.fields": "Fields",
+  "table.regions": "Regions",
+  "table.items": "Items",
+  "table.widgets": "Widgets",
+  "table.structure": "Structure",
+  "table.from": "From",
+  "table.to": "To",
+  "table.code": "Code",
+  "table.user": "User",
+  "table.roles": "Roles",
+  /** Screen-reader-only header of a column of icons. */
+  "table.icon": "Icon",
+  /** Screen-reader-only header of a column of row buttons. */
+  "table.actions": "Actions",
 };
 
 export const cs: Translation<typeof en> = {
@@ -95,4 +118,23 @@ export const cs: Translation<typeof en> = {
   "entries.collection.count": { one: "{count} záznam", few: "{count} záznamy", many: "{count} záznamu", other: "{count} záznamů" },
   "entries.collection.countLabelled": "{count} {noun}",
   "entries.newLabelled": "+ {newItem}",
+
+  "table.name": "Název",
+  "table.title": "Název",
+  "table.slug": "Slug",
+  "table.key": "Klíč",
+  "table.status": "Stav",
+  "table.language": "Jazyk",
+  "table.fields": "Pole",
+  "table.regions": "Oblasti",
+  "table.items": "Položky",
+  "table.widgets": "Widgety",
+  "table.structure": "Struktura",
+  "table.from": "Z",
+  "table.to": "Na",
+  "table.code": "Kód",
+  "table.user": "Uživatel",
+  "table.roles": "Role",
+  "table.icon": "Ikona",
+  "table.actions": "Akce",
 };

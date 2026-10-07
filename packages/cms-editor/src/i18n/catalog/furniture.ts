@@ -30,8 +30,6 @@ export const en = {
   "menus.count": { one: "{count} menu", other: "{count} menus" },
   /** `<code>` renders as code. */
   "menus.empty": "No menus yet. A menu is read by name (<code>getMenu(\"primary\")</code>) from your layout.",
-  /** A menu row's number of items, nested ones included. */
-  "menus.itemCount": { one: "{count} item", other: "{count} items" },
   "menus.new": "New menu",
   "menus.create": "Create menu",
 
@@ -138,8 +136,6 @@ export const en = {
   /** `<code>` renders as code. */
   "widgets.intro": "A widget area is a named slot in your layout (a sidebar, a footer column) that an editor fills without touching code. Your layout reads one by name: <code>getWidgetArea(\"sidebar\")</code>.",
   "widgets.empty": "No widget areas yet.",
-  /** A widget area row's number of widgets. */
-  "widgets.count": { one: "{count} widget", other: "{count} widgets" },
   "widgets.new": "New widget area",
   "widgets.create": "Create widget area",
 
@@ -181,7 +177,6 @@ export const cs: Translation<typeof en> = {
   "menus.none": "Zatím žádné menu",
   "menus.count": { one: "{count} menu", few: "{count} menu", many: "{count} menu", other: "{count} menu" },
   "menus.empty": "Zatím žádné menu. Šablona čte menu podle názvu: <code>getMenu(\"primary\")</code>.",
-  "menus.itemCount": { one: "{count} položka", few: "{count} položky", many: "{count} položky", other: "{count} položek" },
   "menus.new": "Nové menu",
   "menus.create": "Vytvořit menu",
 
@@ -263,7 +258,6 @@ export const cs: Translation<typeof en> = {
   "widgets.leadEm": "které můžete vyplnit",
   "widgets.intro": "Oblast widgetů je pojmenované místo v šabloně (postranní panel, sloupec v patičce), které redaktor vyplní bez zásahu do kódu. Šablona ji čte podle názvu: <code>getWidgetArea(\"sidebar\")</code>.",
   "widgets.empty": "Zatím žádné oblasti widgetů.",
-  "widgets.count": { one: "{count} widget", few: "{count} widgety", many: "{count} widgetu", other: "{count} widgetů" },
   "widgets.new": "Nová oblast widgetů",
   "widgets.create": "Vytvořit oblast widgetů",
 

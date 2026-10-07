@@ -1,6 +1,6 @@
 {
   "name": "@pramen/cms-editor",
-  "version": "0.0.83",
+  "version": "0.0.85",
   "description": "Visual block/page editor for @pramen/cms: a standalone React SPA that talks to the CMS handlers over HTTP.",
   "license": "MIT",
   "repository": {
@@ -36,9 +36,9 @@
   "dependencies": {
     "@buzola/router": "^0.0.17",
     "@phosphor-icons/react": "^2.1.10",
-    "@podoba/react": "^0.0.42",
-    "@podoba/tailwind": "^0.0.42",
-    "@podoba/tokens": "^0.0.42",
+    "@podoba/react": "^0.0.50",
+    "@podoba/tailwind": "^0.0.50",
+    "@podoba/tokens": "^0.0.50",
     "@tiptap/core": "^3.27.4",
     "@tiptap/extension-highlight": "^3.27.4",
     "@tiptap/extension-placeholder": "^3.27.4",

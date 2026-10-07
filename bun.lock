@@ -41,9 +41,9 @@
       },
       "devDependencies": {
         "@astrojs/check": "^0.9.10",
-        "@podoba/react": "0.0.42",
-        "@podoba/tailwind": "0.0.42",
-        "@podoba/tokens": "0.0.42",
+        "@podoba/react": "0.0.50",
+        "@podoba/tailwind": "0.0.50",
+        "@podoba/tokens": "0.0.50",
         "@pramen/cms-theme-gs": "workspace:*",
         "react": "^19.0.0",
         "react-dom": "^19.0.0",
@@ -52,11 +52,11 @@
     },
     "packages/admin": {
       "name": "@pramen/admin",
-      "version": "0.0.76",
+      "version": "0.0.84",
       "dependencies": {
-        "@podoba/react": "^0.0.42",
-        "@podoba/tailwind": "^0.0.42",
-        "@podoba/tokens": "^0.0.42",
+        "@podoba/react": "^0.0.50",
+        "@podoba/tailwind": "^0.0.50",
+        "@podoba/tokens": "^0.0.50",
         "react": "^19.0.0",
         "react-dom": "^19.0.0",
       },
@@ -70,7 +70,7 @@
     },
     "packages/analytics": {
       "name": "@pramen/analytics",
-      "version": "0.0.76",
+      "version": "0.0.84",
       "dependencies": {
         "@pramen/server": "workspace:*",
       },
@@ -87,18 +87,18 @@
     },
     "packages/auth": {
       "name": "@pramen/auth",
-      "version": "0.0.76",
+      "version": "0.0.84",
       "dependencies": {
         "@pramen/server": "workspace:*",
       },
     },
     "packages/client": {
       "name": "@pramen/client",
-      "version": "0.0.76",
+      "version": "0.0.84",
     },
     "packages/cms": {
       "name": "@pramen/cms",
-      "version": "0.0.76",
+      "version": "0.0.84",
       "bin": {
         "pramen-cms": "./dist/cli.js",
       },
@@ -117,7 +117,7 @@
     },
     "packages/cms-astro": {
       "name": "@pramen/cms-astro",
-      "version": "0.0.76",
+      "version": "0.0.84",
       "devDependencies": {
         "@pramen/cms-editor": "workspace:*",
       },
@@ -131,13 +131,13 @@
     },
     "packages/cms-editor": {
       "name": "@pramen/cms-editor",
-      "version": "0.0.76",
+      "version": "0.0.84",
       "dependencies": {
         "@buzola/router": "^0.0.17",
         "@phosphor-icons/react": "^2.1.10",
-        "@podoba/react": "^0.0.42",
-        "@podoba/tailwind": "^0.0.42",
-        "@podoba/tokens": "^0.0.42",
+        "@podoba/react": "^0.0.50",
+        "@podoba/tailwind": "^0.0.50",
+        "@podoba/tokens": "^0.0.50",
         "@tiptap/core": "^3.27.4",
         "@tiptap/extension-highlight": "^3.27.4",
         "@tiptap/extension-placeholder": "^3.27.4",
@@ -161,11 +161,11 @@
     },
     "packages/cms-theme-gs": {
       "name": "@pramen/cms-theme-gs",
-      "version": "0.0.76",
+      "version": "0.0.84",
       "devDependencies": {
-        "@podoba/react": "0.0.42",
-        "@podoba/tailwind": "0.0.42",
-        "@podoba/tokens": "0.0.42",
+        "@podoba/react": "0.0.50",
+        "@podoba/tailwind": "0.0.50",
+        "@podoba/tokens": "0.0.50",
         "@pramen/cms-editor": "workspace:*",
         "@types/react": "^19.0.0",
         "@types/react-dom": "^19.0.0",
@@ -173,14 +173,14 @@
         "react-dom": "^19.0.0",
       },
       "peerDependencies": {
-        "@podoba/react": ">=0.0.42",
+        "@podoba/react": ">=0.0.50",
         "@pramen/cms-editor": "workspace:*",
         "react": "^19.0.0",
       },
     },
     "packages/react": {
       "name": "@pramen/react",
-      "version": "0.0.76",
+      "version": "0.0.84",
       "dependencies": {
         "@pramen/client": "workspace:*",
       },
@@ -190,7 +190,7 @@
     },
     "packages/server": {
       "name": "@pramen/server",
-      "version": "0.0.76",
+      "version": "0.0.84",
       "bin": {
         "pramen": "./dist/cli.js",
       },
@@ -523,11 +523,11 @@
 
     "@phosphor-icons/react": ["@phosphor-icons/react@2.1.10", "", { "peerDependencies": { "react": ">= 16.8", "react-dom": ">= 16.8" } }, "sha512-vt8Tvq8GLjheAZZYa+YG/pW7HDbov8El/MANW8pOAz4eGxrwhnbfrQZq0Cp4q8zBEu8NIhHdnr+r8thnfRSNYA=="],
 
-    "@podoba/react": ["@podoba/react@0.0.42", "", { "dependencies": { "@podoba/tailwind": "^0.0.42", "@podoba/tokens": "^0.0.42", "@radix-ui/react-slot": "1.2.4", "class-variance-authority": "0.7.1", "clsx": "2.1.1", "react-aria-components": "1.18.0", "tailwind-merge": "3.6.0" }, "peerDependencies": { "@tiptap/extension-highlight": "^3.27.4", "@tiptap/extension-placeholder": "^3.27.4", "@tiptap/extension-task-item": "^3.27.4", "@tiptap/extension-task-list": "^3.27.4", "@tiptap/pm": "^3.27.4", "@tiptap/react": "^3.27.4", "@tiptap/starter-kit": "^3.27.4", "react": ">=19", "react-dom": ">=19" }, "optionalPeers": ["@tiptap/extension-highlight", "@tiptap/extension-placeholder", "@tiptap/extension-task-item", "@tiptap/extension-task-list", "@tiptap/pm", "@tiptap/react", "@tiptap/starter-kit"] }, "sha512-HKLa4CUwdZoNasHAQe39vmlmg/0VKKq3S75+UxnMCpI0n21+LiJTUtyq/7vqiz6vJ3EzfH3i+2LYECuXnh+BKg=="],
+    "@podoba/react": ["@podoba/react@0.0.50", "", { "dependencies": { "@podoba/tailwind": "^0.0.50", "@podoba/tokens": "^0.0.50", "@radix-ui/react-slot": "1.2.4", "class-variance-authority": "0.7.1", "clsx": "2.1.1", "react-aria-components": "1.18.0", "tailwind-merge": "3.6.0" }, "peerDependencies": { "@tiptap/extension-highlight": "^3.27.4", "@tiptap/extension-placeholder": "^3.27.4", "@tiptap/extension-task-item": "^3.27.4", "@tiptap/extension-task-list": "^3.27.4", "@tiptap/pm": "^3.27.4", "@tiptap/react": "^3.27.4", "@tiptap/starter-kit": "^3.27.4", "react": ">=19", "react-dom": ">=19" }, "optionalPeers": ["@tiptap/extension-highlight", "@tiptap/extension-placeholder", "@tiptap/extension-task-item", "@tiptap/extension-task-list", "@tiptap/pm", "@tiptap/react", "@tiptap/starter-kit"] }, "sha512-4/sDfcmKSShvdyqofbXDRu4E3ThNVAidPtq/mtOfnDS9bJKgMktrarIqnHxfFcus2r2K3IJvQCyA6ZwJ7rydmA=="],
 
-    "@podoba/tailwind": ["@podoba/tailwind@0.0.42", "", { "dependencies": { "@tailwindcss/typography": "0.5.20" }, "peerDependencies": { "tailwindcss": "^4.0.0" } }, "sha512-MXsgbvKM2Z8OYHD3i/z2V8RCj6/pd1kanU99uw4PrWEfwtXa3CXhQuRtRMm3y4ekEsuOjO4yup08BkqM5PujSw=="],
+    "@podoba/tailwind": ["@podoba/tailwind@0.0.50", "", { "dependencies": { "@tailwindcss/typography": "0.5.20" }, "peerDependencies": { "tailwindcss": "^4.0.0" } }, "sha512-zsHGC9PSRyUq3sCoHOQpZT2LqB86iodcvlqkW+8LfcPd/WyS4dvAspS5GS2oRCPjSXruGbN9N8xSe/GtEDMJfw=="],
 
-    "@podoba/tokens": ["@podoba/tokens@0.0.42", "", {}, "sha512-9FqmN4OTTSWcEwkV0BLGSKwyoz0gTOXTO4VB42oB0GAJAC4zCKxgJP9FJtshM6vwQXB2uJUQuRU07EPAtQqAcQ=="],
+    "@podoba/tokens": ["@podoba/tokens@0.0.50", "", {}, "sha512-VmgUbZiOv0FPScx0F7DZXbAvN5cJP4Y5xV7c4bPCT0u4nFE4qsQtLEasJEDZW6OwyoFNQau14Afq+yf6zijxEg=="],
 
     "@poppinss/colors": ["@poppinss/colors@4.1.6", "", { "dependencies": { "kleur": "^4.1.5" } }, "sha512-H9xkIdFswbS8n1d6vmRd8+c10t2Qe+rZITbbDHHkQixH5+2x1FDGmi/0K+WgWiqQFKPSlIYB7jlH6Kpfn6Fleg=="],
 

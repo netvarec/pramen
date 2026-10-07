@@ -15,7 +15,7 @@
 // server that returned only what changed would have to agree with the host about what is
 // currently on screen, and the two drift the first time a render depends on data that moved.
 
-import { Button, Heading } from "@podoba/react";
+import { Button, Heading, TableBody, TableCell, TableHead, TableHeaderCell, TableRoot, TableRow, TableScroll } from "@podoba/react";
 import { useCallback, useEffect, useState } from "react";
 import type { Api } from "./api";
 import { ChartBlockView } from "./chart";
@@ -233,30 +233,31 @@ function BlockView({ block, values, setValue, disabled, onFire }: { block: Admin
 
 function TableBlock({ block, values, setValue, disabled, onFire }: { block: Extract<AdminBlock, { type: "table" }>; disabled: boolean; onFire: (f: Fired) => void } & ValueBag) {
   if (block.rows.length === 0) return <p className="text-sm text-fg-subtle">{block.empty ?? getI18n().t("blockkit.tableEmpty")}</p>;
+  // podoba's table parts rather than `<Table columns data>`: the block has no sorting and no
+  // row press, so the stateful wrapper adds nothing, and the parts keep the cells plain
+  // children. `TableScroll` scrolls a wide table INSIDE itself; the page never scrolls
+  // sideways. Rows keyed by index: a block's rows carry no id.
   return (
-    // Wide tables scroll INSIDE their own container; the page must not scroll sideways.
-    <div className="overflow-x-auto rounded-lg border border-border bg-surface-card">
-      <table className="w-full border-collapse text-[13px]">
-        <thead>
+    <TableScroll>
+      <TableRoot>
+        <TableHead>
           <tr>
-            {block.columns.map((c) => (
-              <th key={c.key} className="border-b border-border px-3 py-2 text-left font-medium text-fg-subtle">{c.label}</th>
-            ))}
+            {block.columns.map((c) => <TableHeaderCell key={c.key}>{c.label}</TableHeaderCell>)}
           </tr>
-        </thead>
-        <tbody>
+        </TableHead>
+        <TableBody>
           {block.rows.map((row, i) => (
-            <tr key={i}>
+            <TableRow key={i}>
               {block.columns.map((c) => (
-                <td key={c.key} className="border-b border-border px-3 py-2 text-fg">
+                <TableCell key={c.key}>
                   <CellView value={row[c.key]} blockId={block.block_id} values={values} setValue={setValue} disabled={disabled} onFire={onFire} />
-                </td>
+                </TableCell>
               ))}
-            </tr>
+            </TableRow>
           ))}
-        </tbody>
-      </table>
-    </div>
+        </TableBody>
+      </TableRoot>
+    </TableScroll>
   );
 }
 

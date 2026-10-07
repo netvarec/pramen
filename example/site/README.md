@@ -66,7 +66,7 @@ PRAMEN_ADMIN_THEME=gs PRAMEN_ADMIN_LOCALE=cs bun run --cwd example/site dev # se
 
 `PRAMEN_ADMIN_THEME=gs` spreads the theme's `gsAdmin` (the topbar, no media search or filters)
 into `admin` and points `editorAssets` at the build. Without it the site serves the packaged
-editor as before. The site installs podoba 0.0.42 for this (the theme's generation); the packaged
+editor as before. The site installs podoba 0.0.50 for this (the theme's generation); the packaged
 editor keeps the podoba `@pramen/cms-editor` pins.
 
 ## Type checking

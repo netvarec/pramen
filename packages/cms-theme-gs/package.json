@@ -1,6 +1,6 @@
 {
   "name": "@pramen/cms-theme-gs",
-  "version": "0.0.83",
+  "version": "0.0.85",
   "description": "The Graphic Standard look for @pramen/cms-editor: slot components, nav hooks and a stylesheet, wired into buildEditor in one call.",
   "license": "MIT",
   "repository": {
@@ -33,14 +33,14 @@
     "access": "public"
   },
   "peerDependencies": {
-    "@podoba/react": ">=0.0.42",
+    "@podoba/react": ">=0.0.50",
     "@pramen/cms-editor": "workspace:*",
     "react": "^19.0.0"
   },
   "devDependencies": {
-    "@podoba/react": "0.0.42",
-    "@podoba/tailwind": "0.0.42",
-    "@podoba/tokens": "0.0.42",
+    "@podoba/react": "0.0.50",
+    "@podoba/tailwind": "0.0.50",
+    "@podoba/tokens": "0.0.50",
     "@pramen/cms-editor": "workspace:*",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",

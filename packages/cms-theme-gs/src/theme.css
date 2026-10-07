@@ -11,10 +11,8 @@
  *
  * What is NOT here, and why:
  *
- * - Tokens. GS's values are podoba's own from the podoba release after 0.0.42
- *   (graphic-standard/podoba#37); until that ships a host may layer its own overrides after
- *   `@podoba/tokens/variables.css`. A snapshot copied in here would be a second source that
- *   drifts, which is exactly what #37 removes.
+ * - Tokens. GS's values are podoba's own since 0.0.50 (graphic-standard/podoba#37), tracking
+ *   included. A snapshot copied in here would be a second source that drifts.
  * - Layout. Full-width content, 24px gutters and 48px under the topbar are the editor's own
  *   `--pramen-*` defaults (`@pramen/cms-editor/app.css`); the theme's headers read them.
  * - Fonts. GT America is a commercial face and this package is public, so no font file ships
@@ -38,14 +36,9 @@
 }
 
 /* The face GS sets on its whole app. `--font-sans` is podoba's token and already names GT
- * America first; the literal stack is for a host whose tokens do not.
- *
- * `letter-spacing: normal` because podoba 0.0.42's `--tracking-normal` is tuned for the NC
- * Fontina it bundles (+0.01em), while GT America is set at GS's tighter default.
- * TODO(podoba#37): the tracking scale follows the face there; drop this line once it ships. */
+ * America first; the literal stack is for a host whose tokens do not. */
 body {
   font-family: var(--font-sans, "GT America", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif);
-  letter-spacing: normal;
   scrollbar-gutter: stable;
 }
 
@@ -104,32 +97,10 @@ body {
   }
 }
 
-/* Keep the CTA in the header on narrow tablets; only phones (<640px) dock it to the bottom of
- * the screen. podoba 0.0.42 docks below 768px. Scoped to the theme's own headers, plus
- * `.gs-panel-hero`, which a host puts on a `BrandPageHeader` in its own panel to get the same.
- * TODO(podoba#37): `BrandPageHeader` docks below `sm` itself there; delete this block. */
-@media (min-width: 640px) and (max-width: 767px) {
-  :is(.gs-create-header, .gs-panel-hero, .gs-page-header > div) > .grid {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    column-gap: 20px;
-  }
-  :is(.gs-create-header, .gs-panel-hero, .gs-page-header > div) > .grid > .fixed {
-    position: static;
-    inset: auto;
-    grid-column: 2;
-    grid-row: 1 / -1;
-    height: 100%;
-    padding: 0;
-    z-index: auto;
-  }
-}
-
-/* Room at the bottom of a phone's page for the docked CTA, so the last row can scroll out from
- * under it. Measured against podoba 0.0.42's dock (a 99px pill plus the safe-area gap).
- * TODO(podoba#37): replace with `body:has([data-mobile-cta-dock]) { @apply mobile-cta-dock-inset; }`,
- * which pads by the dock's exact footprint and needs no list of headers. */
-@media (max-width: 639px) {
-  body:has(.gs-page-header button, .gs-panel-hero button, .gs-dashboard) {
-    padding-bottom: calc(100px + env(safe-area-inset-bottom));
-  }
+/* Room at the bottom of a phone's page for a docked CTA, so the last row can scroll out from
+ * under it. `BrandPageHeader` marks a docked CTA with `data-mobile-cta-dock`, so this covers
+ * the theme's headers and any a host renders in its own panel; the utility sizes the room by
+ * the dock's exact footprint and applies only while the CTA is actually docked. */
+body:has([data-mobile-cta-dock]) {
+  @apply mobile-cta-dock-inset;
 }

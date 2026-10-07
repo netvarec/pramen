@@ -11,16 +11,16 @@
 // type that exists here is one `FieldForm` can render: `FIELD_TYPES` below is the mirror
 // of the server's own list, which is what keeps that true.
 
-import { Button, Heading, Input, Textarea } from "@podoba/react";
+import { Button, Heading, Input, Table, type TableColumn, Textarea } from "@podoba/react";
 import { useEffect, useRef, useState } from "react";
 import { useUnsavedGuard } from "./app-context";
 import type { Api, BlockTypeInput, ContentTypeInput } from "./api";
 import { CONTROL, slugify } from "./fields";
-import { ROW, ROW_BUTTON, WRAP } from "./chrome";
+import { WRAP } from "./chrome";
 import { getI18n, useI18n, type TextKey } from "./i18n";
 import { rich } from "./i18n/rich";
 import { DetailHeader } from "./detail-header";
-import { LoadFailed } from "./list-state";
+import { LoadFailed, rowLabel } from "./list-state";
 import type { BlockType, ContentType, DefaultBlockDefinition, FieldDefinition, FieldType, RegionDefinition } from "./types";
 
 /** Every field type the CMS knows: the editor's mirror of `FIELD_TYPES` in @pramen/cms.
@@ -486,8 +486,8 @@ export function TypesOverview({ api, codeDefinedTypes, onOpenBlockType, onOpenCo
     return () => { live = false; };
   }, [api, onError, attempt]);
   const retry = () => setAttempt((n) => n + 1);
-  const i18n = useI18n();
-  const { t } = i18n;
+  const { t } = useI18n();
+  const code = (row: { managedBy?: string | null }) => (codeDefinedTypes && row.managedBy ? t("schema.codeBadge") : null);
 
   return (
     <div className={WRAP}>
@@ -509,15 +509,17 @@ export function TypesOverview({ api, codeDefinedTypes, onOpenBlockType, onOpenCo
         onRetry={retry}
         newLabel={t("schema.newBlockType")}
         onNew={() => onOpenBlockType("new")}
-        render={(bt) => (
-          <button type="button" className={`${ROW} ${ROW_BUTTON}`} key={bt.id} onClick={() => onOpenBlockType(bt.slug)}>
-            <span className="w-6 shrink-0 text-center">{bt.icon ?? ""}</span>
-            <span className="min-w-0 flex-1 truncate font-medium">{bt.name}</span>
-            {codeDefinedTypes && bt.managedBy ? <CodeBadge /> : null}
-            <span className="shrink-0 truncate text-fg-subtle">{bt.slug}</span>
-            <span className="shrink-0 text-caption text-fg-subtle">{i18n.tp("schema.fieldCount", (bt.fieldsSchema ?? []).length)}</span>
-          </button>
-        )}
+        onOpen={(bt) => onOpenBlockType(bt.slug)}
+        rowLabel={(bt) => rowLabel(bt.name, code(bt), bt.slug, `${t("table.fields")} ${(bt.fieldsSchema ?? []).length}`)}
+        columns={[
+          // Only when some type has an icon: an always-empty column is a stripe of nothing.
+          ...(blockTypes?.some((bt) => bt.icon)
+            ? [{ key: "icon", header: <span className="sr-only">{t("table.icon")}</span>, width: "3rem", align: "center" as const, render: (bt: BlockType) => bt.icon ?? "" }]
+            : []),
+          { key: "name", header: t("table.name"), render: (bt) => <TypeName name={bt.name} code={codeDefinedTypes && Boolean(bt.managedBy)} /> },
+          { key: "slug", header: t("table.slug"), render: (bt) => <span className="text-fg-subtle">{bt.slug}</span> },
+          { key: "fields", header: t("table.fields"), align: "right", render: (bt) => (bt.fieldsSchema ?? []).length },
+        ]}
       />
 
       <TypeSection
@@ -528,20 +530,29 @@ export function TypesOverview({ api, codeDefinedTypes, onOpenBlockType, onOpenCo
         onRetry={retry}
         newLabel={t("schema.newContentType")}
         onNew={() => onOpenContentType("new")}
-        render={(ct) => (
-          <button type="button" className={`${ROW} ${ROW_BUTTON}`} key={ct.id} onClick={() => onOpenContentType(ct.slug)}>
-            <span className="min-w-0 flex-1 truncate font-medium">{ct.name}</span>
-            {codeDefinedTypes && ct.managedBy ? <CodeBadge /> : null}
-            <span className="shrink-0 truncate text-fg-subtle">{ct.slug}</span>
-            <span className="shrink-0 text-caption text-fg-subtle">{i18n.tp("schema.regionCount", (ct.regions ?? []).length)}</span>
-          </button>
-        )}
+        onOpen={(ct) => onOpenContentType(ct.slug)}
+        rowLabel={(ct) => rowLabel(ct.name, code(ct), ct.slug, `${t("table.regions")} ${(ct.regions ?? []).length}`)}
+        columns={[
+          { key: "name", header: t("table.name"), render: (ct) => <TypeName name={ct.name} code={codeDefinedTypes && Boolean(ct.managedBy)} /> },
+          { key: "slug", header: t("table.slug"), render: (ct) => <span className="text-fg-subtle">{ct.slug}</span> },
+          { key: "regions", header: t("table.regions"), align: "right", render: (ct) => (ct.regions ?? []).length },
+        ]}
       />
     </div>
   );
 }
 
-function TypeSection<T>({ title, empty, rows, failed, onRetry, newLabel, onNew, render }: {
+/** A type's name, with the "code" badge when the row is owned by a code declaration. */
+function TypeName({ name, code }: { name: string; code: boolean }) {
+  return (
+    <span className="flex items-center gap-3">
+      <span className="font-medium">{name}</span>
+      {code ? <CodeBadge /> : null}
+    </span>
+  );
+}
+
+function TypeSection<T extends { id: string }>({ title, empty, rows, failed, onRetry, newLabel, onNew, onOpen, rowLabel, columns }: {
   title: string;
   empty: string;
   rows: T[] | null;
@@ -549,7 +560,9 @@ function TypeSection<T>({ title, empty, rows, failed, onRetry, newLabel, onNew, 
   onRetry: () => void;
   newLabel: string;
   onNew: () => void;
-  render: (row: T) => React.ReactNode;
+  onOpen: (row: T) => void;
+  rowLabel: (row: T) => string;
+  columns: TableColumn<T>[];
 }) {
   const { t } = useI18n();
   return (
@@ -565,7 +578,7 @@ function TypeSection<T>({ title, empty, rows, failed, onRetry, newLabel, onNew, 
       ) : rows.length === 0 ? (
         <p className="text-fg-subtle">{empty}</p>
       ) : (
-        <div className="flex flex-col gap-2">{rows.map(render)}</div>
+        <Table columns={columns} data={rows} getRowKey={(r) => r.id} getRowProps={(r) => ({ "aria-label": rowLabel(r) })} onRowClick={onOpen} aria-label={title} />
       )}
     </section>
   );
