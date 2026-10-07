@@ -17,9 +17,20 @@ export async function runAcl(base: string, wsUrl: string): Promise<void> {
   const anon = await post("listNotes", {});
   assert(anon.status === 403 && anon.body.ok === false, "anonymous read is denied (403)");
 
+  // A token that was SENT and does not verify is a 401, not a downgrade to anonymous (#76):
+  // the client must be able to tell "your session is over" from "you may not see this".
   const forged = await sign({ sub: "alice", roles: ["admin"] }, "wrong-secret");
   const forgedRes = await post("listNotes", {}, forged);
-  assert(forgedRes.status === 403, "forged token (wrong secret) is rejected");
+  assert(forgedRes.status === 401 && forgedRes.body.code === "unauthorized", "forged token (wrong secret) is 401 unauthorized");
+  const expired = await sign({ sub: "alice", roles: ["admin"], exp: Math.floor(Date.now() / 1000) - 60 });
+  const expiredRes = await post("listNotes", {}, expired);
+  assert(expiredRes.status === 401 && expiredRes.body.code === "unauthorized", "expired token is 401 unauthorized");
+  const malformedRes = await post("listNotes", {}, "xx.yy.zz");
+  assert(malformedRes.status === 401, "malformed token is 401");
+  // The /live upgrade carries the same token in its query string: a browser cannot read the
+  // status of a refused upgrade, so it is accepted and closed with 4401.
+  const deadLive = wsClient(`${wsUrl}?token=${encodeURIComponent(expired)}&tenant=main`, {});
+  assert((await deadLive.closed()) === 4401, "an expired token's /live upgrade is closed 4401");
 
   // --- create + write rules ---
   const adminNote = await post("createNote", { title: "by-admin", body: "secret" }, T.admin);

@@ -133,3 +133,69 @@ describe("live connection error surfaces (C4)", () => {
     client.close();
   }, 10_000);
 });
+
+describe("a refused token (#76)", () => {
+  test("a 401 drops the token, so the next call (a sign-in) goes out anonymous, and calls onUnauthorized", async () => {
+    const auth: (string | null)[] = [];
+    let first = true;
+    const fetchImpl: FetchLike = async (_url, init) => {
+      auth.push(new Headers(init?.headers).get("authorization"));
+      if (first) {
+        first = false;
+        return jsonResponse({ ok: false, error: "invalid or expired token", code: "unauthorized" }, { status: 401 });
+      }
+      return jsonResponse({ ok: true, result: 1 });
+    };
+    let refused = 0;
+    const client = createClient({ url: "https://x.example", token: "stale", fetchImpl, onUnauthorized: () => refused++ });
+    await expect(client.call("me" as never)).rejects.toMatchObject({ status: 401, code: "unauthorized" });
+    expect(refused).toBe(1);
+    await client.call("login" as never);
+    expect(auth).toEqual(["Bearer stale", null]);
+  });
+
+  test("a 403 is not a refused token", async () => {
+    const fetchImpl: FetchLike = async () => jsonResponse({ ok: false, error: "access denied", code: "forbidden" }, { status: 403 });
+    let refused = 0;
+    const client = createClient({ url: "https://x.example", token: "good", fetchImpl, onUnauthorized: () => refused++ });
+    await expect(client.call("x" as never)).rejects.toMatchObject({ status: 403 });
+    expect(refused).toBe(0);
+  });
+
+  test("a live socket closed 4401 stays down, reports unauthorized and calls onUnauthorized", async () => {
+    let opened = 0;
+    class RefusedWS {
+      static OPEN = 1;
+      readyState = 0;
+      private handlers: Record<string, ((e: WsEventLike) => void)[]> = {};
+      constructor() {
+        opened++;
+        queueMicrotask(() => this.emit("close", { code: 4401, reason: "invalid or expired token" }));
+      }
+      addEventListener(type: string, fn: (e: WsEventLike) => void) {
+        (this.handlers[type] ??= []).push(fn);
+      }
+      private emit(type: string, e: WsEventLike) {
+        for (const fn of this.handlers[type] ?? []) fn(e);
+      }
+      send() {}
+      close() {}
+    }
+    let refused = 0;
+    const client = createClient({
+      url: "https://x.example",
+      token: "stale",
+      fetchImpl: async () => jsonResponse({ ok: true, result: 1 }),
+      WebSocketImpl: RefusedWS as unknown as typeof WebSocket,
+      onUnauthorized: () => refused++,
+    });
+    const err = await new Promise<{ error: string; code: string }>((resolve) => {
+      client.subscribe("listNotes" as never, undefined, { onData: () => {}, onConnectionError: resolve });
+    });
+    expect(err.code).toBe("unauthorized");
+    expect(refused).toBe(1);
+    await new Promise((r) => setTimeout(r, 700)); // past the first reconnect backoff
+    expect(opened).toBe(1);
+    client.close();
+  });
+});

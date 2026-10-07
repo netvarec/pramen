@@ -42,6 +42,12 @@ export interface ClientOptions {
   /** Give up reconnecting the live socket after this many consecutive failed
    * attempts and surface a connection error to every subscriber (default 8). */
   maxReconnectAttempts?: number;
+  /** Called when the server refuses the token this client sent: expired, forged, signed with
+   * a rotated secret or key, or revoked (HTTP 401 `unauthorized`, or the live socket closed
+   * with 4401). The client has already dropped the token, so later calls go out anonymous
+   * (a sign-in call keeps working) and the live socket stays down until `setToken`. The one
+   * place to send the user back to sign-in, instead of one check per call and subscription. */
+  onUnauthorized?: () => void;
 }
 
 export interface SubHandlers<T> {
@@ -117,10 +123,20 @@ export function createClient<Api = Record<string, never>>(opts: ClientOptions): 
   let closed = false;
   // How long a connection must stay open before we trust it and reset the backoff.
   const STABLE_MS = 3000;
+  // The close code the server sends a socket whose token is unusable (mirrors HTTP 401).
+  const WS_CLOSE_UNAUTHORIZED = 4401;
+
+  /** The server refused `sent`. Drop it (unless the app has set another since) and tell the app. */
+  function tokenRefused(sent: string | undefined): void {
+    if (sent === undefined || token !== sent) return;
+    token = undefined;
+    opts.onUnauthorized?.();
+  }
 
   async function call(name: string, input?: unknown): Promise<unknown> {
     const headers: Record<string, string> = { "content-type": "application/json" };
-    if (token) headers.authorization = `Bearer ${token}`;
+    const sent = token;
+    if (sent) headers.authorization = `Bearer ${sent}`;
     if (opts.tenant) headers["x-pramen-tenant"] = opts.tenant;
     if (d1Bookmark) headers["x-pramen-d1-bookmark"] = d1Bookmark;
     const res = await doFetch(`${baseUrl}/rpc/${name}`, {
@@ -139,6 +155,7 @@ export function createClient<Api = Record<string, never>>(opts: ClientOptions): 
     // other 2xx body (e.g. a non-JSON help page parsed to `{}`, or `ok` absent) is an
     // error, so a call never silently resolves undefined.
     if (!res.ok || body.ok !== true) {
+      if (res.status === 401 && body.code === "unauthorized") tokenRefused(sent);
       throw new PramenError(body.error ?? `request failed (${res.status})`, body.code ?? "error", res.status);
     }
     return body.result;
@@ -167,6 +184,7 @@ export function createClient<Api = Record<string, never>>(opts: ClientOptions): 
       reportConnectionError("no WebSocket implementation available", "no_websocket");
       return;
     }
+    const sent = token;
     const socket = new WS(liveUrl());
     ws = socket;
     socket.addEventListener("open", () => {
@@ -194,11 +212,20 @@ export function createClient<Api = Record<string, never>>(opts: ClientOptions): 
       if (msg.type === "data") sub.onData(msg.result);
       else if (msg.type === "error") sub.onError?.({ error: msg.error ?? "error", code: msg.code ?? "error" });
     });
-    socket.addEventListener("close", () => {
-      if (ws === socket) ws = null;
+    socket.addEventListener("close", (e: CloseEvent) => {
+      const current = ws === socket;
+      if (current) ws = null;
       if (stableTimer) {
         clearTimeout(stableTimer);
         stableTimer = null;
+      }
+      // The token was refused. Reconnecting would either be refused again or, once the token
+      // is dropped, carry on as anonymous, the silent downgrade 4401 exists to prevent. Stay
+      // down until `setToken` (which reconnects) and say why.
+      if (current && e?.code === WS_CLOSE_UNAUTHORIZED) {
+        tokenRefused(sent);
+        reportConnectionError(e.reason || "invalid or expired token", "unauthorized");
+        return;
       }
       scheduleReconnect();
     });
