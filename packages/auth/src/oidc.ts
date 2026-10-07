@@ -42,6 +42,7 @@ import type { PublicRoute, RouteContext } from "@pramen/server/worker";
 // The package's OWN HS256 signer. `@pramen/server`'s `signToken` mints the opaque
 // file/preview token, which the request verifier does not accept as a session.
 import { signToken } from "./index.js";
+import { tableClaim, usersTable } from "./users-table.js";
 
 /** An OpenID Provider's discovery document: the fields this flow uses. */
 interface Discovery {
@@ -289,7 +290,8 @@ const safeErrorCode = (raw: string): string => (/^[a-z_]{1,64}$/.test(raw) ? raw
  */
 export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
   const scopes = opts.scopes ?? ["openid", "email", "profile"];
-  const table = opts.table ?? "auth_users";
+  const users = usersTable(opts.table);
+  const table = users.name;
   const defaultRoles = opts.defaultRoles ?? ["user"];
   const accountKey = opts.accountKey ?? "email";
   const startPath = opts.startPath ?? "/auth/oidc/start";
@@ -510,7 +512,7 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
           console.error("pramen/auth: OIDC callback cannot mint a session, because AUTH_SECRET is not configured");
           return fail(500, "Sign-in could not be completed.", "server_error");
         }
-        const token = await signToken({ sub: username, roles: upserted.result.roles ?? [] }, secret, { ttlSeconds: sessionTtl });
+        const token = await signToken({ sub: username, roles: upserted.result.roles ?? [], ...tableClaim(users) }, secret, { ttlSeconds: sessionTtl });
         // With `endSession`, the ID token rides along so the browser can hand it back to the
         // logout route. Same fragment, so it stays out of logs and `Referer` like the session.
         return redirect(`token=${encodeURIComponent(token)}${opts.endSession ? `&id_token=${encodeURIComponent(tokens.id_token)}` : ""}`);
@@ -618,14 +620,14 @@ export const oidcHandlers: HandlerMap = {
       // `undefined` from a caller that predates the profile (it is optional in the input) is
       // treated as "nothing to say", which on this path means clearing it, the same as `null`.
       const profile = input.profile ? JSON.stringify(input.profile) : null;
-      const rows = (await ctx.db.exec(`SELECT username, roles, active FROM ${quoteIdent(input.table)} WHERE username = ? LIMIT 1`, input.username)) as Row[];
+      const rows = (await ctx.db.exec(`SELECT username, roles, active FROM ${usersTable(input.table).sql} WHERE username = ? LIMIT 1`, input.username)) as Row[];
       const existing = rows[0];
       if (!existing) {
         // First login. `passwordHash` is empty: the column is NOT NULL in `authSchema` and
         // an empty hash never verifies, which is exactly how a magic-link user is created.
         const roles = input.roles ?? input.defaultRoles;
         await ctx.db.exec(
-          `INSERT INTO ${quoteIdent(input.table)} (username, passwordHash, roles, email, emailVerified, active, createdAt, profile) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO ${usersTable(input.table).sql} (username, passwordHash, roles, email, emailVerified, active, createdAt, profile) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
           input.username,
           "",
           JSON.stringify(roles),
@@ -646,11 +648,11 @@ export const oidcHandlers: HandlerMap = {
       const roles = input.roles ?? stored;
       const active = existing.active !== 0 && existing.active !== false;
       if (input.roles && JSON.stringify(roles) !== JSON.stringify(stored)) {
-        await ctx.db.exec(`UPDATE ${quoteIdent(input.table)} SET roles = ? WHERE username = ?`, JSON.stringify(roles), input.username);
+        await ctx.db.exec(`UPDATE ${usersTable(input.table).sql} SET roles = ? WHERE username = ?`, JSON.stringify(roles), input.username);
       }
       // The provider is authoritative for the profile too: every sign-in rewrites it, so a
       // changed name or picture shows up at the next sign-in and a removed one disappears.
-      await ctx.db.exec(`UPDATE ${quoteIdent(input.table)} SET profile = ? WHERE username = ?`, profile, input.username);
+      await ctx.db.exec(`UPDATE ${usersTable(input.table).sql} SET profile = ? WHERE username = ?`, profile, input.username);
       return { roles, active };
     },
     // Gated on a role NO issued token can carry, because `callPrivileged` does not bypass
@@ -665,13 +667,6 @@ export const oidcHandlers: HandlerMap = {
     { auth: [OIDC_SYSTEM_ROLE] },
   ),
 };
-
-/** The table name comes from the app's own options, never from a request, but it is
- * interpolated into SQL, so it is quoted and constrained rather than trusted by convention. */
-function quoteIdent(table: string): string {
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(table)) throw new Error(`@pramen/auth: invalid table name ${JSON.stringify(table)}`);
-  return `"${table}"`;
-}
 
 function parseRoles(v: unknown): string[] {
   if (Array.isArray(v)) return v.map(String);

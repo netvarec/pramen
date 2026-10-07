@@ -206,6 +206,25 @@ profile rather than blocking the sign-in. The editor shows `profile.name` and
 profile is visible to the user and to admins, so keep tokens and secrets out of it. The column
 is additive: an existing `auth_users` table gains it on the next migrate.
 
+When using a custom users table, pass the same `table` to **every** auth factory you use:
+`createAuthHandlers`, `createMagicLinkAuth`, `createOidcAuth`, `createUserHandlers`,
+`createPasswordReset`, `createEmailVerification` and `authPolicies`. A factory left on the
+default reads `auth_users`, finds nobody, and fails quietly: a password reset answers
+`{ ok: true }` and sends nothing. Mind `refreshSession` in particular: both
+`createAuthHandlers` and `createMagicLinkAuth` export one, and whichever you spread last
+serves every caller. The table must have the `authSchema.auth_users` shape, including the
+`profile` column. The default admin read policy includes `profile`; a custom
+`adminReadFields` list must include it explicitly to expose it through `listUsers`.
+
+A session minted from a custom table carries a `usersTable` claim, and `refreshSession`, `me`
+and the self-service handlers (`changeEmail`, `changePassword`, `requestEmailVerification`)
+honor a session only from their own table (no claim means `auth_users`). The JWT `sub`
+is a bare username, so without it a `members` handler would reissue `auth_users`' "ada" a
+token with `members`' "ada"'s roles. The KV denylist is still keyed by username alone:
+deactivating or deleting "ada" in one table revokes every "ada" session, whichever table it
+came from. That errs toward revoking too much, but if you run two tables, keep their
+usernames disjoint.
+
 **The flow sets one cookie per sign-in attempt**, `pramen_oidc_<hash of the state>`: HttpOnly,
 SameSite=Lax, scoped to the callback path, cleared when the attempt ends. Per attempt, not
 per browser, because silent sign-in runs in every tab and overlapping attempts must not
