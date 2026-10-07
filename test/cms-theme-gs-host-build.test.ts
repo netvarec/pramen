@@ -26,7 +26,7 @@ afterAll(async () => {
 
 /** A host's Tailwind entry, the one the README tells a host to write. Under the theme's own
  * `node_modules` so its bare imports resolve the way they do from a host project that has the
- * theme and podoba 0.0.49 installed. */
+ * theme and podoba 0.0.50 installed. */
 async function hostStyles(dir: string): Promise<string> {
   const file = join(dir, "editor.css");
   await writeFile(
@@ -92,6 +92,10 @@ describe("the GS theme in a host build", () => {
     // generated only if Tailwind scanned it through the theme's own `@source`.
     expect(css).toContain("width: min(90vw, 75rem)");
     expect(css).toContain(".min-h-\\[240px\\]");
+    // The dock's room comes from podoba's `mobile-cta-dock-inset`, which `@apply` resolves only
+    // against the host's `@podoba/tailwind`: its spacer is in the output, the measured 100px is not.
+    expect(css).toMatch(/body:has\(\[data-mobile-cta-dock\]\)::after\s*\{[^}]*height: calc\(var\(--control-height-mobile-cta\)/);
+    expect(css).not.toContain("100px + env(safe-area-inset-bottom)");
     // And no font file: GT America is the host's to serve.
     expect(css).not.toContain("data:font/woff2;base64,");
     expect(css).not.toMatch(/@font-face\s*{[^}]*GT America/);

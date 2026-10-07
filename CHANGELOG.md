@@ -603,6 +603,14 @@ there are no backward-compatibility guarantees yet.
   strings `schema.fieldCount`, `schema.regionCount`, `menus.itemCount` and `widgets.count` are
   gone, since a count now sits under its column's header. `ROW_BUTTON` is removed from
   `chrome.ts`. All packages require podoba 0.0.49.
+- **podoba 0.0.50, and the GS theme drops its podoba#37 workarounds (`@pramen/cms-editor`,
+  `@pramen/admin`, `@pramen/cms-theme-gs`).** 0.0.50 ships GS's token values (tracking
+  included), docks a `BrandPageHeader` CTA only below 640px, and marks a docked CTA with
+  `data-mobile-cta-dock`. So `theme.css` no longer resets `letter-spacing` on `body`, no longer
+  forces the CTA back into the header between 640px and 767px, and reserves the dock's room with
+  podoba's `mobile-cta-dock-inset` on any page that has a docked CTA, instead of a measured 100px
+  on a list of known headers. The `gs-panel-hero` class is gone: a host's own `BrandPageHeader`
+  gets the same behaviour with no class. The theme's peer range is `>=0.0.50`.
 
 - **OIDC binder cookie is per attempt (`@pramen/auth`).** `pramen_oidc` became
   `pramen_oidc_<hash of the state>`, so overlapping sign-ins in two tabs no longer overwrite

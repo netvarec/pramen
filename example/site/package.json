@@ -19,9 +19,9 @@
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.10",
-    "@podoba/react": "0.0.49",
-    "@podoba/tailwind": "0.0.49",
-    "@podoba/tokens": "0.0.49",
+    "@podoba/react": "0.0.50",
+    "@podoba/tailwind": "0.0.50",
+    "@podoba/tokens": "0.0.50",
     "@pramen/cms-theme-gs": "workspace:*",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
