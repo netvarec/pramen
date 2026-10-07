@@ -113,7 +113,7 @@ describe("me", () => {
     const driver = bunSqliteDriver(new Database(":memory:"));
     await migrate(driver, schema);
     const db = new Db(driver, { acl: compileAcl([]), identity: null, schema, system: true }, schema);
-    const ctx = { db, env: { AUTH_SECRET: "test-secret-for-custom-table" }, identity: { userId: "ada", roles: ["user"] } } as never;
+    const ctx = { db, env: { AUTH_SECRET: "test-secret-for-custom-table" }, identity: { userId: "ada", roles: ["user"], usersTable: "members" } } as never;
     const handlers = createAuthHandlers({ table: "members" });
     await handlers.signup.run(ctx, { username: "ada", password: "password123", email: "ada@acme.com" });
     await driver.exec("INSERT INTO auth_users (username, profile) VALUES (?, ?)", ["ada", JSON.stringify({ name: "Wrong Ada" })]);

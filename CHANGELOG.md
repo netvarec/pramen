@@ -591,6 +591,20 @@ there are no backward-compatibility guarantees yet.
 
 ### Changed
 
+- **Every auth factory takes the users table, and sessions carry it (`@pramen/auth`).**
+  `createAuthHandlers` and `createMagicLinkAuth` gain a `table` option, so signup, login, `me`,
+  `refreshSession`, `inviteUser` and `loginWithMagicLink` no longer hard-code `auth_users`.
+  Every factory now validates and quotes the name the same way, so a table named after an SQL
+  keyword works in `listUsers`, `changePassword` and the reset and verification flows too. A
+  session minted from a custom table carries a `usersTable` claim, and `refreshSession` and
+  `me` honor only their own table's sessions. Without that, a token from one table could be
+  refreshed into another table's roles for the same username. Sessions from `auth_users`
+  carry no claim and are unchanged.
+- **Admins see OIDC profiles in `listUsers` (`@pramen/auth`).** `profile` joined the default
+  `adminReadFields`, so every admin now receives each user's stored profile (by default the
+  IdP's `name` and `picture`, or whatever a custom `mapProfile` stores). A deployment whose
+  `mapProfile` keeps claims admins should not see must pass its own `adminReadFields` to
+  `authPolicies`.
 - **OIDC binder cookie is per attempt (`@pramen/auth`).** `pramen_oidc` became
   `pramen_oidc_<hash of the state>`, so overlapping sign-ins in two tabs no longer overwrite
   each other's binder. A login in flight across the deploy has to be restarted.

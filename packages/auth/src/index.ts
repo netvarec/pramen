@@ -18,6 +18,7 @@
 
 import { Entity, mutation, query, defaultTo, unique, hidden, policy, allow, $identity, BadRequest, Unauthorized, denySession, allowSession, isSystemRole } from "@pramen/server";
 import type { AppTaskMap, CellValue, HandlerContext, HandlerMap, JsonObject, JsonValue, Policy, Row } from "@pramen/server";
+import { sessionIsFrom, tableClaim, usersTable, type UsersTable } from "./users-table.js";
 
 /** What an auth factory contributes to an app: RPC handlers plus the task handlers
  * that deliver their emails. */
@@ -290,18 +291,20 @@ function parseCreds(raw: JsonValue): Credentials {
  * Shared by password users (`authHandlers`) and magic-link users (`createMagicLinkAuth`): both
  * store the row in the same authSchema-shaped table keyed on the immutable `username`. `ttlOf`
  * supplies each factory's own configured TTL. */
-function buildRefreshSession(ttlOf: (ctx: HandlerContext) => number, table = "auth_users") {
+function buildRefreshSession(ttlOf: (ctx: HandlerContext) => number, table: UsersTable) {
   return mutation(
     async (ctx) => {
       const userId = requireUserId(ctx);
-      const rows = await ctx.db.exec(`SELECT username, roles, active FROM ${table} WHERE username = ? LIMIT 1`, userId);
+      // A session from another users table names a different person who shares the username.
+      if (!sessionIsFrom(ctx, table)) throw new Unauthorized("session is no longer valid");
+      const rows = await ctx.db.exec(`SELECT username, roles, active FROM ${table.sql} WHERE username = ? LIMIT 1`, userId);
       const u = rows[0];
       // Gone or deactivated ⇒ no fresh token (mirrors login). The Worker denylist already
       // fails a deactivated user's outstanding token closed; this ensures refresh can't
       // launder a revoked session into a new, longer-lived one either.
       if (!u || !isActive(u.active)) throw new Unauthorized("session is no longer valid");
       const roles = JSON.parse(String(u.roles)) as string[];
-      const token = await signToken({ sub: String(u.username), roles }, secretOf(ctx), { ttlSeconds: ttlOf(ctx) });
+      const token = await signToken({ sub: String(u.username), roles, ...tableClaim(table) }, secretOf(ctx), { ttlSeconds: ttlOf(ctx) });
       return { token, user: { username: String(u.username), roles } };
     },
     { auth: "authenticated" },
@@ -334,9 +337,10 @@ export interface AuthHandlerOptions {
  * identities do not live in `auth_users` (an external JWT, a table without the column yet)
  * must still get its identity back, just without a profile.
  */
-async function readProfile(ctx: HandlerContext, username: string, table: string): Promise<JsonObject | null> {
+async function readProfile(ctx: HandlerContext, username: string, table: UsersTable): Promise<JsonObject | null> {
+  if (!sessionIsFrom(ctx, table)) return null;
   try {
-    const rows = (await ctx.db.exec(`SELECT profile FROM ${table} WHERE username = ? LIMIT 1`, username)) as Row[];
+    const rows = (await ctx.db.exec(`SELECT profile FROM ${table.sql} WHERE username = ? LIMIT 1`, username)) as Row[];
     return parseProfile(rows[0]?.profile);
   } catch {
     return null;
@@ -360,13 +364,13 @@ export function parseProfile(cell: unknown): JsonObject | null {
 /** Build signup / login / me / refreshSession. Roles are assigned server-side (default
  * `["user"]`): the client never picks its own roles. Spread into your handler map. */
 export function createAuthHandlers(opts: AuthHandlerOptions = {}) {
-  const table = `"${assertIdentifier(opts.table ?? "auth_users")}"`;
+  const table = usersTable(opts.table);
   const loginBy = opts.loginBy ?? "username";
 
   /** Resolve the submitted identifier to a row, per `loginBy`. Returns undefined when
    * nothing matches; the caller still runs a dummy verify so the timing is flat. */
   async function findLoginRow(ctx: HandlerContext, identifier: string): Promise<Row | undefined> {
-    const cols = `SELECT username, passwordHash, roles, active FROM ${table}`;
+    const cols = `SELECT username, passwordHash, roles, active FROM ${table.sql}`;
     if (loginBy !== "email") {
       const byName = await ctx.db.exec(`${cols} WHERE username = ? LIMIT 1`, identifier);
       if (byName[0]) return byName[0];
@@ -392,7 +396,7 @@ export function createAuthHandlers(opts: AuthHandlerOptions = {}) {
     // which keys on the email and always returns the same `{ ok: true }`.
     signup: mutation(
       async (ctx, input: { username: string; password: string; email?: string }) => {
-        const existing = await ctx.db.exec(`SELECT 1 FROM ${table} WHERE username = ? LIMIT 1`, input.username);
+        const existing = await ctx.db.exec(`SELECT 1 FROM ${table.sql} WHERE username = ? LIMIT 1`, input.username);
         if (existing.length > 0) {
           // Equalize timing with the available path (which hashes below) so the taken vs.
           // available decision isn't a fast timing oracle on top of the response-body one.
@@ -402,7 +406,7 @@ export function createAuthHandlers(opts: AuthHandlerOptions = {}) {
         // A supplied email must be free (the column is unique). Same clean-400 shape as
         // changeEmail rather than surfacing the DB constraint as a 500.
         if (input.email) {
-          const emailTaken = await ctx.db.exec(`SELECT 1 FROM ${table} WHERE email = ? LIMIT 1`, input.email);
+          const emailTaken = await ctx.db.exec(`SELECT 1 FROM ${table.sql} WHERE email = ? LIMIT 1`, input.email);
           if (emailTaken.length > 0) throw new BadRequest("email already in use");
         }
         const roles = DEFAULT_ROLES;
@@ -411,14 +415,14 @@ export function createAuthHandlers(opts: AuthHandlerOptions = {}) {
         // createEmailVerification (requestEmailVerification runs right after signup, when the
         // client already holds the returned session token).
         await ctx.db.exec(
-          `INSERT INTO ${table} (username, passwordHash, roles, email, createdAt) VALUES (?, ?, ?, ?, ?)`,
+          `INSERT INTO ${table.sql} (username, passwordHash, roles, email, createdAt) VALUES (?, ?, ?, ?, ?)`,
           input.username,
           passwordHash,
           JSON.stringify(roles),
           input.email ?? null,
           Date.now(),
         );
-        const token = await signToken({ sub: input.username, roles }, secretOf(ctx), { ttlSeconds: sessionTtlOf(ctx) });
+        const token = await signToken({ sub: input.username, roles, ...tableClaim(table) }, secretOf(ctx), { ttlSeconds: sessionTtlOf(ctx) });
         return { token, user: { username: input.username, roles, email: input.email ?? null } };
       },
       { input: parseCreds },
@@ -448,7 +452,7 @@ export function createAuthHandlers(opts: AuthHandlerOptions = {}) {
         if (isForeignHash(String(u.passwordHash))) {
           try {
             await ctx.db.exec(
-              `UPDATE ${table} SET passwordHash = ? WHERE username = ?`,
+              `UPDATE ${table.sql} SET passwordHash = ? WHERE username = ?`,
               await hashPassword(input.password),
               String(u.username),
             );
@@ -457,7 +461,7 @@ export function createAuthHandlers(opts: AuthHandlerOptions = {}) {
           }
         }
         const roles = JSON.parse(String(u.roles)) as string[];
-        const token = await signToken({ sub: String(u.username), roles }, secretOf(ctx), { ttlSeconds: sessionTtlOf(ctx) });
+        const token = await signToken({ sub: String(u.username), roles, ...tableClaim(table) }, secretOf(ctx), { ttlSeconds: sessionTtlOf(ctx) });
         return { token, user: { username: String(u.username), roles } };
       },
       { input: parseCreds },
@@ -632,6 +636,9 @@ export interface MagicLinkOptions {
   sessionTtlSeconds?: number;
   /** Roles assigned when a magic-link login first creates the user. Default `["user"]`. */
   defaultRoles?: string[];
+  /** Users table, default `auth_users`. Pass the same `table` as `createAuthHandlers`: both
+   * export a `refreshSession`, and whichever is spread last serves every caller. */
+  table?: string;
 }
 
 /** Build the `requestMagicLink` / `loginWithMagicLink` handler pair, plus the
@@ -657,6 +664,7 @@ export function createMagicLinkAuth(opts: MagicLinkOptions): AuthModule {
   const linkTtlMs = (opts.linkTtlSeconds ?? 900) * 1000;
   const sessionTtl = opts.sessionTtlSeconds ?? TOKEN_TTL_SECONDS;
   const defaultRoles = opts.defaultRoles ?? DEFAULT_ROLES;
+  const table = usersTable(opts.table);
 
   /** Revoke every link for `email` (only the latest request works), record the new
    * request as pending and enqueue its send. The task mints the token (see above). */
@@ -676,10 +684,11 @@ export function createMagicLinkAuth(opts: MagicLinkOptions): AuthModule {
   }
 
   const handlers: HandlerMap = {
-    // Silent token refresh for magic-link users (same table, keyed on username). Reissues
-    // at this factory's configured session TTL. Shared implementation with authHandlers:
-    // when both are spread into one app, either definition serves either user.
-    refreshSession: buildRefreshSession(() => sessionTtl),
+    // Silent token refresh for magic-link users (keyed on username). Reissues at this
+    // factory's configured session TTL. Shared implementation with authHandlers: when both
+    // are spread into one app, the one spread last serves every caller, which is why both
+    // take the same `table`.
+    refreshSession: buildRefreshSession(() => sessionTtl, table),
 
     /** Admin-only: create a passwordless user with the given roles (defaults if omitted)
      * and email them a fresh magic link. Idempotent: inviting an existing user just
@@ -696,12 +705,12 @@ export function createMagicLinkAuth(opts: MagicLinkOptions): AuthModule {
         const now = Date.now();
         // Existence check on username (== email, per magic-link convention); a re-invite
         // MUST NOT overwrite roles; that's setUserRoles's job.
-        const existing = await ctx.db.exec("SELECT username FROM auth_users WHERE username = ? LIMIT 1", email);
+        const existing = await ctx.db.exec(`SELECT username FROM ${table.sql} WHERE username = ? LIMIT 1`, email);
         if (existing.length === 0) {
           // Same shape as loginWithMagicLink's find-or-create path: username-only, no
           // `email` column set (it stays a pure contact attribute, set via changeEmail).
           await ctx.db.exec(
-            "INSERT INTO auth_users (username, passwordHash, roles, active, createdAt) VALUES (?, ?, ?, ?, ?)",
+            `INSERT INTO ${table.sql} (username, passwordHash, roles, active, createdAt) VALUES (?, ?, ?, ?, ?)`,
             email,
             "",
             JSON.stringify(roles),
@@ -745,7 +754,7 @@ export function createMagicLinkAuth(opts: MagicLinkOptions): AuthModule {
         // both matches existing users and avoids resolving login by a mutable, unverified
         // field (which would let a changeEmail squat another address, and would miss
         // pre-`email`-column users on upgrade, colliding on the username PK).
-        const existing = await ctx.db.exec("SELECT roles, active FROM auth_users WHERE username = ? LIMIT 1", email);
+        const existing = await ctx.db.exec(`SELECT roles, active FROM ${table.sql} WHERE username = ? LIMIT 1`, email);
         let roles: string[];
         if (existing.length > 0) {
           if (!isActive(existing[0].active)) throw new Unauthorized("account is deactivated");
@@ -755,14 +764,14 @@ export function createMagicLinkAuth(opts: MagicLinkOptions): AuthModule {
           // No email column set: it stays a pure contact attribute (set via changeEmail),
           // so a new passwordless user can never collide with a password user's contact email.
           await ctx.db.exec(
-            "INSERT INTO auth_users (username, passwordHash, roles, createdAt) VALUES (?, ?, ?, ?)",
+            `INSERT INTO ${table.sql} (username, passwordHash, roles, createdAt) VALUES (?, ?, ?, ?)`,
             email,
             "",
             JSON.stringify(roles),
             Date.now(),
           );
         }
-        const token = await signToken({ sub: email, roles }, secretOf(ctx), { ttlSeconds: sessionTtl });
+        const token = await signToken({ sub: email, roles, ...tableClaim(table) }, secretOf(ctx), { ttlSeconds: sessionTtl });
         return { token, user: { username: email, roles } };
       },
       { input: parseLinkToken },
@@ -828,13 +837,6 @@ interface UsersDb {
 }
 const usersDb = (ctx: HandlerContext): UsersDb => ctx.db as UsersDb;
 
-// The users table must be a valid SQL identifier (it's interpolated into the raw exec
-// strings below). It's app config, never request input, but guard it anyway.
-function assertIdentifier(table: string): string {
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(table)) throw new Error(`@pramen/auth: invalid table name ${JSON.stringify(table)}`);
-  return table;
-}
-
 /** Build admin + self-service handlers over a users table (default `auth_users`).
  * Pass `table` to operate over your OWN authSchema-shaped table (e.g. one with an
  * extra `tenants` column) without renaming it: the handlers manage username/roles/
@@ -843,7 +845,8 @@ function assertIdentifier(table: string): string {
  * have a `username` primary key and (for changeEmail/changePassword) `email`/
  * `passwordHash` columns. */
 export function createUserHandlers(opts: { table?: string } = {}) {
-  const table = assertIdentifier(opts.table ?? "auth_users");
+  const users = usersTable(opts.table);
+  const table = users.name;
   return {
     /** Admin: list users (ACL projects out passwordHash). A non-admin caller granted
      * only the self policy sees just their own row; ungranted callers get a 403. */
@@ -910,7 +913,7 @@ export function createUserHandlers(opts: { table?: string } = {}) {
     changeEmail: mutation(async (ctx, input: { email: string }) => {
       const userId = requireUserId(ctx);
       const { email } = parseEmail(input); // validates + normalizes; 400 on a bad address
-      const taken = await ctx.db.exec(`SELECT 1 FROM ${table} WHERE email = ? AND username != ? LIMIT 1`, email, userId);
+      const taken = await ctx.db.exec(`SELECT 1 FROM ${users.sql} WHERE email = ? AND username != ? LIMIT 1`, email, userId);
       if (taken.length > 0) throw new BadRequest("email already in use");
       const updated = await usersDb(ctx).update(table, userId, { email });
       if (!updated) throw new Unauthorized("authentication required");
@@ -919,7 +922,7 @@ export function createUserHandlers(opts: { table?: string } = {}) {
       // verified identity, and it only ever CLEARS the flag (routing it through the self
       // update policy would instead let a user set their own verified state). Any pending
       // verify token for the old address is now dead (verifyEmail's current-email guard).
-      await ctx.db.exec(`UPDATE ${table} SET emailVerified = NULL WHERE username = ?`, userId);
+      await ctx.db.exec(`UPDATE ${users.sql} SET emailVerified = NULL WHERE username = ?`, userId);
       return { ...updated, emailVerified: null };
     }),
 
@@ -960,7 +963,7 @@ export function createUserHandlers(opts: { table?: string } = {}) {
       const current = typeof input?.currentPassword === "string" ? input.currentPassword : "";
       const next = typeof input?.newPassword === "string" ? input.newPassword : "";
       if (next.length < 8) throw new BadRequest("newPassword must be at least 8 characters");
-      const rows = await ctx.db.exec(`SELECT passwordHash FROM ${table} WHERE username = ? LIMIT 1`, userId);
+      const rows = await ctx.db.exec(`SELECT passwordHash FROM ${users.sql} WHERE username = ? LIMIT 1`, userId);
       // No row at all: a token for an account that has since been deleted. Previously this
       // fell into the same `stored === ""` branch as a passwordless user and was rejected as
       // a wrong password, harmless then, but once an empty slot is fillable it would make
@@ -971,7 +974,7 @@ export function createUserHandlers(opts: { table?: string } = {}) {
       if (!firstPassword && !(await verifyPassword(current, stored))) {
         throw new Unauthorized("current password is incorrect");
       }
-      await ctx.db.exec(`UPDATE ${table} SET passwordHash = ? WHERE username = ?`, await hashPassword(next), userId);
+      await ctx.db.exec(`UPDATE ${users.sql} SET passwordHash = ? WHERE username = ?`, await hashPassword(next), userId);
       return { ok: true, firstPassword };
     }),
   };
@@ -1009,7 +1012,7 @@ export function authPolicies(opts: {
   selfReadFields?: string[];
   selfWriteFields?: string[];
 } = {}): { admin: Policy[]; self: Policy[] } {
-  const table = opts.table ?? "auth_users";
+  const table = usersTable(opts.table).name;
   const idPath = opts.identityPath ?? "userId";
   const p = opts.prefix ?? "auth";
   const adminRead = opts.adminReadFields ?? ADMIN_READ_FIELDS;
@@ -1130,7 +1133,7 @@ export interface PasswordResetOptions {
  * and sets the new password. Spread `emailTokenSchema` into your schema and `.tasks` into
  * your task map. */
 export function createPasswordReset(opts: PasswordResetOptions): AuthModule {
-  const table = assertIdentifier(opts.table ?? "auth_users");
+  const table = usersTable(opts.table).sql;
   const linkTtlMs = (opts.linkTtlSeconds ?? 3600) * 1000;
 
   const handlers: HandlerMap = {
@@ -1208,7 +1211,7 @@ export interface EmailVerificationOptions {
  * later `changeEmail` invalidates it (verifyEmail rejects a token whose address no longer
  * matches). Spread `emailTokenSchema` into your schema and `.tasks` into your task map. */
 export function createEmailVerification(opts: EmailVerificationOptions): AuthModule {
-  const table = assertIdentifier(opts.table ?? "auth_users");
+  const table = usersTable(opts.table).sql;
   const linkTtlMs = (opts.linkTtlSeconds ?? 86_400) * 1000;
 
   const handlers: HandlerMap = {
