@@ -6,9 +6,15 @@ summary: JWT verification (HS256 or RS256/JWKS), the optional @pramen/auth login
 
 The Worker verifies a **bearer JWT** (WebCrypto), checks `exp`/`nbf`, and maps
 claims to an `Identity`: `sub` → `userId`, `roles`/`role` → roles, and any custom
-claims pass through. A forged or unsigned request gets no identity (and is denied by
-the deny-by-default ACL). The trusted identity is forwarded to the DO, which never
-re-derives it.
+claims pass through. A request with **no** bearer token is anonymous. A request whose
+token does not verify (expired, forged, malformed, signed with a rotated secret or key)
+is answered `401 {"ok":false,"code":"unauthorized","error":"invalid or expired token"}`
+and never runs: it is *not* served as anonymous, which would answer "your session is
+over" with a `403` that reads like "you may not see this". A `/live` upgrade with such a
+token is accepted and closed at once with code `4401`, because a browser cannot read the
+status of a refused upgrade. `@pramen/client` turns both into one `onUnauthorized`
+callback (it drops the token first, so a sign-in call still goes through). The trusted
+identity is forwarded to the DO, which never re-derives it.
 
 The core is **verify-only**: bring your own identity provider (any HS256/JWKS
 issuer). When you don't want a third-party IdP, the optional **`@pramen/auth`**

@@ -4,7 +4,7 @@
 // endpoints (/tenants, /admin/recover, /admin/schema). createPramen() pairs the
 // returned fetch with the matching DO class; a consumer just re-exports both.
 
-import { authorizeTenant, HmacStrategy, isAdmin, JwksStrategy, resolveIdentity, type VerifyOptions, type VerifyStrategy } from "./auth";
+import { authenticate, authorizeTenant, HmacStrategy, isAdmin, JwksStrategy, type VerifyOptions, type VerifyStrategy } from "./auth";
 import { dispatch, tasksFacade, bindTasks } from "./runtime/dispatch";
 import type { EnvBag } from "./sdk/handlers";
 import type { JsonValue } from "./sdk/infer";
@@ -151,6 +151,22 @@ function corsHeaders(origin: string | null, env: Env): Record<string, string> {
 }
 
 /** Return a copy of `res` with the CORS headers merged in (no-op if none). */
+/** WebSocket close code for an unusable token, mirroring HTTP 401 (the DO closes an expired
+ * socket with the same code). */
+const WS_CLOSE_UNAUTHORIZED = 4401;
+
+/** The answer to a bearer token that did not verify. A browser cannot read the status of a
+ * refused WebSocket upgrade (it sees only a failed connection, which a client retries), so a
+ * `/live` upgrade is accepted and closed at once with 4401, a code the client can act on. */
+function unauthorizedToken(isWs: boolean): Response {
+  const error = "invalid or expired token";
+  if (!isWs) return json({ ok: false, error, code: "unauthorized" }, 401);
+  const [client, server] = Object.values(new WebSocketPair());
+  server.accept();
+  server.close(WS_CLOSE_UNAUTHORIZED, error);
+  return new Response(null, { status: 101, webSocket: client });
+}
+
 function withCors(res: Response, cors: Record<string, string>): Response {
   if (Object.keys(cors).length === 0) return res;
   const headers = new Headers(res.headers);
@@ -523,7 +539,14 @@ export function makeWorker(app: PramenApp) {
       req = new Request(request, { headers: h });
     }
 
-    const identity = await resolveIdentity(req, strategyFor(env));
+    const { identity, rejected } = await authenticate(req, strategyFor(env));
+
+    // A bearer token that was SENT and did not verify (expired, forged, a rotated secret or
+    // key) fails closed, like a revoked one below: serving it as anonymous answered "your
+    // session is over" with a 403 indistinguishable from "you may not see this" (#76). No
+    // token at all is still anonymous.
+    // (A 101 is returned as is: `withCors` rebuilds the Response and would drop its socket.)
+    if (rejected) return isWs ? unauthorizedToken(true) : withCors(unauthorizedToken(false), cors);
 
     // Hard revocation (deactivate / delete / compromise), independent of token TTL: a
     // revoked `sub` is on the KV denylist (written by @pramen/auth's setUserActive(false)

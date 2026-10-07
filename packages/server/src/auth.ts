@@ -269,11 +269,22 @@ function toIdentity(claims: JsonObject): Identity {
   return identity;
 }
 
-export async function resolveIdentity(request: Request, strategy: VerifyStrategy): Promise<Identity | null> {
+/** The caller behind a request: `identity` is null for no bearer token (anonymous), and
+ * `rejected` is true when a bearer token WAS sent and did not verify (expired, forged,
+ * malformed, signed by a rotated secret or key). The Worker answers a rejected token 401
+ * rather than serving it as anonymous: otherwise a client cannot tell "your session is over"
+ * from "you may not see this" (#76), and a revoked token already fails closed the same way. */
+export async function authenticate(request: Request, strategy: VerifyStrategy): Promise<{ identity: Identity | null; rejected: boolean }> {
   const token = request.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
-  if (!token) return null;
+  if (!token) return { identity: null, rejected: false };
   const claims = await strategy.verify(token);
-  return claims ? toIdentity(claims) : null;
+  return claims ? { identity: toIdentity(claims), rejected: false } : { identity: null, rejected: true };
+}
+
+/** {@link authenticate} without the distinction: null for anonymous AND for a token that did
+ * not verify. For callers that only need "who, if anyone". */
+export async function resolveIdentity(request: Request, strategy: VerifyStrategy): Promise<Identity | null> {
+  return (await authenticate(request, strategy)).identity;
 }
 
 /** May this identity address the given tenant? Gates `X-Pramen-Tenant` so a caller

@@ -600,6 +600,17 @@ there are no backward-compatibility guarantees yet.
 
 ### Changed
 
+- **An invalid bearer token is a 401, not anonymous (`@pramen/server`, `@pramen/client`,
+  `@pramen/cms-editor`; #76).** A request that SENDS a token the Worker cannot verify
+  (expired, forged, malformed, signed with a rotated `AUTH_SECRET` or JWKS key) is answered
+  `401 { code: "unauthorized", error: "invalid or expired token" }` instead of running as
+  anonymous, where it got a 403 indistinguishable from a missing permission. A `/live` upgrade
+  with such a token is accepted and closed with 4401. No token still means anonymous. **A
+  client that keeps sending a stale token to public calls (a `login` on `main`) now gets 401
+  there**: `@pramen/client` drops a refused token itself and reports it through the new
+  `onUnauthorized` option, and a live socket closed 4401 stays down with an `unauthorized`
+  connection error until `setToken`. The editor sends the user to sign-in on that 401, which
+  covers what its local `exp` check cannot see.
 - **Every auth factory takes the users table, and sessions carry it (`@pramen/auth`).**
   `createAuthHandlers` and `createMagicLinkAuth` gain a `table` option, so signup, login, `me`,
   `refreshSession`, `inviteUser` and `loginWithMagicLink` no longer hard-code `auth_users`.

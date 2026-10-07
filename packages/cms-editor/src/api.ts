@@ -95,10 +95,10 @@ export function clearConfig(): void {
 }
 
 export class Api {
-  /** `onExpired` fires when a call is attempted with a locally-expired token; the app wires
-   * it to redirect to sign-in. We can't key off HTTP status: an expired token is rejected as
-   * anonymous and a role-gated handler then returns 403, indistinguishable from a valid token
-   * that merely lacks the role. So expiry is detected client-side from the token's `exp`. */
+  /** `onExpired` fires when a call is attempted with a locally-expired token, or when the
+   * server refuses the token (401 `unauthorized`); the app wires it to redirect to sign-in.
+   * The local `exp` check saves a round trip; the 401 covers what `exp` cannot see (a
+   * rotated secret or key, a revoked session). */
   constructor(private cfg: Config, private onExpired?: () => void) {}
 
   setConfig(cfg: Config): void {
@@ -134,6 +134,12 @@ export class Api {
       throw new ApiError(t("api.nonJson", { status: res.status }), "bad_response", res.status);
     }
     if (body.ok !== true) {
+      // The server refused the token itself (expired, a rotated secret, revoked): the same
+      // hand-off to sign-in as a locally expired one, for the cases `exp` cannot see.
+      if (res.status === 401 && body.code === "unauthorized" && this.cfg.token && this.onExpired) {
+        this.onExpired();
+        return new Promise<T>(() => {});
+      }
       const msg = body.error ?? t("api.requestFailed", { status: res.status });
       const hint = res.status === 403 ? t("api.forbiddenHint") : "";
       throw new ApiError(msg + hint, body.code ?? "error", res.status);
