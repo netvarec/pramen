@@ -25,7 +25,7 @@ import type { HomeLanding, MediaSource, MediaTile } from "./slots";
 import { useApp, type Me } from "./app-context";
 import { isRichTextDoc, richTextToPlainText } from "./rich-text";
 import { flattenTerms } from "./furniture";
-import type { AssembledPage, AuditEntry, BlockType, CmsCapabilities, CollectionMeta, ContentType, FieldDefinition, FieldValue, FieldValues, Media, MediaKind, MediaSort, Page, RegionDefinition, RenderedBlock, Taxonomy, Term } from "./types";
+import type { AccountCapabilities, AssembledPage, AuditEntry, BlockType, CmsCapabilities, CollectionMeta, ContentType, FieldDefinition, FieldValue, FieldValues, Media, MediaKind, MediaSort, Page, RegionDefinition, RenderedBlock, Taxonomy, Term } from "./types";
 import { MEDIA_KIND_KEYS, MEDIA_KINDS, MEDIA_SORT_KEYS, MEDIA_SORTS } from "./types";
 
 export type InspectorTab = "settings" | "seo" | "i18n" | "terms" | "audit";
@@ -2570,8 +2570,32 @@ export function SettingsView({ api, cfg, me, onSignOut, onError }: { api: Api; c
   );
 }
 
+/** What Settings' account card draws, from the deployment's declared `account` capability.
+ * Nothing account-specific until the probe has answered (`ready`); the provider link only
+ * for an http(s) URL, whatever the server sent. Exported for tests. */
+export function accountForms(account: AccountCapabilities, ready: boolean): {
+  showEmail: boolean;
+  showPassword: boolean;
+  managedBy?: { name: string };
+  managedUrl?: string;
+} {
+  if (!ready) return { showEmail: false, showPassword: false };
+  const url = account.managedBy?.url;
+  return {
+    showEmail: account.changeEmail,
+    showPassword: account.changePassword,
+    managedBy: account.managedBy ? { name: account.managedBy.name } : undefined,
+    managedUrl: url && /^https?:\/\//i.test(url) ? url : undefined,
+  };
+}
+
 function MyAccountCard({ api, me, onError, onSignOut }: { api: Api; me: Me | null; onError: (s: string) => void; onSignOut: () => void }) {
   const { t } = useI18n();
+  // Which forms the deployment offers (`createCmsHandlers({ account })`). Neither is drawn
+  // until the probe answers: a provider-only deployment refuses both, and showing them for a
+  // moment and then taking them away is worse than a beat of nothing.
+  const { cms: { account }, cmsReady } = useApp();
+  const { showEmail, showPassword, managedBy, managedUrl } = accountForms(account, cmsReady);
   const [email, setEmail] = useState("");
   const [pwCurrent, setPwCurrent] = useState("");
   const [pwNew, setPwNew] = useState("");
@@ -2619,23 +2643,44 @@ function MyAccountCard({ api, me, onError, onSignOut }: { api: Api; me: Me | nul
         <span>{t("settings.username")}</span><span>{me?.userId ?? "–"}</span>
         <span>{t("settings.roles")}</span><span>{(me?.roles ?? []).join(", ") || "–"}</span>
       </KV>
+      {managedBy ? (
+        <p className="mb-4 text-small text-fg-muted">
+          {t("settings.managedBy", { name: managedBy.name })}
+          {managedUrl ? (
+            <>
+              {" "}
+              <a className="text-fg underline underline-offset-2 hover:text-brand-green" href={managedUrl} target="_blank" rel="noopener noreferrer">
+                {t("settings.manageAccount", { name: managedBy.name })}
+              </a>
+            </>
+          ) : null}
+        </p>
+      ) : null}
       <div className="flex flex-col gap-4">
-        <Input label={t("settings.changeEmail")} type="email" value={email} onChange={setEmail} placeholder={t("settings.emailPlaceholder")} />
-        <Button className="w-full" onPress={saveEmail} isDisabled={busy || !email}>{t("settings.saveEmail")}</Button>
-        <Input
-          label={t("settings.currentPassword")}
-          description={t("settings.currentPasswordHelp")}
-          type="password"
-          value={pwCurrent}
-          onChange={setPwCurrent}
-          autoComplete="current-password"
-        />
-        <Input label={t("settings.newPassword")} type="password" value={pwNew} onChange={setPwNew} autoComplete="new-password" />
-        {/* Enabled on the NEW password alone. Requiring the current one here is what made
-            the form unusable for the accounts that need it most; the server still requires
-            it wherever there is one to require. "Save" rather than "Change", because for
-            half the people reading this there is nothing yet to change. */}
-        <Button className="w-full" onPress={savePassword} isDisabled={busy || pwNew.length < 8}>{t("settings.savePassword")}</Button>
+        {showEmail ? (
+          <>
+            <Input label={t("settings.changeEmail")} type="email" value={email} onChange={setEmail} placeholder={t("settings.emailPlaceholder")} />
+            <Button className="w-full" onPress={saveEmail} isDisabled={busy || !email}>{t("settings.saveEmail")}</Button>
+          </>
+        ) : null}
+        {showPassword ? (
+          <>
+            <Input
+              label={t("settings.currentPassword")}
+              description={t("settings.currentPasswordHelp")}
+              type="password"
+              value={pwCurrent}
+              onChange={setPwCurrent}
+              autoComplete="current-password"
+            />
+            <Input label={t("settings.newPassword")} type="password" value={pwNew} onChange={setPwNew} autoComplete="new-password" />
+            {/* Enabled on the NEW password alone. Requiring the current one here is what made
+                the form unusable for the accounts that need it most; the server still requires
+                it wherever there is one to require. "Save" rather than "Change", because for
+                half the people reading this there is nothing yet to change. */}
+            <Button className="w-full" onPress={savePassword} isDisabled={busy || pwNew.length < 8}>{t("settings.savePassword")}</Button>
+          </>
+        ) : null}
         <Button variant="ghost" className="mt-2 w-full text-danger" onPress={onSignOut}>{t("settings.signOut")}</Button>
       </div>
     </Card>

@@ -222,6 +222,10 @@ interface AppContextValue {
    * its declared locales. The editor renders its i18n surface off this rather than a local
    * flag, so the UI and the data can never disagree about whether the site is multilingual. */
   cms: CmsCapabilities;
+  /** `listCmsCapabilities` has answered (or failed), so `cms` is the server's answer rather
+   * than the defaults. For a screen where drawing the default and then retracting it is
+   * worse than waiting (Settings would show, then hide, forms a deployment refuses). */
+  cmsReady: boolean;
   error: string;
   setError: (s: string) => void;
   /** Sign out, dropping the token so the config gate falls back to Setup. */
@@ -281,6 +285,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [contentTypesNonce, setContentTypesNonce] = useState(0);
   const refreshContentTypes = useCallback(() => setContentTypesNonce((n) => n + 1), []);
   const [cms, setCms] = useState<CmsCapabilities>(DEFAULT_CAPABILITIES);
+  const [cmsReady, setCmsReady] = useState(false);
   const [error, setError] = useState("");
   // A usable session = somewhere to call + a token that is NOT expired. An expired token
   // counts as no session: otherwise the editor mounts and every RPC 403s into an error
@@ -353,7 +358,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     api
       .call<Partial<CmsCapabilities>>("listCmsCapabilities")
       .then((r) => setCms({ ...DEFAULT_CAPABILITIES, ...r }))
-      .catch(() => setCms(DEFAULT_CAPABILITIES));
+      .catch(() => setCms(DEFAULT_CAPABILITIES))
+      .finally(() => setCmsReady(true));
   }, [api, authValid]);
 
   // Drives the per-type nav + list routes. A failure falls back to the single pooled "Pages"
@@ -390,6 +396,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     contentTypesFailed,
     refreshContentTypes,
     cms,
+    cmsReady,
     error,
     setError,
     confirmNavigation,

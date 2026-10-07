@@ -102,6 +102,20 @@ export const app = {
 };
 ```
 
+**Behind the CMS editor, say where the account lives.** A provider-only deployment usually
+refuses `changeEmail` and `changePassword` (changing the email detaches the account from the
+provider; a local password bypasses it). Tell the editor, so its Settings screen does not offer
+two forms that always fail:
+
+```ts
+createCmsHandlers({
+  account: { changeEmail: false, changePassword: false, managedBy: { name: "Graphic Standard", url: "https://…/account" } },
+});
+```
+
+Settings then shows "Your account is managed in Graphic Standard" with a link instead.
+`managedBy.url` must be an http(s) URL.
+
 The browser hits `/auth/oidc/start`, comes back to `/auth/oidc/callback`, and lands on
 `successRedirect#token=<session>`. The token arrives in the URL **fragment**, which is never
 sent to a server, so it stays out of access logs, proxies and `Referer` headers.

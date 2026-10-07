@@ -261,6 +261,18 @@ export interface CmsCapabilities {
    * ORIGINAL FILENAME needs the signed attachment url, and a Download button on a server
    * without it is a button that always errors. Absent ⇒ Preview only. */
   mediaDownload: boolean;
+  /** Which self-service account forms Settings offers, and where the account is managed
+   * when that is elsewhere (an identity provider). Declared by the deployment
+   * (`createCmsHandlers({ account })`): a provider-only deployment refuses both forms, and
+   * drawing them anyway gave it a Settings screen whose every save failed. */
+  account: AccountCapabilities;
+}
+
+/** Mirror of @pramen/cms `AccountCapabilities`. */
+export interface AccountCapabilities {
+  changeEmail: boolean;
+  changePassword: boolean;
+  managedBy?: { name: string; url?: string };
 }
 
 /**
@@ -304,6 +316,9 @@ export const DEFAULT_CAPABILITIES: CmsCapabilities = {
   // showing one that 403s is a legible error with a way forward. The server is the
   // boundary either way; this only decides what is drawn.
   canEdit: true,
+  // Also fails OPEN: an older server has no `account`, and both forms are what every
+  // deployment had before it was declarable.
+  account: { changeEmail: true, changePassword: true },
 };
 
 /** Mirror of @pramen/cms `CollectionFeature`. */
