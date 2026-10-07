@@ -1153,8 +1153,8 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, backLabe
           orientation an outline was standing in for. */}
       <div className="mt-4 grid items-start gap-6 grid-cols-[minmax(0,1fr)_340px] max-[980px]:grid-cols-1">
 
-      {/* The canvas: one inline document. `pl-8` reserves the left gutter that each
-          block's drag handle occupies on hover. Regions are titled sections. */}
+      {/* The canvas: regions are titled sections, each a column of block cards. `pl-8`
+          reserves the left gutter that each card's drag handle occupies on hover. */}
       <div className="min-w-0 py-1.5 pl-8 pr-2">
         {/* The page's own fields are CONTENT, so they belong on the canvas at full width,
             not in the inspector. For a content type with no regions (a fixed layout, all
@@ -1173,8 +1173,12 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, backLabe
               <div className={`sticky ${BELOW_PAGE_TOOLBAR} z-10 -mx-2 mb-1 bg-surface px-2 py-1 text-caption font-medium uppercase tracking-wide text-fg-subtle`}>{r.label ?? r.name}</div>
               {blocks.map((b, i) => (
                 <div key={b.id}>
-                  {/* Between-blocks insert point: a hover "+" that adds AT index i. */}
-                  <Inserter compact allowed={allowed} btBySlug={btBySlug} onAdd={(slug) => addBlock(r.name, slug, i)} />
+                  {/* Between-blocks insert point, always visible, adding AT index i. Only
+                      BETWEEN two cards: one above the first card was an "insert here" that sat
+                      between nothing, and in a one-block region it stood a card away from the
+                      end inserter below, two controls for one job. A block goes first by
+                      adding it and moving it up. */}
+                  {i > 0 ? <Inserter compact allowed={allowed} btBySlug={btBySlug} onAdd={(slug) => addBlock(r.name, slug, i)} /> : null}
                   <BlockCard
                     api={api}
                     block={b}
@@ -1362,9 +1366,13 @@ function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, o
         {block.is_shared ? <span className="text-caption text-accent-strong">{t("blocks.shared")}</span> : null}
         <span className={`text-caption ${dirty && saveState !== "saving" ? "text-accent-strong" : "text-fg-subtle"}`}>{saveState === "saving" ? t("blocks.saving") : saveState === "saved" ? t("blocks.saved") : dirty ? t("blocks.unsaved") : ""}</span>
         <span className="flex-1" />
-        <Button variant="ghost" size="sm" aria-label={t("blocks.moveUp")} isDisabled={isFirst} onPress={() => onMove(-1)}>↑</Button>
-        <Button variant="ghost" size="sm" aria-label={t("blocks.moveDown")} isDisabled={isLast} onPress={() => onMove(1)}>↓</Button>
-        <Button variant="ghost" size="sm" aria-label={t("blocks.remove")} className="text-danger" onPress={onRemove}>✕</Button>
+        {/* Quieter at rest, so a page of cards is not a column of red ✕s; full strength under
+            the pointer or keyboard focus anywhere in the card. */}
+        <div className="flex items-center opacity-60 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+          <Button variant="ghost" size="sm" aria-label={t("blocks.moveUp")} isDisabled={isFirst} onPress={() => onMove(-1)}>↑</Button>
+          <Button variant="ghost" size="sm" aria-label={t("blocks.moveDown")} isDisabled={isLast} onPress={() => onMove(1)}>↓</Button>
+          <Button variant="ghost" size="sm" aria-label={t("blocks.remove")} className="text-danger" onPress={onRemove}>✕</Button>
+        </div>
       </div>
 
       {collapsed ? (
@@ -1430,7 +1438,7 @@ export function Inserter({ allowed, btBySlug, onAdd, compact }: { allowed: strin
         <button
           type="button"
           onClick={() => setOpen(true)}
-          className="group/ins flex h-8 w-full items-center gap-2 text-fg-muted opacity-80 transition-opacity hover:text-brand-green hover:opacity-100 focus-visible:opacity-100"
+          className="flex h-8 w-full items-center gap-2 text-fg-muted opacity-80 transition-opacity hover:text-brand-green hover:opacity-100 focus-visible:opacity-100"
         >
           <span className="h-px flex-1 bg-current opacity-40" />
           <span className="flex items-center gap-1 text-caption leading-none">

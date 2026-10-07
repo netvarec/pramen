@@ -616,7 +616,9 @@ there are no backward-compatibility guarantees yet.
   editors could not tell where one block ended and the next began. The between-blocks inserter
   is always visible as a faint line labelled "Insert block here" (it was a 12px strip at
   opacity 0, found only by a pointer resting exactly in the gap), so inserting between two
-  blocks no longer looks impossible. `Inserter` is exported for tests.
+  blocks no longer looks impossible. It now sits only between two cards, not above the first
+  one: a block goes first by adding it and moving it up. The move and remove buttons stay at
+  60% until the card is hovered or focused. `Inserter` is exported for tests.
 - **OIDC binder cookie is per attempt (`@pramen/auth`).** `pramen_oidc` became
   `pramen_oidc_<hash of the state>`, so overlapping sign-ins in two tabs no longer overwrite
   each other's binder. A login in flight across the deploy has to be restarted.
