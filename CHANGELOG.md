@@ -591,6 +591,24 @@ there are no backward-compatibility guarantees yet.
 
 ### Changed
 
+- **Every auth factory takes the users table, and sessions carry it (`@pramen/auth`).**
+  `createAuthHandlers` and `createMagicLinkAuth` gain a `table` option, so signup, login, `me`,
+  `refreshSession`, `inviteUser` and `loginWithMagicLink` no longer hard-code `auth_users`.
+  Every factory now validates and quotes the name the same way, so a table named after an SQL
+  keyword works in `listUsers`, `changePassword` and the reset and verification flows too. A
+  session minted from a custom table carries a `usersTable` claim, and `refreshSession` and
+  `me`, `changeEmail`, `changePassword` and `requestEmailVerification` honor only their own
+  table's sessions. Without that, a token from one table could be refreshed into another
+  table's roles, or change another table's row, for the same username. Sessions from
+  `auth_users` carry no claim and are unchanged. A custom-table session minted before this
+  release (an OIDC sign-in with `table`) has no claim, so it must sign in again before it can
+  refresh or use self-service; so must an external-IdP token against a custom table's
+  self-service handlers.
+- **Admins see OIDC profiles in `listUsers` (`@pramen/auth`).** `profile` joined the default
+  `adminReadFields`, so every admin now receives each user's stored profile (by default the
+  IdP's `name` and `picture`, or whatever a custom `mapProfile` stores). A deployment whose
+  `mapProfile` keeps claims admins should not see must pass its own `adminReadFields` to
+  `authPolicies`.
 - **Editor listings are podoba `Table`s (`@pramen/cms-editor`, `@pramen/admin`,
   `@pramen/cms-theme-gs`).** podoba 0.0.49 unified its table into one look (mono header labels,
   row and cell rules, pressable rows), and every list screen now renders through it instead of
