@@ -597,9 +597,13 @@ there are no backward-compatibility guarantees yet.
   Every factory now validates and quotes the name the same way, so a table named after an SQL
   keyword works in `listUsers`, `changePassword` and the reset and verification flows too. A
   session minted from a custom table carries a `usersTable` claim, and `refreshSession` and
-  `me` honor only their own table's sessions. Without that, a token from one table could be
-  refreshed into another table's roles for the same username. Sessions from `auth_users`
-  carry no claim and are unchanged.
+  `me`, `changeEmail`, `changePassword` and `requestEmailVerification` honor only their own
+  table's sessions. Without that, a token from one table could be refreshed into another
+  table's roles, or change another table's row, for the same username. Sessions from
+  `auth_users` carry no claim and are unchanged. A custom-table session minted before this
+  release (an OIDC sign-in with `table`) has no claim, so it must sign in again before it can
+  refresh or use self-service; so must an external-IdP token against a custom table's
+  self-service handlers.
 - **Admins see OIDC profiles in `listUsers` (`@pramen/auth`).** `profile` joined the default
   `adminReadFields`, so every admin now receives each user's stored profile (by default the
   IdP's `name` and `picture`, or whatever a custom `mapProfile` stores). A deployment whose

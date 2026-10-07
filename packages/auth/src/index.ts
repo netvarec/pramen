@@ -294,9 +294,7 @@ function parseCreds(raw: JsonValue): Credentials {
 function buildRefreshSession(ttlOf: (ctx: HandlerContext) => number, table: UsersTable) {
   return mutation(
     async (ctx) => {
-      const userId = requireUserId(ctx);
-      // A session from another users table names a different person who shares the username.
-      if (!sessionIsFrom(ctx, table)) throw new Unauthorized("session is no longer valid");
+      const userId = requireOwnUser(ctx, table);
       const rows = await ctx.db.exec(`SELECT username, roles, active FROM ${table.sql} WHERE username = ? LIMIT 1`, userId);
       const u = rows[0];
       // Gone or deactivated ⇒ no fresh token (mirrors login). The Worker denylist already
@@ -828,6 +826,15 @@ function requireUserId(ctx: HandlerContext): string {
   return id;
 }
 
+/** The caller's username, for a handler that acts on the caller's OWN row in `table`. A session
+ * minted from another users table names a different person who shares the username, so it is
+ * refused rather than let act on (or be reissued from) this table's row. */
+function requireOwnUser(ctx: HandlerContext, table: UsersTable): string {
+  const id = requireUserId(ctx);
+  if (!sessionIsFrom(ctx, table)) throw new Unauthorized("session is no longer valid");
+  return id;
+}
+
 // `ctx.db` is schema-typed against the *app's* composed schema, which this package
 // can't import, so address the users table through a minimal structural view of the
 // ACL'd Db. This is the same ctx.db at runtime: row-scope + field projection still apply.
@@ -911,7 +918,7 @@ export function createUserHandlers(opts: { table?: string } = {}) {
      * write to the caller's own row and permits only the `email` field. Email is unique,
      * so a clash is reported as a clean 400 rather than surfacing the DB constraint as a 500. */
     changeEmail: mutation(async (ctx, input: { email: string }) => {
-      const userId = requireUserId(ctx);
+      const userId = requireOwnUser(ctx, users);
       const { email } = parseEmail(input); // validates + normalizes; 400 on a bad address
       const taken = await ctx.db.exec(`SELECT 1 FROM ${users.sql} WHERE email = ? AND username != ? LIMIT 1`, email, userId);
       if (taken.length > 0) throw new BadRequest("email already in use");
@@ -959,7 +966,7 @@ export function createUserHandlers(opts: { table?: string } = {}) {
      * A deployment that wants the stricter posture keeps `createPasswordReset` and does not
      * surface this branch in its UI; the reset flow still works either way. */
     changePassword: mutation(async (ctx, input: { currentPassword: string; newPassword: string }) => {
-      const userId = requireUserId(ctx);
+      const userId = requireOwnUser(ctx, users);
       const current = typeof input?.currentPassword === "string" ? input.currentPassword : "";
       const next = typeof input?.newPassword === "string" ? input.newPassword : "";
       if (next.length < 8) throw new BadRequest("newPassword must be at least 8 characters");
@@ -1211,7 +1218,8 @@ export interface EmailVerificationOptions {
  * later `changeEmail` invalidates it (verifyEmail rejects a token whose address no longer
  * matches). Spread `emailTokenSchema` into your schema and `.tasks` into your task map. */
 export function createEmailVerification(opts: EmailVerificationOptions): AuthModule {
-  const table = usersTable(opts.table).sql;
+  const users = usersTable(opts.table);
+  const table = users.sql;
   const linkTtlMs = (opts.linkTtlSeconds ?? 86_400) * 1000;
 
   const handlers: HandlerMap = {
@@ -1219,7 +1227,7 @@ export function createEmailVerification(opts: EmailVerificationOptions): AuthMod
      * no-op `{ ok: true, alreadyVerified: true }` if already verified; 400 if no email is set. */
     requestEmailVerification: mutation(
       async (ctx) => {
-        const userId = requireUserId(ctx);
+        const userId = requireOwnUser(ctx, users);
         const rows = await ctx.db.exec(`SELECT email, emailVerified FROM ${table} WHERE username = ? LIMIT 1`, userId);
         const u = rows[0];
         const email = u && typeof u.email === "string" ? u.email : "";

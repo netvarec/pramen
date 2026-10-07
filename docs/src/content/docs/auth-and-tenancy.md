@@ -216,8 +216,9 @@ serves every caller. The table must have the `authSchema.auth_users` shape, incl
 `profile` column. The default admin read policy includes `profile`; a custom
 `adminReadFields` list must include it explicitly to expose it through `listUsers`.
 
-A session minted from a custom table carries a `usersTable` claim, and `refreshSession` and
-`me` honor a session only from their own table (no claim means `auth_users`). The JWT `sub`
+A session minted from a custom table carries a `usersTable` claim, and `refreshSession`, `me`
+and the self-service handlers (`changeEmail`, `changePassword`, `requestEmailVerification`)
+honor a session only from their own table (no claim means `auth_users`). The JWT `sub`
 is a bare username, so without it a `members` handler would reissue `auth_users`' "ada" a
 token with `members`' "ada"'s roles. The KV denylist is still keyed by username alone:
 deactivating or deleting "ada" in one table revokes every "ada" session, whichever table it

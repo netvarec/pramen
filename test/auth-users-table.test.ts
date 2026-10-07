@@ -17,6 +17,7 @@ import {
   authHandlers,
   authSchema,
   createAuthHandlers,
+  createEmailVerification,
   createMagicLinkAuth,
   createPasswordReset,
   createUserHandlers,
@@ -91,6 +92,19 @@ describe("a session is honored only by its own table's handlers", () => {
     await expect(run(members.refreshSession, h.ctx({ userId: "ada", roles: ["user"] }))).rejects.toThrow("session is no longer valid");
     await expect(run(authHandlers.refreshSession, h.ctx({ userId: "ada", roles: ["user"], usersTable: "members" }))).rejects.toThrow("session is no longer valid");
     expect(await run(members.refreshSession, h.ctx({ userId: "ada", roles: ["user"], usersTable: "members" }))).toMatchObject({ user: { username: "ada" } });
+  });
+
+  test("the self-service handlers refuse a session from another table", async () => {
+    const h = await harness("members");
+    const users = createUserHandlers({ table: "members" });
+    const verify = createEmailVerification({ table: "members", sendEmail: () => {} });
+    await run(authHandlers.signup, h.ctx(), { username: "ada", password: "password123" });
+    await run(createAuthHandlers({ table: "members" }).signup, h.ctx(), { username: "ada", password: "password123", email: "ada@acme.com" });
+    const foreign = h.ctx({ userId: "ada", roles: ["user"] });
+    await expect(run(users.changeEmail, foreign, { email: "mallory@acme.com" })).rejects.toThrow("session is no longer valid");
+    await expect(run(users.changePassword, foreign, { currentPassword: "password123", newPassword: "password456" })).rejects.toThrow("session is no longer valid");
+    await expect(run(verify.handlers.requestEmailVerification, foreign)).rejects.toThrow("session is no longer valid");
+    expect(h.enqueued).toEqual([]);
   });
 
   test("me reads no profile across tables", async () => {
