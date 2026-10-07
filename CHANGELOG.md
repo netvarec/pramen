@@ -629,7 +629,14 @@ there are no backward-compatibility guarantees yet.
   podoba's `mobile-cta-dock-inset` on any page that has a docked CTA, instead of a measured 100px
   on a list of known headers. The `gs-panel-hero` class is gone: a host's own `BrandPageHeader`
   gets the same behaviour with no class. The theme's peer range is `>=0.0.50`.
-
+- **Page canvas blocks read as cards (`@pramen/cms-editor`).** Each block is a bordered card
+  with its type label at full strength, instead of a chrome-less row under a label faded to 60%:
+  editors could not tell where one block ended and the next began. The between-blocks inserter
+  is always visible as a faint line labelled "Insert block here" (it was a 12px strip at
+  opacity 0, found only by a pointer resting exactly in the gap), so inserting between two
+  blocks no longer looks impossible. It now sits only between two cards, not above the first
+  one: a block goes first by adding it and moving it up. The move and remove buttons stay at
+  60% until the card is hovered or focused. `Inserter` is exported for tests.
 - **OIDC binder cookie is per attempt (`@pramen/auth`).** `pramen_oidc` became
   `pramen_oidc_<hash of the state>`, so overlapping sign-ins in two tabs no longer overwrite
   each other's binder. A login in flight across the deploy has to be restarted.
