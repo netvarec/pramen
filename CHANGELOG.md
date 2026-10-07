@@ -16,6 +16,15 @@ there are no backward-compatibility guarantees yet.
 
 ### Added
 
+- **`account` option: which account forms the editor offers (`@pramen/cms`,
+  `@pramen/cms-editor`; #81).** `createCmsHandlers({ account: { changeEmail?, changePassword?,
+  managedBy?: { name, url? } } })` is declared in `listCmsCapabilities().account`, and the
+  editor's Settings screen draws only the forms that are on. With `managedBy` it says where the
+  account is managed, with a link. A provider-only deployment (`createOidcAuth`) refuses both
+  forms, and the editor used to draw them anyway, so every save there failed. Default (and an
+  older server) is both forms, as before. `managedBy.url` must be an http(s) URL or
+  `createCmsHandlers` throws. Settings now waits for the capability probe before drawing either
+  form, so they do not flash and vanish.
 - **`mediaSources` slot (`@pramen/cms-editor`).** Where files can come from besides an upload:
   a module exporting `mediaSources: readonly MediaSource[]`, contracts `MediaSource`
   (`{ id, label, Browser }`) and `MediaSourceProps` (`call`, `mode: "pick" | "library"`,

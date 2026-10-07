@@ -3056,6 +3056,54 @@ export interface CmsHandlerOpts {
    * app that grows a menu-rendering layout later flips one flag.
    */
   siteFurniture?: boolean;
+  /**
+   * Which self-service account forms the editor's Settings screen offers, and where the
+   * account is managed when that is somewhere else. Default: both forms, no `managedBy`.
+   *
+   * A deployment that signs in only through an identity provider (`createOidcAuth`) has no
+   * use for either form and usually must refuse both: accounts are matched by email, so
+   * changing it here detaches the account from the provider, and a local password is a
+   * second way in that bypasses it. Without this the editor drew two forms that failed
+   * every time. Declared, not inferred: the CMS cannot see the app's other handlers, and a
+   * handler that exists but always throws (the usual way to refuse them) looks the same as
+   * one that works.
+   *
+   * `managedBy.url` must be an http(s) link; anything else throws at construction.
+   */
+  account?: AccountOptions;
+}
+
+/** See {@link CmsHandlerOpts.account}. */
+export interface AccountOptions {
+  /** Offer "Change contact email" (`changeEmail`). Default `true`. */
+  changeEmail?: boolean;
+  /** Offer "Set/change password" (`changePassword`). Default `true`. */
+  changePassword?: boolean;
+  /** Where the account is managed instead, shown in Settings with a link. */
+  managedBy?: { name: string; url?: string };
+}
+
+/** The `account` part of `listCmsCapabilities`: {@link AccountOptions} with defaults applied. */
+export interface AccountCapabilities {
+  changeEmail: boolean;
+  changePassword: boolean;
+  managedBy?: { name: string; url?: string };
+}
+
+function accountCapabilities(opts: AccountOptions = {}): AccountCapabilities {
+  const out: AccountCapabilities = { changeEmail: opts.changeEmail !== false, changePassword: opts.changePassword !== false };
+  if (opts.managedBy) {
+    const name = typeof opts.managedBy.name === "string" ? opts.managedBy.name.trim() : "";
+    if (name === "") throw new Error("@pramen/cms: account.managedBy.name is required");
+    const url = opts.managedBy.url === undefined ? undefined : normalizeHref(String(opts.managedBy.url));
+    // An http(s) URL only, not every `isSafeHref` shape: it is rendered as a link out of the
+    // editor, where a relative path would resolve against the editor's own origin.
+    if (url !== undefined && !(/^https?:\/\//i.test(url) && isSafeHref(url))) {
+      throw new Error(`@pramen/cms: account.managedBy.url must be an http(s) URL, got ${JSON.stringify(opts.managedBy.url)}`);
+    }
+    out.managedBy = url === undefined ? { name } : { name, url };
+  }
+  return out;
 }
 
 /** Build the CMS handler map. Spread into your app's handlers. Editor mutations are
@@ -3070,6 +3118,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
   // re-walk the list on every page write.
   const reservedSlugs = new Set((opts.reservedSlugs ?? []).map((r) => r.trim().toLowerCase()).filter((r) => r !== ""));
   const siteFurniture = opts.siteFurniture !== false;
+  const account = accountCapabilities(opts.account);
   const reviewerRoles = opts.reviewerRoles ?? ["reviewer", "admin"];
   const reviewer = { auth: reviewerRoles };
   const previewTtl = opts.previewTtlSeconds ?? DEFAULT_PREVIEW_TTL_SECONDS;
@@ -4647,6 +4696,9 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       // server can do this" was never the question the editor needed answered. The question
       // is whether the FRONT END renders any of it, and only the app knows that.
       siteFurniture,
+      // Which account forms Settings offers (`account` option). Absent on an older server,
+      // where the editor keeps drawing both, as it always has.
+      account,
       // Whether `managedBy` means anything on this server. Declared for the same reason as
       // its neighbours: `@pramen/cms-editor` is a separate package with no dependency on
       // `@pramen/cms`, so a newer editor CAN run against an older server, where every row
