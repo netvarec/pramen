@@ -107,13 +107,15 @@ export class R2Adapter implements StorageAdapter {
     try {
       obj = await this.bucket.get(key, req ? { range: req } : undefined);
     } catch (err) {
-      // R2 refuses a range that starts past the end rather than clamping it. Only then is the
-      // size worth a second operation: to tell that apart from a real failure, and to name it.
-      if (!req) throw err;
+      // R2 refuses a range it cannot serve as asked (a start past the end, a length past it)
+      // rather than clamping. Only that error earns a second operation, for the size: any
+      // other failure is rethrown as is, so it is neither masked nor paid for twice.
+      if (!req || !isR2RangeError(err)) throw err;
       const head = await this.bucket.head(key);
       if (!head) return null;
-      if (!resolveRange(req, head.size)) throw new RangeNotSatisfiable(head.size);
-      throw err;
+      const r = resolveRange(req, head.size);
+      if (!r) throw new RangeNotSatisfiable(head.size);
+      obj = await this.bucket.get(key, { range: r });
     }
     if (!obj) return null;
     let range: ByteRange | undefined;
@@ -141,6 +143,12 @@ export class R2Adapter implements StorageAdapter {
   async delete(key: string): Promise<void> {
     await this.bucket.delete(key);
   }
+}
+
+/** R2's "requested range not satisfiable" (code 10039), told apart from a real failure. */
+function isR2RangeError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /\b10039\b|range/i.test(msg);
 }
 
 /** In-memory store for unit tests / substrates without an object store. Not durable. */
@@ -322,7 +330,7 @@ export function createFiles(cfg: FilesConfig): Files {
 
 const CORS: Record<string, string> = {
   "access-control-allow-origin": "*",
-  "access-control-allow-methods": "GET, PUT, OPTIONS",
+  "access-control-allow-methods": "GET, HEAD, PUT, OPTIONS",
   "access-control-allow-headers": "content-type, authorization, range, if-range",
   // Neither is CORS-safelisted, so without this a browser client that `fetch()`es a download
   // (rather than navigating to it) reads both as null, and the filename encoding below
@@ -388,7 +396,7 @@ export async function handleFileRequest(
     }
 
     // download
-    if (request.method !== "GET") return fileError(405, "method_not_allowed", "use GET to download");
+    if (request.method !== "GET" && request.method !== "HEAD") return fileError(405, "method_not_allowed", "use GET to download");
     if (token.op !== "get") return fileError(403, "forbidden", "token is not a download token");
 
     // Ranges here too: a private video behind `signDownload` needs them as much as a public
@@ -452,48 +460,68 @@ export function isActiveType(contentType: string | null | undefined): boolean {
  * in the same call that reads it). `null` means "serve the whole object": no header, a unit
  * other than bytes, several ranges (a multipart response is not worth it for media; answering
  * 200 with everything is allowed), or an end before the start. `bytes=-0` asks for nothing,
- * so it is `"unsatisfiable"` (416) whatever the size.
+ * and a start past MAX_SAFE_INTEGER is past any object, so both are `"unsatisfiable"` (416)
+ * whatever the size.
  */
 export function parseRangeHeader(header: string | null | undefined): RangeRequest | "unsatisfiable" | null {
   const m = /^\s*bytes\s*=\s*(\d*)\s*-\s*(\d*)\s*$/i.exec(header ?? "");
   if (!m) return null;
   const [, a, b] = m;
   if (a === "" && b === "") return null;
+  // Digits are unbounded, numbers are not: a value past MAX_SAFE_INTEGER is past the end of
+  // any object, so an end that large reads as open-ended, a suffix as the whole object, and a
+  // start as unsatisfiable, rather than a float a store may refuse.
+  const MAX = Number.MAX_SAFE_INTEGER;
   if (a === "") {
-    const suffix = Number(b);
+    const suffix = Math.min(Number(b), MAX);
     return suffix === 0 ? "unsatisfiable" : { suffix };
   }
   const offset = Number(a);
-  if (b === "") return { offset };
+  if (offset > MAX) return "unsatisfiable";
   const end = Number(b);
+  if (b === "" || end > MAX) return { offset };
   return end < offset ? null : { offset, length: end - offset + 1 };
+}
+
+/** `If-Range` matches only by STRONG comparison (RFC 9110 13.1.5): a weak validator on
+ * either side, or the date form (no Last-Modified is served), never does. */
+function ifRangeMatches(ifRange: string, etag: string | undefined): boolean {
+  return !!etag && !ifRange.startsWith("W/") && !etag.startsWith("W/") && ifRange === etag;
 }
 
 /**
  * GET/HEAD one stored object, honouring a single byte range. Shared by `/media/` and
  * `/files/download` so the two cannot drift. `headers` carries the route's own (CORS,
- * disposition, nosniff); `cacheControl` applies to a whole-object answer only.
+ * disposition, nosniff). `cache` is the route's policy for a whole answer and for a 206;
+ * absent, neither carries `cache-control`.
  *
  * - A ranged GET is ONE store operation: the adapter resolves the range against the size it
- *   reads anyway. A `head` happens only where the size or validator is needed up front: a HEAD
- *   request, an `If-Range`, or `bytes=-0`.
+ *   reads anyway. A `head` happens only for a HEAD request, or `bytes=-0` (416 needs a size).
  * - 206 only when the adapter REPORTS the range it read (`GetResult.range`). Without it the
  *   body may be the whole object (an adapter that ignores ranges) or, against the contract, a
- *   slice it forgot to report; either way it is a 200, and `content-length` is left off so a
- *   wrong length can never be declared over the body.
- * - A 206 is `private`: a shared cache keyed by URL alone would otherwise store two bytes as
- *   the object for a year (and the Workers Cache API throws on `put` of a 206).
+ *   slice it forgot to report. Either way it is a 200 with no `content-length` (so a wrong one
+ *   is never declared) and `no-store` (so no cache keeps it as the object).
+ * - `If-Range` is checked against the etag of the SAME read that produced the bytes, so a key
+ *   overwritten in between cannot splice new bytes onto the client's old ones. On a mismatch
+ *   the slice is dropped and the whole object fetched: a second operation, only for a stale
+ *   resume.
  * - A zero-length object has no satisfiable range worth refusing, so it is a 200, empty.
  */
 async function serveObject(
   request: Request,
   adapter: StorageAdapter,
   key: string,
-  opts: { headers: Headers; notFound: () => Response; fallbackContentType?: string; cacheControl?: string },
+  opts: {
+    headers: Headers;
+    notFound: () => Response;
+    fallbackContentType?: string;
+    cache?: { whole: string; partial: string };
+  },
 ): Promise<Response> {
   const headers = opts.headers;
   headers.set("accept-ranges", "bytes");
   const isHead = request.method === "HEAD";
+  const ifRange = request.headers.get("if-range");
   let req = parseRangeHeader(request.headers.get("range"));
 
   const describe = (meta: { contentType?: string; etag?: string }) => {
@@ -503,32 +531,27 @@ async function serveObject(
     // Never sniff into, nor render as live, an executable type (see ACTIVE_TYPES).
     if (isActiveType(ct)) headers.set("content-security-policy", ACTIVE_TYPE_CSP);
   };
-  const whole = (size: number | null, body: ReadableStream | null) => {
-    if (size != null) headers.set("content-length", String(size));
-    if (opts.cacheControl) headers.set("cache-control", opts.cacheControl);
+  const whole = (size: number, body: ReadableStream | null) => {
+    headers.set("content-length", String(size));
+    if (opts.cache) headers.set("cache-control", opts.cache.whole);
     return new Response(isHead ? null : body, { status: 200, headers });
   };
   const partial = (r: ByteRange, size: number, body: ReadableStream | null) => {
     headers.set("content-range", `bytes ${r.offset}-${r.offset + r.length - 1}/${size}`);
     headers.set("content-length", String(r.length));
-    headers.set("cache-control", "private, max-age=31536000, immutable");
+    if (opts.cache) headers.set("cache-control", opts.cache.partial);
     return new Response(isHead ? null : body, { status: 206, headers });
   };
   const unsatisfiable = (size: number) => {
     headers.set("content-range", `bytes */${size}`);
-    headers.delete("content-length");
     return new Response(null, { status: 416, headers });
   };
 
-  // HEAD, `If-Range` and `bytes=-0` are answered (or decided) from metadata alone.
-  const ifRange = request.headers.get("if-range");
-  if (isHead || req === "unsatisfiable" || (req && ifRange)) {
+  if (isHead || req === "unsatisfiable") {
     const head = await adapter.head(key);
     if (!head) return opts.notFound();
     describe(head);
-    // A validator that no longer matches means the client's earlier bytes are stale: send it
-    // all. A date-form `If-Range` cannot be checked (no Last-Modified is served), same answer.
-    if (req && ifRange && (!head.etag || ifRange !== head.etag)) req = null;
+    if (req && ifRange && !ifRangeMatches(ifRange, head.etag)) req = null;
     if (req && head.size === 0) req = null;
     if (req === "unsatisfiable") return unsatisfiable(head.size);
     if (isHead) {
@@ -536,6 +559,7 @@ async function serveObject(
       const r = resolveRange(req, head.size);
       return r ? partial(r, head.size, null) : unsatisfiable(head.size);
     }
+    // A GET whose `bytes=-0` was voided (stale `If-Range`, empty object): the whole object.
   }
 
   let obj: GetResult | null;
@@ -543,14 +567,28 @@ async function serveObject(
     obj = await adapter.get(key, req ? { range: req } : undefined);
   } catch (err) {
     if (!(err instanceof RangeNotSatisfiable)) throw err;
-    if (err.size !== 0) return unsatisfiable(err.size);
+    if (err.size !== 0 && !ifRange) return unsatisfiable(err.size);
+    // An empty object is a 200. With `If-Range`, a stale validator voids the range (200, whole)
+    // and only a current one makes it a 416, which the whole read's etag decides.
+    obj = await adapter.get(key);
+    if (obj && obj.size !== 0 && ifRange && ifRangeMatches(ifRange, obj.etag)) {
+      await obj.body.cancel().catch(() => {});
+      return unsatisfiable(obj.size);
+    }
+    req = null;
+  }
+  if (obj?.range && ifRange && !ifRangeMatches(ifRange, obj.etag)) {
+    await obj.body.cancel().catch(() => {});
     obj = await adapter.get(key);
     req = null;
   }
   if (!obj) return opts.notFound();
   describe(obj);
   if (obj.range) return partial(obj.range, obj.size, obj.body);
-  return whole(req ? null : obj.size, obj.body);
+  if (!req) return whole(obj.size, obj.body);
+  // A range was asked for and none reported: the body may be a slice (see above).
+  headers.set("cache-control", "no-store");
+  return new Response(obj.body, { status: 200, headers });
 }
 
 /** Serve a PUBLIC media blob by key: `GET /media/<key>`. Cache-friendly + nosniff, no
@@ -577,10 +615,19 @@ export async function handleMediaRequest(
   // back as a 206, and seeking needs ranges in every browser.
   const headers = new Headers();
   headers.set("x-content-type-options", "nosniff");
-  return serveObject(request, opts.adapter, key, {
-    headers,
-    notFound: () => fileError(404, "not_found", "media not found"),
-    // Blobs are immutable (random keys), so a whole one caches hard.
-    cacheControl: "public, max-age=31536000, immutable",
-  });
+  try {
+    return await serveObject(request, opts.adapter, key, {
+      headers,
+      notFound: () => fileError(404, "not_found", "media not found"),
+      // Blobs are immutable (random keys), so a whole one caches hard. A 206 is `private`: a
+      // shared cache keyed by URL alone would otherwise keep two bytes as the object for a
+      // year (and the Workers Cache API throws on `put` of a 206).
+      cache: { whole: "public, max-age=31536000, immutable", partial: "private, max-age=31536000, immutable" },
+    });
+  } catch (err) {
+    // A public, anonymous route: a store failure is a JSON 500 and a log line, not an
+    // exception out of the Worker's fetch (a bare Cloudflare error page, nothing logged).
+    console.error("pramen: media endpoint error", err);
+    return fileError(500, "internal", "internal error");
+  }
 }

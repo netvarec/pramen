@@ -92,6 +92,13 @@ describe("byte ranges", () => {
     expect(parseRangeHeader("bytes=-0")).toBe("unsatisfiable");
   });
 
+  // Digits are unbounded; a float past MAX_SAFE_INTEGER handed to R2 was a 500.
+  test("numbers past MAX_SAFE_INTEGER are bounded, not passed through", () => {
+    expect(parseRangeHeader("bytes=0-99999999999999999999")).toEqual({ offset: 0 });
+    expect(parseRangeHeader("bytes=-99999999999999999999")).toEqual({ suffix: Number.MAX_SAFE_INTEGER });
+    expect(parseRangeHeader("bytes=99999999999999999999-")).toBe("unsatisfiable");
+  });
+
   test("resolveRange clamps the end and refuses a start past it", () => {
     expect(resolveRange({ offset: 4 }, 10)).toEqual({ offset: 4, length: 6 });
     expect(resolveRange({ suffix: 3 }, 10)).toEqual({ offset: 7, length: 3 });
@@ -138,6 +145,28 @@ describe("byte ranges", () => {
     expect((await serve()).headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
   });
 
+  test("a huge end is the rest of the object, a huge start is 416", async () => {
+    const tail = await serve({ range: "bytes=7-99999999999999999999" });
+    expect(tail.status).toBe(206);
+    expect(await tail.text()).toBe("789");
+    expect((await serve({ range: "bytes=99999999999999999999-" })).status).toBe(416);
+  });
+
+  test("a store failure on /media/ is a JSON 500, not an exception out of the Worker", async () => {
+    const { adapter } = spy(await seeded(), async () => {
+      throw new Error("r2 down");
+    });
+    const orig = console.error;
+    console.error = () => {};
+    try {
+      const res = await serve({ range: "bytes=0-1" }, adapter);
+      expect(res.status).toBe(500);
+      expect(((await res.json()) as { code: string }).code).toBe("internal");
+    } finally {
+      console.error = orig;
+    }
+  });
+
   test("no range is the whole object, and says ranges are accepted", async () => {
     const res = await serve();
     expect(res.status).toBe(200);
@@ -173,16 +202,33 @@ describe("byte ranges", () => {
     expect(calls).toEqual({ get: 0, head: 1 });
   });
 
-  test("an If-Range that does not match the etag gets the whole object", async () => {
+  // The validator is checked against the etag of the SAME read as the bytes: a head then a
+  // get could validate one version and slice another.
+  const etagged = async (etag: string) => {
     const inner = await seeded();
-    const { adapter } = spy(inner);
-    adapter.head = async (k) => ({ ...(await inner.head(k))!, etag: '"v2"' });
-    const stale = await serve({ range: "bytes=2-5", "if-range": '"v1"' }, adapter);
+    return spy(inner, async (k, o) => {
+      const r = await inner.get(k, o);
+      return r && { ...r, etag };
+    });
+  };
+
+  test("an If-Range that matches is a 206 from one read; a stale one gets the whole object", async () => {
+    const fresh = await etagged('"v2"');
+    const ok = await serve({ range: "bytes=2-5", "if-range": '"v2"' }, fresh.adapter);
+    expect(ok.status).toBe(206);
+    expect(await ok.text()).toBe("2345");
+    expect(fresh.calls).toEqual({ get: 1, head: 0 });
+
+    const stale = await serve({ range: "bytes=2-5", "if-range": '"v1"' }, (await etagged('"v2"')).adapter);
     expect(stale.status).toBe(200);
     expect(await stale.text()).toBe("0123456789");
-    const fresh = await serve({ range: "bytes=2-5", "if-range": '"v2"' }, adapter);
-    expect(fresh.status).toBe(206);
-    expect(await fresh.text()).toBe("2345");
+  });
+
+  // RFC 9110: If-Range uses the STRONG comparison, so a weak validator never matches.
+  test("a weak If-Range never matches", async () => {
+    const weak = await serve({ range: "bytes=2-5", "if-range": 'W/"v2"' }, (await etagged('W/"v2"')).adapter);
+    expect(weak.status).toBe(200);
+    expect(await weak.text()).toBe("0123456789");
   });
 
   // A third-party adapter written before `GetOpts` ignores the range and hands back the whole
@@ -210,17 +256,38 @@ describe("byte ranges", () => {
     const res = await serve({ range: "bytes=2-5" }, adapter);
     expect(res.status).toBe(200);
     expect(res.headers.get("content-length")).toBeNull();
+    // Nor may any cache keep it as the object, which /media/'s whole-object policy would allow.
+    expect(res.headers.get("cache-control")).toBe("no-store");
   });
 
-  test("/files/download serves ranges too", async () => {
+  const signed = async () => {
     const secret = "test-secret-at-least-32-characters-long";
     const adapter = new MemoryAdapter();
     await adapter.put("main/video", new TextEncoder().encode("0123456789"), { contentType: "video/mp4" });
     const { url } = await createFiles({ tenant: "main", secret, adapter }).signDownload("main/video");
-    const res = (await handleFileRequest(new Request(`https://x${url}`, { headers: { range: "bytes=0-1" } }), { adapter, secret }))!;
+    return (headers: Record<string, string>, method = "GET") =>
+      handleFileRequest(new Request(`https://x${url}`, { headers, method }), { adapter, secret }).then((r) => r!);
+  };
+
+  test("/files/download serves ranges too", async () => {
+    const res = await (await signed())({ range: "bytes=0-1" });
     expect(res.status).toBe(206);
     expect(res.headers.get("content-range")).toBe("bytes 0-1/10");
     expect(res.headers.get("access-control-expose-headers")).toContain("content-range");
     expect(await res.text()).toBe("01");
+  });
+
+  // A signed url is short-lived and the file deletable: a year in the browser cache would
+  // outlive both, so a ranged read gets no more caching than a whole one (none).
+  test("/files/download sets no cache-control on a 206", async () => {
+    const res = await (await signed())({ range: "bytes=0-1" });
+    expect(res.headers.get("cache-control")).toBeNull();
+  });
+
+  test("/files/download answers HEAD from metadata", async () => {
+    const res = await (await signed())({ range: "bytes=0-1" }, "HEAD");
+    expect(res.status).toBe(206);
+    expect(res.headers.get("content-length")).toBe("2");
+    expect(res.headers.get("access-control-allow-methods")).toContain("HEAD");
   });
 });

@@ -1014,16 +1014,23 @@ there are no backward-compatibility guarantees yet.
 - **Video would not play in Safari, nor seek anywhere (`@pramen/server`).** Both `/media/` and
   the signed `/files/download` answered every request with the whole object and a 200, and
   Safari will not play a video unless `Range: bytes=0-1` comes back as a 206. Both routes now
-  go through one `serveObject` and serve single byte ranges: a 206 with `content-range`, a 416
-  for a start past the end, `accept-ranges: bytes` and the object's `etag` always, and an
-  `If-Range` that no longer matches gets the whole object. A ranged GET is one store operation:
-  `StorageAdapter.get` takes an optional `{ range }` in `R2Range` form (`RangeRequest`), resolves
-  it against the size it reads anyway, reports what it actually read in `GetResult.range`, and
-  throws `RangeNotSatisfiable` for a start past the end. A HEAD is answered from `head()` alone.
-  A 206 is `cache-control: private`, so a shared cache keyed by URL cannot keep two bytes as
-  the object. An adapter that ignores the range still works (200, whole object), and one that
-  slices without reporting it gets a 200 with no `content-length` rather than a wrong one. A
-  zero-length object is a 200 whatever the range. `HeadResult` gains an optional `etag`.
+  go through one `serveObject` and serve single byte ranges, for GET and HEAD: a 206 with
+  `content-range`, a 416 for a start past the end, `accept-ranges: bytes` and the object's
+  `etag` always. A ranged GET is one store operation: `StorageAdapter.get` takes an optional
+  `{ range }` in `R2Range` form (`RangeRequest`, parsed by the exported `parseRangeHeader`),
+  resolves it against the size it reads anyway, reports what it actually read in
+  `GetResult.range`, and throws `RangeNotSatisfiable` for a start past the end. `If-Range` is
+  compared strongly (a weak validator never matches) against the etag of the same read as the
+  bytes, so an overwrite in between cannot splice a new version onto old bytes. A HEAD is
+  answered from `head()` alone. On `/media/` a whole object stays publicly immutable and a 206
+  is `private`, so a shared cache keyed by URL cannot keep two bytes as the object; a signed
+  download sets no `cache-control` either way, so a ranged read cannot outlive its token or the
+  file's deletion in the browser cache. An adapter that ignores the range still works (200,
+  whole object), and one that slices without reporting it gets a 200 with no `content-length`
+  and `no-store`. Range numbers past `MAX_SAFE_INTEGER` are bounded instead of reaching R2 as
+  floats, R2's own invalid-range error is retried with the range clamped, and a store failure on
+  `/media/` is a JSON 500 rather than an exception out of the Worker. A zero-length object is a
+  200 whatever the range. `HeadResult` gains an optional `etag`.
 - **Reordering blocks by drag and drop was unreliable (`@pramen/cms-editor`).** Editors
   reported it "sometimes working, sometimes not", and three things added up to that. A drop in
   the gap between two cards did nothing, because only a card was a target. The ring on the

@@ -77,6 +77,10 @@ export async function runFiles(base: string): Promise<void> {
   const past = await fetch(base + dl.body.result.url, { headers: { range: `bytes=${payload.length + 10}-` } });
   assert(past.status === 416, "files: a range past the end is 416");
   assert(past.headers.get("content-range") === `bytes */${payload.length}`, "files: 416 names the size");
+  const huge = await fetch(base + dl.body.result.url, { headers: { range: "bytes=1-99999999999999999999" } });
+  assert(huge.status === 206 && (await huge.text()) === payload.slice(1), "files: an end past MAX_SAFE_INTEGER reads to the end, not a 500");
+  const headRanged = await fetch(base + dl.body.result.url, { method: "HEAD", headers: { range: "bytes=0-1" } });
+  assert(headRanged.status === 206 && headRanged.headers.get("content-range") === `bytes 0-1/${payload.length}`, "files: HEAD with a range is a 206 from metadata");
 
   // --- a non-ASCII filename survives the round trip ---
   // Regression: the quoted `filename="…"` is a WebIDL ByteString, so reflecting the raw
