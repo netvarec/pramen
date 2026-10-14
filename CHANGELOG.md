@@ -1011,13 +1011,19 @@ there are no backward-compatibility guarantees yet.
 
 ### Fixed
 
-- **Video from `/media/` would not play in Safari, nor seek anywhere (`@pramen/server`).** The
-  route answered every request with the whole object and a 200, and Safari will not play a
-  video unless `Range: bytes=0-1` comes back as a 206. `handleMediaRequest` now serves single
-  byte ranges (206 with `content-range`, 416 for a start past the end, `accept-ranges: bytes`
-  always). `StorageAdapter.get` takes an optional `{ range }`, which `R2Adapter` and
-  `MemoryAdapter` honour and report back in `GetResult.range`. An adapter that ignores it still
-  works: the route answers 200 with the whole object rather than labelling it a 206.
+- **Video would not play in Safari, nor seek anywhere (`@pramen/server`).** Both `/media/` and
+  the signed `/files/download` answered every request with the whole object and a 200, and
+  Safari will not play a video unless `Range: bytes=0-1` comes back as a 206. Both routes now
+  go through one `serveObject` and serve single byte ranges: a 206 with `content-range`, a 416
+  for a start past the end, `accept-ranges: bytes` and the object's `etag` always, and an
+  `If-Range` that no longer matches gets the whole object. A ranged GET is one store operation:
+  `StorageAdapter.get` takes an optional `{ range }` in `R2Range` form (`RangeRequest`), resolves
+  it against the size it reads anyway, reports what it actually read in `GetResult.range`, and
+  throws `RangeNotSatisfiable` for a start past the end. A HEAD is answered from `head()` alone.
+  A 206 is `cache-control: private`, so a shared cache keyed by URL cannot keep two bytes as
+  the object. An adapter that ignores the range still works (200, whole object), and one that
+  slices without reporting it gets a 200 with no `content-length` rather than a wrong one. A
+  zero-length object is a 200 whatever the range. `HeadResult` gains an optional `etag`.
 - **Reordering blocks by drag and drop was unreliable (`@pramen/cms-editor`).** Editors
   reported it "sometimes working, sometimes not", and three things added up to that. A drop in
   the gap between two cards did nothing, because only a card was a target. The ring on the

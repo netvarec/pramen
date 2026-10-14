@@ -84,7 +84,7 @@ export { Kv, denySession, allowSession, isSessionDenied } from "./runtime/kv";
 
 // --- files ---
 export type { FileRef, Files, SignUploadOpts, SignDownloadOpts, HeadResult } from "./sdk/files";
-export { R2Adapter, MemoryAdapter, createFiles, handleFileRequest, isActiveType } from "./runtime/storage";
+export { R2Adapter, MemoryAdapter, RangeNotSatisfiable, resolveRange, createFiles, handleFileRequest, isActiveType } from "./runtime/storage";
 
 // Signed capability tokens (HMAC-SHA256), the machinery behind signed file urls and
 // page-preview links. Exported so an app (or @pramen/cms) can mint its own capability url
@@ -95,7 +95,7 @@ export { signToken, verifyToken, isUsableSecret, resolveSecret, MIN_TOKEN_SECRET
 // token with the same JWKS cache (and its key-rotation handling) the Worker uses.
 export { HmacStrategy, JwksStrategy, isSystemRole, SYSTEM_ROLE_PREFIX, type VerifyStrategy, type VerifyOptions } from "./auth";
 export type { ExpiringToken } from "./runtime/token";
-export type { StorageAdapter, PutResult, GetResult, GetOpts, ByteRange } from "./runtime/storage";
+export type { StorageAdapter, PutResult, GetResult, GetOpts, ByteRange, RangeRequest } from "./runtime/storage";
 
 // --- mail (ctx.mail) ---
 export { Mail, CloudflareEmailAdapter, MailgunAdapter, KvMailAdapter, MemoryMailAdapter, UnconfiguredMailAdapter, createMail } from "./runtime/mail";
