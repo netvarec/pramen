@@ -95,7 +95,7 @@ export { signToken, verifyToken, isUsableSecret, resolveSecret, MIN_TOKEN_SECRET
 // token with the same JWKS cache (and its key-rotation handling) the Worker uses.
 export { HmacStrategy, JwksStrategy, isSystemRole, SYSTEM_ROLE_PREFIX, type VerifyStrategy, type VerifyOptions } from "./auth";
 export type { ExpiringToken } from "./runtime/token";
-export type { StorageAdapter, PutResult, GetResult } from "./runtime/storage";
+export type { StorageAdapter, PutResult, GetResult, GetOpts, ByteRange } from "./runtime/storage";
 
 // --- mail (ctx.mail) ---
 export { Mail, CloudflareEmailAdapter, MailgunAdapter, KvMailAdapter, MemoryMailAdapter, UnconfiguredMailAdapter, createMail } from "./runtime/mail";

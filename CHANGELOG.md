@@ -1011,6 +1011,13 @@ there are no backward-compatibility guarantees yet.
 
 ### Fixed
 
+- **Video from `/media/` would not play in Safari, nor seek anywhere (`@pramen/server`).** The
+  route answered every request with the whole object and a 200, and Safari will not play a
+  video unless `Range: bytes=0-1` comes back as a 206. `handleMediaRequest` now serves single
+  byte ranges (206 with `content-range`, 416 for a start past the end, `accept-ranges: bytes`
+  always). `StorageAdapter.get` takes an optional `{ range }`, which `R2Adapter` and
+  `MemoryAdapter` honour and report back in `GetResult.range`. An adapter that ignores it still
+  works: the route answers 200 with the whole object rather than labelling it a 206.
 - **Reordering blocks by drag and drop was unreliable (`@pramen/cms-editor`).** Editors
   reported it "sometimes working, sometimes not", and three things added up to that. A drop in
   the gap between two cards did nothing, because only a card was a target. The ring on the

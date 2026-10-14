@@ -32,8 +32,22 @@ export interface PutResult {
 }
 export interface GetResult {
   body: ReadableStream;
+  /** Size of the WHOLE object, also when only a range of it is in `body`. */
   size: number;
   contentType?: string;
+  /** The byte range `body` holds, set only by an adapter that honoured `GetOpts.range`. An
+   * adapter that ignores the option leaves it unset, and the caller then has the whole object
+   * (and must not answer 206 with it). */
+  range?: ByteRange;
+}
+/** A byte range: `length` bytes from `offset`, both resolved against the object's size. */
+export interface ByteRange {
+  offset: number;
+  length: number;
+}
+export interface GetOpts {
+  /** Read only this part of the object (an HTTP `Range` request). */
+  range?: ByteRange;
 }
 
 export interface StorageAdapter {
@@ -42,7 +56,7 @@ export interface StorageAdapter {
     body: ReadableStream | ArrayBuffer | Uint8Array | null,
     opts?: { contentType?: string },
   ): Promise<PutResult>;
-  get(key: string): Promise<GetResult | null>;
+  get(key: string, opts?: GetOpts): Promise<GetResult | null>;
   head(key: string): Promise<HeadResult | null>;
   delete(key: string): Promise<void>;
 }
@@ -59,10 +73,10 @@ export class R2Adapter implements StorageAdapter {
     return { key, size: obj?.size ?? 0, etag: obj?.etag };
   }
 
-  async get(key: string): Promise<GetResult | null> {
-    const obj = await this.bucket.get(key);
+  async get(key: string, opts?: GetOpts): Promise<GetResult | null> {
+    const obj = await this.bucket.get(key, opts?.range ? { range: opts.range } : undefined);
     if (!obj) return null;
-    return { body: obj.body, size: obj.size, contentType: obj.httpMetadata?.contentType };
+    return { body: obj.body, size: obj.size, contentType: obj.httpMetadata?.contentType, range: opts?.range };
   }
 
   async head(key: string): Promise<HeadResult | null> {
@@ -86,10 +100,12 @@ export class MemoryAdapter implements StorageAdapter {
     return { key, size: bytes.byteLength };
   }
 
-  async get(key: string): Promise<GetResult | null> {
+  async get(key: string, opts?: GetOpts): Promise<GetResult | null> {
     const e = this.store.get(key);
     if (!e) return null;
-    return { body: bytesToStream(e.bytes), size: e.bytes.byteLength, contentType: e.contentType };
+    const r = opts?.range;
+    const bytes = r ? e.bytes.subarray(r.offset, r.offset + r.length) : e.bytes;
+    return { body: bytesToStream(bytes), size: e.bytes.byteLength, contentType: e.contentType, range: r };
   }
 
   async head(key: string): Promise<HeadResult | null> {
@@ -375,6 +391,31 @@ export function isActiveType(contentType: string | null | undefined): boolean {
   return ACTIVE_TYPES.has(base);
 }
 
+/**
+ * One `Range: bytes=…` request header against an object of `size` bytes. `null` means "serve
+ * the whole object": no header, a unit other than bytes, or several ranges (a multipart
+ * response is not worth it for media; answering 200 with everything is allowed). A range
+ * that starts past the end is `"unsatisfiable"` (416). An end past the object is clamped.
+ */
+export function parseByteRange(header: string | null | undefined, size: number): ByteRange | "unsatisfiable" | null {
+  const m = /^\s*bytes\s*=\s*(\d*)\s*-\s*(\d*)\s*$/i.exec(header ?? "");
+  if (!m) return null;
+  const [, a, b] = m;
+  if (a === "" && b === "") return null;
+  if (a === "") {
+    // Suffix form: the last `b` bytes.
+    const n = Number(b);
+    if (n === 0) return "unsatisfiable";
+    const length = Math.min(n, size);
+    return size === 0 ? "unsatisfiable" : { offset: size - length, length };
+  }
+  const start = Number(a);
+  if (start >= size) return "unsatisfiable";
+  const end = b === "" ? size - 1 : Math.min(Number(b), size - 1);
+  if (end < start) return null;
+  return { offset: start, length: end - start + 1 };
+}
+
 export async function handleMediaRequest(
   request: Request,
   opts: { adapter: StorageAdapter },
@@ -391,14 +432,38 @@ export async function handleMediaRequest(
   }
   if (key.includes("..") || !MEDIA_KEY.test(key)) return fileError(404, "not_found", "no such media");
 
-  const obj = await opts.adapter.get(key);
+  // Byte ranges, for video: Safari will not play one at all unless `bytes=0-1` comes back as
+  // a 206, and seeking needs ranges in every browser. The size comes from `head` first, since
+  // a range can only be resolved (or refused) against it.
+  const rangeHeader = request.headers.get("range");
+  let range: ByteRange | null = null;
+  if (rangeHeader) {
+    const head = await opts.adapter.head(key);
+    if (!head) return fileError(404, "not_found", "media not found");
+    const parsed = parseByteRange(rangeHeader, head.size);
+    if (parsed === "unsatisfiable") {
+      return new Response(null, { status: 416, headers: { "content-range": `bytes */${head.size}`, "accept-ranges": "bytes" } });
+    }
+    range = parsed;
+  }
+
+  const obj = await opts.adapter.get(key, range ? { range } : undefined);
   if (!obj) return fileError(404, "not_found", "media not found");
+  // 206 only when the adapter says it read the range: one that ignores `GetOpts` handed back
+  // the whole object, and that is a 200.
+  const served = obj.range !== undefined ? range : null;
   const headers = new Headers();
   headers.set("content-type", obj.contentType ?? "application/octet-stream");
-  headers.set("content-length", String(obj.size));
+  headers.set("accept-ranges", "bytes");
+  if (served) {
+    headers.set("content-range", `bytes ${served.offset}-${served.offset + served.length - 1}/${obj.size}`);
+    headers.set("content-length", String(served.length));
+  } else {
+    headers.set("content-length", String(obj.size));
+  }
   // Blobs are immutable (random keys), so cache hard; never sniff into an executable type.
   headers.set("cache-control", "public, max-age=31536000, immutable");
   headers.set("x-content-type-options", "nosniff");
   if (isActiveType(obj.contentType)) headers.set("content-security-policy", ACTIVE_TYPE_CSP);
-  return new Response(request.method === "HEAD" ? null : obj.body, { headers });
+  return new Response(request.method === "HEAD" ? null : obj.body, { status: served ? 206 : 200, headers });
 }
