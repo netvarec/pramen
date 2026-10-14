@@ -19,6 +19,8 @@ export interface FileRef {
 export interface HeadResult {
   size: number;
   contentType?: string;
+  /** Quoted HTTP entity tag, when the store has one. */
+  etag?: string;
 }
 
 export interface SignUploadOpts {

@@ -67,6 +67,21 @@ export async function runFiles(base: string): Promise<void> {
     "files: download carries the original filename",
   );
 
+  // --- byte ranges through the real R2 binding: the adapter reports the range R2 read ---
+  const ranged = await fetch(base + dl.body.result.url, { headers: { range: "bytes=1-3" } });
+  assert(ranged.status === 206, "files: a ranged download responds 206");
+  assert(ranged.headers.get("content-range") === `bytes 1-3/${payload.length}`, "files: 206 names the slice and the size");
+  assert((await ranged.text()) === payload.slice(1, 4), "files: a ranged download carries just those bytes");
+  const suffix = await fetch(base + dl.body.result.url, { headers: { range: "bytes=-2" } });
+  assert(suffix.status === 206 && (await suffix.text()) === payload.slice(-2), "files: a suffix range resolves in R2");
+  const past = await fetch(base + dl.body.result.url, { headers: { range: `bytes=${payload.length + 10}-` } });
+  assert(past.status === 416, "files: a range past the end is 416");
+  assert(past.headers.get("content-range") === `bytes */${payload.length}`, "files: 416 names the size");
+  const huge = await fetch(base + dl.body.result.url, { headers: { range: "bytes=1-99999999999999999999" } });
+  assert(huge.status === 206 && (await huge.text()) === payload.slice(1), "files: an end past MAX_SAFE_INTEGER reads to the end, not a 500");
+  const headRanged = await fetch(base + dl.body.result.url, { method: "HEAD", headers: { range: "bytes=0-1" } });
+  assert(headRanged.status === 206 && headRanged.headers.get("content-range") === `bytes 0-1/${payload.length}`, "files: HEAD with a range is a 206 from metadata");
+
   // --- a non-ASCII filename survives the round trip ---
   // Regression: the quoted `filename="…"` is a WebIDL ByteString, so reflecting the raw
   // name into it threw on any code point > U+00FF and 500'd the download. The ASCII

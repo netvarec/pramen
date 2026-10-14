@@ -32,8 +32,50 @@ export interface PutResult {
 }
 export interface GetResult {
   body: ReadableStream;
+  /** Size of the WHOLE object, also when only a range of it is in `body`. */
   size: number;
   contentType?: string;
+  /** Quoted HTTP entity tag, when the store has one (for `ETag` / `If-Range`). */
+  etag?: string;
+  /** The byte range `body` holds, resolved against `size`. Set by an adapter that honoured
+   * `GetOpts.range`; an adapter that ignores the option leaves it unset and hands back the
+   * whole object. An adapter that READS a range MUST report it here: unset is taken to mean
+   * "whole object", and the route cannot tell a slice from the whole without reading it. */
+  range?: ByteRange;
+}
+/** A byte range: `length` bytes from `offset`, both resolved against the object's size. */
+export interface ByteRange {
+  offset: number;
+  length: number;
+}
+/** A requested range, not yet resolved against the object's size (the shape of `R2Range`, so
+ * it is resolved by the store in the same call that reads it, with no `head` first). */
+export type RangeRequest = { offset: number; length?: number } | { suffix: number };
+export interface GetOpts {
+  /** Read only this part of the object (an HTTP `Range` request). An adapter that honours it
+   * throws `RangeNotSatisfiable` when the range starts past the end. */
+  range?: RangeRequest;
+}
+
+/** Thrown by `StorageAdapter.get` for a range that starts past the end of the object: the
+ * caller answers 416 and needs the object's size to say so. */
+export class RangeNotSatisfiable extends Error {
+  constructor(readonly size: number) {
+    super(`range not satisfiable for an object of ${size} bytes`);
+  }
+}
+
+/** Resolve a requested range against an object of `size` bytes: an end past the object is
+ * clamped, a suffix longer than it is the whole object, and a start at or past the end is
+ * `null` (unsatisfiable). */
+export function resolveRange(req: RangeRequest, size: number): ByteRange | null {
+  if ("suffix" in req) {
+    const length = Math.min(req.suffix, size);
+    return length > 0 ? { offset: size - length, length } : null;
+  }
+  if (req.offset >= size) return null;
+  const length = Math.min(req.length ?? size - req.offset, size - req.offset);
+  return length > 0 ? { offset: req.offset, length } : null;
 }
 
 export interface StorageAdapter {
@@ -42,7 +84,7 @@ export interface StorageAdapter {
     body: ReadableStream | ArrayBuffer | Uint8Array | null,
     opts?: { contentType?: string },
   ): Promise<PutResult>;
-  get(key: string): Promise<GetResult | null>;
+  get(key: string, opts?: GetOpts): Promise<GetResult | null>;
   head(key: string): Promise<HeadResult | null>;
   delete(key: string): Promise<void>;
 }
@@ -59,21 +101,54 @@ export class R2Adapter implements StorageAdapter {
     return { key, size: obj?.size ?? 0, etag: obj?.etag };
   }
 
-  async get(key: string): Promise<GetResult | null> {
-    const obj = await this.bucket.get(key);
+  async get(key: string, opts?: GetOpts): Promise<GetResult | null> {
+    const req = opts?.range;
+    let obj: R2ObjectBody | null;
+    try {
+      obj = await this.bucket.get(key, req ? { range: req } : undefined);
+    } catch (err) {
+      // R2 refuses a range it cannot serve as asked (a start past the end, a length past it)
+      // rather than clamping. Only that error earns a second operation, for the size: any
+      // other failure is rethrown as is, so it is neither masked nor paid for twice.
+      if (!req || !isR2RangeError(err)) throw err;
+      const head = await this.bucket.head(key);
+      if (!head) return null;
+      const r = resolveRange(req, head.size);
+      if (!r) throw new RangeNotSatisfiable(head.size);
+      obj = await this.bucket.get(key, { range: r });
+    }
     if (!obj) return null;
-    return { body: obj.body, size: obj.size, contentType: obj.httpMetadata?.contentType };
+    let range: ByteRange | undefined;
+    if (req) {
+      // Report what R2 SAYS it read, not what was asked for: the route labels the body with
+      // this, and a store that clamped or ignored the request would otherwise be mislabelled.
+      // R2 echoes an `R2Range`, which may still be in suffix / open-ended form, and carries
+      // every key (workerd's has `suffix: undefined` beside an offset), so test values, not keys.
+      const got = obj.range as { offset?: number; length?: number; suffix?: number } | undefined;
+      if (got) {
+        const r = resolveRange(got.suffix != null ? { suffix: got.suffix } : { offset: got.offset ?? 0, length: got.length }, obj.size);
+        if (!r) throw new RangeNotSatisfiable(obj.size);
+        range = r;
+      }
+    }
+    return { body: obj.body, size: obj.size, contentType: obj.httpMetadata?.contentType, etag: obj.httpEtag, range };
   }
 
   async head(key: string): Promise<HeadResult | null> {
     const obj = await this.bucket.head(key);
     if (!obj) return null;
-    return { size: obj.size, contentType: obj.httpMetadata?.contentType };
+    return { size: obj.size, contentType: obj.httpMetadata?.contentType, etag: obj.httpEtag };
   }
 
   async delete(key: string): Promise<void> {
     await this.bucket.delete(key);
   }
+}
+
+/** R2's "requested range not satisfiable" (code 10039), told apart from a real failure. */
+function isR2RangeError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /\b10039\b|range/i.test(msg);
 }
 
 /** In-memory store for unit tests / substrates without an object store. Not durable. */
@@ -86,10 +161,18 @@ export class MemoryAdapter implements StorageAdapter {
     return { key, size: bytes.byteLength };
   }
 
-  async get(key: string): Promise<GetResult | null> {
+  async get(key: string, opts?: GetOpts): Promise<GetResult | null> {
     const e = this.store.get(key);
     if (!e) return null;
-    return { body: bytesToStream(e.bytes), size: e.bytes.byteLength, contentType: e.contentType };
+    const size = e.bytes.byteLength;
+    let r: ByteRange | undefined;
+    if (opts?.range) {
+      const resolved = resolveRange(opts.range, size);
+      if (!resolved) throw new RangeNotSatisfiable(size);
+      r = resolved;
+    }
+    const bytes = r ? e.bytes.subarray(r.offset, r.offset + r.length) : e.bytes;
+    return { body: bytesToStream(bytes), size, contentType: e.contentType, range: r };
   }
 
   async head(key: string): Promise<HeadResult | null> {
@@ -247,12 +330,12 @@ export function createFiles(cfg: FilesConfig): Files {
 
 const CORS: Record<string, string> = {
   "access-control-allow-origin": "*",
-  "access-control-allow-methods": "GET, PUT, OPTIONS",
-  "access-control-allow-headers": "content-type, authorization",
+  "access-control-allow-methods": "GET, HEAD, PUT, OPTIONS",
+  "access-control-allow-headers": "content-type, authorization, range, if-range",
   // Neither is CORS-safelisted, so without this a browser client that `fetch()`es a download
   // (rather than navigating to it) reads both as null, and the filename encoding below
   // would be invisible to exactly the cross-origin SPAs `CORS_ORIGINS` exists for.
-  "access-control-expose-headers": "content-disposition, content-length",
+  "access-control-expose-headers": "content-disposition, content-length, content-range, accept-ranges, etag",
 };
 
 const fileError = (status: number, code: string, msg: string) =>
@@ -313,19 +396,20 @@ export async function handleFileRequest(
     }
 
     // download
-    if (request.method !== "GET") return fileError(405, "method_not_allowed", "use GET to download");
+    if (request.method !== "GET" && request.method !== "HEAD") return fileError(405, "method_not_allowed", "use GET to download");
     if (token.op !== "get") return fileError(403, "forbidden", "token is not a download token");
 
-    const obj = await opts.adapter.get(token.k);
-    if (!obj) return fileError(404, "not_found", "file not found");
-
+    // Ranges here too: a private video behind `signDownload` needs them as much as a public
+    // one does (Safari will not play it without a 206 for `bytes=0-1`).
     const headers = new Headers(CORS);
-    headers.set("content-type", obj.contentType ?? token.ct ?? "application/octet-stream");
-    headers.set("content-length", String(obj.size));
     // Never let the browser sniff a user-uploaded blob into an executable type.
     headers.set("x-content-type-options", "nosniff");
     if (token.fn) headers.set("content-disposition", contentDisposition(token.fn));
-    return new Response(obj.body, { headers });
+    return await serveObject(request, opts.adapter, token.k, {
+      headers,
+      fallbackContentType: token.ct,
+      notFound: () => fileError(404, "not_found", "file not found"),
+    });
   } catch (err) {
     if (err instanceof PramenError) return fileError(err.status, err.code, err.message);
     console.error("pramen: file endpoint error", err);
@@ -338,10 +422,6 @@ export async function handleFileRequest(
 // route can only serve media-prefixed blobs, never a signed private attachment.
 const MEDIA_KEY = /^[^/]+\/media\/[^/][^\0]*$/;
 
-/** Serve a PUBLIC media blob by key: `GET /media/<key>`. Cache-friendly + nosniff, no
- * auth (published-site assets are public; the random tenant-scoped key is the capability).
- * Returns a Response for any `/media/*` path, or null if not a media request. Restricted
- * to `<tenant>/media/` keys so it can't serve arbitrary (e.g. signed-private) objects. */
 /** Content types the browser treats as an ACTIVE DOCUMENT: one that can run script when
  * opened at the top level, rather than being rendered as inert media.
  *
@@ -375,6 +455,146 @@ export function isActiveType(contentType: string | null | undefined): boolean {
   return ACTIVE_TYPES.has(base);
 }
 
+/**
+ * One `Range: bytes=…` request header, not yet resolved against a size (the store does that
+ * in the same call that reads it). `null` means "serve the whole object": no header, a unit
+ * other than bytes, several ranges (a multipart response is not worth it for media; answering
+ * 200 with everything is allowed), or an end before the start. `bytes=-0` asks for nothing,
+ * and a start past MAX_SAFE_INTEGER is past any object, so both are `"unsatisfiable"` (416)
+ * whatever the size.
+ */
+export function parseRangeHeader(header: string | null | undefined): RangeRequest | "unsatisfiable" | null {
+  const m = /^\s*bytes\s*=\s*(\d*)\s*-\s*(\d*)\s*$/i.exec(header ?? "");
+  if (!m) return null;
+  const [, a, b] = m;
+  if (a === "" && b === "") return null;
+  // Digits are unbounded, numbers are not: a value past MAX_SAFE_INTEGER is past the end of
+  // any object, so an end that large reads as open-ended, a suffix as the whole object, and a
+  // start as unsatisfiable, rather than a float a store may refuse.
+  const MAX = Number.MAX_SAFE_INTEGER;
+  if (a === "") {
+    const suffix = Math.min(Number(b), MAX);
+    return suffix === 0 ? "unsatisfiable" : { suffix };
+  }
+  const offset = Number(a);
+  if (offset > MAX) return "unsatisfiable";
+  const end = Number(b);
+  if (b === "" || end > MAX) return { offset };
+  return end < offset ? null : { offset, length: end - offset + 1 };
+}
+
+/** `If-Range` matches only by STRONG comparison (RFC 9110 13.1.5): a weak validator on
+ * either side, or the date form (no Last-Modified is served), never does. */
+function ifRangeMatches(ifRange: string, etag: string | undefined): boolean {
+  return !!etag && !ifRange.startsWith("W/") && !etag.startsWith("W/") && ifRange === etag;
+}
+
+/**
+ * GET/HEAD one stored object, honouring a single byte range. Shared by `/media/` and
+ * `/files/download` so the two cannot drift. `headers` carries the route's own (CORS,
+ * disposition, nosniff). `cache` is the route's policy for a whole answer and for a 206;
+ * absent, neither carries `cache-control`.
+ *
+ * - A ranged GET is ONE store operation: the adapter resolves the range against the size it
+ *   reads anyway. A `head` happens only for a HEAD request, or `bytes=-0` (416 needs a size).
+ * - 206 only when the adapter REPORTS the range it read (`GetResult.range`). Without it the
+ *   body may be the whole object (an adapter that ignores ranges) or, against the contract, a
+ *   slice it forgot to report. Either way it is a 200 with no `content-length` (so a wrong one
+ *   is never declared) and `no-store` (so no cache keeps it as the object).
+ * - `If-Range` is checked against the etag of the SAME read that produced the bytes, so a key
+ *   overwritten in between cannot splice new bytes onto the client's old ones. On a mismatch
+ *   the slice is dropped and the whole object fetched: a second operation, only for a stale
+ *   resume.
+ * - A zero-length object has no satisfiable range worth refusing, so it is a 200, empty.
+ */
+async function serveObject(
+  request: Request,
+  adapter: StorageAdapter,
+  key: string,
+  opts: {
+    headers: Headers;
+    notFound: () => Response;
+    fallbackContentType?: string;
+    cache?: { whole: string; partial: string };
+  },
+): Promise<Response> {
+  const headers = opts.headers;
+  headers.set("accept-ranges", "bytes");
+  const isHead = request.method === "HEAD";
+  const ifRange = request.headers.get("if-range");
+  let req = parseRangeHeader(request.headers.get("range"));
+
+  const describe = (meta: { contentType?: string; etag?: string }) => {
+    const ct = meta.contentType ?? opts.fallbackContentType ?? "application/octet-stream";
+    headers.set("content-type", ct);
+    if (meta.etag) headers.set("etag", meta.etag);
+    // Never sniff into, nor render as live, an executable type (see ACTIVE_TYPES).
+    if (isActiveType(ct)) headers.set("content-security-policy", ACTIVE_TYPE_CSP);
+  };
+  const whole = (size: number, body: ReadableStream | null) => {
+    headers.set("content-length", String(size));
+    if (opts.cache) headers.set("cache-control", opts.cache.whole);
+    return new Response(isHead ? null : body, { status: 200, headers });
+  };
+  const partial = (r: ByteRange, size: number, body: ReadableStream | null) => {
+    headers.set("content-range", `bytes ${r.offset}-${r.offset + r.length - 1}/${size}`);
+    headers.set("content-length", String(r.length));
+    if (opts.cache) headers.set("cache-control", opts.cache.partial);
+    return new Response(isHead ? null : body, { status: 206, headers });
+  };
+  const unsatisfiable = (size: number) => {
+    headers.set("content-range", `bytes */${size}`);
+    return new Response(null, { status: 416, headers });
+  };
+
+  if (isHead || req === "unsatisfiable") {
+    const head = await adapter.head(key);
+    if (!head) return opts.notFound();
+    describe(head);
+    if (req && ifRange && !ifRangeMatches(ifRange, head.etag)) req = null;
+    if (req && head.size === 0) req = null;
+    if (req === "unsatisfiable") return unsatisfiable(head.size);
+    if (isHead) {
+      if (!req) return whole(head.size, null);
+      const r = resolveRange(req, head.size);
+      return r ? partial(r, head.size, null) : unsatisfiable(head.size);
+    }
+    // A GET whose `bytes=-0` was voided (stale `If-Range`, empty object): the whole object.
+  }
+
+  let obj: GetResult | null;
+  try {
+    obj = await adapter.get(key, req ? { range: req } : undefined);
+  } catch (err) {
+    if (!(err instanceof RangeNotSatisfiable)) throw err;
+    if (err.size !== 0 && !ifRange) return unsatisfiable(err.size);
+    // An empty object is a 200. With `If-Range`, a stale validator voids the range (200, whole)
+    // and only a current one makes it a 416, which the whole read's etag decides.
+    obj = await adapter.get(key);
+    if (obj && obj.size !== 0 && ifRange && ifRangeMatches(ifRange, obj.etag)) {
+      await obj.body.cancel().catch(() => {});
+      return unsatisfiable(obj.size);
+    }
+    req = null;
+  }
+  if (obj?.range && ifRange && !ifRangeMatches(ifRange, obj.etag)) {
+    await obj.body.cancel().catch(() => {});
+    obj = await adapter.get(key);
+    req = null;
+  }
+  if (!obj) return opts.notFound();
+  describe(obj);
+  if (obj.range) return partial(obj.range, obj.size, obj.body);
+  if (!req) return whole(obj.size, obj.body);
+  // A range was asked for and none reported: the body may be a slice (see above).
+  headers.set("cache-control", "no-store");
+  return new Response(obj.body, { status: 200, headers });
+}
+
+/** Serve a PUBLIC media blob by key: `GET /media/<key>`. Cache-friendly + nosniff, no
+ * auth (published-site assets are public; the random tenant-scoped key is the capability).
+ * Returns a Response for any `/media/*` path, or null if not a media request. Restricted
+ * to `<tenant>/media/` keys so it can't serve arbitrary (e.g. signed-private) objects. */
 export async function handleMediaRequest(
   request: Request,
   opts: { adapter: StorageAdapter },
@@ -391,14 +611,23 @@ export async function handleMediaRequest(
   }
   if (key.includes("..") || !MEDIA_KEY.test(key)) return fileError(404, "not_found", "no such media");
 
-  const obj = await opts.adapter.get(key);
-  if (!obj) return fileError(404, "not_found", "media not found");
+  // Byte ranges matter for video: Safari will not play one at all unless `bytes=0-1` comes
+  // back as a 206, and seeking needs ranges in every browser.
   const headers = new Headers();
-  headers.set("content-type", obj.contentType ?? "application/octet-stream");
-  headers.set("content-length", String(obj.size));
-  // Blobs are immutable (random keys), so cache hard; never sniff into an executable type.
-  headers.set("cache-control", "public, max-age=31536000, immutable");
   headers.set("x-content-type-options", "nosniff");
-  if (isActiveType(obj.contentType)) headers.set("content-security-policy", ACTIVE_TYPE_CSP);
-  return new Response(request.method === "HEAD" ? null : obj.body, { headers });
+  try {
+    return await serveObject(request, opts.adapter, key, {
+      headers,
+      notFound: () => fileError(404, "not_found", "media not found"),
+      // Blobs are immutable (random keys), so a whole one caches hard. A 206 is `private`: a
+      // shared cache keyed by URL alone would otherwise keep two bytes as the object for a
+      // year (and the Workers Cache API throws on `put` of a 206).
+      cache: { whole: "public, max-age=31536000, immutable", partial: "private, max-age=31536000, immutable" },
+    });
+  } catch (err) {
+    // A public, anonymous route: a store failure is a JSON 500 and a log line, not an
+    // exception out of the Worker's fetch (a bare Cloudflare error page, nothing logged).
+    console.error("pramen: media endpoint error", err);
+    return fileError(500, "internal", "internal error");
+  }
 }
