@@ -3,7 +3,8 @@
 // the app context and wire URL params + navigation into these components.
 
 import { Button, Dialog, type DialogSize, DropdownMenu, DropdownMenuItem, DropdownMenuTrigger, Input, SearchField, Table, type TableColumn, Textarea } from "@podoba/react";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
+import { dropInLowerHalf, dropMarked, moveToSlot, useDragAutoScroll } from "./block-drag";
 import { Api, ApiError } from "./api";
 import { CONTROL, FieldForm, formatWhen, fromLocalInput, slugify, toLocalInput } from "./fields";
 import { BELOW_APP_BAR, BELOW_PAGE_TOOLBAR, CONTENT, INSPECTOR_MAX_H, PAGE_TOOLBAR_H, ROW, WRAP } from "./chrome";
@@ -1088,12 +1089,22 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, backLabe
     }
   };
   const reorder = async (region: string, order: string[]) => {
+    // Optimistic: the cards move the moment the block is dropped (or an arrow pressed). They
+    // used to stay put until the round trip AND a full reload were back, so on a real network
+    // a drop looked like it had not taken, and editors dragged the block a second time. Cards
+    // are keyed by placement id, so reordering moves them without remounting their editors.
+    patchRegion(region, (list) => {
+      const byId = new Map(list.map((b) => [b.id, b]));
+      const moved = order.map((id) => byId.get(id)).filter((b): b is RenderedBlock => !!b);
+      return moved.length === list.length ? moved : list;
+    });
     try {
       await api.call("reorderRegion", { pageId: page.id, region, order });
-      await reload();
     } catch (e) {
       setErr(errMsg(e));
     }
+    // Either way, settle on what the server has: after a failure that puts the cards back.
+    await reload();
   };
 
   // Patch a block's raw fields into local state after an inline save: keeps the collapsed
@@ -1107,21 +1118,28 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, backLabe
     });
   }, []);
 
-  // Drag-to-reorder within a region. `from`/`over` are indices in the region's block list;
-  // hovering updates `over` live (for the drop-target highlight), and the drop commits the
-  // new order via reorderRegion. Dragging is confined to the region it started in.
-  const [drag, setDrag] = useState<{ region: string; from: number; over: number } | null>(null);
-  const beginDrag = (region: string, i: number) => setDrag({ region, from: i, over: i });
-  const hoverDrag = (region: string, i: number) => setDrag((d) => (d && d.region === region && d.over !== i ? { ...d, over: i } : d));
+  // Drag-to-reorder within a region. `from` is the dragged block's index, `slot` the GAP it
+  // would land in (0 = above the first card, n = below the last), see `dropSlot`. Hovering a
+  // card picks the gap above or below it by which half the pointer is in, hovering a gap
+  // picks that gap, and the drop commits via reorderRegion. Confined to the region it
+  // started in.
+  //
+  // It used to target CARDS: the hovered card got a ring and the block took its index. That
+  // left the gaps between cards dead (a drop there did nothing at all), and the ring could not
+  // say whether the block would land above or below the card, which depended on the drag's
+  // direction. Editors read both as drag and drop "sometimes not working".
+  const [drag, setDrag] = useState<{ region: string; from: number; slot: number } | null>(null);
+  const beginDrag = (region: string, i: number) => setDrag({ region, from: i, slot: i });
+  const hoverDrag = (region: string, slot: number) => setDrag((d) => (d && d.region === region && d.slot !== slot ? { ...d, slot } : d));
   const cancelDrag = () => setDrag(null);
   const dropDrag = (region: string) => {
     setDrag(null);
-    if (!drag || drag.region !== region || drag.from === drag.over) return;
+    if (!drag || drag.region !== region) return;
     const ids = (assembled?.regions[region] ?? []).map((b) => b.id);
-    const [moved] = ids.splice(drag.from, 1);
-    ids.splice(drag.over, 0, moved);
-    reorder(region, ids);
+    const next = moveToSlot(ids, drag.from, drag.slot);
+    if (next !== ids) reorder(region, next);
   };
+  useDragAutoScroll(drag !== null);
 
   const [acting, setActing] = useState(false);
   /** Run a workflow transition from the toolbar. */
@@ -1177,8 +1195,16 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, backLabe
                       BETWEEN two cards: one above the first card was an "insert here" that sat
                       between nothing, and in a one-block region it stood a card away from the
                       end inserter below, two controls for one job. A block goes first by
-                      adding it and moving it up. */}
-                  {i > 0 ? <Inserter compact allowed={allowed} btBySlug={btBySlug} onAdd={(slug) => addBlock(r.name, slug, i)} /> : null}
+                      adding it and moving it up. The same gap is where a dragged block lands
+                      (slot i), above the first card too, where the gap has no inserter. */}
+                  <DropGap
+                    dragActive={drag?.region === r.name}
+                    marked={dropMarked(drag, r.name, i)}
+                    onOver={() => hoverDrag(r.name, i)}
+                    onDrop={() => dropDrag(r.name)}
+                  >
+                    {i > 0 ? <Inserter compact allowed={allowed} btBySlug={btBySlug} onAdd={(slug) => addBlock(r.name, slug, i)} /> : null}
+                  </DropGap>
                   <BlockCard
                     api={api}
                     block={b}
@@ -1191,18 +1217,25 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, backLabe
                     onDirtyChange={reportDirty}
                     onError={setErr}
                     dragging={drag?.region === r.name && drag.from === i}
-                    isOver={!!drag && drag.region === r.name && drag.over === i && drag.from !== i}
+                    dragActive={drag?.region === r.name}
                     onDragStartBlock={() => beginDrag(r.name, i)}
-                    onDragOverBlock={() => hoverDrag(r.name, i)}
+                    onDragOverBlock={(lowerHalf) => hoverDrag(r.name, lowerHalf ? i + 1 : i)}
                     onDropBlock={() => dropDrag(r.name)}
                     onDragEndBlock={cancelDrag}
                   />
                 </div>
               ))}
-              {/* End inserter, which appends. */}
-              <div className="mt-1">
-                <Inserter allowed={allowed} btBySlug={btBySlug} onAdd={(slug) => addBlock(r.name, slug)} />
-              </div>
+              {/* End inserter, which appends; below the last card is the last drop slot. */}
+              <DropGap
+                dragActive={drag?.region === r.name}
+                marked={dropMarked(drag, r.name, blocks.length)}
+                onOver={() => hoverDrag(r.name, blocks.length)}
+                onDrop={() => dropDrag(r.name)}
+              >
+                <div className="mt-1">
+                  <Inserter allowed={allowed} btBySlug={btBySlug} onAdd={(slug) => addBlock(r.name, slug)} />
+                </div>
+              </DropGap>
             </div>
           );
         })}
@@ -1239,11 +1272,36 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, backLabe
 }
 
 
+/**
+ * A gap between block cards, as a drop target while a block of the region is dragged. The
+ * marker is a line IN the gap, where the block will land; a ring around a card could not say
+ * whether that was above it or below. Zero-height above the first card, so the canvas does
+ * not shift when a drag starts; the line overhangs it instead.
+ */
+function DropGap({ dragActive, marked, onOver, onDrop, children }: {
+  dragActive: boolean;
+  marked: boolean;
+  onOver: () => void;
+  onDrop: () => void;
+  children?: ReactNode;
+}) {
+  return (
+    <div
+      className="relative"
+      onDragOver={dragActive ? (e) => { e.preventDefault(); onOver(); } : undefined}
+      onDrop={dragActive ? (e) => { e.preventDefault(); onDrop(); } : undefined}
+    >
+      {marked ? <div aria-hidden className="pointer-events-none absolute inset-x-0 top-1/2 z-10 h-1 -translate-y-1/2 rounded-full bg-brand-green" /> : null}
+      {children}
+    </div>
+  );
+}
+
 // A single block, edited inline: the block IS its editor. Fields render in place (rich text
 // as the WYSIWYG, media as a thumbnail picker). Edits are held locally and committed only on
 // an explicit Save: the header + footer show an "unsaved" state until you do, and nothing is
 // written until you click Save. Collapse folds it to a one-line plain-text preview.
-function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, onPatch, onDirtyChange, onError, dragging, isOver, onDragStartBlock, onDragOverBlock, onDropBlock, onDragEndBlock }: {
+function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, onPatch, onDirtyChange, onError, dragging, dragActive, onDragStartBlock, onDragOverBlock, onDropBlock, onDragEndBlock }: {
   api: Api;
   block: RenderedBlock;
   blockType: BlockType | undefined;
@@ -1255,9 +1313,11 @@ function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, o
   onDirtyChange: (placementId: string, dirty: boolean) => void;
   onError: (s: string) => void;
   dragging: boolean;
-  isOver: boolean;
+  /** A block of this card's region is being dragged, so the card is a drop target. */
+  dragActive: boolean;
   onDragStartBlock: () => void;
-  onDragOverBlock: () => void;
+  /** `lowerHalf`: the pointer is in the card's lower half, so the block lands below it. */
+  onDragOverBlock: (lowerHalf: boolean) => void;
   onDropBlock: () => void;
   onDragEndBlock: () => void;
 }) {
@@ -1267,6 +1327,7 @@ function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, o
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
   const saved = useRef<string>(""); // JSON of the last-persisted fields: the dirty baseline
   const cardRef = useRef<HTMLDivElement>(null);
+  const headerRef = useRef<HTMLDivElement>(null);
   const blockId = block.block_id;
   const placementId = block.id;
 
@@ -1331,36 +1392,53 @@ function BlockCard({ api, block, blockType, isFirst, isLast, onMove, onRemove, o
   const schema: FieldDefinition[] = blockType?.fieldsSchema ?? [];
   const name = blockType?.name ?? block.block_type;
 
+  const startDrag = (e: DragEvent) => {
+    // The header, not the whole card, as the drag image: an expanded card is often taller
+    // than the screen, and dragging a translucent copy of all of it covered the very gaps
+    // the block was being dropped into.
+    if (headerRef.current) e.dataTransfer.setDragImage(headerRef.current, 12, 12);
+    e.dataTransfer.effectAllowed = "move";
+    // Firefox needs a payload to start a drag; it is empty so a drop on a rich-text field
+    // pastes nothing (see the repeater handle in fields.tsx).
+    e.dataTransfer.setData("text/plain", "");
+    onDragStartBlock();
+  };
+
   return (
     // One card per block. It used to be a chrome-less inline row, which read as one long
     // form: editors could not tell where a block ended and the next began, with a page of
     // eight blocks being eight runs of fields under a faded type label. The border and card
-    // surface are that boundary. The card is the drop target; the ⠿ handle in the hover
-    // gutter is the only draggable element, so dragging never fights the inline text
-    // selection. Its drag image is the whole card.
+    // surface are that boundary. While a block of the region is dragged the card is a drop
+    // target, and which half the pointer is in says whether the block lands above or below
+    // it. What starts a drag is the ⠿ handle in the gutter and the header row, never the
+    // fields, so dragging never fights the inline text selection.
     <div
       ref={cardRef}
-      className={`group relative rounded-lg border border-border bg-surface-card px-3 py-2 transition-colors ${isOver ? "ring-2 ring-brand-green" : ""} ${dragging ? "opacity-40" : ""} ${block.pending ? "pointer-events-none opacity-60" : ""}`}
-      onDragOver={(e) => { e.preventDefault(); onDragOverBlock(); }}
-      onDrop={(e) => { e.preventDefault(); onDropBlock(); }}
+      className={`group relative rounded-lg border border-border bg-surface-card px-3 py-2 transition-colors ${dragging ? "opacity-40" : ""} ${block.pending ? "pointer-events-none opacity-60" : ""}`}
+      // Only while a BLOCK is dragged. Accepting every drag made the card a drop target for
+      // anything (a repeater row, a file from the desktop) and swallowed it.
+      onDragOver={dragActive ? (e) => {
+        e.preventDefault();
+        const r = e.currentTarget.getBoundingClientRect();
+        onDragOverBlock(dropInLowerHalf(e.clientY, r.top, r.height));
+      } : undefined}
+      onDrop={dragActive ? (e) => { e.preventDefault(); onDropBlock(); } : undefined}
     >
-      {/* Left gutter: drag handle, revealed on hover, sitting in the canvas's pl-8. */}
+      {/* Left gutter: drag handle, sitting in the canvas's pl-8. Faint at rest rather than
+          hidden: at opacity 0 it showed only to a pointer already over the card, and editors
+          did not know the cards could be dragged at all. */}
       <span
         draggable
-        onDragStart={(e) => {
-          if (cardRef.current) e.dataTransfer.setDragImage(cardRef.current, 12, 12);
-          e.dataTransfer.effectAllowed = "move";
-          e.dataTransfer.setData("text/plain", "");
-          onDragStartBlock();
-        }}
+        onDragStart={startDrag}
         onDragEnd={onDragEndBlock}
-        className="absolute -left-6 top-1.5 cursor-grab select-none px-1 text-fg-subtle opacity-0 transition-opacity hover:text-fg group-hover:opacity-100 active:cursor-grabbing"
+        className="absolute -left-6 top-1.5 cursor-grab select-none px-1 text-fg-subtle opacity-50 transition-opacity hover:text-fg group-hover:opacity-100 active:cursor-grabbing"
         title={t("blocks.dragToReorder")}
       >⠿</span>
 
       {/* Header: the block's type label is the card's title, so it is at full strength; the
-          state and the actions stay quieter beside it. */}
-      <div className="flex items-center gap-2">
+          state and the actions stay quieter beside it. The whole row is a drag handle too:
+          the ⠿ glyph alone is a small target to aim for. */}
+      <div ref={headerRef} draggable onDragStart={startDrag} onDragEnd={onDragEndBlock} className="flex cursor-grab items-center gap-2 active:cursor-grabbing" title={t("blocks.dragToReorder")}>
         <button type="button" className="w-4 shrink-0 text-fg-muted hover:text-fg" title={collapsed ? t("blocks.expand") : t("blocks.collapse")} aria-label={collapsed ? t("blocks.expand") : t("blocks.collapse")} onClick={() => setCollapsed((c) => !c)}>{collapsed ? "▸" : "▾"}</button>
         <span className="text-caption font-semibold uppercase tracking-wide text-fg">{name}</span>
         {block.is_shared ? <span className="text-caption text-accent-strong">{t("blocks.shared")}</span> : null}

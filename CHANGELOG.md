@@ -1011,6 +1011,20 @@ there are no backward-compatibility guarantees yet.
 
 ### Fixed
 
+- **Reordering blocks by drag and drop was unreliable (`@pramen/cms-editor`).** Editors
+  reported it "sometimes working, sometimes not", and three things added up to that. A drop in
+  the gap between two cards did nothing, because only a card was a target. The ring on the
+  hovered card could not say whether the block would land above or below it, which depended on
+  the drag's direction. And the cards stayed in their old order until the save and a full
+  reload were back, so on a real network a drop looked like it had not taken. A drag now
+  targets the gap: a card hands over the gap above or below it by which half the pointer is
+  in, the gaps are targets of their own, and a line marks where the block will land. The cards
+  move the moment it is dropped (and on the ↑/↓ buttons), and go back if the save fails. The
+  window scrolls when a block is dragged near its top or bottom edge, below the sticky chrome,
+  where the browser's own autoscroll never starts. The ⠿ handle is visible at rest, the whole
+  card header is a handle too, and the drag image is that header rather than the whole card,
+  which on an expanded card covered the gaps it was being dropped into. A card is a drop target
+  only while a block is dragged, so it no longer swallows other drags.
 - **OIDC `returnTo` open redirect (`@pramen/auth`).** `/\evil.com` passed the
   path check and browsers resolve it to `//evil.com`. `returnTo` is now resolved against a
   placeholder origin and dropped unless it stays there; backslashes and control characters are
