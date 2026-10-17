@@ -52,7 +52,7 @@ declare module '@buzola/router' {
   }
 }
 
-// Page registry — page ID → route pattern
+// Page registry: page ID → route pattern
 export const pageRegistry: Record<string, string> = {
   'admin-page': '/apps/:slug',
   'block-type': '/schema/blocks/:slug',
