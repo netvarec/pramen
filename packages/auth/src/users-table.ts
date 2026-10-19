@@ -3,7 +3,7 @@
 // `createAuthHandlers` quoted the name, so a table named after a keyword (`group`) worked for
 // signup/login and broke `listUsers`, `changePassword` and `resetPassword`.
 
-import type { HandlerContext, Row } from "@pramen/server";
+import type { HandlerContext, Row, SchemaDef } from "@pramen/server";
 
 export const DEFAULT_USERS_TABLE = "auth_users";
 
@@ -16,6 +16,22 @@ export interface UsersTable {
   name: string;
   /** The quoted identifier, for raw `ctx.db.exec` SQL. */
   sql: string;
+}
+
+/** Every column the handlers in this package read or write on a users table: the
+ * `authSchema.auth_users` shape. A custom table may add columns, never drop one of these. */
+export const USERS_TABLE_COLUMNS = ["username", "passwordHash", "roles", "email", "emailVerified", "active", "createdAt", "credentialsChangedAt", "profile"] as const;
+
+/** Throw at construction when `schema` declares `table` without a column the handlers need.
+ * Without it the gap surfaced as a SQL error halfway through a handler: `deleteUser` had
+ * already deactivated the row when the tombstone write failed on a missing column. */
+export function assertUsersTableShape(schema: SchemaDef, table: string): void {
+  const entity = schema[table];
+  if (!entity) throw new Error(`@pramen/auth: users table '${table}' is not in the schema`);
+  const missing = USERS_TABLE_COLUMNS.filter((c) => !(c in entity.fields));
+  if (missing.length > 0) {
+    throw new Error(`@pramen/auth: users table '${table}' lacks ${missing.join(", ")} (it must have the authSchema.auth_users shape; extra columns are fine)`);
+  }
 }
 
 /** Validate and quote a users table name. It is app config, never request input, but it is

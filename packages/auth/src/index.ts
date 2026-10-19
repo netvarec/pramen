@@ -17,8 +17,9 @@
 // the token lifecycle. See createMagicLinkAuth below.
 
 import { Entity, mutation, query, defaultTo, unique, hidden, policy, allow, $identity, BadRequest, Unauthorized, denySession, allowSession, isSystemRole, setSessionNotBefore } from "@pramen/server";
-import type { AppTaskMap, CellValue, HandlerContext, HandlerMap, JsonObject, JsonValue, Policy, Row } from "@pramen/server";
-import { adoptableBy, sessionIsFrom, tableClaim, usersTable, type UsersTable } from "./users-table.js";
+import type { AppTaskMap, CellValue, HandlerContext, HandlerMap, JsonObject, JsonValue, Policy, Row, SchemaDef } from "@pramen/server";
+import { adoptableBy, assertUsersTableShape, sessionIsFrom, tableClaim, usersTable, type UsersTable } from "./users-table.js";
+export { assertUsersTableShape, USERS_TABLE_COLUMNS } from "./users-table.js";
 import { declareSessionTtl, maxSessionTtlOf, sessionTtlOf } from "./session-ttl.js";
 
 /** What an auth factory contributes to an app: RPC handlers plus the task handlers
@@ -982,9 +983,12 @@ const usersDb = (ctx: HandlerContext): UsersDb => ctx.db as UsersDb;
  * handler map and gate it with the matching `authPolicies({ table })`. The table must
  * have a `username` primary key and (for changeEmail/changePassword) `email`/
  * `passwordHash` columns. */
-export function createUserHandlers(opts: { table?: string } = {}) {
+export function createUserHandlers(opts: { table?: string; schema?: SchemaDef } = {}) {
   const users = usersTable(opts.table);
   const table = users.name;
+  // Pass the schema to have a custom table's shape checked here, at app construction, rather
+  // than by a handler failing on a missing column after it has already written something.
+  if (opts.schema) assertUsersTableShape(opts.schema, table);
   return {
     /** Admin: list users (ACL projects out passwordHash). A non-admin caller granted
      * only the self policy sees just their own row; ungranted callers get a 403. */
@@ -1050,6 +1054,9 @@ export function createUserHandlers(opts: { table?: string } = {}) {
       if (input.username === ctx.identity?.userId) throw new BadRequest("cannot delete your own account");
       const updated = await usersDb(ctx).update(table, input.username, { active: false });
       if (!updated) throw new BadRequest("user not found");
+      // Revoke at once, before anything else can fail: on D1 the deactivation above has already
+      // committed, and a deactivated user whose sessions still work is the worst place to stop.
+      await denySession(ctx.kv, input.username, maxSessionTtlOf(ctx.env));
       // Only after the ACL'd write succeeded. Raw because none of these columns is (or should
       // be) writable through the admin policy; it only ever clears them. Pending reset and
       // verify links die with the email (both require it to still be the row's address).
@@ -1057,7 +1064,6 @@ export function createUserHandlers(opts: { table?: string } = {}) {
       // Revoke outstanding tokens now (the denylist, lifted again by a reactivation), and for
       // good (notBefore), so reactivating the tombstone never revives a pre-deletion session.
       await retireEarlierSessions(ctx, users, input.username);
-      await denySession(ctx.kv, input.username, maxSessionTtlOf(ctx.env));
       return { ok: true };
     }),
 

@@ -134,9 +134,12 @@ const schema = defineSchema({
     passwordHash: hidden(t.text()),
     roles: t.json(),
     email: unique(t.text()),
+    emailVerified: t.int(),
     active: defaultTo(t.bool(), true),
     tenants: t.json(), // string[], the extra column the built-in handlers ignore
     createdAt: t.int(),
+    credentialsChangedAt: t.int(),
+    profile: t.json(),
   })),
   users: Entity(
     (t) => ({
@@ -259,7 +262,8 @@ const emailVerification = createEmailVerification({
 
 // User management over the CUSTOM org_accounts table (the multi-tenant pattern):
 // the same handlers, pointed at a different table, exposed under prefixed RPC names.
-const orgAccounts = createUserHandlers({ table: "org_accounts" });
+// `schema` makes createUserHandlers check the table has every column the handlers use.
+const orgAccounts = createUserHandlers({ table: "org_accounts", schema });
 
 // CMS collections: register the `lectures` entity as an editable collection. The editor
 // discovers it via listCollections and renders a generic list + form (FieldForm over these

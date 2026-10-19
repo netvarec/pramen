@@ -25,6 +25,8 @@ import {
   userHandlers,
   verifyPassword,
 } from "../packages/auth/src/index";
+import { authSchema } from "../packages/auth/src/index";
+import { Entity, defineSchema } from "../packages/server/src/sdk/schema";
 import { createOidcAuth } from "../packages/auth/src/oidc";
 import { claims, harness, recorder, type Sent } from "./secfix-auth-harness";
 
@@ -200,5 +202,34 @@ describe("a failed verification costs one derivation on every path", () => {
     const unknown = await time(() => attempt("nobody@acme.test"));
     const passwordless = await time(() => attempt("pl@acme.test"));
     expect(passwordless).toBeGreaterThan(unknown * 0.4);
+  });
+});
+
+describe("a custom users table must have the auth_users shape", () => {
+  const short = {
+    members: Entity((t) => ({
+      username: t.textId(),
+      passwordHash: t.text(),
+      roles: t.json(),
+      email: t.text(),
+      active: t.bool(),
+      createdAt: t.int(),
+    })),
+  };
+
+  test("createUserHandlers({ table, schema }) refuses a table missing a column, naming it", () => {
+    const schema = defineSchema({ ...authSchema, ...short });
+    expect(() => createUserHandlers({ table: "members", schema })).toThrow(/members' lacks emailVerified, credentialsChangedAt, profile/);
+    expect(() => createUserHandlers({ table: "auth_users", schema })).not.toThrow();
+    expect(() => createUserHandlers({ table: "nope", schema })).toThrow(/not in the schema/);
+  });
+
+  test("deleteUser revokes the user before a later write can fail on such a table", async () => {
+    const h = await harness({}, short);
+    await h.driver.exec(`INSERT INTO "members" (username, passwordHash, roles, email, active, createdAt) VALUES ('ada', '', '[]', NULL, 1, 0)`, []);
+    const members = createUserHandlers({ table: "members" }); // no schema: the shape is not checked
+    const admin = { userId: "admin", roles: ["admin"] };
+    await expect(h.run(members.deleteUser, h.ctx(admin), { username: "ada" })).rejects.toThrow();
+    expect(h.kvPuts.some((p) => p.key.includes("ada") && p.key.toLowerCase().includes("denied"))).toBe(true);
   });
 });
