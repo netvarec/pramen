@@ -3,7 +3,7 @@
 // `createAuthHandlers` quoted the name, so a table named after a keyword (`group`) worked for
 // signup/login and broke `listUsers`, `changePassword` and `resetPassword`.
 
-import type { HandlerContext } from "@pramen/server";
+import type { HandlerContext, Row } from "@pramen/server";
 
 export const DEFAULT_USERS_TABLE = "auth_users";
 
@@ -25,18 +25,50 @@ export function usersTable(name: string = DEFAULT_USERS_TABLE): UsersTable {
   return { name, sql: `"${name}"` };
 }
 
-/** The claims to add to a session minted from `table`. */
-export function tableClaim(table: UsersTable): { [USERS_TABLE_CLAIM]?: string } {
-  return table.name === DEFAULT_USERS_TABLE ? {} : { [USERS_TABLE_CLAIM]: table.name };
+/** The custom claim naming the STORE a session was minted from. Absent on a session from the
+ * Durable Object store, so every token minted before the claim existed keeps meaning what it
+ * meant. Each store has its own users table and the Worker signs both stores' sessions with the
+ * same AUTH_SECRET, so without it a username signed up on D1 was honored as the same-named
+ * account on the DO (and the reverse): `refreshSession` there reissued THAT account's roles. */
+export const STORE_CLAIM = "store";
+const DEFAULT_STORE = "do";
+
+type SessionClaims = { [USERS_TABLE_CLAIM]?: string; [STORE_CLAIM]?: string };
+
+/** The claims to add to a session minted from `table` on `store` (the handler's `ctx.store`). */
+export function tableClaim(table: UsersTable, store: string | undefined): SessionClaims {
+  const out: SessionClaims = {};
+  if (table.name !== DEFAULT_USERS_TABLE) out[USERS_TABLE_CLAIM] = table.name;
+  if (store !== undefined && store !== DEFAULT_STORE) out[STORE_CLAIM] = store;
+  return out;
 }
 
-/** Whether the caller's session was minted from `table`.
+/** Whether the caller's session was minted from `table`, on the store serving this request.
  *
  * The JWT `sub` is a bare username, so without this a session from one table would be honored
  * by another table's handlers: `refreshSession` over `members` would re-read `members.ada` and
- * mint `auth_users.ada` a token with `members.ada`'s roles. A token with no claim is from
- * `auth_users` (or an external IdP, whose users are not rows in a custom table either). */
+ * mint `auth_users.ada` a token with `members.ada`'s roles. The same holds across stores. A token
+ * with neither claim is from `auth_users` on the DO store (or an external IdP, whose users are
+ * not rows in a custom table either). */
 export function sessionIsFrom(ctx: HandlerContext, table: UsersTable): boolean {
   const claimed = ctx.identity?.[USERS_TABLE_CLAIM];
-  return (typeof claimed === "string" ? claimed : DEFAULT_USERS_TABLE) === table.name;
+  const store = ctx.identity?.[STORE_CLAIM];
+  return (
+    (typeof claimed === "string" ? claimed : DEFAULT_USERS_TABLE) === table.name &&
+    (typeof store === "string" ? store : DEFAULT_STORE) === (ctx.store ?? DEFAULT_STORE)
+  );
+}
+
+/** Whether a sign-in that has just PROVEN control of `address` (a magic link, an invite, an
+ * email-keyed OIDC login) may take the existing row whose username is that address.
+ *
+ * Signup lets anyone create a row under any username with a password of their choosing, so a
+ * row named `victim@corp.test` proves nothing about who made it. Adopting it would share one
+ * identity (one JWT `sub`) between the address owner and whoever set that password: the squatter
+ * keeps logging in with it and inherits every role the row is granted later. So a row with a
+ * password is adopted only when it has itself proven the address (`email` equal to it, and
+ * verified). A passwordless row was only ever created by one of the email-proven doors. */
+export function adoptableBy(row: Row, address: string): boolean {
+  if (String(row.passwordHash ?? "") === "") return true;
+  return row.email === address && row.emailVerified != null;
 }

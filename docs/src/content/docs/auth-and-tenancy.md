@@ -39,12 +39,31 @@ Set `JWKS_URL` to your identity provider's JWKS endpoint (Auth0, Clerk, Cognito,
 - an unknown `kid` triggers one forced refetch to pick up **key rotation**
 - stale keys are kept if a refetch fails
 
-When `JWKS_URL` is set it takes over from `AUTH_SECRET`.
+When `JWKS_URL` is set it takes over from `AUTH_SECRET`, and it **requires**
+`AUTH_AUDIENCE` and `AUTH_ISSUER`. A key set alone binds a token only to the IdP, not to
+this service: the same keys sign tokens for every other client (and, on a multi-tenant
+IdP, every other directory), and their `roles` / `tenants` claims would become authority
+here. With either one missing, the Worker refuses to serve: every request gets `500`
+(`server misconfigured`) and the reason is logged once per isolate. A Worker has no startup
+hook that sees `env`, so this is its form of refusing to start.
 
 ```jsonc
 // wrangler vars / secrets
-{ "JWKS_URL": "https://your-tenant.auth0.com/.well-known/jwks.json" }
+{
+  "JWKS_URL": "https://your-tenant.auth0.com/.well-known/jwks.json",
+  "AUTH_AUDIENCE": "https://api.your-app.example", // the token's `aud` must contain it
+  "AUTH_ISSUER": "https://your-tenant.auth0.com/"  // the token's `iss` must equal it
+}
 ```
+
+### Dev-only values never serve a deployment
+
+The local `oblaka.ts` env carries values that are public by design: the dev
+`AUTH_SECRET` and `FILES_SECRET` (anyone can sign tokens with them) and
+`PRAMEN_DEV_SEED=true` (a known demo admin). If they reach a deployment, the Worker answers
+every request on a non-local host with `500` and logs why. Local means `localhost`,
+`127.0.0.1`, `[::1]` and `*.localhost`; the request host is the signal, not a var such as
+`APP_URL`, since the failure being caught is the whole local vars block arriving at once.
 
 ## Login with @pramen/auth
 
@@ -70,11 +89,15 @@ column, never returned by a read), `roles`, a mutable unique `email`, and an
   user, or **deactivated** account all return `401` (no account enumeration).
 - **`me()`** → the caller's `Identity`.
 - **`refreshSession()`** (authenticated) → `{ token, user }` with **freshly read**
-  roles and `active`, at the configured TTL.
+  roles and `active`, at the configured TTL. It refuses a token issued before the account's
+  last credential change, or before the row itself was created.
 
-Token lifetime defaults to 1h; set `AUTH_SESSION_TTL_SECONDS` to tune it. Because
-`refreshSession` lets a client renew silently, a short TTL costs nothing in UX. See
-[Sessions & revocation](#sessions-revocation).
+Token lifetime defaults to 1h; set `AUTH_SESSION_TTL_SECONDS` to tune it. It is the default
+for every minter; a factory's own `sessionTtlSeconds` (`createMagicLinkAuth`,
+`createOidcAuth`) overrides it for the tokens that factory mints, and revocation entries are
+sized to the longest of all of them (`maxSessionTtlOf(env)`, exported for an app's own
+`denySession` call). Because `refreshSession` lets a client renew silently, a short TTL costs
+nothing in UX. See [Sessions & revocation](#sessions-revocation).
 
 ### OIDC (Entra, Auth0/Okta, Google Workspace)
 
@@ -128,7 +151,7 @@ screen, and the browser lands on `successRedirect#error=login_required` (or
 `interaction_required`, `consent_required`, `account_selection_required`) with **no token**.
 Show your ordinary sign-in button then. A silent attempt that fails on pramen's side after the
 provider said yes lands there too, with a pramen code: `account_deactivated`,
-`email_not_verified`, `invalid_token` or `server_error`. Any other provider code (a
+`account_conflict`, `email_not_verified`, `invalid_token` or `server_error`. Any other provider code (a
 misconfigured client, an outage) is handed back the same way and logged as an error on the
 server. Treat every `error=` as "show sign-in". Any `prompt` other than `none` is refused.
 
@@ -201,7 +224,19 @@ row as a magic-link or password login for that address. A provider that does not
 `email_verified` is refused rather than trusted, because otherwise an IdP allowing arbitrary
 addresses would be a takeover path into any existing account. Use `accountKey: "sub"` to key
 on the provider's opaque subject (namespaced by issuer) instead; that survives an email
-change but will not link up with accounts created another way.
+change but will not link up with accounts created another way. In `sub` mode an email the
+provider did not verify is not stored at all.
+
+An email-keyed sign-in adopts an existing row only if the row has no password, or has proven
+the same address (its `email` is that address and is verified). Anyone can sign up with a
+victim's address as their username and a password of their own; adopting that row would share
+one identity between them. Such a sign-in fails with `account_conflict` (409) and writes
+nothing; an admin resolves it by deleting the row, or the owner by resetting the password
+through the row's contact email. The magic link and `inviteUser` apply the same rule.
+
+On a first sign-in, another row's **unverified** claim on the address (any signup or
+`changeEmail` can write one) is released so the provider-verified owner can take it; a row
+that verified the address keeps it, and the new row is stored without an email.
 
 Deactivating a user in pramen still holds: `active = false` blocks the login even though the
 IdP knows nothing about that flag.
@@ -245,6 +280,12 @@ deactivating or deleting "ada" in one table revokes every "ada" session, whichev
 came from. That errs toward revoking too much, but if you run two tables, keep their
 usernames disjoint.
 
+The same holds across **stores**: the DO store and D1 each have their own users table, signed
+with the same `AUTH_SECRET`. A session minted on D1 carries a `store: "d1"` claim (no claim
+means the DO), and the handlers above honor a session only on the store that minted it, so a
+username signed up on one store is never reissued the roles of the same-named account on the
+other. Tokens minted before the claim existed are DO sessions and keep working there.
+
 **The flow sets one cookie per sign-in attempt**, `pramen_oidc_<hash of the state>`: HttpOnly,
 SameSite=Lax, scoped to the callback path, cleared when the attempt ends. Per attempt, not
 per browser, because silent sign-in runs in every tab and overlapping attempts must not
@@ -282,9 +323,16 @@ const handlers = { ...authHandlers, ...magic /* … */ };
 ```
 
 - **`requestMagicLink({ email })`** → always `{ ok: true }` (no enumeration); mints a
-  token, persists its hash, and calls `sendEmail`.
-- **`loginWithMagicLink({ token })`** → `{ token, user }`. Validates (unexpired,
-  unconsumed), consumes single-use, and find-or-creates the user.
+  token, persists its hash, and calls `sendEmail`. One address gets at most one link per
+  `resendCooldownSeconds` (default 60) while the earlier link is unredeemed; a request inside
+  the window still answers `{ ok: true }` and sends nothing. `createPasswordReset` and
+  `createEmailVerification` take the same option. It stops one caller mail-bombing one inbox
+  from your sending domain; a rate limit across addresses belongs at the edge.
+- **`loginWithMagicLink({ token })`** → `{ token, user }`. Consumes the token in one
+  conditional statement (so two concurrent redemptions on D1 cannot both pass) and
+  find-or-creates the user. It refuses a row with a password that never proved the address
+  (see the OIDC section above), and records the proven address as the row's verified `email`
+  when no other row holds it.
 - **`refreshSession()`**: the same handler `authHandlers` exposes, at this factory's
   configured TTL. Passwordless users renew without a new email round-trip.
 
@@ -361,7 +409,19 @@ const acl = [
 
 - **Admin:** `listUsers`, `setUserRoles`, `setUserActive` (deactivate/reactivate),
   `deleteUser`. Reads are projected, so `passwordHash` is never returned.
-- **Self:** `changeEmail` (unique, validated), `changePassword`.
+- **Self:** `changeEmail({ email, currentPassword })` (unique, validated),
+  `changePassword({ currentPassword, newPassword })`.
+
+`deleteUser` keeps the row as an inactive **tombstone** (no password, email or profile) rather
+than removing it. The username is the identity everywhere (the JWT `sub`, owner columns, CMS
+history), so a freed one could be signed up again by anyone, who would then own the deleted
+user's rows. The tombstone keeps every door refusing the name and frees the email for a new
+account; it still shows in `listUsers` as inactive. The write is an update of `active`, so the
+admin **update** policy authorizes it (`authPolicies().admin` grants it; a custom ACL must too).
+
+`changeEmail` on an account with a password requires `currentPassword`, the same rule as
+`changePassword`: the email is the password-reset channel, so a bare session that could move
+it could mail itself a reset link and replace the password. A passwordless account needs none.
 
 `changePassword` follows one rule: **an empty password slot may be filled by the session, a
 filled one only by proving you know it.** An account created by `inviteUser` or a magic-link
@@ -374,6 +434,10 @@ Without that first branch, "I signed in with a link and now I want a password" h
 at all: the account was asked for a credential it had never had, and told the one it invented
 was incorrect. The password-RESET flow was the only way through, which is a flow named for a
 problem the user does not have.
+
+Either way a password change retires every earlier session, the caller's own included (see
+[Credential changes](#credential-changes)), so the result also carries a fresh `token`: switch
+to it (`pramen.setToken(token)`) or the next request answers 401.
 
 Deactivating or deleting a user **revokes their outstanding tokens immediately**: the
 handlers write a KV denylist entry the Worker enforces. A `setUserRoles` change is
@@ -404,15 +468,15 @@ managed by your own handlers.
 Tokens are **stateless**: roles and `active` are baked in at login, and the Worker does
 no per-request database lookup. That is what keeps the core verify-only and reads
 cheap, but it means a token outlives a change to the account behind it. pramen closes
-that gap two ways, still with no session store.
+that gap three ways, still with no session store.
 
 ### Silent refresh
 
 **`refreshSession()`** (authenticated; in both `authHandlers` and
 `createMagicLinkAuth`) re-reads `roles` and `active` for the caller and reissues a
 token: `{ token, user }`, the same shape as `login`. It throws `401` if the account
-is gone or deactivated, so a refresh can never launder a revoked session into a new,
-longer-lived one.
+is gone or deactivated, or the token predates its last credential change, so a refresh can
+never launder a revoked session into a new, longer-lived one.
 
 Refreshing at **~half the TTL** lets you keep `AUTH_SESSION_TTL_SECONDS` short without
 ever logging the user out, which bounds how long a stale role can linger. It also
@@ -435,9 +499,10 @@ WebSocket upgrade alike. A denied token fails **closed** with `401` (it is *not*
 downgraded to anonymous), so revocation takes effect on the **next request** rather
 than the next login.
 
-The entry carries an `expirationTtl` equal to the session TTL, so it self-expires
-exactly when the last token that could have been outstanding at revocation time does, so
-the denylist only ever holds recently-revoked users and never grows unbounded.
+The entry carries an `expirationTtl` equal to the longest session TTL any configured factory
+mints (`maxSessionTtlOf`), so it self-expires only once the last token that could have been
+outstanding at revocation time has, and the denylist only ever holds recently-revoked users
+and never grows unbounded.
 Reactivating (`setUserActive(true)`) lifts the entry: the key is username-scoped, so a
 stale entry would otherwise lock out even a fresh login.
 
@@ -454,15 +519,46 @@ await denySession(ctx.kv, username, 3600); // block every token for this user, u
 > in every region, and the entry TTL is clamped to KV's 60s minimum. Treat it as a kill
 > switch, not a transactional gate. Routine role changes belong on `refreshSession`.
 
+### Revoking tokens issued before an instant (not-before)
+
+The denylist blocks every token for a user, a fresh login included. A password reset or
+"sign out everywhere" wants the narrower cut: tokens issued **before** the event stop
+working, the one minted right after keeps working. That is a per-user not-before instant,
+compared with the token's `iat`:
+
+```ts
+import { setSessionNotBefore, isIssuedBeforeNotBefore } from "@pramen/server";
+
+await setSessionNotBefore(ctx.kv, username, Math.floor(Date.now() / 1000), 3600);
+```
+
+The Worker checks it right next to the denylist (HTTP, the WebSocket upgrade, both
+stores) and answers `401` "session revoked" for a token whose `iat` is below the instant.
+The same second is not "before", so a token issued in the reset's own second survives. A
+token with no `iat` cannot prove it is newer, so while an instant is set it is refused.
+Like the denylist entry, it self-expires at the TTL you pass (the session TTL).
+
+### Credential changes
+
+A password reset or change, and a deletion, retire every session issued **before** them while
+leaving later ones alone, which the denylist cannot do (it blocks a fresh login too). The
+handler stamps `auth_users.credentialsChangedAt` (epoch seconds), which `refreshSession`
+checks against the token's `iat`, and writes a per-user KV notBefore entry
+(`setSessionNotBefore`) that the Worker checks next to the denylist. So a session stolen before
+the owner reset their password stops working at the next request and can never be refreshed.
+`iat` has one-second resolution: a token minted in the same second as the change survives it.
+A token without `iat` is refused by `refreshSession`. Custom users tables need the
+`credentialsChangedAt` column too (it is part of the `authSchema.auth_users` shape).
+
 ### Live connections
 
 A WebSocket verifies its token **once, at upgrade**, and the identity is then fixed for
 the life of the socket, so a long-lived or hibernating connection could otherwise
-outlive its TTL indefinitely. The DO therefore re-checks the token's `exp` on every
-message: an expired socket receives an `unauthorized` error frame, is closed with
-**4401**, and stops receiving subscription pushes. The client should re-authenticate
-and reconnect (`@pramen/client`'s `setToken` does this for you). See
-[Live Queries](/docs/live-queries).
+outlive its TTL indefinitely. The DO therefore re-checks the token's `exp`, the denylist
+and the not-before instant on every message and before every push: an expired or revoked
+socket receives an `unauthorized` error frame, is closed with **4401**, and stops
+receiving subscription pushes. The client should re-authenticate and reconnect
+(`@pramen/client`'s `setToken` does this for you). See [Live Queries](/docs/live-queries).
 
 ## Tenancy
 
