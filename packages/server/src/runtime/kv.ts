@@ -88,3 +88,45 @@ export async function allowSession(kv: Kv, username: string): Promise<void> {
 export async function isSessionDenied(kv: Kv, username: string): Promise<boolean> {
   return (await kv.get(denyKey(username))) != null;
 }
+
+// --- session not-before (revoke every token issued BEFORE an instant) ---------
+//
+// The denylist above blocks every token for a user, a fresh login included, which fits
+// deactivation and deletion. A password reset (or "sign out everywhere") wants the
+// narrower cut: tokens minted before the event die, a token minted after it keeps
+// working. That is a per-user `notBefore` instant compared against the token's `iat`.
+// Same shape as the denylist: one username-scoped key, self-expiring at the session TTL
+// (by then every token issued before the instant has expired on its own).
+
+const notBeforeKey = (username: string): string => `authNotBefore:${username}`;
+
+/** Revoke every token for `username` whose `iat` is below `atSeconds` (epoch seconds),
+ * for up to `ttlSeconds` (the session TTL). A later call moves the instant. */
+export async function setSessionNotBefore(kv: Kv, username: string, atSeconds: number, ttlSeconds: number): Promise<void> {
+  const ttl = Math.max(MIN_KV_TTL_SECONDS, Math.trunc(ttlSeconds) || MIN_KV_TTL_SECONDS);
+  await kv.put(notBeforeKey(username), String(Math.trunc(atSeconds)), { expirationTtl: ttl });
+}
+
+/** Was a token with this `iat` issued before `username`'s not-before instant? A token
+ * with no numeric `iat` cannot prove it is newer, so while an instant is set it counts as
+ * issued before (fail closed). No instant set: false. Same-second is NOT before, so the
+ * token minted right after a reset survives. */
+export async function isIssuedBeforeNotBefore(kv: Kv, username: string, iat: unknown): Promise<boolean> {
+  const raw = await kv.get(notBeforeKey(username));
+  if (raw == null) return false;
+  const notBefore = Number(raw);
+  if (!Number.isFinite(notBefore)) return false;
+  return typeof iat !== "number" || iat < notBefore;
+}
+
+/** Is this verified identity revoked, by the denylist or by a not-before instant newer
+ * than its `iat`? Shared by the Worker (per request, the WS upgrade included) and the DO
+ * (per socket frame and before each push), so the two cannot disagree on what "revoked"
+ * means. An identity with no string `userId` (anonymous, a synthetic callPrivileged one)
+ * is never revoked. */
+export async function isIdentityRevoked(kv: Kv, identity: { userId?: unknown; iat?: unknown } | null): Promise<boolean> {
+  const sub = typeof identity?.userId === "string" ? identity.userId : undefined;
+  if (!sub) return false;
+  const [denied, stale] = await Promise.all([isSessionDenied(kv, sub), isIssuedBeforeNotBefore(kv, sub, identity?.iat)]);
+  return denied || stale;
+}

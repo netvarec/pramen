@@ -27,7 +27,7 @@ import { digest } from "./runtime/digest";
 import { compileAcl, type AclContext, type CompiledAcl } from "./runtime/acl";
 import { DoSqliteDriver, type Driver } from "./runtime/driver";
 import { BadRequest, Unauthorized, toResponse, toWsError } from "./runtime/errors";
-import { Kv } from "./runtime/kv";
+import { Kv, isIdentityRevoked } from "./runtime/kv";
 import { registryKey } from "./runtime/registry";
 import { DEFAULT_PARTITION } from "./sdk/schema";
 import { createFiles, R2Adapter, type Files } from "./runtime/storage";
@@ -285,10 +285,17 @@ export class PramenDOBase extends DurableObject<DoEnv> {
     }
   }
 
-  /** Arm the drain alarm soon after a mutation enqueued task(s). setAlarm replaces any
-   * pending alarm; a near-future time batches a burst of enqueues into one drain. */
+  /** Arm the drain alarm soon after a mutation enqueued task(s). A near-future time batches
+   * a burst of enqueues into one drain. setAlarm REPLACES the pending alarm, so an earlier
+   * pending one is kept: overwriting it unconditionally made this a trailing debounce with
+   * no maximum wait, and a steady stream of enqueuing requests under 50 ms apart (anonymous
+   * magic-link requests will do) pushed the tenant's only automatic drain back forever. A
+   * later pending alarm (a backed-off retry) is pulled in, since new work is due now. */
   private async armDrain(): Promise<void> {
-    await this.ctx.storage.setAlarm(Date.now() + 50);
+    const at = Date.now() + 50;
+    const pending = await this.ctx.storage.getAlarm();
+    if (pending != null && pending <= at) return;
+    await this.ctx.storage.setAlarm(at);
   }
 
   /** A privileged, system-scoped context for running task handlers (outside a request).
@@ -396,9 +403,14 @@ export class PramenDOBase extends DurableObject<DoEnv> {
 
     // The token was verified ONCE at upgrade; a live/hibernating socket can outlive its
     // TTL. Re-check `exp` per message so an expired session can't keep calling/subscribing
-    // (role changes + the denylist only bite on reconnect, which this forces). Fail the
-    // frame and close 4401 so the client re-auths. Synthetic identities carry no exp.
-    if (this.isExpired(att.identity)) return this.rejectExpired(ws, msg.id);
+    // (role changes only bite on reconnect, which this forces). Fail the frame and close
+    // 4401 so the client re-auths. Synthetic identities carry no exp.
+    if (this.isExpired(att.identity)) return this.rejectUnauthorized(ws, msg.id, "session expired");
+    // Hard revocation too (denylist, or a not-before newer than the token's iat), against
+    // the same KV the Worker reads. Waiting for a reconnect is not enough: the revoked
+    // client is the one that decides when to reconnect, and an exp-less token never
+    // forces one.
+    if (await isIdentityRevoked(this.kv, att.identity)) return this.rejectUnauthorized(ws, msg.id, "session revoked");
 
     // A woken socket whose subscriptions the map lost cannot be repaired one frame at a
     // time: every id an `unsubscribe` or a re-`subscribe` names refers to a subscription
@@ -490,15 +502,26 @@ export class PramenDOBase extends DurableObject<DoEnv> {
   // because it runs after a mutation has committed (a throw here would 500 that write).
   private async broadcast(touched: string[]): Promise<void> {
     const written = new Set(touched);
+    // One revocation lookup per (user, iat) per broadcast, not per socket: a user with
+    // many tabs open would otherwise cost a KV read per tab on every write.
+    const revoked = new Map<string, Promise<boolean>>();
+    const isRevoked = (identity: Identity | null): Promise<boolean> => {
+      const key = JSON.stringify([identity?.userId ?? null, identity?.iat ?? null]);
+      let hit = revoked.get(key);
+      if (!hit) revoked.set(key, (hit = isIdentityRevoked(this.kv, identity)));
+      return hit;
+    };
     for (const ws of this.ctx.getWebSockets()) {
       try {
         const att = this.getAttachment(ws);
-        // A live socket whose token expired while connected must not keep receiving pushes.
-        // Close it 4401 and drop its subscriptions instead of pushing (an expired hibernating
-        // socket already has no in-memory subs, so this only bites still-live ones).
-        if (this.isExpired(att.identity)) {
+        // A live socket whose token expired, or was revoked, while connected must not keep
+        // receiving pushes. Close it 4401 and drop its subscriptions instead of pushing (an
+        // expired hibernating socket already has no in-memory subs, so this only bites
+        // still-live ones).
+        const reason = this.isExpired(att.identity) ? "session expired" : (await isRevoked(att.identity)) ? "session revoked" : null;
+        if (reason) {
           try {
-            ws.close(WS_CLOSE_UNAUTHORIZED, "session expired");
+            ws.close(WS_CLOSE_UNAUTHORIZED, reason);
           } catch {
             /* already closing */
           }
@@ -734,15 +757,16 @@ export class PramenDOBase extends DurableObject<DoEnv> {
     return typeof exp === "number" && Date.now() / 1000 >= exp;
   }
 
-  /** Reject a message from an expired socket: send the protocol's auth-failure error frame,
-   * then close 4401 (the client should re-authenticate and reconnect). */
-  private rejectExpired(ws: WebSocket, id: string): void {
-    this.send(ws, toWsError(id, new Unauthorized("session expired")));
+  /** Reject a message from an expired or revoked socket: send the protocol's auth-failure
+   * error frame, then close 4401 (the client should re-authenticate and reconnect). */
+  private rejectUnauthorized(ws: WebSocket, id: string, reason: "session expired" | "session revoked"): void {
+    this.send(ws, toWsError(id, new Unauthorized(reason)));
     try {
-      ws.close(WS_CLOSE_UNAUTHORIZED, "session expired");
+      ws.close(WS_CLOSE_UNAUTHORIZED, reason);
     } catch {
       /* already closing */
     }
+    this.subsBySocket.delete(ws);
   }
 
   /** The durable per-socket auth/routing state (identity + tenant + partition), read

@@ -8,7 +8,7 @@ pramen runs the **same** schema, ACL, and read/write engine over two stores. The
 default is the **Durable Object** (the DO *is* the database); the **D1** store is a
 first-class alternate for read-heavy / globally-distributed reads.
 
-| | Durable Object (default) | D1 (`x-pramen-store: d1`) |
+| | Durable Object (default) | D1 (`PRAMEN_STORE=d1`) |
 |---|---|---|
 | Where it runs | per-tenant DO (in-process SQLite) | the Worker, over a D1 binding (RPC) |
 | Single-writer | yes (free, one request at a time) | no (D1 has no interactive transactions) |
@@ -30,19 +30,30 @@ tenants must be isolated by construction.
 
 ## Selecting the store
 
-- **Per request, the reliable way.** Send the header **`x-pramen-store: d1`** to run a
-  call on D1, or `x-pramen-store: do` to force the Durable Object.
-- **App-wide default.** Set the `PRAMEN_STORE=d1` var to make D1 the default when no
-  header is sent (the header still overrides per request).
+- **The operator picks it.** Set the `PRAMEN_STORE=d1` var to run `/rpc` on D1; unset
+  (or `do`) is the Durable Object.
+- **Per request, only when opted in.** The header `x-pramen-store: d1` (or `do`) overrides
+  `PRAMEN_STORE` **only** when `PRAMEN_STORE_HEADER=allow` is set. That is for local dev and
+  tests (the e2e suite sets it); leave it off in a deployment.
 
-> **Prefer the header to pin the store.** A `PRAMEN_STORE` *var* can be dropped by some
-> adapters' `cloudflare:workers` env proxies (e.g. Astro's), so the Worker may not see
-> it in-process. The `x-pramen-store: d1` header is **always** honored.
+> **Why the header is off by default.** Each store keeps its own `auth_users`, and a
+> session names its user by a bare username signed with the shared `AUTH_SECRET`. A caller
+> who could pick the store could sign up an admin's username on the store where it is free,
+> then present that token to the admin's store, whose `refreshSession` reissues the admin's
+> roles. With the store fixed by the operator, the second store is simply unreachable.
+>
+> A `PRAMEN_STORE` *var* can be dropped by some adapters' `cloudflare:workers` env proxies
+> (e.g. Astro's), so the Worker may not see it in-process. Such an adapter must pass it
+> through; the header is no longer a workaround.
 
 `/live` always uses the Durable Object regardless of the header or default (live needs a
 single writer + a socket host). If a request routes to the DO but **no DO is bound**, you
-get a clear `400` ("no Durable Object (PRAMEN) is bound. Pin the D1 store…") instead of a
-crash.
+get a clear `400` ("no Durable Object (PRAMEN) is bound. Set PRAMEN_STORE=d1…") instead of
+a crash.
+
+The admin routes (`/admin/migrations`, `/admin/tasks/drain`, `/admin/tasks/list`) still
+take `x-pramen-store: d1` to address the D1 store: they are admin-gated, and the header
+there chooses what to inspect, not which users table authenticates the caller.
 
 ## Read replicas + read-your-writes (D1 Sessions API)
 
@@ -107,6 +118,11 @@ everything built on a pre-auth route DO-only: signed preview links, the sitemap.
 store it now dispatches **locally in the Worker** instead, through the same code path a
 request takes.
 
-One thing to know: the store is chosen **per request**, and a browser opening a signed link
-sends no `x-pramen-store` header. A deployment that serves such links from D1 should set
-`PRAMEN_STORE=d1` so the default matches where the data is.
+The route uses the same store decision as `/rpc`: `PRAMEN_STORE`, or the request's
+`x-pramen-store` header only under `PRAMEN_STORE_HEADER=allow`. A browser opening a signed
+link sends no header anyway, so a deployment that serves such links from D1 sets
+`PRAMEN_STORE=d1`.
+
+`ctx.callPrivileged({ name, input, roles?, userId? })` presents a synthetic identity:
+`roles` defaults to `["admin"]` (an explicit `[]` stays empty), and `userId`, when given,
+becomes `ctx.identity.userId` on both stores.

@@ -67,7 +67,9 @@ beforeAll(async () => {
   // Fresh local DO state so suites are deterministic (e.g. resolver "before authoring").
   rmSync(join(ROOT, ".wrangler"), { recursive: true, force: true });
 
-  server = Bun.spawn(["bunx", "wrangler", "dev", "--port", String(PORT)], {
+  // PRAMEN_STORE_HEADER=allow: the D1 and CMS suites pick the store per request with
+  // `x-pramen-store`, which the Worker ignores unless the operator opts in.
+  server = Bun.spawn(["bunx", "wrangler", "dev", "--port", String(PORT), "--var", "PRAMEN_STORE_HEADER:allow"], {
     cwd: ROOT,
     stdout: "ignore",
     stderr: "ignore",

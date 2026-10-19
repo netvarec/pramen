@@ -42,7 +42,7 @@ const STORES: Record<StoreId, Store> = {
       "You don't need live queries",
       "Cloudflare-native, with no database to operate",
     ],
-    setup: "Send x-pramen-store: d1 (or set PRAMEN_STORE=d1 as the default). Same schema, ACL and handlers; RPC only. @pramen/client carries the read-your-writes bookmark for you.",
+    setup: "Set PRAMEN_STORE=d1 (an operator setting; the x-pramen-store header counts only under PRAMEN_STORE_HEADER=allow, for local dev). Same schema, ACL and handlers; RPC only. @pramen/client carries the read-your-writes bookmark for you.",
     watch: [
       "No live queries (those need a Durable Object)",
       "No interactive transactions / rollback-on-throw (D1 limitation)",
