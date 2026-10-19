@@ -526,6 +526,19 @@ export class Db<S extends SchemaDef = SchemaDef> {
     return out;
   }
 
+  /** Judge a scope's `where` on a row that is NOT stored (the create candidate, the write
+   * echo), computing `extra` flag predicates in the same one-row probe. A `where` that
+   * traverses a relation can't run in `evalExpr`, so it rides along as a flag; a single-table
+   * one is evaluated in memory. `holds` is true when there is no `where`. The ONE place this
+   * is decided, so the insert gate and the echo cannot drift apart. */
+  private async whereOnUnstored(table: string, row: Row, where: SqlExpr | null, extra: { alias: string; expr: SqlExpr }[]): Promise<{ row: Row; holds: boolean }> {
+    const whereFlag = where && hasSub(where) ? [{ alias: SCOPE_WHERE_FLAG, expr: where }] : [];
+    const flagged = await this.withFlags(table, row, [...extra, ...whereFlag]);
+    if (!where) return { row: flagged, holds: true };
+    const holds = whereFlag.length > 0 ? predicateHolds({ expr: where, flag: SCOPE_WHERE_FLAG }, flagged) : evalExpr(where, flagged);
+    return { row: flagged, holds };
+  }
+
   /** The insert candidate as the DB would store it, for evaluating the create policy:
    * omitted columns take their literal `default` (an expression default can't be known
    * before the INSERT, so such a column reads as NULL and a predicate on it fails closed). */
@@ -943,12 +956,9 @@ export class Db<S extends SchemaDef = SchemaDef> {
     const generatedCols = this.fillGeneratedUuids(table, vals);
     let evalRow: Row = vals;
     if (scope.where || scope.grants.length > 0) {
-      const whereFlag = scope.where && hasSub(scope.where) ? [{ alias: SCOPE_WHERE_FLAG, expr: scope.where }] : [];
-      evalRow = await this.withFlags(table, this.withDefaults(table, vals), [...flagColumns(scope), ...whereFlag]);
-      if (scope.where) {
-        const ok = whereFlag.length > 0 ? predicateHolds({ expr: scope.where, flag: SCOPE_WHERE_FLAG }, evalRow) : evalExpr(scope.where, evalRow);
-        if (!ok) throw new AclDenied(table, "create");
-      }
+      const judged = await this.whereOnUnstored(table, this.withDefaults(table, vals), scope.where, flagColumns(scope));
+      evalRow = judged.row;
+      if (!judged.holds) throw new AclDenied(table, "create");
     }
     this.checkWriteFields(table, "create", scope, Object.keys(vals), evalRow, new Set([...Object.keys(set), ...generatedCols]));
     this.runValidators(validators, vals);
@@ -980,14 +990,9 @@ export class Db<S extends SchemaDef = SchemaDef> {
     if (this.acl.system) return this.stripHidden(table, row);
     const visible = new Set<string>([this.pkOf(table), ...writtenCols]);
     const readScope = this.scopeFor(table, "read");
-    const where = readScope.where;
-    const whereFlag = where && hasSub(where) ? [{ alias: SCOPE_WHERE_FLAG, expr: where }] : [];
-    const evalRow = readScope.allowed ? await this.withFlags(table, row, [...flagColumns(readScope), ...whereFlag]) : row;
-    const inReadScope =
-      readScope.allowed &&
-      (!where || (whereFlag.length > 0 ? predicateHolds({ expr: where, flag: SCOPE_WHERE_FLAG }, evalRow) : evalExpr(where, evalRow)));
-    if (inReadScope) {
-      const readable = effectiveFields(readScope, evalRow, this.acl.identity);
+    const judged = readScope.allowed ? await this.whereOnUnstored(table, row, readScope.where, flagColumns(readScope)) : null;
+    if (judged?.holds) {
+      const readable = effectiveFields(readScope, judged.row, this.acl.identity);
       if (readable === null) return this.stripHidden(table, row); // unrestricted read -> echo everything (minus hidden)
       for (const f of readable) visible.add(f);
     }
