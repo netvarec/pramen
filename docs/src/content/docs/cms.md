@@ -391,6 +391,14 @@ the right answer for twenty campaigns and no answer at all for a thousand record
 no paging, and no way to render the label of a stored value that is not in the one page it
 fetched, so an existing row shows a uuid.
 
+Both name a handler the editor calls **with the viewer's token** as soon as the form renders,
+and editors author field schemas. So a source must be DECLARED:
+`createCmsHandlers({ optionSources: { lookupCampaigns } })`. Only query handlers are accepted,
+they are registered by `createCmsHandlers` itself, an editor-authored schema naming anything
+else is refused (400), and the editor refuses to call a name `listCmsCapabilities().optionSources`
+does not list. A collection's fields are checked against the same `optionSources` at boot, so
+pass the same options to `createCollectionHandlers`.
+
 A `reference` field points at a handler that answers **two** shapes:
 
 ```ts

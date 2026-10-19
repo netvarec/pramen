@@ -8,7 +8,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { createCmsHandlers, cmsPolicies, MAX_MENU_DEPTH, MAX_MENU_ITEMS, normalizeRedirectPath } from "../packages/cms/src/index";
-import type { HandlerContext } from "@pramen/server";
+import { query, type HandlerContext } from "@pramen/server";
 
 type Row = Record<string, unknown>;
 type Query = { from: string; where?: Record<string, unknown>; select?: readonly string[]; limit?: number; orderBy?: unknown };
@@ -123,7 +123,7 @@ describe("menus", () => {
           { id: "b", label: "Gone", kind: "page", ref: "missing", children: [{ id: "c", label: "Child", kind: "custom", url: "/c" }] },
         ],
       }],
-      cms_pages: [{ id: "p1", slug: "about", locale: "en" }],
+      cms_pages: [{ id: "p1", slug: "about", locale: "en", status: "published" }],
     });
     const menu = await call(h, "getMenu", { name: "primary" }, ctx) as { items: Array<{ id: string; url: string }> };
     expect(menu.items.map((i) => i.id)).toEqual(["a"]);
@@ -133,7 +133,7 @@ describe("menus", () => {
   test("the locale segment appears only where the deployment declares more than one", async () => {
     const store = {
       cms_menus: [{ id: "m1", name: "primary", label: "P", items: [{ id: "a", label: "About", kind: "page", ref: "p1" }] }],
-      cms_pages: [{ id: "p1", slug: "about", locale: "cs" }],
+      cms_pages: [{ id: "p1", slug: "about", locale: "cs", status: "published" }],
     };
     const mono = await call(H({ locales: ["cs"] }), "getMenu", { name: "primary" }, stubCtx(structuredClone(store)).ctx) as { items: Array<{ url: string }> };
     expect(mono.items[0]!.url).toBe("/about");
@@ -145,7 +145,7 @@ describe("menus", () => {
     const h = H({ menuHref: (t) => (t.kind === "page" ? `/clanky/${t.slug}` : "/") });
     const { ctx } = stubCtx({
       cms_menus: [{ id: "m1", name: "primary", label: "P", items: [{ id: "a", label: "About", kind: "page", ref: "p1" }] }],
-      cms_pages: [{ id: "p1", slug: "about", locale: "en" }],
+      cms_pages: [{ id: "p1", slug: "about", locale: "en", status: "published" }],
     });
     const menu = await call(h, "getMenu", { name: "primary" }, ctx) as { items: Array<{ url: string }> };
     expect(menu.items[0]!.url).toBe("/clanky/about");
@@ -378,8 +378,9 @@ describe("a widget area embeds a RESOLVED menu", () => {
           { id: "gone", label: "Secret draft", kind: "page", ref: "unpublished" },
         ],
       }],
-      // Only the published page is visible to this caller's scope.
-      cms_pages: [{ id: "p1", slug: "about", locale: "en" }],
+      // The draft is in the store (a draft-reading caller's scope would return it): the handler
+      // filters it itself, so a deployer token with editor scope still renders no link to it.
+      cms_pages: [{ id: "p1", slug: "about", locale: "en", status: "published" }, { id: "unpublished", slug: "secret", locale: "en", status: "draft" }],
     });
     const area = await call(h, "getWidgetArea", { name: "sidebar" }, ctx) as { widgets: Array<{ menu: { items: Array<{ id: string; url: string }> } }> };
     const items = area.widgets[0]!.menu.items;
@@ -432,12 +433,14 @@ describe("an authored handler name cannot traverse a path", () => {
     // The editor interpolates these into `fetch(`${base}/rpc/${name}`)`, and "../admin/data"
     // normalizes to /admin/data, so an editor-authored string became a same-origin
     // authenticated POST fired by whoever opens the block, including an admin.
-    const h = H();
+    const h = H({ optionSources: { lookupCampaigns: query(() => ({ items: [] })) } });
     const parse = (schema: unknown) => h.createBlockType.input!({ name: "B", slug: "b", fieldsSchema: schema });
     expect(() => parse([{ name: "p", type: "reference", referenceFrom: "../admin/data" }])).toThrow(/must be a handler name/);
     expect(() => parse([{ name: "p", type: "select", optionsFrom: "../admin/data" }])).toThrow(/must be a handler name/);
     expect(() => parse([{ name: "p", type: "reference", referenceFrom: "look/up" }])).toThrow(/must be a handler name/);
     expect(parse([{ name: "p", type: "reference", referenceFrom: "lookupCampaigns" }])).toBeTruthy();
+    // A well-formed name is not enough: it has to be a DECLARED source (see secfix-cms tests).
+    expect(() => parse([{ name: "p", type: "select", optionsFrom: "pruneAnalytics" }])).toThrow(/not a declared option source/);
   });
 });
 

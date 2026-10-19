@@ -1,7 +1,13 @@
 // oblaka IaC: the source of truth for pramen's Cloudflare topology.
 //
 //   bun run config            generate wrangler.jsonc from this file (local)
-//   bun run deploy            provision resources (oblaka --remote) + ship code (wrangler deploy)
+//   bun run deploy            provision resources (oblaka --remote --env production) + ship code (wrangler deploy)
+//
+// The env must reach OBLAKA, not wrangler: oblaka falls back to `local` when it is given
+// neither `--env` nor `CLOUDFLARE_ENV`, even with `--remote`, and the local block below
+// carries a published AUTH_SECRET and the dev-account seed. `bun run deploy --env x`
+// appends `--env x` to the LAST command of the `&&` chain only (wrangler), so the deploy
+// script names the env itself, and this file refuses to render `local` for `--remote`.
 //
 // `oblaka oblaka.ts` (no --remote) writes wrangler.jsonc into this dir, which
 // `wrangler dev`/`wrangler deploy` then consume. `--remote` provisions the Worker
@@ -16,8 +22,19 @@ import { define, D1Database, DurableObject, EmailService, KVNamespace, Queue, R2
 const PROJECT = "pramen";
 
 export default define(({ env }) => {
+  // Fail the deploy rather than ship the local block. Checked against oblaka's own argv:
+  // `--remote` is what makes this a deploy, and no var can say otherwise.
+  const argv = (globalThis as { process?: { argv?: string[] } }).process?.argv ?? [];
+  if (env === "local" && argv.includes("--remote")) {
+    throw new Error(
+      "oblaka.ts: refusing to render the LOCAL env for a --remote deploy (it carries a published AUTH_SECRET and the " +
+        "dev-account seed). Pass --env <name> to oblaka itself, or set CLOUDFLARE_ENV.",
+    );
+  }
   // AUTH_SECRET: a dev value locally; in real envs set it as a secret with
-  // `wrangler secret put AUTH_SECRET` (a secret overrides this var at runtime).
+  // `wrangler secret put AUTH_SECRET` (a secret overrides this var at runtime). Run it
+  // AFTER `bun run deploy`: oblaka names the remote script `${env}-${PROJECT}` and writes
+  // that name into wrangler.jsonc, which is the script `wrangler secret put` then targets.
   const vars =
     env === "local"
       ? {
@@ -37,6 +54,11 @@ export default define(({ env }) => {
           // in locally; a real multi-tenant deployment must add a tenant column / per-tenant
           // DB before enabling this.
           PRAMEN_D1_ALLOW_MULTITENANT: "true",
+          // Let a request pick its store with `x-pramen-store: d1|do` (the e2e D1 suite and
+          // the docs' curl examples do). LOCAL ONLY: each store has its own users table, so a
+          // caller who can pick the store can present one store's session to the other. A
+          // deployment selects the store with PRAMEN_STORE, never per request.
+          PRAMEN_STORE_HEADER: "allow",
           // Where the magic-link lands in your frontend (the example builds
           // `${APP_URL}/auth?token=…`). MAIL_FROM is intentionally unset locally;
           // MAIL_CAPTURE opts ctx.mail into the dev inbox (capture to KV) instead of
@@ -46,9 +68,8 @@ export default define(({ env }) => {
           MAIL_CAPTURE: "true",
           // Seed the demo account `pramen@local` (see `devUserBootstrap` in example/app.ts),
           // so `bun run dev` + the sign-in page lead somewhere on a fresh store. LOCAL ONLY,
-          // and gated rather than unconditional for the obvious reason: a known username with
-          // a known password is exactly the reference data that must never reach a
-          // deployment, and `bun run deploy` ships this same app.ts.
+          // twice over: the seed is registered only by the LOCAL entry (`main` below), so the
+          // deployed bundle never runs it, and it is also gated on this flag.
           PRAMEN_DEV_SEED: "true",
         }
       : {
@@ -64,7 +85,9 @@ export default define(({ env }) => {
   return new Worker({
     dir: ".",
     name: PROJECT,
-    main: "./example/worker.ts",
+    // The local env runs the dev entry, which adds the dev-account seed to the app. Every
+    // other env runs the plain entry, so a known credential is not even in the deployed code.
+    main: env === "local" ? "./example/dev-worker.ts" : "./example/worker.ts",
     compatibility_date: "2026-06-18",
     compatibility_flags: ["nodejs_compat"],
     observability: { enabled: true },
@@ -81,7 +104,8 @@ export default define(({ env }) => {
       // and handler-facing ctx.kv data (`app:` keys); see packages/server/src/runtime/kv.ts.
       KV: new KVNamespace({ name: `${PROJECT}-kv` }),
       // D1 database for the "Worker + D1 (no DO)" path: the same engine over D1,
-      // selected per-request via `x-pramen-store: d1`. The DO remains the write path.
+      // selected by PRAMEN_STORE=d1 (or, locally, the `x-pramen-store: d1` header). The DO
+      // remains the write path.
       DB: new D1Database({ name: `${PROJECT}-d1` }),
       // R2 bucket backing file storage: `fileRef` columns + ctx.files + the Worker
       // /files/* upload/download route. Bytes live here; the DB holds only metadata.

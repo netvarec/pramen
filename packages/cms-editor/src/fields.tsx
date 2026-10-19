@@ -9,7 +9,7 @@ import TaskItem from "@tiptap/extension-task-item";
 import TaskList from "@tiptap/extension-task-list";
 import StarterKit from "@tiptap/starter-kit";
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
-import type { Api } from "./api";
+import { ApiError, type Api } from "./api";
 import { controlShown } from "./controls";
 import { getI18n, useI18n } from "./i18n";
 import { rich } from "./i18n/rich";
@@ -715,16 +715,24 @@ function SlugField({ def, label, description, descriptionId, value, source, onCh
 // campaigns, so the editor never has to hardcode or copy identifiers by hand.
 function SelectField({ def, value, onChange, api, ariaLabel, describedBy }: { def: FieldDefinition; value: string | null; onChange: (v: FieldValue) => void; api: Api; ariaLabel?: string; describedBy?: string }) {
   const [dyn, setDyn] = useState<{ value: string; label: string }[] | null>(null);
+  const [refused, setRefused] = useState<string | null>(null);
   const from = def.optionsFrom;
   useEffect(() => {
     if (!from) return;
     let alive = true;
+    // Through `callOptionSource`, never `call`: the name comes from a stored schema, and only a
+    // server-declared source may be dispatched under this viewer's token.
     api
-      .call<{ value: string; label: string }[]>(from)
+      .callOptionSource<{ value: string; label: string }[]>(from)
       .then((r) => { if (alive) setDyn(Array.isArray(r) ? r : []); })
-      .catch(() => { if (alive) setDyn([]); });
+      .catch((e: unknown) => {
+        if (!alive) return;
+        setDyn([]);
+        if (e instanceof ApiError && e.code === "undeclared_option_source") setRefused(e.message);
+      });
     return () => { alive = false; };
   }, [from, api]);
+  if (refused) return <span className="text-sm text-danger">{refused}</span>;
   const loading = Boolean(from) && dyn === null;
   const opts = from ? dyn ?? [] : (def.options ?? []).map((o) => ({ value: o, label: o }));
   return (
@@ -967,7 +975,7 @@ function useReferenceLabels(api: Api, from: string | undefined, ids: readonly st
     if (missing.length === 0) return;
     let alive = true;
     api
-      .call<ReferenceResult>(from, { ids: missing })
+      .callOptionSource<ReferenceResult>(from, { ids: missing })
       .then((r) => {
         if (!alive) return;
         const items = asReferenceResult(r).items;
@@ -1103,7 +1111,7 @@ function ReferencePicker({ api, from, title, selected, multiple, onPick, onClose
       setErr("");
       const asked = term;
       return api
-        .call<ReferenceResult>(from, { search: term || undefined, limit: REFERENCE_PAGE_SIZE, offset })
+        .callOptionSource<ReferenceResult>(from, { search: term || undefined, limit: REFERENCE_PAGE_SIZE, offset })
         .then((raw) => {
           if (asked !== current.current) return;
           const r = asReferenceResult(raw);

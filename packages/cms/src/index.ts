@@ -47,10 +47,12 @@ import {
   Conflict,
   signToken,
   verifyToken,
+  Kv,
+  isSessionDenied,
   resolveSecret,
   authorizeHandler,
 } from "@pramen/server";
-import type { HandlerContext, Policy, FileRef, BootstrapFn, DataMigration, MigrationContext, JsonValue, SchemaDef, FieldDef, FieldType, WhereClause } from "@pramen/server";
+import type { Handler, HandlerContext, Policy, FileRef, BootstrapFn, DataMigration, MigrationContext, JsonValue, SchemaDef, FieldDef, FieldType, WhereClause } from "@pramen/server";
 import type { EnvBag } from "@pramen/server";
 import { isSafeHref, normalizeHref } from "./href";
 import { NAV_ORDER } from "./nav";
@@ -1638,7 +1640,7 @@ const REGION_NAME = /^[A-Za-z_][A-Za-z0-9_-]*$/;
  * uses, so a `select`'s stale `options` cannot ride along on a field someone switched to
  * `text` and reappear if they switch back.
  */
-export function validateFieldSchema(raw: unknown, path = "fieldsSchema", depth = 0): FieldDefinition[] {
+export function validateFieldSchema(raw: unknown, path = "fieldsSchema", depth = 0, optionSources?: ReadonlySet<string>): FieldDefinition[] {
   if (raw == null) return [];
   if (!Array.isArray(raw)) throw new BadRequest(`${path} must be a list of field definitions`);
   if (depth >= MAX_FIELD_DEPTH) throw new BadRequest(`${path} nests deeper than ${MAX_FIELD_DEPTH} levels`);
@@ -1668,7 +1670,7 @@ export function validateFieldSchema(raw: unknown, path = "fieldsSchema", depth =
     if (o.default !== undefined) f.default = o.default;
 
     if (NESTING_TYPES.includes(type)) {
-      f.fields = validateFieldSchema(o.fields, `${at}.fields`, depth + 1);
+      f.fields = validateFieldSchema(o.fields, `${at}.fields`, depth + 1, optionSources);
       // A `group` with no fields renders an empty box; a `repeater` with none renders rows
       // of nothing and an Add button. Both are the shape of a half-finished edit, and both
       // are silently useless rather than visibly wrong, so they are refused here.
@@ -1682,7 +1684,7 @@ export function validateFieldSchema(raw: unknown, path = "fieldsSchema", depth =
       // `optionsFrom` takes precedence at render time, so requiring options alongside it
       // would reject the live-data case the option exists for.
       if (typeof o.optionsFrom === "string" && o.optionsFrom.trim() !== "") {
-        f.optionsFrom = assertHandlerName(o.optionsFrom, `${at}.optionsFrom`);
+        f.optionsFrom = assertOptionSource(o.optionsFrom, `${at}.optionsFrom`, optionSources);
       } else {
         const options = Array.isArray(o.options) ? o.options.map((v) => String(v).trim()).filter((v) => v !== "") : [];
         if (options.length === 0) throw new BadRequest(`${at} is a 'select' and needs either \`options\` or an \`optionsFrom\` handler`);
@@ -1697,7 +1699,7 @@ export function validateFieldSchema(raw: unknown, path = "fieldsSchema", depth =
       if (typeof o.referenceFrom !== "string" || o.referenceFrom.trim() === "") {
         throw new BadRequest(`${at} is a 'reference' and needs a \`referenceFrom\` query handler`);
       }
-      f.referenceFrom = assertHandlerName(o.referenceFrom, `${at}.referenceFrom`);
+      f.referenceFrom = assertOptionSource(o.referenceFrom, `${at}.referenceFrom`, optionSources);
       if (o.multiple === true) f.multiple = true;
     }
     return f;
@@ -1722,9 +1724,16 @@ export function checkSlugSources(schema: readonly FieldDefinition[], path = "fie
   });
 }
 
-/** Validate + canonicalize an authored field schema end to end. */
-export function normalizeFieldSchema(raw: unknown, path = "fieldsSchema"): FieldDefinition[] {
-  const schema = validateFieldSchema(raw, path);
+/** Validate + canonicalize an authored field schema end to end.
+ *
+ * `optionSources` is the deployment's declared allowlist (`createCmsHandlers({ optionSources })`):
+ * when given, every `optionsFrom` / `referenceFrom` must name one of them. The editor
+ * dispatches that name with the VIEWER's token, so a schema an editor wrote naming an
+ * admin-only handler ran it as whichever admin opened the block. The editor-authoring
+ * handlers always pass it; code-declared schemas (`cmsBootstrap`, collections) are written
+ * by the deployer and are bounded by the editor refusing any name outside the same list. */
+export function normalizeFieldSchema(raw: unknown, path = "fieldsSchema", optionSources?: ReadonlySet<string>): FieldDefinition[] {
+  const schema = validateFieldSchema(raw, path, 0, optionSources);
   checkSlugSources(schema, path);
   return schema;
 }
@@ -2056,6 +2065,10 @@ export interface AssembledPage {
   /** True when this is a live draft assembled behind a preview grant, rather than the
    * published snapshot, so a frontend can render a "you are viewing a draft" banner. */
   isPreview?: boolean;
+  /** On an editor preview (`getPage` with `preview: true`): a digest of the content shown.
+   * `approve` requires it back as `expectedContentHash`, which is what binds a reviewer's
+   * decision to the content they actually reviewed. See {@link pageContentHash}. */
+  contentHash?: string;
 }
 
 // --- media -------------------------------------------------------------------
@@ -2313,6 +2326,40 @@ export async function assertPublishable(db: CmsDb, page: Record<string, unknown>
   );
 }
 
+/** The snapshot a publish would bake, with the required-field gate applied (see
+ * {@link doPublish}). Split out so a caller that must publish EXACTLY what it checked (approve
+ * against a content hash, a schedule freezing what the reviewer saw) assembles once. */
+async function assembleForPublish(db: CmsDb, page: Record<string, unknown>): Promise<AssembledPage> {
+  await assertPublishable(db, page);
+  const snapshot = await assembleLive(db, { ...page, status: "published" });
+  snapshot.page.status = "published";
+  return snapshot;
+}
+
+const stableJson = (v: unknown): string => {
+  if (Array.isArray(v)) return `[${v.map(stableJson).join(",")}]`;
+  if (v && typeof v === "object") {
+    const o = v as Record<string, unknown>;
+    const keys = Object.keys(o).filter((k) => o[k] !== undefined).sort();
+    return `{${keys.map((k) => `${JSON.stringify(k)}:${stableJson(o[k])}`).join(",")}}`;
+  }
+  return JSON.stringify(v) ?? "null";
+};
+
+/** A digest of a page's CONTENT as assembled: fields, SEO, title, slug and every region's
+ * blocks. What a reviewer saw and what `approve` is about to publish compare equal exactly
+ * when the content is the same.
+ *
+ * Left out on purpose: `status` (the preview reads `review`, the publish `published`),
+ * `translations` (computed from OTHER pages, so a sibling going live would 409 an unrelated
+ * approval) and the preview/hash flags themselves. */
+export async function pageContentHash(a: AssembledPage): Promise<string> {
+  const { status: _status, translations: _translations, ...page } = a.page;
+  const bytes = new TextEncoder().encode(stableJson({ page, regions: a.regions }));
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  return Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 /** Publish a page: assemble a snapshot, write a revision (recording the actor), and point
  * the page at it. Shared by publishPage, approve, and the scheduled cms:publish task.
  * `clearSchedule` (a MANUAL publish) also clears the pending auto-unpublish token so a
@@ -2339,11 +2386,9 @@ export async function assertPublishable(db: CmsDb, page: Record<string, unknown>
  *
  * Type checks are not repeated here: the draft writes already ran them, and a stored value
  * cannot have changed type without going through one of them. */
-async function doPublish(db: CmsDb, page: Record<string, unknown>, actor: string | null, note?: string, clearSchedule = false): Promise<Record<string, unknown> | undefined> {
+async function doPublish(db: CmsDb, page: Record<string, unknown>, actor: string | null, note?: string, clearSchedule = false, frozen?: AssembledPage): Promise<Record<string, unknown> | undefined> {
   const now = nowStamp();
-  await assertPublishable(db, page);
-  const snapshot = await assembleLive(db, { ...page, status: "published" });
-  snapshot.page.status = "published";
+  const snapshot = frozen ?? (await assembleForPublish(db, page));
   const rev = await db.insert("cms_page_revisions", { pageId: page.id, title: page.title, status: "published", snapshot, note: note ?? null, actor });
   const patch: Record<string, unknown> = { status: "published", publishedAt: now, scheduledAt: null, currentRevisionId: rev.id, updatedAt: now };
   if (clearSchedule) patch.unpublishAt = null;
@@ -2501,6 +2546,43 @@ function assertHandlerName(v: unknown, what: string): string {
     throw new BadRequest(`${what} must be a handler name (a letter or underscore, then letters/digits/underscores), got ${JSON.stringify(v)}`);
   }
   return str;
+}
+
+/** `assertHandlerName`, and, when the deployment's allowlist is given, membership in it. */
+function assertOptionSource(v: unknown, what: string, optionSources: ReadonlySet<string> | undefined): string {
+  const name = assertHandlerName(v, what);
+  if (optionSources && !optionSources.has(name)) {
+    throw new BadRequest(
+      `${what} names '${name}', which is not a declared option source. Declare the query in ` +
+        `createCmsHandlers({ optionSources: { ${name} } })`,
+    );
+  }
+  return name;
+}
+
+/** Every `optionsFrom` / `referenceFrom` a schema names, nested fields included. */
+export function optionSourcesOf(schema: readonly FieldDefinition[], out = new Set<string>()): Set<string> {
+  for (const f of schema) {
+    if (f.optionsFrom) out.add(f.optionsFrom);
+    if (f.referenceFrom) out.add(f.referenceFrom);
+    if (f.fields) optionSourcesOf(f.fields, out);
+  }
+  return out;
+}
+
+/** Check a declared `optionSources` map: identifier names, QUERY handlers only. A mutation is
+ * refused because the editor calls a source on mount, under whoever is looking: a source has
+ * to be something that is safe to run just by opening a form. */
+function checkOptionSources(sources: Readonly<Record<string, Handler>> | undefined): Record<string, Handler> {
+  const out: Record<string, Handler> = {};
+  for (const [name, h] of Object.entries(sources ?? {})) {
+    assertHandlerName(name, `optionSources.${name}`);
+    if (!h || typeof h !== "object" || h.kind !== "query") {
+      throw new Error(`@pramen/cms: optionSources.${name} must be a query handler (the editor calls it just by rendering a form)`);
+    }
+    out[name] = h;
+  }
+  return out;
 }
 
 /** Whatever a JSON text column holds, or undefined when it is absent, empty or unreadable.
@@ -2937,11 +3019,66 @@ function normalizeWidgets(raw: unknown, rtSchema: RichTextSchema): Widget[] {
   });
 }
 
-/** What a preview link authorizes: one page, in one tenant, until `exp`. */
-export interface PreviewToken {
+/** What a preview link authorizes: one page, in one tenant, until `exp`, READ AS ITS MINTER. */
+export interface PreviewToken extends PreviewMinter {
   /** tenant */ t: string;
   /** page id: the grant is scoped to this ONE page, never "all drafts" */ p: string;
   /** expiry (epoch seconds) */ exp: number;
+}
+
+/**
+ * Who minted a preview link, signed into it.
+ *
+ * A link is redeemed with no session, so SOMETHING has to stand in for the reader. It used
+ * to be the configured viewer-role union (`editor ∪ reviewer ∪ admin` by default), so a link
+ * showed whatever the WIDEST of those roles could read: an editor whose ACL withheld a field,
+ * a row or a region could mint a link and read exactly what their own role was denied. The
+ * redeem routes now present the minter instead (`u` + `ro`), so the handler gate and every
+ * row, field and cell scope apply as they did when the link was minted. And because the
+ * reader is a known user, revoking that user (the session denylist) ends their links too.
+ */
+export interface PreviewMinter {
+  /** the minter's userId (the JWT `sub`) */ u: string;
+  /** the minter's roles at mint time, system (`__`) roles excluded */ ro: string[];
+}
+
+/** The minter half of a preview token, from the caller's identity. A link must name a user:
+ * without one it could not be revoked with them, so an identity with no `userId` cannot mint. */
+function previewMinter(identity: { userId?: unknown; roles?: readonly string[] } | null | undefined): PreviewMinter {
+  const u = identity?.userId;
+  if (typeof u !== "string" || u === "") throw new Forbidden("minting a preview link needs a signed-in user (an identity with a userId)");
+  return { u, ro: (identity?.roles ?? []).filter((r) => typeof r === "string" && !r.startsWith("__")) };
+}
+
+/** The session lifetime the deployment runs with, as `@pramen/auth` reads it. */
+function sessionTtlSeconds(env: EnvBag): number {
+  const v = Number((env as Record<string, unknown>).AUTH_SESSION_TTL_SECONDS);
+  return Number.isFinite(v) && v > 0 ? v : 3600;
+}
+
+/** A preview link's lifetime: what was asked for (or the default), clamped to `[60, ceiling]`.
+ * The ceiling is the SESSION TTL unless the deployment opted into longer links: the denylist
+ * entry that revokes a user lives exactly one session TTL, so a link that outlived it would
+ * outlive the revocation too. */
+function previewTtlFor(env: EnvBag, requested: number | undefined, opts: CmsHandlerOpts): number {
+  const fallback = opts.previewTtlSeconds ?? DEFAULT_PREVIEW_TTL_SECONDS;
+  const ceiling = Math.min(opts.maxPreviewTtlSeconds ?? sessionTtlSeconds(env), 30 * 24 * 3600);
+  return Math.max(60, Math.min(requested ?? fallback, ceiling));
+}
+
+/** The identity a redeemed link reads as, or `null` to refuse it: no minter (a token minted
+ * before minters were bound, or a forged shape), or a minter whose sessions are revoked. */
+async function redeemerOf(env: EnvBag, payload: Partial<PreviewMinter>): Promise<{ roles: string[]; userId: string } | null> {
+  if (typeof payload.u !== "string" || payload.u === "" || !Array.isArray(payload.ro)) return null;
+  const kv = (env as Record<string, unknown>).KV as KVNamespace | undefined;
+  // Fail closed: without the namespace the denylist cannot be consulted, and a revoked
+  // minter's link would read as valid.
+  if (!kv) {
+    console.error("pramen/cms: preview redemption needs the KV binding to check the session denylist");
+    return null;
+  }
+  if (await isSessionDenied(new Kv(kv), payload.u)) return null;
+  return { roles: payload.ro.filter((r): r is string => typeof r === "string" && !r.startsWith("__")), userId: payload.u };
 }
 
 /** Secret preference order. `PREVIEW_SECRET` lets an operator rotate preview links without
@@ -2959,11 +3096,8 @@ const previewUnconfigured = () =>
 /** The viewer roles for a given handler config: `editorRoles ∪ reviewerRoles`, computed
  * exactly as `createCmsHandlers` computes them.
  *
- * Exported so `cmsRoutes()` cannot drift from `createCmsHandlers()`: pass the SAME options
- * object to both. Configuring the two independently was how the preview route ended up
- * presenting an identity neither the handler gate nor the ACL accepted, and a partial
- * customization still worked, so the failure appeared only for the app that had most
- * carefully renamed its roles. */
+ * The gate on the read handlers (previews, media, content types). The preview ROUTES no
+ * longer present this set: a redeemed link reads as its minter (see `PreviewMinter`). */
 export function viewerRolesOf(opts: CmsHandlerOpts = {}): string[] {
   return [...new Set([...(opts.editorRoles ?? ["editor", "admin"]), ...(opts.reviewerRoles ?? ["reviewer", "admin"])])];
 }
@@ -3009,6 +3143,25 @@ export interface CmsHandlerOpts {
   reviewerRoles?: readonly string[];
   /** Preview-link lifetime in seconds. Default 3600 (1 hour). */
   previewTtlSeconds?: number;
+  /**
+   * The query handlers a field may name as its `optionsFrom` (select) or `referenceFrom`
+   * (reference), keyed by RPC name: `{ lookupCampaigns: query(...) }`. Nothing else.
+   *
+   * The editor calls a field's source as soon as the form renders, with the token of whoever
+   * is LOOKING, and editors author field schemas. So an editor could name an admin-only
+   * handler and have it run as the next admin to open the block. A declared source closes
+   * that: editor-authored schemas are refused if they name anything else, the editor refuses
+   * to call a name outside the list (it reads it from `listCmsCapabilities`), and only query
+   * handlers are accepted. They are REGISTERED by `createCmsHandlers` (spread its result as
+   * usual), so a declared name always resolves to the handler declared here. Pass the same
+   * options to `createCollectionHandlers`, which checks its collections against them.
+   */
+  optionSources?: Readonly<Record<string, Handler>>;
+  /** Ceiling on a preview link's lifetime, in seconds. Default: the session TTL
+   * (`AUTH_SESSION_TTL_SECONDS`, else 3600), because the denylist entry that revokes a user
+   * lives exactly that long. A link may outlive it only if you raise this, and then a link
+   * minted by a since-revoked user keeps working until it expires. Never above 30 days. */
+  maxPreviewTtlSeconds?: number;
   /** The node/mark vocabulary accepted on write. Defaults to `DEFAULT_RICH_TEXT_SCHEMA`
    * (what the shipped editor produces). Widen it if your editor adds TipTap extensions:
    * a node type absent from the schema is DROPPED on write, not rejected. */
@@ -3119,9 +3272,10 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
   const reservedSlugs = new Set((opts.reservedSlugs ?? []).map((r) => r.trim().toLowerCase()).filter((r) => r !== ""));
   const siteFurniture = opts.siteFurniture !== false;
   const account = accountCapabilities(opts.account);
+  const optionSources = checkOptionSources(opts.optionSources);
+  const optionSourceNames: ReadonlySet<string> = new Set(Object.keys(optionSources));
   const reviewerRoles = opts.reviewerRoles ?? ["reviewer", "admin"];
   const reviewer = { auth: reviewerRoles };
-  const previewTtl = opts.previewTtlSeconds ?? DEFAULT_PREVIEW_TTL_SECONDS;
   const rtSchema = opts.richTextSchema ?? DEFAULT_RICH_TEXT_SCHEMA;
   const menuHref = opts.menuHref ?? ((target: MenuHrefTarget): string => {
     switch (target.kind) {
@@ -3269,7 +3423,14 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       collectMenuRefs(items, pageIds, termIds);
       const pages = new Map<string, { slug: string; locale: string }>();
       if (pageIds.size > 0) {
-        const found = await db.find({ from: "cms_pages", where: { id: { in: [...pageIds] } }, select: ["id", "slug", "locale"], limit: pageIds.size });
+        // `status` is filtered here too, not left to the scope: the caller may be a site's
+        // deployer token whose role reads drafts, and a menu is public chrome either way.
+        const found = await db.find({
+          from: "cms_pages",
+          where: { id: { in: [...pageIds] }, status: "published", deletedAt: { isNull: true } },
+          select: ["id", "slug", "locale"],
+          limit: pageIds.size,
+        });
         for (const p of found) pages.set(String(p.id), { slug: String(p.slug), locale: String(p.locale ?? defaultLocale) });
       }
       const terms = new Map<string, { slug: string; taxonomy: string }>();
@@ -3322,7 +3483,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
   const TASK_PUBLISH = "cms:publish";
   const TASK_UNPUBLISH = "cms:unpublish";
 
-  return {
+  const built = {
     // ---- block types & content types (data-driven definitions) ----
     listBlockTypes: query((ctx) => cdb(ctx).find({ from: "cms_block_types", orderBy: { column: "name" } })),
 
@@ -3355,7 +3516,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
           description: typeof o.description === "string" ? o.description : undefined,
           icon: typeof o.icon === "string" ? o.icon : undefined,
           category: typeof o.category === "string" ? o.category : undefined,
-          fieldsSchema: normalizeFieldSchema(o.fieldsSchema),
+          fieldsSchema: normalizeFieldSchema(o.fieldsSchema, "fieldsSchema", optionSourceNames),
         };
       },
     }),
@@ -3395,7 +3556,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
           // is anywhere else in a URL. The example itself ships `seeded_doc`.
           slug: assertRegistryKey(o.slug, "content type slug"),
           regions,
-          fieldsSchema: normalizeFieldSchema(o.fieldsSchema),
+          fieldsSchema: normalizeFieldSchema(o.fieldsSchema, "fieldsSchema", optionSourceNames),
           defaultBlocks: normalizeDefaultBlocks(o.defaultBlocks, regions),
           labels: normalizeEntryLabels(o.labels),
         };
@@ -3428,7 +3589,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
         // `name` is the label in the editor's inserter; blanking it leaves an unnamed entry
         // nobody can identify.
         if (o.name !== undefined) out.name = assertLabel(o.name, "block type name");
-        if (o.fieldsSchema !== undefined) out.fieldsSchema = normalizeFieldSchema(o.fieldsSchema);
+        if (o.fieldsSchema !== undefined) out.fieldsSchema = normalizeFieldSchema(o.fieldsSchema, "fieldsSchema", optionSourceNames);
         return out as never;
       },
     }),
@@ -3464,7 +3625,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
         // `name` is the editor's tab label; blanking it leaves an unlabelled tab.
         if (o.name !== undefined) out.name = assertLabel(o.name, "content type name");
         if (o.regions !== undefined) out.regions = normalizeRegions(o.regions);
-        if (o.fieldsSchema !== undefined) out.fieldsSchema = normalizeFieldSchema(o.fieldsSchema);
+        if (o.fieldsSchema !== undefined) out.fieldsSchema = normalizeFieldSchema(o.fieldsSchema, "fieldsSchema", optionSourceNames);
         if (o.labels !== undefined) out.labels = normalizeEntryLabels(o.labels);
         // Checked against the regions being SAVED where the same call sends both, patching
         // only `defaultBlocks` cannot see the stored regions from an input parser, and the
@@ -3966,7 +4127,9 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       if (!term) return [];
       return db.find({
         from: "cms_pages",
-        where: { terms: { id: String(term.id) } },
+        // Published-only in the handler, as `listPublishedPages` does, not just in the anonymous
+        // scope: a draft-reading caller (a site's deployer token) would list drafts otherwise.
+        where: { terms: { id: String(term.id) }, status: "published", deletedAt: { isNull: true } },
         orderBy: { column: "createdAt", dir: "desc" },
         select: ["id", "typeId", "title", "slug", "locale", "status", "publishedAt"],
         limit: input.limit ?? PAGE_LIST_LIMIT,
@@ -4104,6 +4267,15 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     /** Confirm an uploaded blob is really in storage (capturing its true size) and
      * persist a `cms_media` row. Mirrors the notes attach flow. */
     createMedia: mutation(async (ctx, input: { ref: FileRef; alt?: string }) => {
+      // The key is the client's claim. `ctx.files.head` only proves the object exists in
+      // THIS tenant, which an app-private upload (`<tenant>/<rand>`, whose key is printed in
+      // every signed url, expired ones included) satisfies too. Registering one would turn a
+      // time-boxed private link into a permanent `signMediaDownload` and a `purgeMedia`
+      // target. So only the `media/` prefix `signMediaUpload` mints is accepted, and only
+      // once: two rows sharing a blob would let purging one delete the other's bytes.
+      if (!input.ref.key.startsWith(`${ctx.tenant}/media/`)) throw new BadRequest("ref.key is not a media upload");
+      const dup = await cdb(ctx).exec("SELECT id FROM cms_media WHERE json_extract(file, '$.key') = ? LIMIT 1", input.ref.key);
+      if (dup[0]) throw new BadRequest("this file is already in the media library");
       const head = await ctx.files.head(input.ref.key);
       if (!head) throw new BadRequest("uploaded file not found in storage");
       const file: FileRef = {
@@ -4338,9 +4510,14 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       // this one), so parse it before reaching for the key.
       const file = typeof media.file === "string" ? (JSON.parse(media.file) as { key?: string }) : asObj(media.file);
       const key = String(file.key ?? "");
+      // Bytes FIRST, and a failure is an error. The row is the only handle on the key (the
+      // store has no list), and `/media` serves the object with no DB check, so deleting
+      // the row before a failed object delete would report a takedown that never happened
+      // and leave nothing to retry it from. Deleting a missing key is a no-op, so a retry
+      // after a partial failure (D1 has no rollback) is safe.
+      if (key) await ctx.files.delete(key);
       await db.exec("DELETE FROM cms_media WHERE id = ?", input.id);
       markChanged(db, "cms_media");
-      if (key) await ctx.files.delete(key).catch(() => {});
       return { ok: true as const };
     }, { ...reviewer, ...mediaIdInput }),
 
@@ -4725,6 +4902,9 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       // The editor cannot work it out for itself: it knows the caller's roles from `me` but
       // not which roles this deployment configured as `editorRoles`.
       canEdit: isEditor(ctx, editorRoles),
+      // The ONLY handlers the editor will call from a field's `optionsFrom`/`referenceFrom`
+      // (see `CmsHandlerOpts.optionSources`). Absent on an older server ⇒ the editor calls none.
+      optionSources: [...optionSourceNames],
     }), viewer),
 
     /** Distinct locales present across all pages. NOTE: a DATA query, what is in the
@@ -4942,22 +5122,35 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       },
     }),
 
-    /** Approve a page in review → publish it (snapshot + currentRevisionId). Reviewer-gated. */
-    approve: mutation(async (ctx, input: { pageId: string; note?: string }) => {
+    /** Approve a page in review → publish it (snapshot + currentRevisionId). Reviewer-gated.
+     *
+     * Bound to CONTENT, not to the page id: `expectedContentHash` is the `contentHash` of the
+     * preview the reviewer looked at, and a page whose content has moved since (an editor
+     * kept writing while it sat in review) is a 409, not an approval of copy nobody reviewed.
+     * The snapshot that is hashed is the one that is published, so nothing can slip in
+     * between the check and the write. */
+    approve: mutation(async (ctx, input: { pageId: string; note?: string; expectedContentHash: string }) => {
       const db = cdb(ctx);
       const rows = await db.find({ from: "cms_pages", where: { id: input.pageId }, limit: 1 });
       const page = rows[0];
       if (!page) throw notFound("page");
       if (String(page.status) !== "review") throw new BadRequest("only a page in review can be approved");
-      const updated = await doPublish(db, page, actorOf(ctx), input.note, true); // manual → clear pending auto-unpublish
+      const snapshot = await assembleForPublish(db, page);
+      if ((await pageContentHash(snapshot)) !== input.expectedContentHash) {
+        throw new Conflict("this page changed since you reviewed it. Reload it and review it again");
+      }
+      const updated = await doPublish(db, page, actorOf(ctx), input.note, true, snapshot); // manual → clear pending auto-unpublish
       await writeAudit(db, { pageId: input.pageId, action: "approve", from: "review", to: "published", actor: actorOf(ctx), note: input.note });
       return { ok: true, page: updated };
     }, {
       ...reviewer,
-      input: (raw): { pageId: string; note?: string } => {
+      input: (raw): { pageId: string; note?: string; expectedContentHash: string } => {
         const o = asObj(raw);
         if (typeof o.pageId !== "string") throw new BadRequest("pageId is required");
-        return o as never;
+        if (typeof o.expectedContentHash !== "string" || o.expectedContentHash === "") {
+          throw new BadRequest("expectedContentHash is required: pass the contentHash of the preview you reviewed");
+        }
+        return { pageId: o.pageId, note: typeof o.note === "string" ? o.note : undefined, expectedContentHash: o.expectedContentHash };
       },
     }),
 
@@ -5050,16 +5243,33 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
      * each task carries the token it was enqueued for. At fire time the task acts ONLY if
      * its token still equals the page's current token, so rescheduling (new token),
      * manual publish/unpublish (token cleared), and duplicate deliveries all make a stale
-     * task a no-op. `unpublishAt` must be after `publishAt`. */
-    schedulePage: mutation(async (ctx, input: { pageId: string; publishAt: number; unpublishAt?: number }) => {
+     * task a no-op. `unpublishAt` must be after `publishAt`.
+     *
+     * The CONTENT is frozen here, not at fire time. The snapshot is assembled now (and the
+     * required-field gate applied now) into a `scheduled` revision the task later points the
+     * page at. Re-assembling at fire time published whatever the tables held by then, so an
+     * editor (who cannot publish) could write anything after a reviewer scheduled the page
+     * and it went live unreviewed. An optional `expectedContentHash` (the preview's
+     * `contentHash`) binds the schedule to the content the reviewer saw, as `approve` does. */
+    schedulePage: mutation(async (ctx, input: { pageId: string; publishAt: number; unpublishAt?: number; expectedContentHash?: string }) => {
       const db = cdb(ctx);
       const rows = await db.find({ from: "cms_pages", where: { id: input.pageId }, limit: 1 });
-      if (!rows[0]) throw notFound("page");
+      const page = rows[0];
+      if (!page) throw notFound("page");
+      const snapshot = await assembleForPublish(db, page);
+      if (input.expectedContentHash !== undefined && (await pageContentHash(snapshot)) !== input.expectedContentHash) {
+        throw new Conflict("this page changed since you reviewed it. Reload it and review it again");
+      }
       const now = Date.now();
       const publishToken = new Date(input.publishAt).toISOString();
       const unpublishToken = input.unpublishAt !== undefined ? new Date(input.unpublishAt).toISOString() : null;
+      // A reschedule supersedes the previous frozen snapshot (its task is already a no-op by
+      // token), so drop it rather than accumulate unreachable revisions.
+      await db.exec("DELETE FROM cms_page_revisions WHERE pageId = ? AND status = 'scheduled'", input.pageId);
+      markChanged(db, "cms_page_revisions");
+      const pending = await db.insert("cms_page_revisions", { pageId: input.pageId, title: page.title, status: "scheduled", snapshot, note: "scheduled", actor: actorOf(ctx) });
       await db.update("cms_pages", input.pageId, { scheduledAt: publishToken, unpublishAt: unpublishToken });
-      await ctx.tasks.enqueue({ kind: TASK_PUBLISH, payload: { pageId: input.pageId, token: publishToken }, delayMs: Math.max(0, input.publishAt - now) });
+      await ctx.tasks.enqueue({ kind: TASK_PUBLISH, payload: { pageId: input.pageId, token: publishToken, revisionId: String(pending.id) }, delayMs: Math.max(0, input.publishAt - now) });
       if (input.unpublishAt !== undefined) {
         await ctx.tasks.enqueue({ kind: TASK_UNPUBLISH, payload: { pageId: input.pageId, token: unpublishToken }, delayMs: Math.max(0, input.unpublishAt - now) });
       }
@@ -5067,13 +5277,14 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
     }, {
       // Reviewer-gated like publishPage: a scheduled publish is still a publish.
       ...reviewer,
-      input: (raw): { pageId: string; publishAt: number; unpublishAt?: number } => {
+      input: (raw): { pageId: string; publishAt: number; unpublishAt?: number; expectedContentHash?: string } => {
         const o = asObj(raw);
         if (typeof o.pageId !== "string" || !Number.isFinite(o.publishAt)) throw new BadRequest("pageId and a finite publishAt (epoch ms) are required");
         if (o.unpublishAt !== undefined) {
           if (!Number.isFinite(o.unpublishAt)) throw new BadRequest("unpublishAt must be a finite epoch ms");
           if ((o.unpublishAt as number) <= (o.publishAt as number)) throw new BadRequest("unpublishAt must be after publishAt");
         }
+        if (o.expectedContentHash !== undefined && typeof o.expectedContentHash !== "string") throw new BadRequest("expectedContentHash must be a string");
         return o as never;
       },
     }),
@@ -5087,8 +5298,8 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       // This used to refuse on the D1 store: redemption goes through `ctx.callPrivileged`,
       // which only forwarded to a DO, so a link minted on D1 would have 404'd forever while
       // the editor reported success. `callPrivileged` now dispatches locally in the Worker
-      // on D1, so both stores mint. The redeem route is a BROWSER request carrying no
-      // `x-pramen-store`, so a D1 deployment still needs `PRAMEN_STORE=d1` to route it.
+      // on D1, so both stores mint. The redeem route picks its store like /rpc does (from
+      // `PRAMEN_STORE`, not the request), so a D1 deployment needs `PRAMEN_STORE=d1`.
       const db = cdb(ctx);
       // Read the page through the ACL first: minting a link is granting access to it, so a
       // caller who cannot read the page must not be able to mint a link that can.
@@ -5096,12 +5307,12 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       const page = rows[0];
       if (!page) throw notFound("page");
 
-      const ttl = Math.max(60, Math.min(input.expiresIn ?? previewTtl, 30 * 24 * 3600));
-      const exp = Math.floor(Date.now() / 1000) + ttl;
+      const minter = previewMinter(ctx.identity);
+      const exp = Math.floor(Date.now() / 1000) + previewTtlFor(ctx.env, input.expiresIn, opts);
       // Server-resolved, never caller-supplied, so the tenant inside the signature
       // cannot be steered by whoever asks for the link.
       const tenant = ctx.tenant;
-      const token = await signToken<PreviewToken>({ t: tenant, p: String(page.id), exp }, secret);
+      const token = await signToken<PreviewToken>({ t: tenant, p: String(page.id), exp, ...minter }, secret);
       // RELATIVE, like signed file urls: the client resolves it against the CMS origin.
       return { url: `${PREVIEW_PATH}?token=${encodeURIComponent(token)}`, token, expiresAt: exp * 1000 };
     }, {
@@ -5159,12 +5370,12 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       const rows = await db.find({ from: "cms_pages", where: { id: input.pageId }, limit: 1 });
       if (!rows[0]) throw notFound("page"); // already trashed reads as absent: the scope hides it
       const now = new Date().toISOString();
-      // Clear the schedule. The publish/unpublish tasks run on the SYSTEM task context,
-      // where the ACL is bypassed entirely, so the `deletedAt IS NULL` read scope does
-      // NOT protect them, and a page trashed before its scheduled time was republished,
-      // publicly live, with a fresh revision and nobody pressing publish. Clearing the
-      // timestamps makes the tasks' existing intent-token check reject both for free.
-      await db.update("cms_pages", input.pageId, { deletedAt: now, updatedAt: now, scheduledAt: null, unpublishAt: null });
+      // The schedule is KEPT. Clearing it here (so the tasks' token check would reject a
+      // publish of a trashed page) also destroyed a reviewer-scheduled TAKEDOWN, and an
+      // editor could keep a page live past it with trash + restore. Instead `cms:publish`
+      // refuses a trashed page itself (the task is SYSTEM-scoped, so the read scope cannot),
+      // and `cms:unpublish` archives regardless of trash.
+      await db.update("cms_pages", input.pageId, { deletedAt: now, updatedAt: now });
       await writeAudit(db, { pageId: input.pageId, action: "delete", from: String(rows[0].status ?? ""), to: "trashed", actor: actorOf(ctx) });
       return { ok: true as const, deletedAt: now };
     }, { ...editor, ...pageIdInput }),
@@ -5209,13 +5420,25 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       // practice nothing can have taken the slug. Kept so a future change that DOES free
       // the slug on delete surfaces as a clean 400 rather than a constraint violation.
       await assertSlugFree(db, String(page.slug), String(page.locale), String(page.id));
-      await db.exec("UPDATE cms_pages SET deletedAt = NULL, updatedAt = ? WHERE id = ?", new Date().toISOString(), input.pageId);
+      // The schedule survived the trash (deletePage keeps it). A pending takedown still fires
+      // on its own: `cms:unpublish` archives whether or not the page was trashed. A publish
+      // whose time came while the page was in the trash was refused by `cms:publish`, and
+      // replaying it now would make a restore publish the page, so a PAST-DUE publish is
+      // dropped, and said so in the response and the audit row. A future one stays pending.
+      const publishMissed = page.scheduledAt != null && Date.parse(String(page.scheduledAt)) <= Date.now();
+      const now = new Date().toISOString();
+      if (publishMissed) await db.exec("UPDATE cms_pages SET deletedAt = NULL, scheduledAt = NULL, updatedAt = ? WHERE id = ?", now, input.pageId);
+      else await db.exec("UPDATE cms_pages SET deletedAt = NULL, updatedAt = ? WHERE id = ?", now, input.pageId);
       markChanged(db, "cms_pages");
-      await writeAudit(db, { pageId: input.pageId, action: "restore", from: "trashed", to: String(page.status ?? ""), actor: actorOf(ctx) });
-      // deletePage had to clear any schedule (the publish task runs SYSTEM-scoped, outside
-      // the read scope). Restore cannot know what it was, so SAY so: otherwise a promo
-      // page due to auto-unpublish comes back live forever with nothing in the audit trail.
-      return { ok: true as const, scheduleCleared: page.scheduledAt != null || page.unpublishAt != null };
+      await writeAudit(db, {
+        pageId: input.pageId,
+        action: "restore",
+        from: "trashed",
+        to: String(page.status ?? ""),
+        actor: actorOf(ctx),
+        note: publishMissed ? "scheduled publish was due while trashed and was dropped" : undefined,
+      });
+      return { ok: true as const, scheduleCleared: publishMissed };
     }, { ...editor, ...pageIdInput }),
 
     /** Permanently remove a trashed page and everything hanging off it. Reviewer-gated:
@@ -5256,19 +5479,25 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       const locale = input.locale ?? defaultLocale;
       const rows = await db.find({ from: "cms_pages", where: { slug: input.slug, locale }, limit: 1 });
       const page = rows[0];
-      if (!page) throw notFound("page"); // also the anonymous-vs-draft case: ACL yields no row
+      if (!page) throw notFound("page");
 
       if (input.preview) {
         const live = await assembleLive(db, page);
+        live.contentHash = await pageContentHash(live);
         live.isPreview = true; // same flag the token route sets, so a banner works either way
         return live;
       }
-      // Public path: serve the page's current published revision snapshot (selected by the
-      // page's `currentRevisionId` pointer: deterministic, unlike ordering by a
-      // second-precision timestamp). We do NOT assemble live here: anonymous has no read
-      // grant on the block tables (only pages + revisions), so a page without a current
-      // revision returns its meta with empty regions rather than a spurious 403. In
-      // practice publish always sets currentRevisionId, so that fallback is defensive.
+      // Public path: published-only is enforced HERE, not left to the caller's read scope.
+      // The anonymous policy happens to filter drafts, but a site rendering with a deployer
+      // token whose role reads drafts (any role built from `cmsPolicies().editor`) would
+      // otherwise serve a never-published page's live fields, or an UNPUBLISHED page's last
+      // snapshot (`unpublishPage` keeps `currentRevisionId`), to every visitor. Drafts are
+      // reachable only through `preview: true` above or a signed preview link.
+      if (String(page.status) !== "published" || page.deletedAt != null) throw notFound("page");
+      // Serve the page's current published revision snapshot (selected by the page's
+      // `currentRevisionId` pointer: deterministic, unlike ordering by a second-precision
+      // timestamp). Never live: publish always sets the pointer, and a live fallback would
+      // serve whatever the row holds now rather than what was published.
       if (page.currentRevisionId) {
         const revs = await db.find({ from: "cms_page_revisions", where: { id: page.currentRevisionId }, limit: 1 });
         if (revs[0]?.snapshot) {
@@ -5290,7 +5519,7 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
           return snap;
         }
       }
-      return { page: pageMeta(page, await siblingTranslations(db, page), await resolveMediaId(db, page.ogImage)), regions: {} };
+      throw notFound("page");
     }, {
       input: (raw): { slug: string; locale?: string; preview?: boolean } => {
         const o = asObj(raw);
@@ -5300,6 +5529,13 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       },
     }),
   };
+  // Register the declared option sources beside the CMS's own handlers, so a name the
+  // editor is allowed to call is always the handler declared for it. A clash with a CMS
+  // handler is refused: the capability would then advertise e.g. `getPage` as a source.
+  for (const name of optionSourceNames) {
+    if (name in built) throw new Error(`@pramen/cms: optionSources.${name} clashes with a CMS handler of the same name`);
+  }
+  return { ...optionSources, ...built } as typeof built;
 }
 
 /** The default CMS handlers (editor roles `["editor", "admin"]`). */
@@ -5371,7 +5607,9 @@ export function cmsPolicies(opts: CmsPolicyOpts = {}): { public: Policy[]; edito
       // this is defense in depth, but a revision snapshot is a BAKED copy of the page's
       // content, and a future revision-listing handler reading it directly would otherwise
       // serve a trashed page's body.
-      policy(`${p}:public:revisions:read`, "cms_page_revisions", "read", { where: { page: { status: "published", deletedAt: { isNull: true } } } }),
+      // And the REVISION's own status: a `scheduled` one is a frozen snapshot waiting for its
+      // time, not yet public even when its page already is.
+      policy(`${p}:public:revisions:read`, "cms_page_revisions", "read", { where: { status: "published", page: { status: "published", deletedAt: { isNull: true } } } }),
       // Media metadata is public (the bytes are separately gated by signed urls).
       policy(`${p}:public:media:read`, "cms_media", "read", { where: { deletedAt: { isNull: true } } }),
       // --- site furniture ---
@@ -5842,8 +6080,8 @@ export function validateCollections(collections: readonly CollectionDef[], schem
   }
 }
 
-/** A signed grant to preview ONE collection row. Mirrors {@link PreviewToken}. */
-export interface CollectionPreviewToken {
+/** A signed grant to preview ONE collection row, read as its minter. Mirrors {@link PreviewToken}. */
+export interface CollectionPreviewToken extends PreviewMinter {
   /** tenant */ t: string;
   /** collection slug */ c: string;
   /** row id: the grant is scoped to this ONE row, never "all drafts" */ r: string;
@@ -5882,13 +6120,26 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
   // Boot check, before a single handler is built: unknown/incoherent features and missing
   // managed columns throw here rather than 500ing on the first publish.
   validateCollections(collections, opts.schema);
+  // A collection form calls its fields' sources exactly as a block form does, and the editor
+  // refuses any name the deployment did not declare, so an undeclared one is a field that can
+  // never load. Said at boot, by name, rather than as an empty dropdown.
+  const declaredSources = new Set(Object.keys(checkOptionSources(opts.optionSources)));
+  for (const c of collections) {
+    for (const name of optionSourcesOf(c.fields)) {
+      if (!declaredSources.has(name)) {
+        throw new Error(
+          `@pramen/cms: collection '${c.slug}' names '${name}' as a field source, which is not in optionSources. ` +
+            `Declare it there and pass the same options to createCmsHandlers`,
+        );
+      }
+    }
+  }
   const collectionRtSchema = opts.richTextSchema ?? DEFAULT_RICH_TEXT_SCHEMA;
   const editor = { auth: opts.editorRoles ?? ["editor", "admin"] };
-  // Preview redemption presents editorRoles ∪ reviewerRoles (see `viewerRolesOf`), so the
-  // handler the route calls has to accept that set: gating it to `editor` alone would 403
-  // every preview link for a reviewer-only identity. Same wiring as `getPagePreview`.
+  // The read handlers (and `getCollectionPreview`, which a redeemed link calls AS ITS MINTER)
+  // accept editorRoles ∪ reviewerRoles (see `viewerRolesOf`): gating them to `editor` alone
+  // would 403 a reviewer-only identity. Same wiring as `getPagePreview`.
   const viewer = { auth: viewerRolesOf(opts) };
-  const previewTtl = opts.previewTtlSeconds ?? DEFAULT_PREVIEW_TTL_SECONDS;
   const bySlug = new Map(collections.map((c) => [c.slug, c] as const));
   const metas = collections.map(collectionMeta);
   const def = (slug: unknown): CollectionDef => {
@@ -6408,11 +6659,11 @@ export function createCollectionHandlers(collections: readonly CollectionDef[], 
       const secret = previewSecret(ctx.env);
       if (!secret) throw previewUnconfigured(); // fail closed: never mint a forgeable link
       const row = await loadRow(cdb(ctx), c, input.id);
-      const ttl = Math.max(60, Math.min(input.expiresIn ?? previewTtl, 30 * 24 * 3600));
-      const exp = Math.floor(Date.now() / 1000) + ttl;
+      const minter = previewMinter(ctx.identity);
+      const exp = Math.floor(Date.now() / 1000) + previewTtlFor(ctx.env, input.expiresIn, opts);
       // Server-resolved, never caller-supplied, so the tenant inside the signature cannot
       // be steered by whoever asks for the link.
-      const token = await signToken<CollectionPreviewToken>({ t: ctx.tenant, c: c.slug, r: String(row[idOf(c)]), exp }, secret);
+      const token = await signToken<CollectionPreviewToken>({ t: ctx.tenant, c: c.slug, r: String(row[idOf(c)]), exp, ...minter }, secret);
       // RELATIVE, like signed file urls: the client resolves it against the CMS origin.
       return { url: `${COLLECTION_PREVIEW_PATH}?token=${encodeURIComponent(token)}`, token, expiresAt: exp * 1000 };
     }, {
@@ -6718,8 +6969,23 @@ export const cmsTasks = {
     // reschedule (new token), a manual publish/unpublish (token cleared), or a duplicate
     // delivery after this task already ran (token cleared below) all make this a no-op.
     if (String(page.scheduledAt ?? "") !== String(token ?? "")) return;
+    // SYSTEM-scoped, so the `deletedAt` read scope does not apply here: check the tombstone
+    // explicitly. The schedule is KEPT on a trashed page (so a takedown survives trash and
+    // restore), which makes this the line that stops a trashed page going live.
+    if (page.deletedAt != null) return;
+    // Publish the snapshot frozen at schedule time, never the live tables (see schedulePage).
+    // A task without one, or whose revision is gone, publishes nothing: re-assembling live is
+    // exactly the unreviewed publish the freeze exists to prevent.
+    const { revisionId } = asObj(payload) as { revisionId?: string };
+    const revs = revisionId ? await db.find({ from: "cms_page_revisions", where: { id: revisionId, pageId, status: "scheduled" }, limit: 1 }) : [];
+    if (!revs[0]) {
+      console.error(`pramen/cms: scheduled publish of page ${pageId} has no frozen snapshot; not publishing`);
+      return;
+    }
     const from = String(page.status);
-    await doPublish(db, page, null, "scheduled publish"); // actor null = system
+    const now = nowStamp();
+    await db.update("cms_page_revisions", String(revs[0].id), { status: "published" });
+    await db.update("cms_pages", pageId, { status: "published", publishedAt: now, scheduledAt: null, currentRevisionId: String(revs[0].id), updatedAt: now });
     await db.insert("cms_audit", { pageId, action: "publish", fromStatus: from, toStatus: "published", actor: null, note: "scheduled" });
   },
   "cms:unpublish": async (ctx: HandlerContext, payload: unknown) => {
@@ -6774,7 +7040,7 @@ export function robotsTxt(opts: { origin: string; disallow?: string[] }): string
 
 // Minimal shape of a pramen public route (see @pramen/server/worker app.routes).
 interface RouteCtx {
-  callPrivileged: (opts: { name: string; input?: JsonValue; tenant?: string; roles?: string[] }) => Promise<Response>;
+  callPrivileged: (opts: { name: string; input?: JsonValue; tenant?: string; roles?: string[]; userId?: string }) => Promise<Response>;
 }
 interface CmsRoute {
   method: string;
@@ -6804,25 +7070,11 @@ export function cmsRoutes(
     tenant?: string;
     pageUrl?: SitemapOpts["pageUrl"];
     disallow?: string[];
-    /** The SAME options you passed to `createCmsHandlers`. The route derives its identity
-     * from them with `viewerRolesOf`, so the two cannot drift. (`viewerRoles` overrides it
-     * outright if you need to.) */
-    handlers?: CmsHandlerOpts;
-    /** The SAME options you passed to `createCollectionHandlers`, if they differ from
-     * `handlers`. The COLLECTION preview route has its own gate: `getCollectionPreview` is
-     * built by `createCollectionHandlers`, so an app that passes different `editorRoles` /
-     * `reviewerRoles` to the two factories would have the route present the page half's
-     * roles to a handler gated on the collection half's, and every collection preview link
-     * would 404 uniformly (the response is deliberately indistinguishable from "not
-     * found"). Defaults to `handlers`, which is right whenever both got the same options. */
-    collectionHandlers?: CmsHandlerOpts;
-    /** Explicit override for the roles the preview routes present to the DO. */
-    viewerRoles?: readonly string[];
   } = {},
 ): CmsRoute[] {
+  // No role options: a preview route presents the link's MINTER (signed into the token),
+  // never a configured role set. See `PreviewMinter`.
   const tenant = opts.tenant ?? "main";
-  const previewRoles = opts.viewerRoles ?? viewerRolesOf(opts.handlers);
-  const collectionPreviewRoles = opts.viewerRoles ?? viewerRolesOf(opts.collectionHandlers ?? opts.handlers);
   return [
     {
       method: "GET",
@@ -6851,18 +7103,17 @@ export function cmsRoutes(
         if (!raw) return previewDenied();
         const payload = await verifyToken<PreviewToken>(raw, secret);
         if (!payload || typeof payload.p !== "string" || typeof payload.t !== "string") return previewDenied();
-
-        // The synthetic identity has to satisfy BOTH gates the DO applies: the handler's
-        // `auth` (viewerRoles) and the row ACL (whatever role the app granted cmsPolicies
-        // to). Hardcoding ["admin"] satisfied neither under the wiring this package's own
-        // README documents (`role("anonymous", …)` + `role("editor", …)`, no admin role
-        // at all) so every preview link 404'd. The e2e only passed because example/app.ts
-        // happens to define an admin role. Send the configured viewer roles instead.
+        // Read AS THE MINTER: their roles and userId, so the handler gate and the row ACL
+        // decide exactly what they decided for that user, and a revoked user's links die
+        // with their sessions. Same uniform 404 as a missing page (probe resistance).
+        const who = await redeemerOf(env, payload);
+        if (!who) return previewDenied(404, "page not found");
         const res = await ctx.callPrivileged({
           name: "getPagePreview",
           input: { pageId: payload.p },
           tenant: payload.t, // from the SIGNED payload, never from the query string
-          roles: [...previewRoles],
+          roles: who.roles,
+          userId: who.userId,
         });
         const body = (await res.json().catch(() => ({}))) as { ok?: boolean; result?: JsonValue; error?: string; code?: string };
         if (body.ok !== true) {
@@ -6895,11 +7146,15 @@ export function cmsRoutes(
         if (!raw) return previewDenied();
         const payload = await verifyToken<CollectionPreviewToken>(raw, secret);
         if (!payload || typeof payload.c !== "string" || typeof payload.r !== "string" || typeof payload.t !== "string") return previewDenied();
+        // As the minter, exactly as the page route above.
+        const who = await redeemerOf(env, payload);
+        if (!who) return previewDenied(404, "not found");
         const res = await ctx.callPrivileged({
           name: "getCollectionPreview",
           input: { collection: payload.c, id: payload.r },
           tenant: payload.t, // from the SIGNED payload, never from the query string
-          roles: [...collectionPreviewRoles], // the COLLECTION handlers' gate, see `collectionHandlers`
+          roles: who.roles,
+          userId: who.userId,
         });
         const body = (await res.json().catch(() => ({}))) as { ok?: boolean; result?: JsonValue; error?: string; code?: string };
         if (body.ok !== true) {

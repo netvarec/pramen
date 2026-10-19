@@ -866,9 +866,9 @@ const acl = [
   role("editor", [...cmsPolicies({ prefix: "cms-ed" }).editor, ...collectionPolicies(collections, { prefix: "cms-ed" }), ...analyticsPolicies({ prefix: "an-ed" }).viewer]),
   // A reviewer needs the COLLECTION grants too, not just the page ones: getCollectionPreview
   // is gated with viewerRoles (editor ∪ reviewer), so a reviewer-only identity passes the
-  // handler gate and then hits the row ACL. Without this the direct RPC 404s, while the preview
-  // ROUTE happens to work anyway, because it presents admin alongside reviewer and grants
-  // OR-merge across roles, which is exactly the kind of asymmetry that hides the gap.
+  // handler gate and then hits the row ACL. A preview link a reviewer mints is redeemed AS that
+  // reviewer (the route presents the minter, not a role union that includes admin), so without
+  // this both the direct RPC and the reviewer's own links 404.
   role("reviewer", [...cmsPolicies({ prefix: "cms-rev" }).editor, ...collectionPolicies(collections, { prefix: "cms-rev" })]),
   role("author", [
     policy("author:read", "notes", "read", {
@@ -881,7 +881,7 @@ const acl = [
         if (!values.title) throw new Error("title is required");
       },
     }),
-    policy("author:update", "notes", "update", { where: { ownerId: $identity("userId") } }),
+    policy("author:update", "notes", "update", { where: { ownerId: $identity("userId") }, check: { ownerId: $identity("userId") } }),
     policy("author:delete", "notes", "delete", { where: { ownerId: $identity("userId") } }),
   ]),
   role("reader", [
@@ -989,11 +989,11 @@ const routes = [
   // batch off and returns; without one it writes in-request through `callPrivileged`. The
   // example binds no analytics queue, so this exercises the direct path.
   ...collectRoute({
-    // The tenant a visitor belongs to. A browser sends no `x-pramen-tenant`, so a real
-    // multi-tenant deployment maps the request's HOST to a tenant here; the header is
-    // honoured too so the e2e suite can address its own store.
-    sink: (request, env, ctx) =>
-      createAnalyticsSink(env, ctx, { tenant: request.headers.get("x-pramen-tenant") ?? "main" }),
+    // The tenant is SERVER-determined: this route is pre-auth, and taking it from the
+    // visitor's `x-pramen-tenant` let any anonymous client instantiate, migrate and register a
+    // tenant DO per name it sent. A real multi-tenant deployment maps the request's HOST to a
+    // known tenant here, and lists those in `tenants` (the sink drops any other).
+    sink: (_request, env, ctx) => createAnalyticsSink(env, ctx, { tenant: "main", tenants: ["main"] }),
   }),
   trackerRoute(),
 ];
@@ -1059,19 +1059,21 @@ const queues = {
 // could only be satisfied by hand-signing a JWT with the dev AUTH_SECRET. That is a fine
 // escape hatch (`bun tools/dev-token.ts`) and a terrible front door.
 //
-// GATED on `PRAMEN_DEV_SEED`, which `oblaka.ts` sets for the `local` env and for no other.
-// The gate is the whole point: a known username and a known password reconciled onto every
-// boot is precisely the reference data that must never reach a deployment, and `bun run
-// deploy` runs this same file. Reading it needs `BootstrapContext.env`: a boot-time
-// reconciler has no request to carry a flag on, so before that existed the only gates
-// available were "always" and "never".
+// NOT in `app.bootstrap`. Only the LOCAL entry (`example/dev-worker.ts`, which `oblaka.ts`
+// points the `local` env at) registers it. A var gate alone was not enough: a deploy that
+// rendered oblaka's local block (no `--env` reaching oblaka) shipped `PRAMEN_DEV_SEED=true`
+// together with this file, and every tenant got an admin account with a published password.
+// The deployed entry (`example/worker.ts`) never registers it, so no var can turn it on there.
+//
+// Still gated on `PRAMEN_DEV_SEED` as well (set for the `local` env only), so running the dev
+// entry against another config does not seed either.
 const DEV_USER = "pramen@local";
 // Eight characters, because `login` parses its input with the same rule `signup` does and
 // rejects anything shorter before it ever looks at a hash: a 6-character demo password would
 // be unusable however it was stored. Override with PRAMEN_DEV_PASSWORD.
 const DEV_PASSWORD = "pramen-dev";
 
-const devUserBootstrap: BootstrapFn = async ({ db, env }) => {
+export const devUserBootstrap: BootstrapFn = async ({ db, env }) => {
   if (env.PRAMEN_DEV_SEED !== "true") return;
   // Present ⇒ leave it ALONE. `bootstrap` runs on every boot, so writing the hash
   // unconditionally would silently reset a password someone had changed, every time the DO
@@ -1170,6 +1172,6 @@ export const app = {
   routes,
   tasks,
   queues,
-  bootstrap: [cmsBootstrap({ blockTypes: [seededNote], contentTypes: [seededDoc] }), devUserBootstrap],
+  bootstrap: [cmsBootstrap({ blockTypes: [seededNote], contentTypes: [seededDoc] })] as BootstrapFn[],
   migrations,
 };

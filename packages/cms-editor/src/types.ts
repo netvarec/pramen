@@ -266,6 +266,9 @@ export interface CmsCapabilities {
    * (`createCmsHandlers({ account })`): a provider-only deployment refuses both forms, and
    * drawing them anyway gave it a Settings screen whose every save failed. */
   account: AccountCapabilities;
+  /** The only handlers a field's `optionsFrom` / `referenceFrom` may call
+   * (`createCmsHandlers({ optionSources })`). Absent on an older server, where none is. */
+  optionSources: string[];
 }
 
 /** Mirror of @pramen/cms `AccountCapabilities`. */
@@ -319,6 +322,8 @@ export const DEFAULT_CAPABILITIES: CmsCapabilities = {
   // Also fails OPEN: an older server has no `account`, and both forms are what every
   // deployment had before it was declarable.
   account: { changeEmail: true, changePassword: true },
+  // Fails CLOSED: a field source runs under the viewer's token, so an unknown list is none.
+  optionSources: [],
 };
 
 /** Mirror of @pramen/cms `CollectionFeature`. */
@@ -367,6 +372,8 @@ export interface RenderedBlock {
 export interface AssembledPage {
   page: Page & { translations?: { locale: string; slug: string }[]; seo?: FieldValues };
   regions: Record<string, RenderedBlock[]>;
+  /** Set on an editor preview: what `approve` must echo back as `expectedContentHash`. */
+  contentHash?: string;
 }
 
 export interface Media {

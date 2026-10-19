@@ -26,7 +26,7 @@ import type { HomeLanding, MediaSource, MediaTile } from "./slots";
 import { useApp, type Me } from "./app-context";
 import { isRichTextDoc, richTextToPlainText } from "./rich-text";
 import { flattenTerms } from "./furniture";
-import type { AccountCapabilities, AssembledPage, AuditEntry, BlockType, CmsCapabilities, CollectionMeta, ContentType, FieldDefinition, FieldValue, FieldValues, Media, MediaKind, MediaSort, Page, RegionDefinition, RenderedBlock, Taxonomy, Term } from "./types";
+import type { AccountCapabilities, AssembledPage, AuditEntry, BlockType, CmsCapabilities, CollectionMeta, ContentType, FieldDefinition, FieldValue, FieldValues, Media, MediaKind, MediaSort, Page, RegionDefinition, RenderedBlock, RpcInput, Taxonomy, Term } from "./types";
 import { MEDIA_KIND_KEYS, MEDIA_KINDS, MEDIA_SORT_KEYS, MEDIA_SORTS } from "./types";
 
 export type InspectorTab = "settings" | "seo" | "i18n" | "terms" | "audit";
@@ -1146,10 +1146,18 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, backLabe
   const act = async (name: string) => {
     setActing(true);
     try {
-      const r = await api.call<{ page?: Page }>(name, { pageId: page.id });
+      // `approve` is bound to the content on screen: the server publishes only if the page
+      // still hashes to what this preview showed, so an edit made while it sat in review
+      // cannot be approved unseen.
+      const input: RpcInput = { pageId: page.id };
+      if (name === "approve") input.expectedContentHash = assembled?.contentHash;
+      const r = await api.call<{ page?: Page }>(name, input);
       if (r?.page) onChange(r.page);
     } catch (e) {
       setErr(errMsg(e));
+      // A refused approval means the content moved: show what is there now, so the next
+      // Approve is a decision about it.
+      if (name === "approve") await reload();
     } finally {
       setActing(false);
     }
@@ -2672,9 +2680,10 @@ function MyAccountCard({ api, me, onError, onSignOut }: { api: Api; me: Me | nul
   // Which forms the deployment offers (`createCmsHandlers({ account })`). Neither is drawn
   // until the probe answers: a provider-only deployment refuses both, and showing them for a
   // moment and then taking them away is worse than a beat of nothing.
-  const { cms: { account }, cmsReady } = useApp();
+  const { cms: { account }, cmsReady, adoptToken } = useApp();
   const { showEmail, showPassword, managedBy, managedUrl } = accountForms(account, cmsReady);
   const [email, setEmail] = useState("");
+  const [emailPw, setEmailPw] = useState("");
   const [pwCurrent, setPwCurrent] = useState("");
   const [pwNew, setPwNew] = useState("");
   const [msg, setMsg] = useState("");
@@ -2683,7 +2692,9 @@ function MyAccountCard({ api, me, onError, onSignOut }: { api: Api; me: Me | nul
 
   const saveEmail = async () => {
     setBusy(true);
-    try { await api.call("changeEmail", { email }); setEmail(""); flash(t("settings.emailUpdated")); }
+    // The address is the password-reset channel, so moving it needs the current password on an
+    // account that has one (empty for a passwordless account, which the server accepts).
+    try { await api.call("changeEmail", { email, currentPassword: emailPw }); setEmail(""); setEmailPw(""); flash(t("settings.emailUpdated")); }
     catch (e) { onError(errMsg(e)); }
     finally { setBusy(false); }
   };
@@ -2705,8 +2716,10 @@ function MyAccountCard({ api, me, onError, onSignOut }: { api: Api; me: Me | nul
   const savePassword = async () => {
     setBusy(true);
     try {
-      const res = await api.call<{ firstPassword?: boolean }>("changePassword", { currentPassword: pwCurrent, newPassword: pwNew });
+      const res = await api.call<{ firstPassword?: boolean; token?: string }>("changePassword", { currentPassword: pwCurrent, newPassword: pwNew });
       setPwCurrent(""); setPwNew("");
+      // The change retired this session too; carry on with the one the server just minted.
+      if (res?.token) adoptToken(res.token);
       flash(res?.firstPassword ? t("settings.passwordSet") : t("settings.passwordUpdated"));
     }
     catch (e) { onError(errMsg(e)); }
@@ -2738,6 +2751,14 @@ function MyAccountCard({ api, me, onError, onSignOut }: { api: Api; me: Me | nul
         {showEmail ? (
           <>
             <Input label={t("settings.changeEmail")} type="email" value={email} onChange={setEmail} placeholder={t("settings.emailPlaceholder")} />
+            <Input
+              label={t("settings.currentPassword")}
+              description={t("settings.emailPasswordHelp")}
+              type="password"
+              value={emailPw}
+              onChange={setEmailPw}
+              autoComplete="current-password"
+            />
             <Button className="w-full" onPress={saveEmail} isDisabled={busy || !email}>{t("settings.saveEmail")}</Button>
           </>
         ) : null}

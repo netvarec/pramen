@@ -38,7 +38,13 @@ through). A forged or unsigned request gets no identity. Verification is pluggab
 - **RS256 via JWKS** (`JwksStrategy`): set `JWKS_URL` to your identity provider's
   JWKS endpoint and tokens are verified asymmetrically against the fetched public
   keys (cached, with `kid` selection and rotation handling). When `JWKS_URL` is
-  set it takes over from `AUTH_SECRET`.
+  set it takes over from `AUTH_SECRET`. It **requires** `AUTH_AUDIENCE` and
+  `AUTH_ISSUER`: without both the Worker answers every request `500`, because a key
+  set alone also accepts tokens the same IdP minted for other clients or directories.
+
+The Worker also refuses to serve (`500` on every request, logged once) a non-local host
+while dev-only values are configured: `PRAMEN_DEV_SEED=true`, or the published dev
+`AUTH_SECRET` / `FILES_SECRET`. That catches the local vars block reaching a deployment.
 
 The core only *verifies* (bring your own IdP: Clerk/Auth0/WorkOS/Cloudflare Access
 all work via JWKS). To *issue* logins without a third party, add the optional
@@ -185,20 +191,21 @@ over the socket. Single-writer DOs see every write, so invalidation is exact.
 ### D1 store (Worker + D1, no DO)
 
 The same schema / ACL / read engine runs over a **D1 database** instead of a Durable
-Object, selected per-request with the header `x-pramen-store: d1`, or made the app
-default with `PRAMEN_STORE=d1` (the header still overrides per-request; `x-pramen-store:
-do` forces the DO). Set the default and you don't sprinkle the header on every client:
+Object, selected by the operator with `PRAMEN_STORE=d1`:
 
 ```jsonc
 // wrangler.jsonc / oblaka vars
 "vars": { "PRAMEN_STORE": "d1" }   // requires the DB binding bound
 ```
 
-> **The header is the reliable way to pin the store.** `PRAMEN_STORE` is convenient, but
-> some adapters' `cloudflare:workers` env proxies (e.g. Astro's) don't surface a `vars`
-> default in-process, so the Worker may not see it. `x-pramen-store: d1` per request is
-> always honored. If a request routes to the DO with no DO bound, you now get a clear
-> `400` ("no Durable Object (PRAMEN) is bound. Pin the D1 store…") instead of a crash.
+> **The store is operator config, not a request option.** The `x-pramen-store: d1|do`
+> header is ignored unless `PRAMEN_STORE_HEADER=allow` is set, which is meant for local
+> dev and tests only. Each store has its own users table and both sign sessions with the
+> same secret, so a caller who could pick the store could sign up an admin's username on
+> the store where it is free and have the other store reissue the admin's roles. An adapter
+> whose env proxy drops `vars` (e.g. Astro's) must pass `PRAMEN_STORE` through. If a
+> request routes to the DO with no DO bound, you get a clear `400` ("no Durable Object
+> (PRAMEN) is bound. Set PRAMEN_STORE=d1…") instead of a crash.
 
 **Read replicas + read-your-writes (D1 Sessions API).** Each request opens one D1
 **session** (`db.withSession(...)`) and runs all SQL through it. The Worker picks where
@@ -288,7 +295,7 @@ git push --follow-tags    # CI publishes @pramen/* to npm
 
 ## Production config
 
-- Set real secrets: `wrangler secret put AUTH_SECRET` (and `FILES_SECRET` if using
+- Set real secrets AFTER `bun run deploy` (see Deploy): `wrangler secret put AUTH_SECRET` (and `FILES_SECRET` if using
   files; it must be ≥16 chars, else file storage fails closed). Auth itself fails
   closed too: an empty `AUTH_SECRET` rejects every token.
 - Destructive migrations are **off by default**. A drop/rename/type-change is skipped
@@ -691,13 +698,35 @@ Worker, the `PRAMEN` Durable Object, its SQLite migration, vars, and observabili
 ```bash
 bun run config         # oblaka oblaka.ts        -> generate wrangler.jsonc (local)
 bun run dev            # regenerate + wrangler dev
-bun run plan           # oblaka --remote --dry-run -> preview the remote changes
+bun run plan           # oblaka --remote --env production --dry-run -> preview the remote changes
 
 # Real deploy: provision resources via oblaka, then ship the code via wrangler.
 export CLOUDFLARE_ACCOUNT_ID=... CLOUDFLARE_API_TOKEN=...
-wrangler secret put AUTH_SECRET   # production auth secret (overrides the dev var)
-bun run deploy --env production    # oblaka --remote (provision + config) && wrangler deploy
+bun run deploy                     # oblaka --remote --env production (provision + config) && wrangler deploy
+wrangler secret put AUTH_SECRET    # then the real secret, on the script the deploy created
 ```
+
+**The env has to reach oblaka, not just wrangler.** oblaka falls back to the `local` env
+when it is given neither `--env` nor `CLOUDFLARE_ENV`, even with `--remote`, and the local
+block in `oblaka.ts` carries a published `AUTH_SECRET`, `CORS_ORIGINS=*` and the dev-account
+seed. `bun run deploy --env production` does NOT pass the flag to oblaka: bun appends extra
+arguments to the last command of the `&&` chain only, which is `wrangler deploy`. So the
+`deploy` and `plan` scripts name `--env production` on the oblaka command themselves, and
+`oblaka.ts` throws if it is asked to render `local` for `--remote`, so a missing env fails
+the deploy instead of shipping dev values. To deploy another env, run the two halves
+yourself: `oblaka oblaka.ts --remote --env staging --state-namespace pramen-iac-state &&
+wrangler deploy`.
+
+**Set secrets after the deploy, on the script it created.** oblaka names the remote Worker
+`${env}-${PROJECT}` (`production-pramen`) and writes that name into `wrangler.jsonc`, which is
+what a plain `wrangler secret put` then targets. Run it before the first deploy and it lands
+on whatever name the local config had, never on the deployed script. Until `AUTH_SECRET` is
+set the deployed Worker rejects every token (auth fails closed), and a short-lived window
+like that is the safe direction to be wrong in.
+
+The dev-account seed (`pramen@local`) is registered only by `example/dev-worker.ts`, the
+entry the `local` env points `main` at. The deployed entry, `example/worker.ts`, never
+registers it, whatever vars a deploy carries.
 
 `oblaka --remote` provisions the Worker + Durable Object (and the SQLite DO
 migration) on Cloudflare and writes the config; `wrangler deploy` bundles and

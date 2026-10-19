@@ -109,6 +109,21 @@ function redirectToSignIn(): void {
   location.replace(SIGN_IN_URL!);
 }
 
+/** Signing out ON PURPOSE with no external sign-in page: the built-in Setup screen comes back.
+ * The token has to go from STORAGE too, not only from React state: `loadConfig` trusts what is
+ * stored on every boot, so a sign-out that only reset state left the session one reload away
+ * for whoever used the browser next. The backend url and tenant are kept (they are not a
+ * credential, and Setup would only ask for them again). Returns the config to continue with. */
+export function forgetSession(cfg: Config): Config {
+  const next = { ...cfg, token: "" };
+  try {
+    saveConfig(next);
+  } catch {
+    clearConfig();
+  }
+  return next;
+}
+
 /** Signing out ON PURPOSE: the session is dropped the same way, but the browser goes to the
  * sign-out page when there is one. Expiry still goes to sign-in (`redirectToSignIn`): only a
  * deliberate sign-out should end the identity provider's session. */
@@ -230,6 +245,10 @@ interface AppContextValue {
   setError: (s: string) => void;
   /** Sign out, dropping the token so the config gate falls back to Setup. */
   reconfigure: () => void;
+  /** Continue on a token the server just reissued (`changePassword` retires every session
+   * issued before it, the caller's own included, and answers with a fresh one). Persisted
+   * like the original, so a reload keeps the new session rather than the revoked one. */
+  adoptToken: (token: string) => void;
   /** Ask the current screen whether it is safe to navigate away; `false` cancels.
    * `beforeunload` only covers a real page unload, so in-app navigation (the topbar, sign
    * out) would otherwise discard unsaved edits with no prompt. With no guard registered
@@ -357,8 +376,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // reads as its (closed) default rather than `undefined`.
     api
       .call<Partial<CmsCapabilities>>("listCmsCapabilities")
-      .then((r) => setCms({ ...DEFAULT_CAPABILITIES, ...r }))
-      .catch(() => setCms(DEFAULT_CAPABILITIES))
+      .then((r) => {
+        setCms({ ...DEFAULT_CAPABILITIES, ...r });
+        api.declareOptionSources(r?.optionSources);
+      })
+      .catch(() => {
+        setCms(DEFAULT_CAPABILITIES);
+        api.declareOptionSources([]);
+      })
       .finally(() => setCmsReady(true));
   }, [api, authValid]);
 
@@ -403,7 +428,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setNavGuard,
     reconfigure: () => {
       if (SIGN_IN_URL) { signOutToShell(); return; }
-      setMe(null); setError(""); setCfg({ ...cfg, token: "" });
+      setMe(null); setError(""); setCfg(forgetSession(cfg));
+    },
+    adoptToken: (token: string) => {
+      const next = { ...cfg, token };
+      try { saveConfig(next); } catch { /* storage unavailable: the session still lives in state */ }
+      setCfg(next);
     },
   };
   return <AppContext value={value}>{children}</AppContext>;
