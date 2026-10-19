@@ -12,14 +12,24 @@
 // Create a fresh Db per handler run so identity and `touched` are scoped.
 
 import {
+  ACL_FLAG_PREFIX,
   AclDenied,
   ALLOW_ALL,
+  anyGrantApplies,
+  assertReadableWhereKeys,
+  checkFlagPredicates,
   compileScopedWhere,
   effectiveFields,
+  flagColumns,
+  hasCheck,
+  hasFieldsFn,
+  possibleFields,
+  predicateHolds,
   projectRow,
   resolveRelationScope,
   resolveScope,
   resolveWriteRules,
+  scopeInputColumns,
   type AclContext,
   type Scope,
 } from "./acl";
@@ -29,12 +39,16 @@ import type { WhereRule } from "../sdk/acl";
 import {
   and,
   cmp,
+  columnsInExpr,
   compileAggregate,
   compileCount,
   compileExpr,
+  compileFlags,
   compileSelect,
   eq,
+  evalExpr,
   FALSE,
+  hasSub,
   inList,
   isNull,
   or,
@@ -43,7 +57,7 @@ import {
   type OrderBy,
   type SqlExpr,
 } from "./read-engine";
-import { BadRequest } from "./errors";
+import { BadRequest, Conflict } from "./errors";
 import { enqueueTask } from "./outbox";
 import type { Dialect, Driver } from "./driver";
 import { partitionOf, triggersOf, triggerFires, type EntityFields, type FieldDef, type RelationDef, type SchemaDef, type TriggerOp } from "../sdk/schema";
@@ -57,6 +71,14 @@ type Selected = Partial<Record<string, true>> | undefined;
 
 const DEFAULT_PAGE_SIZE = 50;
 
+/** How many times an update authorized on a pre-image is re-evaluated after losing a race
+ * (the row changed between the pre-image read and the UPDATE) before it is a 409. */
+const UPDATE_ATTEMPTS = 3;
+
+/** Flag alias for a scope's own `where` evaluated on a row that isn't stored yet (the
+ * create candidate, the write echo), when that `where` traverses a relation. */
+const SCOPE_WHERE_FLAG = `${ACL_FLAG_PREFIX}where`;
+
 /** Compare two decoded cell values for trigger change-detection. Primitives by ===;
  * json/object cells (already parsed) by structural JSON equality. */
 function cellEqual(a: unknown, b: unknown): boolean {
@@ -69,32 +91,6 @@ function cellEqual(a: unknown, b: unknown): boolean {
 function normalizeOrder(orderBy: unknown): OrderBy[] | undefined {
   if (!orderBy) return undefined;
   return (Array.isArray(orderBy) ? orderBy : [orderBy]) as OrderBy[];
-}
-
-/** Single-table columns a compiled predicate reads (for cell-`when` grants: the SELECT
- * must fetch a `when`'s input columns or the per-row visibility check can't evaluate).
- * cell-`when` is single-table, so there's never a `sub` node to cross into. */
-function columnsInExpr(expr: SqlExpr | null | undefined, out: Set<string> = new Set()): Set<string> {
-  if (!expr) return out;
-  switch (expr.t) {
-    case "cmp":
-    case "in":
-    case "null":
-    case "strmatch":
-      out.add(expr.col);
-      break;
-    case "and":
-    case "or":
-      for (const p of expr.parts) columnsInExpr(p, out);
-      break;
-    case "not":
-      columnsInExpr(expr.expr, out);
-      break;
-    case "sub":
-      out.add(expr.outerCol); // inner `where` is over another table, not this row's columns
-      break;
-  }
-  return out;
 }
 
 type OrderSpec<S extends SchemaDef, T extends keyof S> = {
@@ -279,7 +275,8 @@ export class Db<S extends SchemaDef = SchemaDef> {
 
   /** Enforce field-level (incl. cell-level) write permission for one row. `setCols`
    * are server-forced values that bypass the restriction. `evalRow` is the row the
-   * per-row grants are evaluated against (candidate on insert, post-merge on update). */
+   * per-row grants are evaluated against (candidate on insert, post-merge on update);
+   * `stored` is the row each policy's own `where` admits (the pre-image on update). */
   private checkWriteFields(
     table: string,
     action: "create" | "update",
@@ -287,8 +284,9 @@ export class Db<S extends SchemaDef = SchemaDef> {
     writtenCols: string[],
     evalRow: Row,
     setCols: Set<string>,
+    stored: Row = evalRow,
   ): void {
-    const allowed = effectiveFields(scope, evalRow, this.acl.identity);
+    const allowed = effectiveFields(scope, evalRow, this.acl.identity, stored);
     if (!allowed) return; // all fields permitted for this row
     for (const c of writtenCols) {
       if (!setCols.has(c) && !allowed.includes(c)) throw new AclDenied(table, action, c);
@@ -324,7 +322,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
     const select = spec.select && spec.select.length > 0 ? [...new Set(spec.select as readonly string[])] : undefined;
     if (select) this.assertSelectable(from, scope, select);
     const columns = this.projectionColumns(from, scope, { select, orderBy, withSel: spec.with as Selected });
-    const raw = await this.selectRaw(from, where, orderBy, spec.limit, spec.offset, columns);
+    const raw = await this.selectRaw(from, where, orderBy, spec.limit, spec.offset, columns, flagColumns(scope));
     return (await this.finishRows(from, raw, scope, spec.with as Selected, select)) as (InferRow<FieldsOf<S[T]>> &
       RelationsResult<S, T>)[];
   }
@@ -353,7 +351,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
     const columns = this.projectionColumns(from, scope, { select, orderBy: order, withSel: spec.with as Selected });
 
     const limit = spec.limit ?? DEFAULT_PAGE_SIZE;
-    const raw = await this.selectRaw(from, where, order, limit + 1, undefined, columns); // +1 to detect a next page
+    const raw = await this.selectRaw(from, where, order, limit + 1, undefined, columns, flagColumns(scope)); // +1 to detect a next page
     const hasMore = raw.length > limit;
     if (hasMore) raw.length = limit;
 
@@ -435,7 +433,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
     // Compiles the user's where relation-aware (relation keys → security-scoped
     // subqueries), then AND-merges the entity's own ACL row scope.
     if (userWhere) this.assertReadableWhere(from, scope, userWhere);
-    const userExpr: SqlExpr = userWhere ? compileScopedWhere(userWhere as WhereRule, from, this.acl) : TRUE;
+    const userExpr: SqlExpr = userWhere ? compileScopedWhere(userWhere as WhereRule, from, this.acl, { untrusted: true }) : TRUE;
     const where = scope.where ? and(userExpr, scope.where) : userExpr;
     // A relation-traversal `where` (or a relation-traversing ACL scope) compiles to a
     // `sub` node over another table. Record those tables in `touched` so the live-query
@@ -466,24 +464,14 @@ export class Db<S extends SchemaDef = SchemaDef> {
 
   /** Reject a user `where` that filters on a column the caller cannot read (closes
    * the same info-leak as ordering by a hidden column: a filter is an oracle for a
-   * hidden field's values). Mirrors `assertReadableCols`. Relation keys are skipped
-   * here: they're filtered through the TARGET's read scope in acl.relationPredicate
-   *, and AND/OR groups recurse. Operator objects (`{ gt: … }`) sit under the column
-   * key, so checking the top-level keys is sufficient. */
+   * hidden field's values). Mirrors `assertReadableCols`: a `hidden()` column is
+   * rejected whatever the scope (allow() and SYSTEM included), an unknown key is a 400,
+   * and a belongsTo/oneHasOne key needs its FK readable here, since the join filters on
+   * it. The rest of a relation filter is checked against the TARGET's read scope in
+   * acl.relationPredicate. AND/OR/NOT groups recurse; operator objects (`{ gt: … }`) sit
+   * under the column key, so checking the keys is sufficient. */
   private assertReadableWhere(from: string, scope: Scope, where: unknown): void {
-    if (scope.fields === null || where == null || typeof where !== "object") return;
-    const relations = this.schema[from]?.relations ?? {};
-    for (const [k, v] of Object.entries(where as Record<string, unknown>)) {
-      if (k === "AND" || k === "OR") {
-        for (const g of v as WhereRule[]) this.assertReadableWhere(from, scope, g);
-      } else if (k === "NOT") {
-        this.assertReadableWhere(from, scope, v);
-      } else if (relations[k]) {
-        continue; // relation traversal: enforced against the target's scope downstream
-      } else if (!scope.fields.includes(k)) {
-        throw new AclDenied(from, "read", k);
-      }
-    }
+    assertReadableWhereKeys(where, from, scope.fields, this.schema);
   }
 
   private async selectRaw(
@@ -493,9 +481,73 @@ export class Db<S extends SchemaDef = SchemaDef> {
     limit?: number,
     offset?: number,
     columns?: readonly string[],
+    flags?: { alias: string; expr: SqlExpr }[],
   ): Promise<Row[]> {
-    const { sql, params } = compileSelect({ from, where, orderBy, limit, offset, columns }, this.dialect);
+    const { sql, params } = compileSelect({ from, where, orderBy, limit, offset, columns, flags }, this.dialect);
     return this.decodeRows(from, await this.driver.exec(sql, params));
+  }
+
+  /** Drop the SQL-computed ACL flag columns from a row (copying only if any are present). */
+  private stripFlags(row: Row): Row {
+    let out: Row | undefined;
+    for (const k of Object.keys(row)) {
+      if (!k.startsWith(ACL_FLAG_PREFIX)) continue;
+      out ??= { ...row };
+      delete out[k];
+    }
+    return out ?? row;
+  }
+
+  /** Evaluate relation-traversing ACL predicates against a row that is NOT stored (an
+   * insert candidate, an update post-image, a write echo), which a projected flag column
+   * can't reach. One probe over a one-row derived table aliased with the entity's own
+   * name, so the predicate's bare column names bind to the row's values (a `sub` node
+   * qualifies its own inner columns, so they bind to the traversed table). Returns a
+   * copy of `row` carrying each predicate's 0/1 flag. */
+  private async withFlags(table: string, row: Row, preds: { alias: string; expr: SqlExpr }[]): Promise<Row> {
+    if (preds.length === 0) return row;
+    const out: Row = { ...row };
+    const cols = this.allColsOf(table);
+    const names = cols.length > 0 ? cols : Object.keys(row).filter((k) => !k.startsWith(ACL_FLAG_PREFIX));
+    if (names.length === 0) {
+      for (const p of preds) out[p.alias] = 0;
+      return out;
+    }
+    const jsonCols = new Set(this.jsonColsOf(table));
+    const params: CellValue[] = [];
+    const flags = compileFlags(preds, this.dialect, params); // the SELECT list's params come first
+    const values = names.map((c) => {
+      params.push(this.encodeCell(jsonCols, c, (row[c] ?? null) as CellValue));
+      return `${this.dialect.placeholder(params.length)} AS ${this.dialect.id(c)}`;
+    });
+    const sql = `SELECT ${flags.join(", ")} FROM (SELECT ${values.join(", ")}) AS ${this.dialect.id(table)}`;
+    const res = ((await this.driver.exec(sql, params))[0] ?? {}) as Row;
+    for (const p of preds) out[p.alias] = res[p.alias] ?? 0;
+    return out;
+  }
+
+  /** The insert candidate as the DB would store it, for evaluating the create policy:
+   * omitted columns take their literal `default` (an expression default can't be known
+   * before the INSERT, so such a column reads as NULL and a predicate on it fails closed). */
+  private withDefaults(table: string, vals: Row): Row {
+    const fields = this.schema[table]?.fields;
+    if (!fields) return vals;
+    const out: Row = { ...vals };
+    for (const [name, f] of Object.entries(fields)) {
+      const fd = f as FieldDef;
+      if (out[name] === undefined && fd.default !== undefined) out[name] = fd.default;
+    }
+    return out;
+  }
+
+  /** A target row may be joined to a parent only through a join column the caller can
+   * read ON THAT ROW: a join on a column is an oracle for its value, exactly like a
+   * filter. A `hidden()` join column never joins, even under SYSTEM, matching how
+   * orderBy/select reject hidden columns regardless of scope. */
+  private joinVisible(entity: string, scope: Scope, row: Row, col: string): boolean {
+    if (this.hiddenColsOf(entity).includes(col)) return false;
+    const fields = effectiveFields(scope, row, this.acl.identity);
+    return fields === null || fields.includes(col);
   }
 
   /** All column names of a table (schema order). */
@@ -520,9 +572,9 @@ export class Db<S extends SchemaDef = SchemaDef> {
   private assertSelectable(from: string, scope: Scope, cols: readonly string[]): void {
     const hidden = new Set(this.hiddenColsOf(from));
     for (const c of cols) if (hidden.has(c)) throw new AclDenied(from, "read", c);
-    if (scope.fields === null || scope.fieldsFns.length > 0) return;
-    const allowed = new Set(scope.fields);
-    for (const cg of scope.conditional) for (const f of cg.fields) allowed.add(f);
+    const possible = possibleFields(scope);
+    if (possible === null) return;
+    const allowed = new Set(possible);
     for (const c of cols) if (!allowed.has(c)) throw new AclDenied(from, "read", c);
   }
 
@@ -534,9 +586,10 @@ export class Db<S extends SchemaDef = SchemaDef> {
    *     unrestricted (fields === null) or a field-resolver (fieldsFn) may expose anything;
    *   - PLUS the columns the machinery needs regardless of visibility: the PK (identity /
    *     relation grouping / cursor), the order-by columns, each eager-loaded relation's
-   *     parent-side join column, and any cell-`when` input columns, some of which the
-   *     caller can't read; they're fetched, used, then stripped by projectRow/stripHidden
-   *     before return.
+   *     parent-side join column, and the inputs of the per-row grants (cell-`when`s and
+   *     each policy's in-memory admission), some of which the caller can't read; they're
+   *     fetched, used, then stripped by projectRow/stripHidden before return. A
+   *     relation-traversing admission is computed in SQL instead (`flagColumns`).
    * Returns undefined (→ `SELECT *`) only for a schemaless/unknown table. */
   private projectionColumns(
     from: string,
@@ -548,20 +601,19 @@ export class Db<S extends SchemaDef = SchemaDef> {
     const hidden = new Set(this.hiddenColsOf(from));
 
     let visible: string[];
-    if (opts.select && scope.fieldsFns.length === 0) {
+    const possible = possibleFields(scope);
+    if (opts.select && !hasFieldsFn(scope)) {
       visible = opts.select.filter((c) => !hidden.has(c));
-    } else if (scope.fields === null || scope.fieldsFns.length > 0) {
+    } else if (possible === null) {
       visible = all.filter((c) => !hidden.has(c)); // unrestricted / resolver may expose anything
     } else {
-      const set = new Set(scope.fields);
-      for (const cg of scope.conditional) for (const f of cg.fields) set.add(f);
-      visible = [...set].filter((c) => !hidden.has(c));
+      visible = possible.filter((c) => !hidden.has(c));
     }
 
     const cols = new Set<string>(visible);
     cols.add(this.pkOf(from));
     for (const o of opts.orderBy ?? []) cols.add(o.column);
-    for (const cg of scope.conditional) for (const c of columnsInExpr(cg.when)) cols.add(c); // cell-`when` inputs
+    for (const c of scopeInputColumns(scope)) cols.add(c); // per-row grant inputs
     if (opts.withSel) {
       for (const relName of Object.keys(opts.withSel)) {
         if (!opts.withSel[relName]) continue;
@@ -713,18 +765,25 @@ export class Db<S extends SchemaDef = SchemaDef> {
     return this.dialect.encode(v);
   }
 
-  /** Fetch one row by id within an ACL row-scope (for per-row write evaluation). */
-  private async fetchOne(from: string, id: Id, scopeWhere: SqlExpr | null): Promise<Row | undefined> {
+  /** Fetch one row by id within an ACL row-scope (for per-row write evaluation), with the
+   * SQL-computed admission flags of `flagScope` (if given). `raw` is the row exactly as
+   * stored (undecoded), for the optimistic compare that re-asserts it in the UPDATE. */
+  private async fetchOne(from: string, id: Id, scopeWhere: SqlExpr | null, flagScope?: Scope): Promise<{ row: Row; raw: Row } | undefined> {
     const pk = this.pkOf(from);
     const where = scopeWhere ? and(eq(pk, id), scopeWhere) : eq(pk, id);
-    const { sql, params } = compileSelect({ from, where, limit: 1 }, this.dialect);
-    return this.decodeRow(from, (await this.driver.exec(sql, params))[0] as Row | undefined);
+    const flags = flagScope ? flagColumns(flagScope) : [];
+    const { sql, params } = compileSelect({ from, where, limit: 1, flags }, this.dialect);
+    const found = (await this.driver.exec(sql, params))[0] as Row | undefined;
+    if (!found) return undefined;
+    const raw = { ...found };
+    return { row: this.decodeRow(from, found)!, raw };
   }
 
   private async finishRows(from: string, raw: Row[], scope: Scope, withSel: Selected, select?: readonly string[]): Promise<Row[]> {
     const relNames = withSel ? Object.keys(withSel).filter((k) => withSel[k]) : [];
-    for (const relName of relNames) await this.loadRelation(from, raw, relName);
+    for (const relName of relNames) await this.loadRelation(from, raw, relName, scope);
     const sel = select && select.length > 0 ? new Set(select) : undefined;
+    const flagged = flagColumns(scope).length > 0;
     return raw.map((r) => {
       // Per-row visible fields = ACL effective set (null = all), then narrowed to the
       // caller's `select`. Hidden columns are stripped even under unrestricted/SYSTEM.
@@ -735,6 +794,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
         const fields = eff === null ? [...sel!] : sel ? eff.filter((f) => sel.has(f)) : eff;
         base = projectRow(r, fields);
       }
+      if (flagged) base = this.stripFlags(base);
       const projected = this.stripHidden(from, base);
       for (const relName of relNames) projected[relName] = r[relName]; // relations survive projection
       return projected;
@@ -755,8 +815,10 @@ export class Db<S extends SchemaDef = SchemaDef> {
   }
 
   /** Eager-load one relation onto `rows` (mutates them). Traversal is ACL-checked
-   * via resolveRelationScope: the related read scope OR a parent directAccess grant. */
-  private async loadRelation(parentEntity: string, rows: Row[], relName: string): Promise<void> {
+   * via resolveRelationScope: the related read scope OR a parent directAccess grant.
+   * `parentScope` is the read scope the parent rows were fetched under: a belongsTo/
+   * oneHasOne attaches only where the caller can read the parent's FK on that row. */
+  private async loadRelation(parentEntity: string, rows: Row[], relName: string, parentScope: Scope = ALLOW_ALL): Promise<void> {
     const rel = this.schema[parentEntity]?.relations?.[relName] as RelationDef | undefined;
     if (!rel) throw new Error(`unknown relation: ${parentEntity}.${relName}`);
 
@@ -766,56 +828,79 @@ export class Db<S extends SchemaDef = SchemaDef> {
 
     // Strip hidden() columns from the relation load, like every other read path:
     // projectRow alone keeps them under a full/allow()/SYSTEM scope (fields === null).
-    const project = (row: Row): Row => this.stripHidden(rel.target, projectRow(row, effectiveFields(scope, row, this.acl.identity)));
+    const project = (row: Row): Row =>
+      this.stripHidden(rel.target, this.stripFlags(projectRow(row, effectiveFields(scope, row, this.acl.identity))));
     // One IN query per relation (no N+1). Match column before projecting (which
-    // may drop the join column).
-    const fetchBy = async (col: string, values: CellValue[]): Promise<Array<{ key: CellValue; row: Row }>> => {
+    // may drop the join column). `targetFk`: the join column is the TARGET's FK
+    // (hasMany/oneHasOneInverse), so a target row joins only if the caller can read it
+    // there. For belongsTo/manyToMany the column is the target's PK, which a read grant
+    // may legitimately omit, so it isn't checked.
+    const fetchBy = async (col: string, values: CellValue[], targetFk: boolean): Promise<Array<{ key: CellValue; row: Row }>> => {
       if (values.length === 0) return [];
       const where = scope.where ? and(inList(col, values), scope.where) : inList(col, values);
       // Project the target to its readable columns (+ the join `col`, matched before
       // projecting) so a wide relation target isn't shipped whole over RPC either.
       const cols = this.projectionColumns(rel.target, scope);
       const columns = cols ? [...new Set([...cols, col])] : undefined;
-      const { sql, params } = compileSelect({ from: rel.target, where, columns }, this.dialect);
+      const { sql, params } = compileSelect({ from: rel.target, where, columns, flags: flagColumns(scope) }, this.dialect);
       const rows = this.decodeRows(rel.target, await this.driver.exec(sql, params));
-      return rows.map((row) => ({ key: row[col], row: project(row) }));
+      const out: Array<{ key: CellValue; row: Row }> = [];
+      for (const row of rows) {
+        if (targetFk && !this.joinVisible(rel.target, scope, row, col)) continue;
+        out.push({ key: row[col], row: project(row) });
+      }
+      return out;
     };
 
     if (rel.kind === "belongsTo" || rel.kind === "oneHasOne") {
-      // parent[column] -> target.id (single-valued; oneHasOne is belongsTo + a 1:1 unique)
-      const keys = [...new Set(rows.map((r) => r[rel.column]).filter((v) => v != null))];
+      // parent[column] -> target.id (single-valued; oneHasOne is belongsTo + a 1:1 unique).
+      // Only through an FK the caller can read on that parent row: attaching the target
+      // would otherwise disclose the very value the field ACL withholds.
+      const joins = (r: Row) => r[rel.column] != null && this.joinVisible(parentEntity, parentScope, r, rel.column);
+      const keys = [...new Set(rows.filter(joins).map((r) => r[rel.column]))];
       const byId = new Map<unknown, Row>();
-      for (const { key, row } of await fetchBy(this.pkOf(rel.target), keys)) byId.set(key, row);
-      for (const r of rows) r[relName] = r[rel.column] != null ? (byId.get(r[rel.column]) ?? null) : null;
+      for (const { key, row } of await fetchBy(this.pkOf(rel.target), keys, false)) byId.set(key, row);
+      for (const r of rows) r[relName] = joins(r) ? (byId.get(r[rel.column]) ?? null) : null;
     } else if (rel.kind === "oneHasOneInverse") {
       // inverse 1:1: target[column] -> parent.<pk>, single object (or null)
       const pk = this.pkOf(parentEntity);
       const ids = [...new Set(rows.map((r) => r[pk]).filter((v) => v != null))];
       const byParent = new Map<unknown, Row>();
-      for (const { key, row } of await fetchBy(rel.column, ids)) if (!byParent.has(key)) byParent.set(key, row);
+      for (const { key, row } of await fetchBy(rel.column, ids, true)) if (!byParent.has(key)) byParent.set(key, row);
       for (const r of rows) r[relName] = byParent.get(r[pk]) ?? null;
     } else if (rel.kind === "manyToMany") {
       // parent.<pk> -> junction(sourceColumn -> targetColumn) -> target.<pk>. The junction
-      // is read for just its two link columns (its own ACL isn't applied, like hasMany's
-      // intermediate); the target rows ARE scope-filtered by fetchBy, so an unreadable
-      // target simply drops out of the list.
+      // is an ordinary entity with its own policies, read under ITS read scope: a link the
+      // caller can't read directly is not observable here either, and both link columns
+      // must be readable on each link row. The target rows are scope-filtered by fetchBy,
+      // so an unreadable target simply drops out of the list.
       const pk = this.pkOf(parentEntity);
       const parentIds = [...new Set(rows.map((r) => r[pk]).filter((v) => v != null))];
-      if (parentIds.length === 0) {
+      this.touched.add(rel.through);
+      const jScope = this.acl.system ? ALLOW_ALL : resolveScope(this.acl, rel.through, "read");
+      const hiddenLink = this.hiddenColsOf(rel.through).some((c) => c === rel.sourceColumn || c === rel.targetColumn);
+      if (parentIds.length === 0 || !jScope.allowed || hiddenLink) {
         for (const r of rows) r[relName] = [];
         return;
       }
-      this.touched.add(rel.through);
-      // The junction is read for ONLY its two link columns (source→target); its other
-      // columns are irrelevant to the join and needn't cross RPC.
+      // The junction is read for its two link columns (plus whatever its per-row grants
+      // need); its other columns are irrelevant to the join and needn't cross RPC.
+      const jCols = this.projectionColumns(rel.through, jScope);
       const linkSel = compileSelect(
-        { from: rel.through, where: inList(rel.sourceColumn, parentIds), columns: [rel.sourceColumn, rel.targetColumn] },
+        {
+          from: rel.through,
+          where: jScope.where ? and(inList(rel.sourceColumn, parentIds), jScope.where) : inList(rel.sourceColumn, parentIds),
+          columns: jCols ? [...new Set([...jCols, rel.sourceColumn, rel.targetColumn])] : undefined,
+          flags: flagColumns(jScope),
+        },
         this.dialect,
       );
-      const links = this.decodeRows(rel.through, await this.driver.exec(linkSel.sql, linkSel.params));
+      const links = this.decodeRows(rel.through, await this.driver.exec(linkSel.sql, linkSel.params)).filter(
+        (l) => this.joinVisible(rel.through, jScope, l, rel.sourceColumn) && this.joinVisible(rel.through, jScope, l, rel.targetColumn),
+      );
       const targetIds = [...new Set(links.map((l) => l[rel.targetColumn]).filter((v) => v != null))];
       const byTarget = new Map<unknown, Row>();
-      for (const { key, row } of await fetchBy(this.pkOf(rel.target), targetIds)) byTarget.set(key, row);
+      for (const { key, row } of await fetchBy(this.pkOf(rel.target), targetIds, false)) byTarget.set(key, row);
       const grouped = new Map<unknown, Row[]>();
       for (const l of links) {
         const t = byTarget.get(l[rel.targetColumn]);
@@ -830,7 +915,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
       const pk = this.pkOf(parentEntity);
       const ids = [...new Set(rows.map((r) => r[pk]).filter((v) => v != null))];
       const grouped = new Map<unknown, Row[]>();
-      for (const { key, row } of await fetchBy(rel.column, ids)) {
+      for (const { key, row } of await fetchBy(rel.column, ids, true)) {
         const bucket = grouped.get(key) ?? grouped.set(key, []).get(key)!;
         bucket.push(row);
       }
@@ -838,7 +923,10 @@ export class Db<S extends SchemaDef = SchemaDef> {
     }
   }
 
-  /** Insert a single row, returning the persisted row. */
+  /** Insert a single row, returning the persisted row. The create policy's `where` (and
+   * `check`) must hold on the candidate row after `set`, else the insert is a 403: a
+   * where-only create policy is a real constraint, not decoration. It is evaluated BEFORE
+   * the INSERT, so it holds on D1 too, which cannot roll a statement back. */
   async insert<T extends keyof S & string>(
     table: T,
     values: InferInsert<FieldsOf<S[T]>>,
@@ -853,7 +941,16 @@ export class Db<S extends SchemaDef = SchemaDef> {
     // Auto-mint generated() uuid columns the caller omitted; server-minted, so they
     // join `set` in the bypass-list for the writable-field check.
     const generatedCols = this.fillGeneratedUuids(table, vals);
-    this.checkWriteFields(table, "create", scope, Object.keys(vals), vals, new Set([...Object.keys(set), ...generatedCols]));
+    let evalRow: Row = vals;
+    if (scope.where || scope.grants.length > 0) {
+      const whereFlag = scope.where && hasSub(scope.where) ? [{ alias: SCOPE_WHERE_FLAG, expr: scope.where }] : [];
+      evalRow = await this.withFlags(table, this.withDefaults(table, vals), [...flagColumns(scope), ...whereFlag]);
+      if (scope.where) {
+        const ok = whereFlag.length > 0 ? predicateHolds({ expr: scope.where, flag: SCOPE_WHERE_FLAG }, evalRow) : evalExpr(scope.where, evalRow);
+        if (!ok) throw new AclDenied(table, "create");
+      }
+    }
+    this.checkWriteFields(table, "create", scope, Object.keys(vals), evalRow, new Set([...Object.keys(set), ...generatedCols]));
     this.runValidators(validators, vals);
     this.assertValidUuids(table, vals);
 
@@ -866,7 +963,7 @@ export class Db<S extends SchemaDef = SchemaDef> {
     const rows = await this.driver.exec(sql, params);
     const persisted = this.decodeRow(table, rows[0])!;
     await this.fireTriggers(table, "create", persisted, cols);
-    return this.projectWrite(table, persisted, cols) as InferRow<FieldsOf<S[T]>>;
+    return (await this.projectWrite(table, persisted, cols)) as InferRow<FieldsOf<S[T]>>;
   }
 
   /** Project a mutation's RETURNING row so the echo never reveals more than a read
@@ -874,13 +971,23 @@ export class Db<S extends SchemaDef = SchemaDef> {
    * wrote (which they already know) and the primary key (so a write-only caller
    * still gets the generated id). Full read access -> the whole row; SYSTEM -> as-is.
    * This makes create/update echoes field-ACL-safe without ever collapsing to {}.
-   * Hidden columns are never echoed, even when written or under SYSTEM. */
-  private projectWrite(table: string, row: Row, writtenCols: string[]): Row {
+   * Hidden columns are never echoed, even when written or under SYSTEM.
+   *
+   * "Readable for this row" includes the read scope's `where`, judged on the persisted
+   * row (the post-image): a caller who may update or create rows it cannot read gets only
+   * the PK and what it wrote, not every readable column of a row a find would not return. */
+  private async projectWrite(table: string, row: Row, writtenCols: string[]): Promise<Row> {
     if (this.acl.system) return this.stripHidden(table, row);
     const visible = new Set<string>([this.pkOf(table), ...writtenCols]);
     const readScope = this.scopeFor(table, "read");
-    if (readScope.allowed) {
-      const readable = effectiveFields(readScope, row, this.acl.identity);
+    const where = readScope.where;
+    const whereFlag = where && hasSub(where) ? [{ alias: SCOPE_WHERE_FLAG, expr: where }] : [];
+    const evalRow = readScope.allowed ? await this.withFlags(table, row, [...flagColumns(readScope), ...whereFlag]) : row;
+    const inReadScope =
+      readScope.allowed &&
+      (!where || (whereFlag.length > 0 ? predicateHolds({ expr: where, flag: SCOPE_WHERE_FLAG }, evalRow) : evalExpr(where, evalRow)));
+    if (inReadScope) {
+      const readable = effectiveFields(readScope, evalRow, this.acl.identity);
       if (readable === null) return this.stripHidden(table, row); // unrestricted read -> echo everything (minus hidden)
       for (const f of readable) visible.add(f);
     }
@@ -889,7 +996,15 @@ export class Db<S extends SchemaDef = SchemaDef> {
   }
 
   /** Update a row by id. ACL row-scope is AND-ed into the WHERE, so a caller can
-   * only update rows within scope; returns undefined if none matched. */
+   * only update rows within scope; returns undefined if none matched.
+   *
+   * When the write is authorized per row (cell-level grants, a policy that admits only
+   * some rows, or a `check` on the post-image), it is authorized against a pre-image read
+   * first. On D1 that read and the UPDATE are separate autocommitting statements, so a
+   * concurrent write could change the row in between and land this one on a row the
+   * grant no longer covers. The UPDATE therefore re-asserts what the decision read (an
+   * optimistic compare); a lost race re-evaluates against the fresh row, and keeps
+   * losing only under sustained contention, which is a 409. */
   async update<T extends keyof S & string>(
     table: T,
     id: Id,
@@ -904,39 +1019,93 @@ export class Db<S extends SchemaDef = SchemaDef> {
     Object.assign(p, set); // forced server values first
     const cols = Object.keys(p);
     if (cols.length === 0) return undefined;
+    const setCols = new Set(Object.keys(set));
 
     // Fetch the existing row when we need it: for per-row field permission (evaluated
-    // against the FINAL post-merge row) OR for a field-filtered update trigger's
-    // value-change detection (so it fires only on an actual change, not a same-value write).
-    const needCellEval = scope.fields !== null && (scope.conditional.length > 0 || scope.fieldsFns.length > 0);
+    // against the FINAL post-merge row, with each policy's `where` on the pre-image) OR
+    // for a field-filtered update trigger's value-change detection (so it fires only on
+    // an actual change, not a same-value write).
+    const checked = hasCheck(scope);
+    const needCellEval = checked || (scope.fields !== null && scope.grants.length > 0);
     const needBefore = !this.acl.suppressTriggers && triggersOf(this.schema, table).some((t) => Array.isArray(t.on.update));
-    let evalRow: Row = p;
-    let before: Row | undefined;
-    if (needCellEval || needBefore) {
-      const existing = await this.fetchOne(table, id, scope.where);
-      if (!existing) return undefined; // out of update scope -> no-op
-      before = existing;
-      if (needCellEval) evalRow = { ...existing, ...p };
-    }
-    this.checkWriteFields(table, "update", scope, cols, evalRow, new Set(Object.keys(set)));
-    this.runValidators(validators, p);
-    this.assertValidUuids(table, p);
 
-    const params: CellValue[] = [];
-    const jsonCols = new Set(this.jsonColsOf(table));
-    const assignments = cols
-      .map((c) => {
-        params.push(this.encodeCell(jsonCols, c, p[c]));
-        return `${this.dialect.id(c)} = ${this.dialect.placeholder(params.length)}`;
-      })
-      .join(", ");
-    params.push(this.dialect.encode(id));
-    let sql = `UPDATE ${this.dialect.id(table)} SET ${assignments} WHERE ${this.dialect.id(this.pkOf(table))} = ${this.dialect.placeholder(params.length)}`;
-    sql += this.scopeClause(scope.where, params);
-    sql += this.returningClause("*");
-    const updated = this.decodeRow(table, (await this.driver.exec(sql, params))[0]);
-    if (updated) await this.fireTriggers(table, "update", updated, cols, before);
-    return (updated ? this.projectWrite(table, updated, cols) : undefined) as InferRow<FieldsOf<S[T]>> | undefined;
+    for (let attempt = 1; ; attempt++) {
+      let evalRow: Row = p;
+      let stored: Row = p;
+      let before: Row | undefined;
+      let raw: Row | undefined;
+      if (needCellEval || needBefore) {
+        const existing = await this.fetchOne(table, id, scope.where, needCellEval ? scope : undefined);
+        if (!existing) return undefined; // out of update scope -> no-op
+        stored = existing.row;
+        raw = existing.raw;
+        before = this.stripFlags(existing.row);
+        if (needCellEval) {
+          evalRow = await this.withFlags(table, { ...before, ...p }, checkFlagPredicates(scope));
+          // A policy's `check` must hold on the post-image: a grant whose check fails
+          // contributes nothing, and a write no grant still applies to is refused.
+          if (checked && !anyGrantApplies(scope, evalRow, stored)) throw new AclDenied(table, "update");
+        }
+      }
+      this.checkWriteFields(table, "update", scope, cols, evalRow, setCols, stored);
+      this.runValidators(validators, p);
+      this.assertValidUuids(table, p);
+
+      const params: CellValue[] = [];
+      const jsonCols = new Set(this.jsonColsOf(table));
+      const assignments = cols
+        .map((c) => {
+          params.push(this.encodeCell(jsonCols, c, p[c]));
+          return `${this.dialect.id(c)} = ${this.dialect.placeholder(params.length)}`;
+        })
+        .join(", ");
+      params.push(this.dialect.encode(id));
+      let sql = `UPDATE ${this.dialect.id(table)} SET ${assignments} WHERE ${this.dialect.id(this.pkOf(table))} = ${this.dialect.placeholder(params.length)}`;
+      sql += this.scopeClause(scope.where, params);
+      if (needCellEval && raw) sql += this.preimageGuard(scope, raw, stored, params);
+      sql += this.returningClause("*");
+      const updated = this.decodeRow(table, (await this.driver.exec(sql, params))[0]);
+      if (!updated && needCellEval) {
+        // The row changed under the decision (or left the scope): decide again.
+        if (attempt < UPDATE_ATTEMPTS) continue;
+        throw new Conflict(`${table} ${String(id)} was modified concurrently; retry the update`);
+      }
+      if (updated) await this.fireTriggers(table, "update", updated, cols, before);
+      return (updated ? await this.projectWrite(table, updated, cols) : undefined) as InferRow<FieldsOf<S[T]>> | undefined;
+    }
+  }
+
+  /** The optimistic compare for a per-row-authorized update: AND the stored values of every
+   * column the decision read (the inputs of cell `when`s, admissions and checks; every
+   * column when a field-resolver function, which can read anything, was involved), plus
+   * each relation-traversing admission that held, since it reads OTHER tables the compare
+   * can't see. Values are compared exactly as stored (`raw`), null-safely. */
+  private preimageGuard(scope: Scope, raw: Row, stored: Row, params: CellValue[]): string {
+    const deps = new Set<string>();
+    if (hasFieldsFn(scope)) {
+      for (const c of Object.keys(raw)) deps.add(c);
+    } else {
+      for (const c of scopeInputColumns(scope)) deps.add(c);
+      for (const g of scope.grants) {
+        if (g.check) columnsInExpr(g.check.expr, deps);
+        if (g.admit) columnsInExpr(g.admit.expr, deps);
+      }
+    }
+    let sql = "";
+    for (const c of deps) {
+      if (c.startsWith(ACL_FLAG_PREFIX) || !(c in raw)) continue;
+      const v = raw[c] as CellValue;
+      if (v === null || v === undefined) {
+        sql += ` AND ${this.dialect.id(c)} IS NULL`;
+      } else {
+        params.push(v);
+        sql += ` AND ${this.dialect.id(c)} = ${this.dialect.placeholder(params.length)}`;
+      }
+    }
+    for (const g of scope.grants) {
+      if (g.admit?.flag !== undefined && predicateHolds(g.admit, stored)) sql += this.scopeClause(g.admit.expr, params);
+    }
+    return sql;
   }
 
   /** Delete a row by id within scope. Returns whether a row was deleted. */

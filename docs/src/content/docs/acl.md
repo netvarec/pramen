@@ -20,7 +20,10 @@ role("author", [
 
 ACL `where` rules accept the same operators and `AND`/`OR` as queries, and
 `$identity` markers can appear anywhere, including inside `in`. If a marker can't
-be resolved (a missing claim), the rule safely matches nothing.
+be resolved (a missing claim), the rule safely matches nothing. A marker only ever
+resolves to a non-null scalar (or, inside `in`/`notIn`, a list of them): a `null` or an
+object from the token or the request input matches nothing too, so `$input("key")` fed
+`{ "key": null }` never becomes `IS NULL` and never reads the rows that hold no key.
 
 ```ts
 // reads notes owned by anyone on the caller's team; no `team` claim -> sees none
@@ -35,6 +38,17 @@ settable on write:
 ```ts
 policy("reader:read", "notes", "read", { fields: ["id", "title", "ownerId", "createdAt"] });
 ```
+
+A policy's fields stay **bound to its own rows** when grants merge. An identity holding
+both `author` (own notes, every column) and `reader` (every note, no `body`) reads every
+note, sees `body` on its own notes only, and can't filter, order or aggregate by `body`,
+because it isn't readable on every row in scope. Rows OR-merge; a field is readable on a
+row only if one single policy admits that row AND grants that field. The same holds for
+writes: a policy's writable fields apply only to the rows its `where` admits.
+
+A caller's `where` may only name columns it can read: a field outside its grant is a
+403, a `hidden()` column is a 403 under every scope (`allow()` and SYSTEM included, like
+`orderBy`/`select`), and an undeclared key is a 400.
 
 ## Cell-level (per-row) field ACL
 
@@ -58,7 +72,11 @@ notes omit it.
 
 The same rules enforce **writes** per row: insert evaluates the candidate values,
 update the post-merge row. So a teammate may edit `body` on their own note but not
-on another's, even though both are writable for `title`.
+on another's, even though both are writable for `title`. An update authorized this way
+re-asserts, in the UPDATE itself, the stored values its decision read, so on D1 (where
+the pre-image read and the write are separate statements) a concurrent change to those
+columns makes the update re-evaluate against the fresh row rather than land on a row
+the grant no longer covers. Contention that persists across retries is a 409.
 
 > A conditionally-visible column can't be aggregated or used in `orderBy`, since that
 > would leak its value (or relative ordering) across rows. Such requests are denied.
@@ -78,6 +96,25 @@ policy("author:create", "notes", "create", {
 `set` is applied before the field check, so a conditional `when` that references a
 forced column (e.g. `ownerId`) sees the server value.
 
+A write policy's `where` binds the row being written. On **create** it must hold on the
+candidate row (after `set`; an omitted column counts at its literal default), else the
+insert is a 403, so a where-only create policy is a real constraint. On **update** the
+`where` gates the row as stored before the write. To also constrain what the row
+becomes, add an opt-in `check`, evaluated on the post-image before the UPDATE runs:
+
+```ts
+policy("author:update", "notes", "update", {
+  where: { ownerId: $identity("userId") },  // may edit own notes…
+  check: { ownerId: $identity("userId") },  // …and they must stay own notes
+});
+```
+
+`check` is opt-in because moving a row out of the update scope is sometimes the point: a
+soft delete that sets `deletedAt` under a `deletedAt IS NULL` scope. When grants merge,
+a policy whose `check` fails contributes nothing to that write, and a write no policy
+still covers is a 403. `check` is accepted on create (AND-ed with `where`) and update;
+`compileAcl` rejects it on read and delete.
+
 ## Relations & nested ACL
 
 Each eager-loaded relation is independently ACL-checked. A relation loads under the
@@ -91,6 +128,22 @@ policy("author:read", "notes", "read", {
   relations: { owner: { directAccess: true, fields: ["id", "name"] } }, // owner, but not email
 });
 ```
+
+A `directAccess` grant reaches only targets linked from parent rows that ITS policy's
+`where` admits: if another role lets the same caller read every note, the author still
+gets no `owner` on notes it doesn't own.
+
+Traversal never widens a direct read, and a join is a read of its join column:
+
+- `with` attaches a belongsTo/oneHasOne target only where the caller can read the FK on
+  that parent row, and a hasMany/oneHasOneInverse target only where it can read the FK on
+  that target row. Otherwise the relation is `null`/`[]`.
+- A relation key in a `where` filters on the join column, so the FK must be readable
+  (at every hop), else it is a 403, as filtering on the FK directly would be.
+- A `hidden()` FK never joins, not even under SYSTEM.
+- A manyToMany goes through its junction's own read scope: a link row the caller can't
+  read directly is invisible to both `with` and `where`. Grant the junction to whoever
+  traverses it.
 
 ## Dynamic resolvers
 

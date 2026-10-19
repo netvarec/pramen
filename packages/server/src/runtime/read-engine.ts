@@ -105,7 +105,55 @@ export interface CompiledSql {
   readonly params: CellValue[];
 }
 
-export function compileExpr(expr: SqlExpr, dialect: Dialect, params: CellValue[] = []): CompiledSql {
+/** Whether a predicate traverses a relation (contains a `sub` node), so it can only be
+ * evaluated in SQL, never by `evalExpr`. */
+export function hasSub(expr: SqlExpr | null | undefined): boolean {
+  if (!expr) return false;
+  switch (expr.t) {
+    case "sub":
+      return true;
+    case "and":
+    case "or":
+      return expr.parts.some(hasSub);
+    case "not":
+      return hasSub(expr.expr);
+    default:
+      return false;
+  }
+}
+
+/** Columns of the evaluated row that a compiled predicate reads. A `sub` node reads only
+ * its `outerCol` here: its inner `where` is over another table. */
+export function columnsInExpr(expr: SqlExpr | null | undefined, out: Set<string> = new Set()): Set<string> {
+  if (!expr) return out;
+  switch (expr.t) {
+    case "cmp":
+    case "in":
+    case "null":
+    case "strmatch":
+      out.add(expr.col);
+      break;
+    case "and":
+    case "or":
+      for (const p of expr.parts) columnsInExpr(p, out);
+      break;
+    case "not":
+      columnsInExpr(expr.expr, out);
+      break;
+    case "sub":
+      out.add(expr.outerCol);
+      break;
+  }
+  return out;
+}
+
+/** Compile a predicate. `table` qualifies every column reference (`"t"."col"`); the top
+ * level passes none (bare names, resolved against the statement's own table). A `sub`
+ * node always qualifies its inner predicate with its own table, so an inner name can never
+ * bind to an enclosing query's row through SQL's correlated-name resolution (a relation
+ * filter naming a column only the PARENT has would otherwise filter the parent's column). */
+export function compileExpr(expr: SqlExpr, dialect: Dialect, params: CellValue[] = [], table?: string): CompiledSql {
+  const ref = (col: string) => (table ? `${dialect.id(table)}.${dialect.id(col)}` : dialect.id(col));
   switch (expr.t) {
     case "true":
       return { sql: "1", params };
@@ -119,9 +167,9 @@ export function compileExpr(expr: SqlExpr, dialect: Dialect, params: CellValue[]
       // caller reaches here with a null value.)
       if (expr.value === null) return { sql: "0", params };
       params.push(dialect.encode(expr.value));
-      return { sql: `${dialect.id(expr.col)} ${expr.op} ${dialect.placeholder(params.length)}`, params };
+      return { sql: `${ref(expr.col)} ${expr.op} ${dialect.placeholder(params.length)}`, params };
     case "null":
-      return { sql: `${dialect.id(expr.col)} IS ${expr.negate ? "NOT " : ""}NULL`, params };
+      return { sql: `${ref(expr.col)} IS ${expr.negate ? "NOT " : ""}NULL`, params };
     case "strmatch": {
       // Escape the LIKE metacharacters in the needle (\, %, _) so they match literally,
       // then wrap with wildcards per mode. ESCAPE '\' declares the escape char (SQLite +
@@ -129,29 +177,30 @@ export function compileExpr(expr: SqlExpr, dialect: Dialect, params: CellValue[]
       const esc = expr.needle.replace(/[\\%_]/g, "\\$&");
       const pattern = expr.mode === "contains" ? `%${esc}%` : expr.mode === "prefix" ? `${esc}%` : `%${esc}`;
       params.push(dialect.encode(pattern));
-      return { sql: `${dialect.id(expr.col)} LIKE ${dialect.placeholder(params.length)} ESCAPE '\\'`, params };
+      return { sql: `${ref(expr.col)} LIKE ${dialect.placeholder(params.length)} ESCAPE '\\'`, params };
     }
     case "in": {
       if (expr.values.length === 0) return { sql: expr.negate ? "1" : "0", params }; // empty: notIn=>all, in=>none
       const ph = expr.values.map((v) => (params.push(dialect.encode(v)), dialect.placeholder(params.length))).join(", ");
-      return { sql: `${dialect.id(expr.col)} ${expr.negate ? "NOT IN" : "IN"} (${ph})`, params };
+      return { sql: `${ref(expr.col)} ${expr.negate ? "NOT IN" : "IN"} (${ph})`, params };
     }
     case "and":
     case "or": {
       if (expr.parts.length === 0) return { sql: expr.t === "and" ? "1" : "0", params };
       const sep = expr.t === "and" ? " AND " : " OR ";
-      const sql = expr.parts.map((p) => compileExpr(p, dialect, params).sql).join(sep);
+      const sql = expr.parts.map((p) => compileExpr(p, dialect, params, table).sql).join(sep);
       return { sql: expr.parts.length > 1 ? `(${sql})` : sql, params };
     }
     case "not":
-      return { sql: `NOT (${compileExpr(expr.expr, dialect, params).sql})`, params };
+      return { sql: `NOT (${compileExpr(expr.expr, dialect, params, table).sql})`, params };
     case "sub": {
       // Inner predicate shares `params`, so placeholder numbering stays correct
       // across dialects (? and $n alike).
-      const inner = compileExpr(expr.where, dialect, params).sql;
+      const inner = compileExpr(expr.where, dialect, params, expr.from).sql;
       const op = expr.negate ? "NOT IN" : "IN";
+      const from = dialect.id(expr.from);
       return {
-        sql: `${dialect.id(expr.outerCol)} ${op} (SELECT ${dialect.id(expr.selectCol)} FROM ${dialect.id(expr.from)} WHERE ${inner})`,
+        sql: `${ref(expr.outerCol)} ${op} (SELECT ${from}.${dialect.id(expr.selectCol)} FROM ${from} WHERE ${inner})`,
         params,
       };
     }
@@ -245,6 +294,14 @@ export interface QuerySpec {
    * machinery needs), so wide `json`/`text` and `hidden()` columns don't cross RPC on
    * the D1 path, instead of `SELECT *` then dropping them in JS. */
   readonly columns?: readonly string[];
+  /** Computed 0/1 columns, `CASE WHEN <expr> THEN 1 ELSE 0 END AS <alias>`: the per-row
+   * value of an ACL predicate that traverses a relation, which `evalExpr` cannot evaluate. */
+  readonly flags?: readonly { alias: string; expr: SqlExpr }[];
+}
+
+/** `CASE WHEN … END AS alias` select items for `flags`, compiled into `params` in order. */
+export function compileFlags(flags: readonly { alias: string; expr: SqlExpr }[], dialect: Dialect, params: CellValue[]): string[] {
+  return flags.map((f) => `CASE WHEN ${compileExpr(f.expr, dialect, params).sql} THEN 1 ELSE 0 END AS ${dialect.id(f.alias)}`);
 }
 
 export type AggFn = "count" | "sum" | "avg" | "min" | "max";
@@ -287,7 +344,9 @@ export function compileAggregate(
 export function compileSelect(spec: QuerySpec, dialect: Dialect): CompiledSql {
   const params: CellValue[] = [];
   const cols = spec.columns && spec.columns.length > 0 ? spec.columns.map((c) => dialect.id(c)).join(", ") : "*";
-  let sql = `SELECT ${cols} FROM ${dialect.id(spec.from)}`;
+  // Flag params precede the WHERE's, matching their textual order in the statement.
+  const flags = spec.flags && spec.flags.length > 0 ? `, ${compileFlags(spec.flags, dialect, params).join(", ")}` : "";
+  let sql = `SELECT ${cols}${flags} FROM ${dialect.id(spec.from)}`;
 
   if (spec.where && spec.where.t !== "true") {
     const { sql: where } = compileExpr(spec.where, dialect, params);
