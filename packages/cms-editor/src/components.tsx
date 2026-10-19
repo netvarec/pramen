@@ -1153,11 +1153,12 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, backLabe
       if (name === "approve") {
         // The hash from the last load goes stale with every edit made HERE (inline saves,
         // optimistic adds and reorders patch the screen without a reload), so the first
-        // approve after one used to 409. Take the server's current page instead: if it is
-        // exactly what this screen shows, approve its hash; if not, someone else changed it,
-        // so show it rather than approve it. The server still checks the hash either way.
+        // approve after one used to 409. Take the server's current page instead, and send ITS
+        // hash only if every value that hash covers equals what this screen holds; any
+        // difference (someone else's edit, or a shape this screen can't vouch for) shows the
+        // fresh page for a new review instead. The server still checks the hash either way.
         const fresh = await api.getPagePreview(page.slug, page.locale);
-        const unchanged = assembled !== null && screenOf(page, assembled.regions) === screenOf(fresh.page, fresh.regions);
+        const unchanged = assembled !== null && matchesScreen(fresh, { ...assembled.page, ...page }, assembled.regions);
         setAssembled(fresh);
         if (!unchanged) {
           setErr(t("pageEditor.approveChanged"));
@@ -2655,19 +2656,34 @@ function InviteUser({ api, onClose, onInvited, onError }: { api: Api; onClose: (
   );
 }
 
-/** What a reviewer sees of a page, as one comparable string: the page's own content fields
- * and every placed block's identity and fields, keys sorted so a server round trip that
- * reorders JSON keys still compares equal. Exported for tests. */
-export function screenOf(page: Partial<Page>, regions: Record<string, RenderedBlock[]>): string {
+/** Page keys the server's `contentHash` leaves out (`status`, `translations`), plus
+ * `updatedAt`, a timestamp rather than content. Everything else in the fresh page is compared. */
+const UNHASHED_PAGE_KEYS = new Set(["status", "translations", "updatedAt"]);
+
+/** Does the server's current preview hold exactly what this screen holds, for every value its
+ * `contentHash` covers? Driven by the FRESH side's keys, so nothing the hash includes can go
+ * unchecked: a key this screen lacks reads as null and fails unless the server's is null too.
+ * Regions must match in name, order and count, and every property of every fresh block must
+ * equal the screen's. JSON key order does not matter. Exported for tests. */
+export function matchesScreen(fresh: AssembledPage, screenPage: Record<string, unknown>, screenRegions: Record<string, RenderedBlock[]>): boolean {
   const stable = (v: unknown): unknown =>
     Array.isArray(v) ? v.map(stable) : v && typeof v === "object" ? Object.fromEntries(Object.keys(v as object).sort().map((k) => [k, stable((v as Record<string, unknown>)[k])])) : (v ?? null);
-  const pageKeys = ["title", "slug", "locale", "fields", "metaTitle", "metaDescription", "canonicalUrl", "robots", "ogTitle", "ogDescription", "ogImage"] as const;
-  return JSON.stringify(
-    stable({
-      page: Object.fromEntries(pageKeys.map((k) => [k, page[k] ?? null])),
-      regions: Object.fromEntries(Object.entries(regions).map(([name, list]) => [name, list.map((b) => ({ id: b.id, type: b.block_type, title: b.title, fields: b.fields }))])),
-    }),
-  );
+  const eq = (a: unknown, b: unknown) => JSON.stringify(stable(a)) === JSON.stringify(stable(b));
+  for (const [k, v] of Object.entries(fresh.page as unknown as Record<string, unknown>)) {
+    if (!UNHASHED_PAGE_KEYS.has(k) && !eq(v, screenPage[k])) return false;
+  }
+  const names = new Set([...Object.keys(fresh.regions), ...Object.keys(screenRegions)]);
+  for (const name of names) {
+    const a = fresh.regions[name] ?? [];
+    const b = screenRegions[name] ?? [];
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      const fb = a[i] as unknown as Record<string, unknown>;
+      const sb = b[i] as unknown as Record<string, unknown>;
+      for (const [k, v] of Object.entries(fb)) if (!eq(v, sb[k])) return false;
+    }
+  }
+  return true;
 }
 
 // --- settings ----------------------------------------------------------------

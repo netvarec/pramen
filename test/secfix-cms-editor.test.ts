@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { forgetSession } from "../packages/cms-editor/src/app-context";
 import { Api, loadConfig, saveConfig } from "../packages/cms-editor/src/api";
-import { screenOf } from "../packages/cms-editor/src/components";
+import { matchesScreen } from "../packages/cms-editor/src/components";
 import { createCmsHandlers, collection, createCollectionHandlers, normalizeFieldSchema } from "../packages/cms/src/index";
 import { mutation, query } from "../packages/server/src";
 import { defineSchema, Entity, generated, primaryKey } from "../packages/server/src/sdk/schema";
@@ -106,19 +106,23 @@ describe("the server declares, validates and registers option sources", () => {
 });
 
 describe("approve compares the screen with the server's current page", () => {
-  const block = (fields: Record<string, unknown>) => ({ id: "pb1", block_type: "text", title: null, fields, is_shared: false }) as never;
-  const page = { title: "T", slug: "t", locale: "cs", fields: { a: 1, b: 2 } };
+  const block = (fields: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({ id: "pb1", block_type: "text", title: null, fields, is_shared: false, ...extra }) as never;
+  const page = { id: "p1", title: "T", slug: "t", locale: "cs", fields: { a: 1, b: 2 }, seo: { title: "S" } };
+  const fresh = (p: Record<string, unknown>, regions: Record<string, unknown[]>) => ({ page: p, regions, contentHash: "h" }) as never;
 
-  test("a round trip that reorders JSON keys or turns undefined into null still matches", () => {
-    const screen = screenOf({ ...page, metaTitle: undefined }, { main: [block({ x: "1", y: { p: 1, q: 2 } })] });
-    const server = screenOf({ ...page, fields: { b: 2, a: 1 }, metaTitle: null, status: "review" } as never, { main: [block({ y: { q: 2, p: 1 }, x: "1" })] });
-    expect(screen).toBe(server);
+  test("a round trip that reorders JSON keys, or changes only status/updatedAt, still matches", () => {
+    const f = fresh({ ...page, fields: { b: 2, a: 1 }, status: "review", updatedAt: "later", translations: [] }, { main: [block({ y: { q: 2, p: 1 }, x: "1" })] });
+    expect(matchesScreen(f, { ...page, status: "draft" }, { main: [block({ x: "1", y: { p: 1, q: 2 } })] })).toBe(true);
   });
 
-  test("a block or page field someone else changed does not match", () => {
-    const screen = screenOf(page, { main: [block({ x: "1" })] });
-    expect(screenOf(page, { main: [block({ x: "2" })] })).not.toBe(screen);
-    expect(screenOf({ ...page, title: "Other" }, { main: [block({ x: "1" })] })).not.toBe(screen);
-    expect(screenOf(page, { main: [block({ x: "1" }), { ...block({}), id: "pb2" }] })).not.toBe(screen);
+  test("anything else the hash covers that differs is a mismatch, nested SEO and block properties included", () => {
+    const screen = { main: [block({ x: "1" })] };
+    expect(matchesScreen(fresh(page, { main: [block({ x: "2" })] }), page, screen)).toBe(false);
+    expect(matchesScreen(fresh({ ...page, title: "Other" }, screen), page, screen)).toBe(false);
+    expect(matchesScreen(fresh({ ...page, seo: { title: "Changed" } }, screen), page, screen)).toBe(false);
+    expect(matchesScreen(fresh({ ...page, contentType: { slug: "x" } }, screen), page, screen)).toBe(false);
+    expect(matchesScreen(fresh(page, { main: [block({ x: "1" }, { is_shared: true })] }), page, screen)).toBe(false);
+    expect(matchesScreen(fresh(page, { main: [block({ x: "1" }), { ...block({}), id: "pb2" }] }), page, screen)).toBe(false);
+    expect(matchesScreen(fresh(page, { main: [block({ x: "1" })], aside: [block({})] }), page, screen)).toBe(false);
   });
 });
