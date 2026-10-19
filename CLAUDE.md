@@ -62,7 +62,8 @@ The Worker REFUSES TO SERVE (500 on every request, files/media/public routes inc
 once per isolate) in two configurations, checked first in `makeWorker`'s fetch by
 `misconfiguration(env, hostname)`: dev-only values on a NON-LOCAL host (`PRAMEN_DEV_SEED=true`,
 `AUTH_SECRET === DEV_SECRET` without `JWKS_URL`, or `FILES_SECRET === DEV_FILES_SECRET`; local =
-localhost / 127.0.0.1 / [::1] / *.localhost), and `JWKS_URL` without BOTH `AUTH_AUDIENCE` and
+loopback, *.localhost, *.local, 0.0.0.0 and the private LAN ranges, so the dev server opened from a
+phone still works, while a tunnel's public hostname does not), and `JWKS_URL` without BOTH `AUTH_AUDIENCE` and
 `AUTH_ISSUER` (any host). The request host is the signal, never a var like APP_URL: the failure
 caught is oblaka rendering the whole LOCAL vars block into a deploy, APP_URL=localhost included.
 A Worker has no startup hook that sees env, so a 500 to everything is how it refuses to start.
@@ -109,8 +110,13 @@ The data layer runs over a `Driver` (async `exec` + `transaction`) + `Dialect`
   second half of that fix. `useD1Store`/`requestUsesD1` in `worker.ts` is the one decision,
   shared by /rpc and a route's `callPrivileged`. Admin routes (`/admin/migrations`,
   `/admin/tasks/*`) still read the header: they are admin-gated and it selects what to inspect.
-  RPC only:
-  live queries need the DO (single writer + socket host). Proven end-to-end in
+  A queue consumer's `callPrivileged` follows `PRAMEN_STORE` too (it used to always forward to a
+  DO, landing a D1 deployment's queue writes in a store nothing reads). RPC only:
+  live queries need the DO (single writer + socket host), and on `PRAMEN_STORE=d1` `/live` is
+  REFUSED (404, by the Worker and again by the DO's upgrade, header opt-in or not): a D1
+  deployment still binds the DO class, whose own store holds none of the data but has its own
+  empty users table and answers every handler over `call` frames, so a reachable socket there is
+  a second store nobody runs. Proven end-to-end in
   miniflare by `test/suites/d1.ts` (ACL, row scope, field/cell-level projection,
   RETURNING writes, aggregates). The D1 binding is declared in `oblaka.ts`.
 - **The D1 boot is a `SharedBoot`, never a bare memoized promise** (`runtime/boot.ts`, #51).
@@ -296,7 +302,10 @@ log) for independent single-writer serialization and storage.
   `email`, `emailVerified` (epoch ms the current email was confirmed; NULL = unverified),
   `active` (deactivation flag, which blocks login), `credentialsChangedAt` (epoch SECONDS of the
   last password reset/change or deletion; NULL = never). A custom users table must have the same
-  shape, `credentialsChangedAt` and `profile` included. Also:
+  shape (`USERS_TABLE_COLUMNS`), `credentialsChangedAt` and `profile` included: pass
+  `createUserHandlers({ table, schema })` to have it checked at app construction
+  (`assertUsersTableShape`), else a missing column is a SQL error mid-handler. `deleteUser`
+  writes the denylist right after the ACL'd deactivation, before anything that could fail. Also:
   `createMagicLinkAuth({ sendEmail })` (passwordless one-time links; transport is the
   app's: Cloudflare Email Sending via the `send_email`/`EMAIL` binding declared in
   `oblaka.ts`; magic-link users keyed on the immutable `username`, never the mutable
@@ -328,7 +337,11 @@ log) for independent single-writer serialization and storage.
   (runtime/kv.ts) is the single "denylist OR stale iat" check the Worker and the DO both call.
   `toIdentity` carries `iat` like `exp` for this (declared on Identity by module augmentation in
   auth.ts). A live WebSocket re-checks `exp` AND `isIdentityRevoked` per frame and before every
-  push (one lookup per (user, iat) per broadcast), closing 4401 "session revoked": waiting for a
+  push, closing 4401 "session revoked". A broadcast looks revocation up only for the sockets it
+  is about to push to (a subscription reads a written table), once per (user, iat), in
+  parallel. Frames from ONE socket run strictly in arrival order (`frameTail` in the DO): the
+  input gate holds only across the DO's own storage awaits, so the per-frame KV read let a
+  `subscribe` be overtaken by its own `unsubscribe` and leave a zombie subscription. Waiting for a
   reconnect is not revocation, because the revoked client decides when to reconnect and an
   exp-less token never forces one. Every failed `verifyPassword` spends one PBKDF2 derivation
   (empty hash of a passwordless user, unknown scheme, unparseable pbkdf2), so `login` for a
@@ -534,8 +547,10 @@ log) for independent single-writer serialization and storage.
 - CMS preview links read AS THE MINTER: `PreviewToken`/`CollectionPreviewToken` carry `u`
   (userId) and `ro` (non-`__` roles), and the redeem routes pass exactly those to
   `callPrivileged({ roles, userId })`, never a configured role union. A token without a minter
-  is refused, minting needs an identity with a `userId`, redemption checks the session denylist
-  (`isSessionDenied`, needs the `KV` binding, fails closed without it), and a link's TTL is
+  is refused, minting needs an identity with a `userId`, the token also carries the minting
+  session's `iat` (`ia`), redemption runs `isIdentityRevoked` on that (the denylist AND a
+  not-before, so a password reset kills links its retired sessions minted; needs the `KV`
+  binding, fails closed without it, and a link without `ia` fails once a not-before is set), and a link's TTL is
   capped at the session TTL unless `maxPreviewTtlSeconds` raises it. `cmsRoutes` no longer takes
   `handlers`/`collectionHandlers`/`viewerRoles`.
 - `createMedia` accepts only a key under `${tenant}/media/`, once per key. `purgeMedia` deletes
@@ -544,7 +559,9 @@ log) for independent single-writer serialization and storage.
   })`. Query handlers only, registered by `createCmsHandlers`, reported as
   `listCmsCapabilities().optionSources`; editor-authored schemas naming anything else are a 400
   (`normalizeFieldSchema(raw, path, optionSources)`), `createCollectionHandlers` throws at boot
-  for an undeclared collection source, and the editor dispatches a field's source only through
+  for an undeclared collection source, `cmsBootstrap(defs, { optionSources })` (the same map) does
+  the same for code-defined block and content types (without it, it WARNS naming the unchecked
+  sources: an undeclared one boots and its picker stays empty), and the editor dispatches a field's source only through
   `Api.callOptionSource`, which refuses undeclared names (the call carries the VIEWER's token,
   so an arbitrary handler name was a confused deputy).
 - `@pramen/analytics`: `createAnalyticsSink({ tenants })` and `createAnalyticsQueues({ tenants
