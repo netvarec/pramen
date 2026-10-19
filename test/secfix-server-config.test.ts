@@ -50,9 +50,18 @@ async function hit(env: Record<string, unknown>, url: string, init: RequestInit 
 }
 
 describe("isLocalHost", () => {
-  test("loopback and *.localhost are local; anything routed is not", () => {
-    for (const h of ["localhost", "127.0.0.1", "[::1]", "pramen.localhost"]) expect(isLocalHost(h)).toBe(true);
-    for (const h of ["app.example.com", "local-pramen.acme.workers.dev", "localhost.evil.com", "10.0.0.1"]) expect(isLocalHost(h)).toBe(false);
+  test("loopback, *.localhost and the private LAN ranges are local; anything publicly routed is not", () => {
+    for (const h of ["localhost", "127.0.0.1", "[::1]", "pramen.localhost", "0.0.0.0", "10.0.0.1", "172.16.4.2", "172.31.255.1", "192.168.1.20", "169.254.3.3", "mac.local", "[fd12:3456::1]", "[fe80::1]"]) {
+      expect(isLocalHost(h)).toBe(true);
+    }
+    for (const h of ["app.example.com", "local-pramen.acme.workers.dev", "localhost.evil.com", "172.32.0.1", "192.169.1.1", "8.8.8.8", "abc.ngrok-free.app", "[2001:db8::1]", "10.0.0.1.evil.com"]) {
+      expect(isLocalHost(h)).toBe(false);
+    }
+  });
+
+  test("the local vars are served on a LAN address (the dev server opened from a phone)", async () => {
+    const r = await hit(LOCAL_VARS, "http://192.168.1.20:8787/rpc/login", { method: "POST" });
+    expect(r.status).not.toBe(500);
   });
 });
 

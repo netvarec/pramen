@@ -131,9 +131,27 @@ const requestUsesD1 = (request: Request, env: Env, isLive: boolean): boolean =>
     allowHeader: env.PRAMEN_STORE_HEADER === "allow",
   });
 
-/** Is `hostname` (a URL's, so IPv6 keeps its brackets) a loopback / local-dev name? */
+/** Is `hostname` (a URL's, so IPv6 keeps its brackets) a loopback / local-network name?
+ *
+ * Local includes the private LAN ranges, so the dev server opened from a phone on the same
+ * network (`http://192.168.1.20:8787`) is still the local deployment. A deployed Worker is only
+ * ever reached by its public hostname, so none of these can be it. A TUNNEL (ngrok and the
+ * like) is deliberately not local: it puts the dev secrets on a public URL, which is exactly
+ * what the dev-value refusal exists to stop. */
 export function isLocalHost(hostname: string): boolean {
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]" || hostname.endsWith(".localhost");
+  const h = hostname.toLowerCase();
+  if (h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local") || h === "0.0.0.0") return true;
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254);
+  }
+  if (h.startsWith("[") && h.endsWith("]")) {
+    const v6 = h.slice(1, -1);
+    // loopback, unique-local fc00::/7, link-local fe80::/10
+    return v6 === "::1" || /^f[cd][0-9a-f]{0,2}:/.test(v6) || /^fe[89ab][0-9a-f]?:/.test(v6);
+  }
+  return false;
 }
 
 /** A deployment configuration the Worker must refuse to serve, as the log message, or
@@ -547,6 +565,30 @@ export function makeWorker(app: PramenApp) {
     return { partition, applied: rows.map((r) => ({ id: r.id, appliedAt: r.appliedAt })) };
   };
 
+  /** A privileged call on the store the caller decided (`onD1`): forwarded to the tenant's
+   * DO, or on the D1 store dispatched HERE, since the engine runs in this Worker and there
+   * is no DO holding the data. Shared by pre-auth routes and the queue consumer, so neither
+   * can land a write in a DO that a D1 deployment never reads. */
+  const privilegedCall = async (env: Env, ectx: ExecutionContext | undefined, opts: PrivilegedCallOpts, onD1: boolean): Promise<Response> => {
+    if (!onD1) return callPrivileged(env, opts);
+    try {
+      const { result } = await dispatchD1(env, ectx, {
+        name: opts.name,
+        input: opts.input ?? null,
+        tenant: opts.tenant ?? "main",
+        // The same synthetic identity the DO path sends in `x-pramen-identity`.
+        identity: privilegedIdentity(opts),
+        // A privileged call may write (a redeemed one-time token), so pin the primary
+        // rather than risk a read-modify-write off a lagging replica.
+        start: "first-primary",
+      });
+      return json({ ok: true, result });
+    } catch (err) {
+      const { status, body } = toResponse(err);
+      return json(body, status);
+    }
+  };
+
   return {
     async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
@@ -587,27 +629,9 @@ export function makeWorker(app: PramenApp) {
         // route (a signed preview link, the sitemap) was DO-only, and the CMS had to
         // refuse to mint preview links on D1 rather than hand out a dead one.
         const routeCtx = {
-          callPrivileged: async (opts: PrivilegedCallOpts): Promise<Response> => {
-            // The same store decision as /rpc: the caller's header counts only under the
-            // operator's opt-in, else PRAMEN_STORE alone decides.
-            if (!requestUsesD1(request, env, false)) return callPrivileged(env, opts);
-            try {
-              const { result } = await dispatchD1(env, ctx, {
-                name: opts.name,
-                input: opts.input ?? null,
-                tenant: opts.tenant ?? "main",
-                // The same synthetic identity the DO path sends in `x-pramen-identity`.
-                identity: privilegedIdentity(opts),
-                // A privileged call may write (a redeemed one-time token), so pin the
-                // primary rather than risk a read-modify-write off a lagging replica.
-                start: "first-primary",
-              });
-              return json({ ok: true, result });
-            } catch (err) {
-              const { status, body } = toResponse(err);
-              return json(body, status);
-            }
-          },
+          // The same store decision as /rpc: the caller's header counts only under the
+          // operator's opt-in, else PRAMEN_STORE alone decides.
+          callPrivileged: (opts: PrivilegedCallOpts): Promise<Response> => privilegedCall(env, ctx, opts, requestUsesD1(request, env, false)),
         };
         return r.handler(request, envBag(env), routeCtx);
       }
@@ -801,6 +825,14 @@ export function makeWorker(app: PramenApp) {
     const isRpc = url.pathname.startsWith("/rpc/");
     const isLive = url.pathname === "/live";
 
+    // Live queries need the Durable Object, and on a D1 deployment (`PRAMEN_STORE=d1`) the
+    // DO holds none of the data: routing /live there would hand every caller a second,
+    // empty store with its own users table and every handler reachable through `call`
+    // frames. So /live does not exist on D1, whatever the header opt-in says.
+    if (isLive && env.PRAMEN_STORE === "d1") {
+      return withCors(new Response("pramen: live queries are not available on the D1 store", { status: 404 }), cors);
+    }
+
     if (!isRpc && !(isLive && isWs)) {
       return new Response(
         "pramen: POST /rpc/<handler> (JSON body), or WebSocket /live for live queries. " +
@@ -923,8 +955,9 @@ export function makeWorker(app: PramenApp) {
 
     // Cloudflare Queues consumer entry: routes a batch to the matching `app.queues`
     // handler (ACK on success / RETRY on throw, per message). A consumer is Worker-level
-    // (no tenant DO): its ctx carries env/kv/mail/queue + callPrivileged to reach a DO.
-    async queue(batch: QueueBatch, env: Env): Promise<void> {
+    // (no tenant DO): its ctx carries env/kv/mail/queue + callPrivileged to reach the
+    // tenant's data, on the operator's store (a message carries no request to pick one).
+    async queue(batch: QueueBatch, env: Env, ectx?: ExecutionContext): Promise<void> {
       const bag = envBag(env);
       const kv = new Kv(env.KV);
       const ctx: QueueContext = {
@@ -932,7 +965,7 @@ export function makeWorker(app: PramenApp) {
         kv,
         mail: createMail(bag, kv),
         queue: createQueue(bag),
-        callPrivileged: (opts) => callPrivileged(env, opts),
+        callPrivileged: (opts) => privilegedCall(env, ectx, opts, env.PRAMEN_STORE === "d1"),
       };
       await dispatchQueueBatch(app.queues ?? {}, ctx, batch);
     },

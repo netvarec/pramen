@@ -426,3 +426,160 @@ describe("armDrain keeps an earlier pending alarm", () => {
     setSystemTime();
   });
 });
+
+// --- frames from one socket run in order; broadcast pays only for relevant sockets ----
+
+describe("a socket's frames run in arrival order, and a broadcast reads KV only for sockets it pushes to", () => {
+  const app = {
+    schema: defineSchema({ items: Entity((t) => ({ id: t.id(), by: t.text() })), other: Entity((t) => ({ id: t.id(), v: t.text() })) }),
+    acl: [role("user", [policy("ir", "items", "read", allow()), policy("ic", "items", "create", allow()), policy("oc", "other", "create", allow())])],
+    handlers: {
+      addItem: mutation(async (ctx) => ctx.db.insert("items", { by: String(ctx.identity?.userId) }), { auth: "authenticated" }),
+      addOther: mutation(async (ctx) => ctx.db.insert("other", { v: "x" }), { auth: "authenticated" }),
+      countItems: query(async (ctx) => ctx.db.count({ from: "items" }), { auth: "authenticated" }),
+    },
+  } as never;
+
+  /** The harness KV, with a per-call delay chosen by `delayFor` and a log of every key read. */
+  function slowKv(delayFor: (key: string, n: number) => number) {
+    const m = new Map<string, string>();
+    const reads: string[] = [];
+    return {
+      reads,
+      kv: {
+        get: async (k: string, t?: string) => {
+          reads.push(k);
+          const ms = delayFor(k, reads.length);
+          if (ms > 0) await new Promise((r) => setTimeout(r, ms));
+          return m.has(k) ? (t === "json" ? JSON.parse(m.get(k)!) : m.get(k)!) : null;
+        },
+        put: async (k: string, v: string) => void m.set(k, v),
+        delete: async (k: string) => void m.delete(k),
+        list: async () => ({ keys: [], list_complete: true }),
+      },
+    };
+  }
+  const tokenFor = async (sub: string) => hs256({ sub, roles: ["user"], iat: nowS(), exp: nowS() + 3600 });
+  const open = async (h: ReturnType<typeof setup>, token: string): Promise<FakeWs> => {
+    await h.upgrade(token);
+    const sockets = h.doFor("main").sockets;
+    return sockets[sockets.length - 1]!;
+  };
+  const frame = (h: ReturnType<typeof setup>, ws: FakeWs, msg: unknown) => h.doFor("main").inst.webSocketMessage(ws as never, JSON.stringify(msg));
+  const dataFrames = (ws: FakeWs, id: string) => ws.sent.map((m) => JSON.parse(m)).filter((m) => m.type === "data" && m.id === id);
+
+  test("an unsubscribe sent right behind its subscribe is never overtaken by it", async () => {
+    // The FIRST frame's revocation lookup is slow, the second's instant: unserialized, the
+    // unsubscribe would run first and the subscribe would then register for good.
+    let frames = 0;
+    const slow = slowKv((k) => (k.includes("carol") && frames++ < 2 ? 30 : 0));
+    const h = setup(app, { KV: slow.kv } as never);
+    const carol = await open(h, await tokenFor("carol"));
+    frames = 0;
+    await Promise.all([
+      frame(h, carol, { type: "subscribe", id: "s1", name: "countItems", input: null }),
+      frame(h, carol, { type: "unsubscribe", id: "s1" }),
+    ]);
+    const before = dataFrames(carol, "s1").length;
+    const dave = await open(h, await tokenFor("dave"));
+    await frame(h, dave, { type: "call", id: "c1", name: "addItem", input: {} });
+    expect(dataFrames(carol, "s1").length).toBe(before); // nothing pushed to a subscription carol dropped
+  });
+
+  test("a write to a table no subscription reads costs no revocation lookup for the idle socket", async () => {
+    const slow = slowKv(() => 0);
+    const h = setup(app, { KV: slow.kv } as never);
+    const carol = await open(h, await tokenFor("carol"));
+    await frame(h, carol, { type: "subscribe", id: "s1", name: "countItems", input: null });
+    const dave = await open(h, await tokenFor("dave"));
+    slow.reads.length = 0;
+    await frame(h, dave, { type: "call", id: "c1", name: "addOther", input: {} });
+    expect(slow.reads.filter((k) => k.includes("carol"))).toEqual([]);
+    // A write carol's subscription DOES read still checks her before pushing.
+    slow.reads.length = 0;
+    await frame(h, dave, { type: "call", id: "c2", name: "addItem", input: {} });
+    expect(slow.reads.some((k) => k.includes("carol"))).toBe(true);
+    expect(dataFrames(carol, "s1").length).toBeGreaterThan(1);
+  });
+});
+
+// --- /live does not exist on a D1 deployment ------------------------------------------
+
+describe("/live is refused on PRAMEN_STORE=d1", () => {
+  const app = {
+    schema: defineSchema({ ...authSchema }),
+    handlers: { ...authHandlers },
+    acl: [],
+  } as never;
+
+  test("the Worker answers 404 and no Durable Object socket is opened, with or without a token", async () => {
+    const h = setup(app, { PRAMEN_STORE: "d1" });
+    const anon = await h.worker.fetch(new Request("https://app.example/live", { headers: { Upgrade: "websocket" } }), h.env, h.ectx);
+    expect(anon.status).toBe(404);
+    const authed = await h.upgrade(await hs256({ sub: "ada", roles: ["user"], iat: nowS(), exp: nowS() + 3600 }));
+    expect(authed.status).toBe(404);
+    expect(h.doFor("main").sockets).toEqual([]);
+  });
+
+  test("the header opt-in does not bring it back", async () => {
+    const h = setup(app, { PRAMEN_STORE: "d1", PRAMEN_STORE_HEADER: "allow" });
+    const res = await h.worker.fetch(new Request("https://app.example/live", { headers: { Upgrade: "websocket", "x-pramen-store": "do" } }), h.env, h.ectx);
+    expect(res.status).toBe(404);
+  });
+
+  test("the DO itself refuses an upgrade on a D1 deployment", async () => {
+    const h = setup(app, { PRAMEN_STORE: "d1" });
+    const res = await h.doFor("main").inst.fetch(new Request("https://do/live", { headers: { Upgrade: "websocket", "x-pramen-tenant": "main" } }));
+    expect(res.status).toBe(404);
+    expect(h.doFor("main").sockets).toEqual([]);
+  });
+
+  test("the DO store still serves /live", async () => {
+    const h = setup(app);
+    const res = await h.upgrade(await hs256({ sub: "ada", roles: ["user"], iat: nowS(), exp: nowS() + 3600 }));
+    expect(res.headers.get("x-upgraded")).toBe("1");
+  });
+});
+
+// --- a queue consumer's callPrivileged follows the operator's store ----------------------
+
+describe("queue consumer callPrivileged lands on the operator's store", () => {
+  const app = {
+    schema: defineSchema({ notes: Entity((t) => ({ id: t.id(), body: t.text() })) }),
+    acl: [role("admin", [policy("nc", "notes", "create", allow())])],
+    handlers: { addNote: mutation(async (ctx, input: { body: string }) => ctx.db.insert("notes", { body: input.body })) },
+    queues: {
+      jobs: async (ctx: { callPrivileged(o: unknown): Promise<Response> }, m: { body: unknown }) => {
+        const res = await ctx.callPrivileged({ name: "addNote", input: m.body });
+        if (!res.ok) throw new Error(`addNote ${res.status}`);
+      },
+    },
+  } as never;
+  const batch = (body: unknown) => {
+    const acked: string[] = [];
+    return {
+      acked,
+      batch: {
+        queue: "jobs",
+        messages: [{ id: "m1", timestamp: new Date(), body, attempts: 1, ack: () => acked.push("m1"), retry: () => {} }],
+        ackAll() {},
+        retryAll() {},
+      },
+    };
+  };
+
+  test("on PRAMEN_STORE=d1 the write is in D1, not in a Durable Object", async () => {
+    const h = setup(app, { PRAMEN_STORE: "d1" });
+    const b = batch({ body: "from-queue" });
+    await h.worker.queue(b.batch as never, h.env, h.ectx);
+    expect(b.acked).toEqual(["m1"]);
+    expect(h.d1db.query("SELECT body FROM notes").all()).toEqual([{ body: "from-queue" }]);
+  });
+
+  test("on the DO store it still reaches the tenant DO", async () => {
+    const h = setup(app);
+    const b = batch({ body: "from-queue" });
+    await h.worker.queue(b.batch as never, h.env, h.ectx);
+    expect(h.doFor("main").db.query("SELECT body FROM notes").all()).toEqual([{ body: "from-queue" }]);
+  });
+});

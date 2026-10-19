@@ -68,6 +68,8 @@ export interface DoEnv {
   /** "true" to apply destructive schema migrations (drop/rebuild/type-change). Off by
    * default, since data-loss is gated behind this explicit opt-in. */
   PRAMEN_ALLOW_DESTRUCTIVE?: string;
+  /** `"d1"` = the deployment's data lives in D1 and this DO serves no sockets (see the upgrade). */
+  PRAMEN_STORE?: string;
 }
 
 /** Per-socket subscription cap, which bounds memory and per-mutation re-run cost. */
@@ -112,6 +114,9 @@ export class PramenDOBase extends DurableObject<DoEnv> {
    * one bit that survives to detect it; `subsFor` turns that into a close, and the close
    * into a replay. Keyed by the WebSocket object; cleaned up in webSocketClose. */
   private readonly subsBySocket = new Map<WebSocket, Subscription[]>();
+  /** The tail of each socket's frame chain (see `webSocketMessage`). In memory only: a
+   * fresh instance after hibernation starts every chain empty, which is all it needs. */
+  private readonly frameTail = new WeakMap<WebSocket, Promise<void>>();
 
   constructor(ctx: DurableObjectState, env: DoEnv, app: PramenApp) {
     super(ctx, env);
@@ -247,6 +252,11 @@ export class PramenDOBase extends DurableObject<DoEnv> {
     const identity = this.identityOf(request);
 
     if (request.headers.get("Upgrade") === "websocket") {
+      // A D1 deployment keeps its data, and its users, in D1, so a socket here would be a
+      // second store nobody runs: its own empty users table, handlers callable over `call`
+      // frames. The Worker refuses /live there already; this holds even if a future route
+      // forgets to.
+      if (this.env.PRAMEN_STORE === "d1") return new Response("pramen: live queries are not available on the D1 store", { status: 404 });
       const { 0: client, 1: server } = new WebSocketPair();
       this.ctx.acceptWebSocket(server); // hibernatable
       this.setAttachment(server, { identity, tenant: this.tenant, partition: this.partition });
@@ -384,7 +394,18 @@ export class PramenDOBase extends DurableObject<DoEnv> {
 
   // --- Hibernatable WebSocket handlers ---
 
-  override async webSocketMessage(ws: WebSocket, raw: string | ArrayBuffer): Promise<void> {
+  /** Frames from ONE socket are handled strictly in arrival order. The DO's input gate
+   * only holds while it awaits its own storage: an await on KV (the per-frame revocation
+   * check) or on a handler's `fetch` lets the next frame start, so a `subscribe` followed
+   * at once by its `unsubscribe` could run the unsubscribe first and leave a subscription
+   * nobody holds, re-running and pushing on every write. Different sockets still overlap. */
+  override webSocketMessage(ws: WebSocket, raw: string | ArrayBuffer): Promise<void> {
+    const run = (this.frameTail.get(ws) ?? Promise.resolve()).then(() => this.handleFrame(ws, raw));
+    this.frameTail.set(ws, run.catch(() => {}));
+    return run;
+  }
+
+  private async handleFrame(ws: WebSocket, raw: string | ArrayBuffer): Promise<void> {
     let msg: ClientMsg;
     try {
       msg = JSON.parse(typeof raw === "string" ? raw : new TextDecoder().decode(raw));
@@ -502,30 +523,15 @@ export class PramenDOBase extends DurableObject<DoEnv> {
   // because it runs after a mutation has committed (a throw here would 500 that write).
   private async broadcast(touched: string[]): Promise<void> {
     const written = new Set(touched);
-    // One revocation lookup per (user, iat) per broadcast, not per socket: a user with
-    // many tabs open would otherwise cost a KV read per tab on every write.
-    const revoked = new Map<string, Promise<boolean>>();
-    const isRevoked = (identity: Identity | null): Promise<boolean> => {
-      const key = JSON.stringify([identity?.userId ?? null, identity?.iat ?? null]);
-      let hit = revoked.get(key);
-      if (!hit) revoked.set(key, (hit = isIdentityRevoked(this.kv, identity)));
-      return hit;
-    };
+    // First the sockets this write is relevant to, from memory alone: a socket none of
+    // whose subscriptions read a written table costs nothing here, not even a KV read.
+    // Expired and hibernation-orphaned sockets are closed on the way (both cheap to tell).
+    const targets: { ws: WebSocket; att: SocketAttachment; subs: Subscription[] }[] = [];
     for (const ws of this.ctx.getWebSockets()) {
       try {
         const att = this.getAttachment(ws);
-        // A live socket whose token expired, or was revoked, while connected must not keep
-        // receiving pushes. Close it 4401 and drop its subscriptions instead of pushing (an
-        // expired hibernating socket already has no in-memory subs, so this only bites
-        // still-live ones).
-        const reason = this.isExpired(att.identity) ? "session expired" : (await isRevoked(att.identity)) ? "session revoked" : null;
-        if (reason) {
-          try {
-            ws.close(WS_CLOSE_UNAUTHORIZED, reason);
-          } catch {
-            /* already closing */
-          }
-          this.subsBySocket.delete(ws);
+        if (this.isExpired(att.identity)) {
+          this.closeSocket(ws, WS_CLOSE_UNAUTHORIZED, "session expired");
           continue;
         }
         const subs = this.subsFor(ws, att);
@@ -533,12 +539,44 @@ export class PramenDOBase extends DurableObject<DoEnv> {
         // every subscription on `open`, and re-running them there returns the state this
         // broadcast was carrying anyway. Pushing on would push to nobody.
         if (subs === null) {
-          try {
-            ws.close(WS_CLOSE_RESUBSCRIBE, "resubscribe");
-          } catch {
-            /* already closing */
-          }
-          this.subsBySocket.delete(ws);
+          this.closeSocket(ws, WS_CLOSE_RESUBSCRIBE, "resubscribe");
+          continue;
+        }
+        if (subs.some((sub) => sub.tables.some((t) => written.has(t)))) targets.push({ ws, att, subs });
+      } catch (err) {
+        // A bad socket must not stop the loop over the others.
+        console.error("pramen: broadcast to a socket failed", err);
+      }
+    }
+    if (targets.length === 0) return;
+
+    // A socket revoked while connected must not receive this push: close it 4401 instead.
+    // One lookup per (user, iat), all in parallel. A socket that is revoked but not
+    // targeted keeps no data flowing and is closed by its next frame or relevant push.
+    // A failed lookup skips that socket for this push (fail closed) and is logged.
+    const lookups = new Map<string, Promise<boolean | "error">>();
+    const keyOf = (identity: Identity | null) => JSON.stringify([identity?.userId ?? null, identity?.iat ?? null]);
+    for (const { att } of targets) {
+      const key = keyOf(att.identity);
+      if (!lookups.has(key)) {
+        lookups.set(
+          key,
+          isIdentityRevoked(this.kv, att.identity).catch((err) => {
+            console.error("pramen: revocation lookup failed during broadcast", err);
+            return "error" as const;
+          }),
+        );
+      }
+    }
+    const verdict = new Map<string, boolean | "error">();
+    await Promise.all([...lookups].map(async ([key, p]) => verdict.set(key, await p)));
+
+    for (const { ws, att, subs } of targets) {
+      try {
+        const revoked = verdict.get(keyOf(att.identity));
+        if (revoked === "error") continue;
+        if (revoked) {
+          this.closeSocket(ws, WS_CLOSE_UNAUTHORIZED, "session revoked");
           continue;
         }
         let dirty = false;
@@ -563,10 +601,19 @@ export class PramenDOBase extends DurableObject<DoEnv> {
         }
         if (dirty) this.setSubs(ws, subs);
       } catch (err) {
-        // A bad socket must not stop the loop over the others.
         console.error("pramen: broadcast to a socket failed", err);
       }
     }
+  }
+
+  /** Close `ws` and forget its subscriptions; a socket already closing is fine. */
+  private closeSocket(ws: WebSocket, code: number, reason: string): void {
+    try {
+      ws.close(code, reason);
+    } catch {
+      /* already closing */
+    }
+    this.subsBySocket.delete(ws);
   }
 
   // --- helpers ---

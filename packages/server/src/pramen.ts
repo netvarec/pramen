@@ -78,7 +78,7 @@ export type { Env, DoEnv };
 export function createPramen(app: PramenApp): {
   fetch: (request: Request, env: Env, ctx: ExecutionContext) => Promise<Response>;
   scheduled: (event: unknown, env: Env, ctx: ExecutionContext) => Promise<void>;
-  queue: (batch: QueueBatch, env: Env) => Promise<void>;
+  queue: (batch: QueueBatch, env: Env, ctx?: ExecutionContext) => Promise<void>;
   PramenDO: ReturnType<typeof pramenDO>;
 } {
   validateTriggerTasks(app.schema, Object.keys(app.tasks ?? {})); // fail fast on a typo'd trigger task
