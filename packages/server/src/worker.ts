@@ -82,6 +82,9 @@ export interface Env {
    * caller choosing the store can sign up a username on the store where it is free and
    * then have the other store reissue that username's roles. */
   PRAMEN_STORE_HEADER?: string;
+  /** `"true"` lets the dev-only values serve on private-network hosts too (the dev server
+   * opened from a phone). Set it by hand for that; never in a deployed env. */
+  PRAMEN_DEV_ALLOW_LAN?: string;
   /** `"true"` seeds the demo account in local dev (example app). The Worker refuses to
    * serve a non-local host while it is set (see `misconfiguration`). */
   PRAMEN_DEV_SEED?: string;
@@ -131,25 +134,27 @@ const requestUsesD1 = (request: Request, env: Env, isLive: boolean): boolean =>
     allowHeader: env.PRAMEN_STORE_HEADER === "allow",
   });
 
-/** Is `hostname` (a URL's, so IPv6 keeps its brackets) a loopback / local-network name?
- *
- * Local includes the private LAN ranges, so the dev server opened from a phone on the same
- * network (`http://192.168.1.20:8787`) is still the local deployment. A deployed Worker is only
- * ever reached by its public hostname, so none of these can be it. A TUNNEL (ngrok and the
- * like) is deliberately not local: it puts the dev secrets on a public URL, which is exactly
- * what the dev-value refusal exists to stop. */
-export function isLocalHost(hostname: string): boolean {
+/** Is `hostname` (a URL's, so IPv6 keeps its brackets) a loopback name: `localhost`,
+ * `*.localhost`, 127.0.0.0/8 or `[::1]`? With `lan`, also the private network names a phone on
+ * the same network would use (10/8, 172.16/12, 192.168/16, 169.254/16, fc00::/7, fe80::/10,
+ * `*.local`, 0.0.0.0). That is an explicit opt-in (`PRAMEN_DEV_ALLOW_LAN=true`), never the
+ * default: a host the request names is no proof of where the Worker runs, and a staging box on
+ * a private network serving the published dev secrets is exactly what the refusal is for. A
+ * tunnel's public hostname is never local, opt-in or not. */
+export function isLocalHost(hostname: string, opts: { lan?: boolean } = {}): boolean {
   const h = hostname.toLowerCase();
-  if (h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local") || h === "0.0.0.0") return true;
+  if (h === "localhost" || h.endsWith(".localhost") || h === "[::1]") return true;
   const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
+  if (v4 && Number(v4[1]) === 127) return true;
+  if (!opts.lan) return false;
+  if (h.endsWith(".local") || h === "0.0.0.0") return true;
   if (v4) {
     const [a, b] = [Number(v4[1]), Number(v4[2])];
-    return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254);
+    return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254);
   }
   if (h.startsWith("[") && h.endsWith("]")) {
     const v6 = h.slice(1, -1);
-    // loopback, unique-local fc00::/7, link-local fe80::/10
-    return v6 === "::1" || /^f[cd][0-9a-f]{0,2}:/.test(v6) || /^fe[89ab][0-9a-f]?:/.test(v6);
+    return /^f[cd][0-9a-f]{0,2}:/.test(v6) || /^fe[89ab][0-9a-f]?:/.test(v6); // unique-local, link-local
   }
   return false;
 }
@@ -174,7 +179,7 @@ export function misconfiguration(env: Env, hostname: string): string | null {
   if (env.JWKS_URL && (!env.AUTH_AUDIENCE || !env.AUTH_ISSUER)) {
     return "JWKS_URL is set without AUTH_AUDIENCE and AUTH_ISSUER. Set both, so only tokens issued for this service are accepted.";
   }
-  if (isLocalHost(hostname)) return null;
+  if (isLocalHost(hostname, { lan: env.PRAMEN_DEV_ALLOW_LAN === "true" })) return null;
   const dev: string[] = [];
   if (env.PRAMEN_DEV_SEED === "true") dev.push("PRAMEN_DEV_SEED=true");
   if (!env.JWKS_URL && env.AUTH_SECRET === DEV_SECRET) dev.push("AUTH_SECRET is the published dev secret");
