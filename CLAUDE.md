@@ -62,8 +62,10 @@ The Worker REFUSES TO SERVE (500 on every request, files/media/public routes inc
 once per isolate) in two configurations, checked first in `makeWorker`'s fetch by
 `misconfiguration(env, hostname)`: dev-only values on a NON-LOCAL host (`PRAMEN_DEV_SEED=true`,
 `AUTH_SECRET === DEV_SECRET` without `JWKS_URL`, or `FILES_SECRET === DEV_FILES_SECRET`; local =
-loopback, *.localhost, *.local, 0.0.0.0 and the private LAN ranges, so the dev server opened from a
-phone still works, while a tunnel's public hostname does not), and `JWKS_URL` without BOTH `AUTH_AUDIENCE` and
+loopback only: localhost / *.localhost / 127.0.0.0/8 / [::1]; `PRAMEN_DEV_ALLOW_LAN=true`, set by
+hand to open the dev server from a phone, adds the private ranges and *.local, never a tunnel's
+public hostname; it is not inferred from the host because a staging box on a private network
+serving the dev secrets is what this refuses), and `JWKS_URL` without BOTH `AUTH_AUDIENCE` and
 `AUTH_ISSUER` (any host). The request host is the signal, never a var like APP_URL: the failure
 caught is oblaka rendering the whole LOCAL vars block into a deploy, APP_URL=localhost included.
 A Worker has no startup hook that sees env, so a 500 to everything is how it refuses to start.
@@ -538,7 +540,10 @@ log) for independent single-writer serialization and storage.
 - CMS review is bound to CONTENT. `getPage({ preview: true })` returns `contentHash`
   (`pageContentHash`: page minus `status`/`translations`, plus regions, stable JSON, SHA-256);
   `approve` REQUIRES it as `expectedContentHash` (409 on mismatch) and publishes the very
-  snapshot it hashed. `schedulePage` freezes the snapshot into a `scheduled` revision whose id
+  snapshot it hashed. The editor fetches the current preview right before an approve and sends
+  its hash only if EVERY value that hash covers equals the screen's (`matchesScreen`, driven by
+  the fresh side's keys, so nothing hashed goes unchecked; the editor's own inline saves leave
+  the loaded hash stale), else it shows the new content for a fresh review. `schedulePage` freezes the snapshot into a `scheduled` revision whose id
   rides in the `cms:publish` payload; the task publishes THAT revision and publishes nothing
   without one (so a publish queued before this shipped logs and does nothing). `deletePage`
   keeps `scheduledAt`/`unpublishAt`; `cms:publish` refuses a trashed page itself,
