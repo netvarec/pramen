@@ -13,7 +13,8 @@ import { Db } from "../packages/server/src/runtime/db";
 import { migrate } from "../packages/server/src/runtime/migrate";
 import { createFiles, handleFileRequest, MemoryAdapter } from "../packages/server/src/runtime/storage";
 import { bunSqliteDriver } from "./sqlite-driver";
-import { cmsSchema, cmsPolicies, createCmsHandlers, cmsTasks } from "../packages/cms/src/index";
+import { cmsSchema, cmsPolicies, createCmsHandlers, cmsTasks, cmsBootstrap } from "../packages/cms/src/index";
+import { query } from "../packages/server/src/sdk/handlers";
 
 type H = { run: (c: unknown, i: unknown) => Promise<any>; auth?: unknown; input?: (raw: unknown) => unknown };
 const SECRET = "secfix-dummy-secret-0123456789";
@@ -234,5 +235,29 @@ describe("a scheduled takedown survives trash and restore", () => {
     await call("deletePage", ed, { pageId: page.id });
     const restored = await call("restorePage", ed, { pageId: page.id });
     expect(restored.scheduleCleared).toBe(true);
+  });
+});
+
+describe("cmsBootstrap checks option sources like collections do", () => {
+  const bt = { slug: "promo", name: "Promo", fieldsSchema: [{ name: "campaign", label: "Campaign", type: "select", optionsFrom: "lookupCampaigns" }] } as never;
+
+  test("an undeclared source fails at construction, naming the type and the source", () => {
+    expect(() => cmsBootstrap({ blockTypes: [bt] }, { optionSources: {} })).toThrow(/promo[\s\S]*lookupCampaigns/);
+  });
+
+  test("a declared source passes", () => {
+    expect(() => cmsBootstrap({ blockTypes: [bt] }, { optionSources: { lookupCampaigns: query(async () => []) } })).not.toThrow();
+  });
+
+  test("without optionSources it boots, but says which sources it could not check", () => {
+    const warned: string[] = [];
+    const orig = console.warn;
+    console.warn = (m: unknown) => void warned.push(String(m));
+    try {
+      expect(() => cmsBootstrap({ blockTypes: [bt] })).not.toThrow();
+    } finally {
+      console.warn = orig;
+    }
+    expect(warned.some((w) => w.includes("lookupCampaigns"))).toBe(true);
   });
 });

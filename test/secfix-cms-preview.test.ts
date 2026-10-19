@@ -9,7 +9,7 @@ import { policy, role, type Identity, type Policy } from "../packages/server/src
 import { compileAcl, type AclContext } from "../packages/server/src/runtime/acl";
 import { migrate } from "../packages/server/src/runtime/migrate";
 import { dispatch } from "../packages/server/src/runtime/dispatch";
-import { Kv, denySession } from "../packages/server/src/runtime/kv";
+import { Kv, denySession, setSessionNotBefore } from "../packages/server/src/runtime/kv";
 import { bunSqliteDriver } from "./sqlite-driver";
 import {
   cmsSchema, collection, createCollectionHandlers, createCmsHandlers, collectionPolicies, cmsPolicies,
@@ -156,6 +156,22 @@ describe("a preview link dies with its minter's sessions", () => {
     const r = await redeem(d, kv, COLLECTION_PREVIEW_PATH, m.url);
     expect(r.status).toBe(404);
     expect(r.presented).toBeUndefined();
+  });
+
+  test("a password reset retires links minted from the sessions it retired, not later ones", async () => {
+    const d = await fresh();
+    const kv = memoryKv();
+    const t0 = Math.floor(Date.now() / 1000);
+    const before = await call(d, { ...edA, iat: t0 - 120 }, "signPagePreview", { pageId: PAGE });
+    expect(payloadOf(before.token).ia).toBe(t0 - 120);
+    expect((await redeem(d, kv, PREVIEW_PATH, before.url)).status).toBe(200);
+    await setSessionNotBefore(new Kv(kv), "edA", t0 - 60, 3600); // the reset, after `before` was minted
+    expect((await redeem(d, kv, PREVIEW_PATH, before.url)).status).toBe(404);
+    const after = await call(d, { ...edA, iat: t0 }, "signPagePreview", { pageId: PAGE });
+    expect((await redeem(d, kv, PREVIEW_PATH, after.url)).status).toBe(200);
+    // A link from a session with no `iat` cannot prove it is newer: refused while the instant stands.
+    const noIat = await call(d, edA, "signPagePreview", { pageId: PAGE });
+    expect((await redeem(d, kv, PREVIEW_PATH, noIat.url)).status).toBe(404);
   });
 
   test("a demoted minter's link fails the handler gate (roles are the minter's)", async () => {

@@ -1150,7 +1150,21 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, backLabe
       // still hashes to what this preview showed, so an edit made while it sat in review
       // cannot be approved unseen.
       const input: RpcInput = { pageId: page.id };
-      if (name === "approve") input.expectedContentHash = assembled?.contentHash;
+      if (name === "approve") {
+        // The hash from the last load goes stale with every edit made HERE (inline saves,
+        // optimistic adds and reorders patch the screen without a reload), so the first
+        // approve after one used to 409. Take the server's current page instead: if it is
+        // exactly what this screen shows, approve its hash; if not, someone else changed it,
+        // so show it rather than approve it. The server still checks the hash either way.
+        const fresh = await api.getPagePreview(page.slug, page.locale);
+        const unchanged = assembled !== null && screenOf(page, assembled.regions) === screenOf(fresh.page, fresh.regions);
+        setAssembled(fresh);
+        if (!unchanged) {
+          setErr(t("pageEditor.approveChanged"));
+          return;
+        }
+        input.expectedContentHash = fresh.contentHash;
+      }
       const r = await api.call<{ page?: Page }>(name, input);
       if (r?.page) onChange(r.page);
     } catch (e) {
@@ -2638,6 +2652,21 @@ function InviteUser({ api, onClose, onInvited, onError }: { api: Api; onClose: (
         </div>
       </div>
     </Modal>
+  );
+}
+
+/** What a reviewer sees of a page, as one comparable string: the page's own content fields
+ * and every placed block's identity and fields, keys sorted so a server round trip that
+ * reorders JSON keys still compares equal. Exported for tests. */
+export function screenOf(page: Partial<Page>, regions: Record<string, RenderedBlock[]>): string {
+  const stable = (v: unknown): unknown =>
+    Array.isArray(v) ? v.map(stable) : v && typeof v === "object" ? Object.fromEntries(Object.keys(v as object).sort().map((k) => [k, stable((v as Record<string, unknown>)[k])])) : (v ?? null);
+  const pageKeys = ["title", "slug", "locale", "fields", "metaTitle", "metaDescription", "canonicalUrl", "robots", "ogTitle", "ogDescription", "ogImage"] as const;
+  return JSON.stringify(
+    stable({
+      page: Object.fromEntries(pageKeys.map((k) => [k, page[k] ?? null])),
+      regions: Object.fromEntries(Object.entries(regions).map(([name, list]) => [name, list.map((b) => ({ id: b.id, type: b.block_type, title: b.title, fields: b.fields }))])),
+    }),
   );
 }
 

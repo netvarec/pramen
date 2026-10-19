@@ -68,6 +68,7 @@ export const en = {
   /** `window.confirm` before leaving the page editor with unsaved edits. */
   "pageEditor.leaveUnsaved": { one: "You have {count} unsaved change. Leave without saving?", other: "You have {count} unsaved changes. Leave without saving?" },
   "pageEditor.noFieldsOrRegions": "This page's content type defines no fields or regions.",
+  "pageEditor.approveChanged": "Someone else changed this page since you opened it. It now shows the current content: review it and approve again.",
   /** The small confirmation banner after a panel saves. */
   "pageEditor.saved": "saved",
   "pageEditor.titleLabel": "Title",
@@ -338,6 +339,7 @@ export const cs: Translation<typeof en> = {
     other: "Máte {count} neuložených změn. Odejít bez uložení?",
   },
   "pageEditor.noFieldsOrRegions": "Typ obsahu této stránky nemá žádná pole ani oblasti.",
+  "pageEditor.approveChanged": "Stránku mezitím upravil někdo jiný. Teď ukazuje aktuální obsah: projděte ho a schvalte znovu.",
   "pageEditor.saved": "Uloženo",
   "pageEditor.titleLabel": "Název",
   "pageEditor.slugLabel": "Adresa (slug)",

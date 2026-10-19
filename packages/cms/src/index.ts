@@ -48,7 +48,7 @@ import {
   signToken,
   verifyToken,
   Kv,
-  isSessionDenied,
+  isIdentityRevoked,
   resolveSecret,
   authorizeHandler,
 } from "@pramen/server";
@@ -454,6 +454,7 @@ export const CMS_BOOTSTRAP_OWNER = "cms";
  */
 function validateCmsDefinitions(
   defs: { blockTypes?: readonly BlockTypeDef[]; contentTypes?: readonly ContentTypeDef[] },
+  optionSources?: ReadonlySet<string>,
 ): { blockTypes: Record<string, unknown>[]; contentTypes: Record<string, unknown>[] } {
   const problems: string[] = [];
   const at = (what: string, slug: unknown, e: unknown): void => {
@@ -473,7 +474,7 @@ function validateCmsDefinitions(
         name: assertLabel(bt.name ?? slug, "block type name"),
         slug,
         description: bt.description ?? null,
-        fieldsSchema: normalizeFieldSchema(bt.fieldsSchema, "fieldsSchema"),
+        fieldsSchema: normalizeFieldSchema(bt.fieldsSchema, "fieldsSchema", optionSources),
         icon: bt.icon ?? null,
         category: bt.category ?? null,
       });
@@ -497,7 +498,7 @@ function validateCmsDefinitions(
         name: assertLabel(ct.name ?? slug, "content type name"),
         slug,
         description: ct.description ?? null,
-        fieldsSchema: normalizeFieldSchema(ct.fields, "fields"),
+        fieldsSchema: normalizeFieldSchema(ct.fields, "fields", optionSources),
         regions,
         defaultBlocks: normalizeDefaultBlocks(ct.defaultBlocks, regions),
         labels: normalizeEntryLabels(ct.labels, "labels"),
@@ -579,10 +580,28 @@ async function releaseUndeclared(db: ReconcileDb, table: string, owner: string, 
  * reported at once. See {@link validateCmsDefinitions}. */
 export function cmsBootstrap(
   defs: { blockTypes?: readonly BlockTypeDef[]; contentTypes?: readonly ContentTypeDef[] },
-  opts: { owner?: string } = {},
+  opts: {
+    owner?: string;
+    /** The SAME `optionSources` map given to `createCmsHandlers`. With it, a field naming an
+     * undeclared `optionsFrom`/`referenceFrom` fails here, at app construction, like a
+     * collection's does; without it such a field boots and its picker stays empty, because
+     * the editor calls only declared sources. */
+    optionSources?: Readonly<Record<string, unknown>>;
+  } = {},
 ): BootstrapFn {
   const owner = opts.owner ?? CMS_BOOTSTRAP_OWNER;
-  const { blockTypes, contentTypes } = validateCmsDefinitions(defs);
+  const declared = opts.optionSources ? new Set(Object.keys(opts.optionSources)) : undefined;
+  const { blockTypes, contentTypes } = validateCmsDefinitions(defs, declared);
+  if (!declared) {
+    const named = new Set<string>();
+    for (const t of [...blockTypes, ...contentTypes]) optionSourcesOf(t.fieldsSchema as FieldDefinition[], named);
+    if (named.size > 0) {
+      console.warn(
+        `@pramen/cms: cmsBootstrap definitions name option source(s) ${[...named].join(", ")}, but no optionSources were given to check them against. ` +
+          `Pass the same map as createCmsHandlers({ optionSources }) to cmsBootstrap(defs, { optionSources }); an undeclared source leaves its picker empty.`,
+      );
+    }
+  }
   // Presence of the KEY, not truthiness of the array: `blockTypes: []` is "I declare none",
   // which must sweep, while an absent key is "I say nothing about block types", which must
   // not. Truthiness read `[]` as the latter four lines after `?? []` read it as the former,
@@ -3035,19 +3054,23 @@ export interface PreviewToken extends PreviewMinter {
  * a row or a region could mint a link and read exactly what their own role was denied. The
  * redeem routes now present the minter instead (`u` + `ro`), so the handler gate and every
  * row, field and cell scope apply as they did when the link was minted. And because the
- * reader is a known user, revoking that user (the session denylist) ends their links too.
+ * reader is a known user, revoking that user ends their links too: the session denylist, and
+ * a not-before instant (a password reset or change), which is why the minting session's
+ * `iat` rides along. A link minted from a session the owner has since retired dies with it.
  */
 export interface PreviewMinter {
   /** the minter's userId (the JWT `sub`) */ u: string;
   /** the minter's roles at mint time, system (`__`) roles excluded */ ro: string[];
+  /** the minting session's `iat` (seconds), when it had one */ ia?: number;
 }
 
 /** The minter half of a preview token, from the caller's identity. A link must name a user:
  * without one it could not be revoked with them, so an identity with no `userId` cannot mint. */
-function previewMinter(identity: { userId?: unknown; roles?: readonly string[] } | null | undefined): PreviewMinter {
+function previewMinter(identity: { userId?: unknown; roles?: readonly string[]; iat?: unknown } | null | undefined): PreviewMinter {
   const u = identity?.userId;
   if (typeof u !== "string" || u === "") throw new Forbidden("minting a preview link needs a signed-in user (an identity with a userId)");
-  return { u, ro: (identity?.roles ?? []).filter((r) => typeof r === "string" && !r.startsWith("__")) };
+  const ro = (identity?.roles ?? []).filter((r) => typeof r === "string" && !r.startsWith("__"));
+  return typeof identity?.iat === "number" ? { u, ro, ia: identity.iat } : { u, ro };
 }
 
 /** The session lifetime the deployment runs with, as `@pramen/auth` reads it. */
@@ -3067,7 +3090,9 @@ function previewTtlFor(env: EnvBag, requested: number | undefined, opts: CmsHand
 }
 
 /** The identity a redeemed link reads as, or `null` to refuse it: no minter (a token minted
- * before minters were bound, or a forged shape), or a minter whose sessions are revoked. */
+ * before minters were bound, or a forged shape), or a minter whose session is revoked, by the
+ * denylist or by a not-before newer than the minting session (`ia`; a link without one fails
+ * closed once a not-before is set, like a token without `iat`). */
 async function redeemerOf(env: EnvBag, payload: Partial<PreviewMinter>): Promise<{ roles: string[]; userId: string } | null> {
   if (typeof payload.u !== "string" || payload.u === "" || !Array.isArray(payload.ro)) return null;
   const kv = (env as Record<string, unknown>).KV as KVNamespace | undefined;
@@ -3077,7 +3102,8 @@ async function redeemerOf(env: EnvBag, payload: Partial<PreviewMinter>): Promise
     console.error("pramen/cms: preview redemption needs the KV binding to check the session denylist");
     return null;
   }
-  if (await isSessionDenied(new Kv(kv), payload.u)) return null;
+  const iat = typeof payload.ia === "number" ? payload.ia : undefined;
+  if (await isIdentityRevoked(new Kv(kv), { userId: payload.u, iat })) return null;
   return { roles: payload.ro.filter((r): r is string => typeof r === "string" && !r.startsWith("__")), userId: payload.u };
 }
 
