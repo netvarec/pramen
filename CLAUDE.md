@@ -556,7 +556,8 @@ log) for independent single-writer serialization and storage.
   session's `iat` (`ia`), redemption runs `isIdentityRevoked` on that (the denylist AND a
   not-before, so a password reset kills links its retired sessions minted; needs the `KV`
   binding, fails closed without it, and a link without `ia` fails once a not-before is set), and a link's TTL is
-  capped at the session TTL unless `maxPreviewTtlSeconds` raises it. `cmsRoutes` no longer takes
+  capped at the session TTL unless `maxPreviewTtlSeconds` raises it. An app's OWN route over a preview token (one redeeming into its own handler) uses
+  `previewRedeemer(env, payload)` after `verifyToken`, for the same refusal rules. `cmsRoutes` no longer takes
   `handlers`/`collectionHandlers`/`viewerRoles`.
 - `createMedia` accepts only a key under `${tenant}/media/`, once per key. `purgeMedia` deletes
   the object FIRST and lets a failure propagate (the row is the only handle on the key).

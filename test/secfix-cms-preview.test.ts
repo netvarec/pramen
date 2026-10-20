@@ -13,7 +13,7 @@ import { Kv, denySession, setSessionNotBefore } from "../packages/server/src/run
 import { bunSqliteDriver } from "./sqlite-driver";
 import {
   cmsSchema, collection, createCollectionHandlers, createCmsHandlers, collectionPolicies, cmsPolicies,
-  cmsRoutes, COLLECTION_PREVIEW_PATH, PREVIEW_PATH,
+  cmsRoutes, COLLECTION_PREVIEW_PATH, PREVIEW_PATH, previewRedeemer,
 } from "../packages/cms/src/index";
 
 const SECRET = "secfix-dummy-secret-at-least-16-chars";
@@ -196,5 +196,16 @@ describe("a preview link dies with its minter's sessions", () => {
     const a = { acl, identity: edA, schema, tenant: "main", partition: undefined } as unknown as AclContext;
     const res = (await dispatch(longer as any, schema, d, {} as any, {} as any, { AUTH_SECRET: SECRET } as any, a, "signPagePreview", { pageId: PAGE, expiresIn: thirtyDays })).result as any;
     expect(payloadOf(res.token).exp - Math.floor(Date.now() / 1000)).toBeGreaterThan(6 * 24 * 3600);
+  });
+});
+
+describe("previewRedeemer, for an app's own preview route", () => {
+  test("answers the minter for a live link and null once the minter is revoked or absent", async () => {
+    const kv = memoryKv();
+    const t0 = Math.floor(Date.now() / 1000);
+    expect(await previewRedeemer(env(kv) as never, { u: "edA", ro: ["editor", "__sys"], ia: t0 })).toEqual({ userId: "edA", roles: ["editor"] });
+    expect(await previewRedeemer(env(kv) as never, {})).toBeNull();
+    await setSessionNotBefore(new Kv(kv), "edA", t0 + 1, 3600);
+    expect(await previewRedeemer(env(kv) as never, { u: "edA", ro: ["editor"], ia: t0 })).toBeNull();
   });
 });

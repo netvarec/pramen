@@ -52,7 +52,7 @@ import {
   resolveSecret,
   authorizeHandler,
 } from "@pramen/server";
-import type { Handler, HandlerContext, Policy, FileRef, BootstrapFn, DataMigration, MigrationContext, JsonValue, SchemaDef, FieldDef, FieldType, WhereClause } from "@pramen/server";
+import type { HandlerContext, HandlerMap, Policy, FileRef, BootstrapFn, DataMigration, MigrationContext, JsonValue, SchemaDef, FieldDef, FieldType, WhereClause } from "@pramen/server";
 import type { EnvBag } from "@pramen/server";
 import { isSafeHref, normalizeHref } from "./href";
 import { NAV_ORDER } from "./nav";
@@ -2592,8 +2592,8 @@ export function optionSourcesOf(schema: readonly FieldDefinition[], out = new Se
 /** Check a declared `optionSources` map: identifier names, QUERY handlers only. A mutation is
  * refused because the editor calls a source on mount, under whoever is looking: a source has
  * to be something that is safe to run just by opening a form. */
-function checkOptionSources(sources: Readonly<Record<string, Handler>> | undefined): Record<string, Handler> {
-  const out: Record<string, Handler> = {};
+function checkOptionSources(sources: Readonly<HandlerMap> | undefined): HandlerMap {
+  const out: HandlerMap = {};
   for (const [name, h] of Object.entries(sources ?? {})) {
     assertHandlerName(name, `optionSources.${name}`);
     if (!h || typeof h !== "object" || h.kind !== "query") {
@@ -3107,6 +3107,13 @@ async function redeemerOf(env: EnvBag, payload: Partial<PreviewMinter>): Promise
   return { roles: payload.ro.filter((r): r is string => typeof r === "string" && !r.startsWith("__")), userId: payload.u };
 }
 
+/** For an app's OWN route over a CMS preview token (one that redeems into its own handler
+ * rather than `getPage`): the identity to hand `callPrivileged` (`{ roles, userId }`), or
+ * `null` to refuse the link. The same rules as `cmsRoutes()`: the minter signed into the token,
+ * refused when there is none or when the minter's session has been revoked since. Verify the
+ * token's signature (`verifyToken`) first; this only reads its minter half. */
+export const previewRedeemer: (env: EnvBag, payload: Partial<PreviewMinter>) => Promise<{ roles: string[]; userId: string } | null> = redeemerOf;
+
 /** Secret preference order. `PREVIEW_SECRET` lets an operator rotate preview links without
  * invalidating every signed file url, but falling back keeps the common case zero-config. */
 export const PREVIEW_SECRET_NAMES = ["PREVIEW_SECRET", "FILES_SECRET", "AUTH_SECRET"] as const;
@@ -3182,7 +3189,9 @@ export interface CmsHandlerOpts {
    * usual), so a declared name always resolves to the handler declared here. Pass the same
    * options to `createCollectionHandlers`, which checks its collections against them.
    */
-  optionSources?: Readonly<Record<string, Handler>>;
+  // `HandlerMap` (any input/output) so a query with a typed input is accepted: handler
+  // parameters are contravariant, and `Handler<unknown>` admitted none.
+  optionSources?: Readonly<HandlerMap>;
   /** Ceiling on a preview link's lifetime, in seconds. Default: the session TTL
    * (`AUTH_SESSION_TTL_SECONDS`, else 3600), because the denylist entry that revokes a user
    * lives exactly that long. A link may outlive it only if you raise this, and then a link
