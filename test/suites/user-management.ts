@@ -54,7 +54,10 @@ export async function runUserManagement(base: string): Promise<void> {
   // --- self-service: changeEmail -------------------------------------------
   const badEmail = await call("changeEmail", { email: "not-an-email" }, alice);
   assert(badEmail.status === 400, "um: changeEmail rejects a malformed address (400)");
-  const newEmail = await call("changeEmail", { email: "alice@new.example.com" }, alice);
+  // The email is the reset channel, so moving it is a credential op for a password account.
+  const bareSession = await call("changeEmail", { email: "alice@new.example.com" }, alice);
+  assert(bareSession.status === 401, "um: changeEmail without the current password is refused (401)");
+  const newEmail = await call("changeEmail", { email: "alice@new.example.com", currentPassword: "password123" }, alice);
   assert(newEmail.body.ok && newEmail.body.result.email === "alice@new.example.com", "um: changeEmail updates own email");
 
   // a user cannot change another user's email (the self policy scopes to own row)
@@ -66,6 +69,8 @@ export async function runUserManagement(base: string): Promise<void> {
   assert(wrongCurrent.status === 401, "um: changePassword with a wrong current password → 401");
   const changed = await call("changePassword", { currentPassword: "password123", newPassword: "brandnew123" }, alice);
   assert(changed.body.ok && changed.body.result?.ok === true, "um: changePassword succeeds");
+  // A credential change retires every earlier session, so the result carries the one to use.
+  assert(typeof changed.body.result?.token === "string", "um: changePassword returns a fresh session token");
   const oldLogin = await call("login", { username: "um_alice", password: "password123" });
   assert(oldLogin.status === 401, "um: the old password no longer logs in (401)");
   const newLogin = await call("login", { username: "um_alice", password: "brandnew123" });
@@ -92,7 +97,8 @@ export async function runUserManagement(base: string): Promise<void> {
   const afterSet = await call("login", { username: "um_invited@example.com", password: "firstpassword" });
   assert(afterSet.body.ok && Boolean(afterSet.body.result.token), "um: the newly set password logs in");
   // …a od té chvíle je to obyčejný účet s heslem, tedy zase pod ochranou současného hesla.
-  const nowLocked = await call("changePassword", { currentPassword: "", newPassword: "secondpassword" }, invitedToken);
+  // (Se sezením, které změna vrátila: to původní změna hesla zneplatnila.)
+  const nowLocked = await call("changePassword", { currentPassword: "", newPassword: "secondpassword" }, firstSet.body.result.token);
   assert(nowLocked.status === 401, "um: once set, the password can no longer be replaced from the session alone");
 
   // --- admin: deactivate blocks login, reactivate restores it ---------------
@@ -114,7 +120,7 @@ export async function runUserManagement(base: string): Promise<void> {
   // alice set alice@new.example.com above; bob trying to take it gets a clean 400.
   const bobLogin = await call("login", { username: "um_bob", password: "password123" });
   const bobTok = bobLogin.body.result.token;
-  const clash = await call("changeEmail", { email: "alice@new.example.com" }, bobTok);
+  const clash = await call("changeEmail", { email: "alice@new.example.com", currentPassword: "password123" }, bobTok);
   assert(clash.status === 400, "um: changeEmail rejects an email already in use (400, not 500)");
 
   // regression: a magic link for an address a password user holds as CONTACT email must
@@ -137,11 +143,12 @@ export async function runUserManagement(base: string): Promise<void> {
   assert(del.body.ok && del.body.result?.ok === true, "um: admin deleteUser succeeds");
   const goneLogin = await call("login", { username: "um_bob", password: "password123" });
   assert(goneLogin.status === 401, "um: a deleted user can no longer log in (401)");
+  // The row stays as an inactive tombstone, so the username is never handed to someone else.
   const goneList = await call("listUsers", { limit: 200 }, admin);
-  assert(
-    !(goneList.body.result as Row[]).some((r) => r.username === "um_bob"),
-    "um: the deleted user is gone from the listing",
-  );
+  const tomb = (goneList.body.result as Row[]).find((r) => r.username === "um_bob");
+  assert(tomb !== undefined && Number(tomb.active) === 0 && tomb.email == null, "um: the deleted user remains as an inactive tombstone without an email");
+  const reclaim = await call("signup", { username: "um_bob", password: "squatter123" });
+  assert(reclaim.status === 400, "um: a deleted username cannot be signed up again (400)");
 
   // --- hardening: the SYSTEM-scope admin data API does NOT leak passwordHash --
   const adminData = await fetch(`${base}/admin/data`, {

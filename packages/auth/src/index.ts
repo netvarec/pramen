@@ -16,9 +16,11 @@
 // magicLinkSchema too). It is transport-agnostic: you supply sendEmail; pramen owns
 // the token lifecycle. See createMagicLinkAuth below.
 
-import { Entity, mutation, query, defaultTo, unique, hidden, policy, allow, $identity, BadRequest, Unauthorized, denySession, allowSession, isSystemRole } from "@pramen/server";
-import type { AppTaskMap, CellValue, HandlerContext, HandlerMap, JsonObject, JsonValue, Policy, Row } from "@pramen/server";
-import { sessionIsFrom, tableClaim, usersTable, type UsersTable } from "./users-table.js";
+import { Entity, mutation, query, defaultTo, unique, hidden, policy, allow, $identity, BadRequest, Unauthorized, denySession, allowSession, isSystemRole, setSessionNotBefore } from "@pramen/server";
+import type { AppTaskMap, CellValue, HandlerContext, HandlerMap, JsonObject, JsonValue, Policy, Row, SchemaDef } from "@pramen/server";
+import { adoptableBy, assertUsersTableShape, sessionIsFrom, tableClaim, usersTable, type UsersTable } from "./users-table.js";
+export { assertUsersTableShape, USERS_TABLE_COLUMNS } from "./users-table.js";
+import { declareSessionTtl, maxSessionTtlOf, sessionTtlOf } from "./session-ttl.js";
 
 /** What an auth factory contributes to an app: RPC handlers plus the task handlers
  * that deliver their emails. */
@@ -45,6 +47,10 @@ export const authSchema = {
     emailVerified: t.int(), // epoch ms the current `email` was confirmed; NULL = unverified (additive)
     active: defaultTo(t.bool(), true), // deactivation flag; false blocks login (additive, backfills 1)
     createdAt: t.int(),
+    // Epoch SECONDS (a token's `iat` unit) of the last credential change: a password reset or
+    // change, or the account's deletion. refreshSession refuses a token issued before it, so a
+    // session stolen before the owner recovered the account cannot be renewed. NULL = never.
+    credentialsChangedAt: t.int(),
     // What the identity provider says about the person ({ name, picture } by default), written
     // on every OIDC sign-in and read back by `me`. NULL for users who never signed in through
     // OIDC. Additive: an existing table gains the column on the next migrate.
@@ -200,8 +206,10 @@ export async function verifyPassword(password: string, stored: string): Promise<
   if (scheme !== "pbkdf2") {
     const verify = foreignVerifiers.get(scheme);
     // Unknown scheme (including the empty passwordHash of a passwordless user) never
-    // verifies, the same as before this feature existed.
-    if (!verify) return false;
+    // verifies, the same as before this feature existed. It still pays for one derivation:
+    // passwordless users are keyed by their email, so a fast "no" here told an anonymous
+    // caller which addresses have a magic-link/invited/OIDC account.
+    if (!verify) return burnDummyVerify(password);
     try {
       return await verify(password, stored.slice(scheme.length + 1));
     } catch {
@@ -211,9 +219,17 @@ export async function verifyPassword(password: string, stored: string): Promise<
     }
   }
   const parsed = parseStoredHash(stored);
-  if (!parsed) return false;
+  if (!parsed) return burnDummyVerify(password);
   const bits = await deriveBits(password, unb64(parsed.saltB64), parsed.iterations, parsed.hash);
   return constantTimeEqual(b64(bits), parsed.hashB64);
+}
+
+/** A failed verification that costs what a real one does: one derivation against the
+ * placeholder hash, then `false`. */
+async function burnDummyVerify(password: string): Promise<false> {
+  const p = parseStoredHash(await dummyPasswordHash())!;
+  await deriveBits(password, unb64(p.saltB64), p.iterations, p.hash);
+  return false;
 }
 
 // A fixed placeholder hash (current params), computed once and reused, so a login for a
@@ -250,13 +266,50 @@ function secretOf(ctx: HandlerContext): string {
 }
 
 const DEFAULT_ROLES = ["user"];
-const TOKEN_TTL_SECONDS = 3600;
 
-/** Session-token lifetime: AUTH_SESSION_TTL_SECONDS from the env (a deployment can
- * shorten it to tighten the deactivation/role-change window), else 1h. */
-function sessionTtlOf(ctx: HandlerContext): number {
-  const v = Number(ctx.env.AUTH_SESSION_TTL_SECONDS);
-  return Number.isFinite(v) && v > 0 ? Math.trunc(v) : TOKEN_TTL_SECONDS;
+/** Session-token lifetime for a minter with no TTL option of its own: AUTH_SESSION_TTL_SECONDS
+ * from the env (a deployment can shorten it to tighten the deactivation/role-change window),
+ * else 1h. See session-ttl.ts for how it agrees with the factories that have one. */
+const envSessionTtl = (ctx: HandlerContext): number => sessionTtlOf(ctx.env);
+
+/** The caller's verified token `iat` (epoch seconds), or null for an identity without one. */
+function issuedAt(ctx: HandlerContext): number | null {
+  const iat = ctx.identity?.iat;
+  return typeof iat === "number" && Number.isFinite(iat) ? iat : null;
+}
+
+/** Whether the caller's token predates the incarnation or the credentials of `row`.
+ *
+ * - `credentialsChangedAt` (seconds): a reset, a password change or a deletion since the token
+ *   was issued. Without this a session stolen before the owner reset their password was renewed
+ *   by refreshSession forever.
+ * - `createdAt` (ms): the row was created after the token, so the token named an EARLIER account
+ *   under the same username. 1 s of slack, because `iat` is floored to the second while the row
+ *   is stamped in ms just before signing.
+ *
+ * A token with no `iat` cannot be placed in time, so it is refused whenever either column says
+ * there is something to be older than. `iat` has one-second resolution: a token minted in the
+ * same second as a credential change survives it. */
+function issuedBeforeAccountState(ctx: HandlerContext, row: Row): boolean {
+  const iat = issuedAt(ctx);
+  const changedAt = row.credentialsChangedAt == null ? null : Number(row.credentialsChangedAt);
+  const createdAt = row.createdAt == null ? null : Number(row.createdAt);
+  if (changedAt === null && createdAt === null) return false;
+  if (iat === null) return true;
+  if (changedAt !== null && iat < changedAt) return true;
+  return createdAt !== null && iat * 1000 + 1000 <= createdAt;
+}
+
+/** Record a credential change for `username`: every session issued before this second stops
+ * working, both at refreshSession (`credentialsChangedAt`) and at the Worker (the KV notBefore
+ * entry, sized to outlive the longest token any factory mints). A session minted from now on
+ * keeps working, which is why this is not `denySession`: that entry is username-scoped and would
+ * also lock out the owner's next login. KV is not part of the transaction, so call it after the
+ * row writes it accompanies. */
+async function retireEarlierSessions(ctx: HandlerContext, table: UsersTable, username: string): Promise<void> {
+  const at = Math.floor(Date.now() / 1000);
+  await ctx.db.exec(`UPDATE ${table.sql} SET credentialsChangedAt = ? WHERE username = ?`, at, username);
+  await setSessionNotBefore(ctx.kv, username, at, maxSessionTtlOf(ctx.env));
 }
 
 /** A permissive email shape check (one `@`, a dot in the domain). The single source of
@@ -295,14 +348,18 @@ function buildRefreshSession(ttlOf: (ctx: HandlerContext) => number, table: User
   return mutation(
     async (ctx) => {
       const userId = requireOwnUser(ctx, table);
-      const rows = await ctx.db.exec(`SELECT username, roles, active FROM ${table.sql} WHERE username = ? LIMIT 1`, userId);
+      const rows = await ctx.db.exec(
+        `SELECT username, roles, active, createdAt, credentialsChangedAt FROM ${table.sql} WHERE username = ? LIMIT 1`,
+        userId,
+      );
       const u = rows[0];
       // Gone or deactivated ⇒ no fresh token (mirrors login). The Worker denylist already
       // fails a deactivated user's outstanding token closed; this ensures refresh can't
-      // launder a revoked session into a new, longer-lived one either.
-      if (!u || !isActive(u.active)) throw new Unauthorized("session is no longer valid");
+      // launder a revoked session into a new, longer-lived one either. The same for a token
+      // older than the password now on the row, or than the row itself.
+      if (!u || !isActive(u.active) || issuedBeforeAccountState(ctx, u)) throw new Unauthorized("session is no longer valid");
       const roles = JSON.parse(String(u.roles)) as string[];
-      const token = await signToken({ sub: String(u.username), roles, ...tableClaim(table) }, secretOf(ctx), { ttlSeconds: ttlOf(ctx) });
+      const token = await signToken({ sub: String(u.username), roles, ...tableClaim(table, ctx.store) }, secretOf(ctx), { ttlSeconds: ttlOf(ctx) });
       return { token, user: { username: String(u.username), roles } };
     },
     { auth: "authenticated" },
@@ -420,7 +477,7 @@ export function createAuthHandlers(opts: AuthHandlerOptions = {}) {
           input.email ?? null,
           Date.now(),
         );
-        const token = await signToken({ sub: input.username, roles, ...tableClaim(table) }, secretOf(ctx), { ttlSeconds: sessionTtlOf(ctx) });
+        const token = await signToken({ sub: input.username, roles, ...tableClaim(table, ctx.store) }, secretOf(ctx), { ttlSeconds: envSessionTtl(ctx) });
         return { token, user: { username: input.username, roles, email: input.email ?? null } };
       },
       { input: parseCreds },
@@ -459,7 +516,7 @@ export function createAuthHandlers(opts: AuthHandlerOptions = {}) {
           }
         }
         const roles = JSON.parse(String(u.roles)) as string[];
-        const token = await signToken({ sub: String(u.username), roles, ...tableClaim(table) }, secretOf(ctx), { ttlSeconds: sessionTtlOf(ctx) });
+        const token = await signToken({ sub: String(u.username), roles, ...tableClaim(table, ctx.store) }, secretOf(ctx), { ttlSeconds: envSessionTtl(ctx) });
         return { token, user: { username: String(u.username), roles } };
       },
       { input: parseCreds },
@@ -477,7 +534,7 @@ export function createAuthHandlers(opts: AuthHandlerOptions = {}) {
     // Re-read roles/active for the caller and reissue a token at the env-configured session
     // TTL (AUTH_SESSION_TTL_SECONDS). Lets a short TTL bound revocation lag without logging
     // the user out, and picks up role grants without re-login. See buildRefreshSession.
-    refreshSession: buildRefreshSession(sessionTtlOf, table),
+    refreshSession: buildRefreshSession(envSessionTtl, table),
   };
 }
 
@@ -630,13 +687,44 @@ export interface MagicLinkOptions {
   sendEmail: (ctx: HandlerContext, args: { email: string; token: string }) => void | Promise<void>;
   /** How long the emailed link stays valid, in seconds. Default 900 (15 min). */
   linkTtlSeconds?: number;
-  /** TTL of the session JWT minted on successful login, in seconds. Default 3600 (1h). */
+  /** TTL of the session JWT minted on successful login, in seconds. Default
+   * AUTH_SESSION_TTL_SECONDS, else 3600 (1h). Revocation entries are sized to the longest TTL
+   * any factory declares, so a long one here keeps a deactivated user's denylist entry alive
+   * that long too. */
   sessionTtlSeconds?: number;
   /** Roles assigned when a magic-link login first creates the user. Default `["user"]`. */
   defaultRoles?: string[];
   /** Users table, default `auth_users`. Pass the same `table` as `createAuthHandlers`: both
    * export a `refreshSession`, and whichever is spread last serves every caller. */
   table?: string;
+  /** Minimum seconds between two links sent to the same address by `requestMagicLink`, while
+   * the earlier one is unredeemed. A request inside the window still answers `{ ok: true }` but
+   * sends nothing: the link already on its way stays the live one. `inviteUser` (admin) is not
+   * held back. Default 60; 0 turns it off. See {@link resendCooldownMs}. */
+  resendCooldownSeconds?: number;
+}
+
+const DEFAULT_RESEND_COOLDOWN_SECONDS = 60;
+
+/** The anonymous email-sending handlers (`requestMagicLink`, `requestPasswordReset`) and the
+ * self-service `requestEmailVerification` each send one email per call, to an address the caller
+ * names. With nothing in between, anyone could mail-bomb an inbox from the operator's sending
+ * domain, spending its provider quota and reputation and queueing ahead of everyone else's login
+ * mail in the tenant's outbox. So one address gets at most one email per window. It is a floor,
+ * not a rate limit across addresses: that belongs at the edge, in front of the Worker. */
+function resendCooldownMs(seconds: number | undefined): number {
+  const s = seconds ?? DEFAULT_RESEND_COOLDOWN_SECONDS;
+  if (!Number.isFinite(s) || s < 0) throw new Error(`@pramen/auth: resendCooldownSeconds must be >= 0, got ${JSON.stringify(seconds)}`);
+  return s * 1000;
+}
+
+/** Whether the newest request a token table holds for this address is inside the cooldown.
+ * `where` + `params` pick the address's rows; their `createdAt` is the request time. */
+async function inCooldown(ctx: HandlerContext, table: TokenTable, where: string, params: CellValue[], cooldownMs: number): Promise<boolean> {
+  if (cooldownMs <= 0) return false;
+  const rows = await ctx.db.exec(`SELECT createdAt FROM ${table} WHERE ${where} ORDER BY createdAt DESC LIMIT 1`, ...params);
+  const last = rows[0]?.createdAt;
+  return last != null && Date.now() - Number(last) < cooldownMs;
 }
 
 /** Build the `requestMagicLink` / `loginWithMagicLink` handler pair, plus the
@@ -660,9 +748,11 @@ export interface MagicLinkOptions {
  * Both handlers are anonymous and gate nothing; the token is the capability. */
 export function createMagicLinkAuth(opts: MagicLinkOptions): AuthModule {
   const linkTtlMs = (opts.linkTtlSeconds ?? 900) * 1000;
-  const sessionTtl = opts.sessionTtlSeconds ?? TOKEN_TTL_SECONDS;
+  const configuredTtl = declareSessionTtl(opts.sessionTtlSeconds);
+  const sessionTtl = (ctx: HandlerContext): number => sessionTtlOf(ctx.env, configuredTtl);
   const defaultRoles = opts.defaultRoles ?? DEFAULT_ROLES;
   const table = usersTable(opts.table);
+  const cooldownMs = resendCooldownMs(opts.resendCooldownSeconds);
 
   /** Revoke every link for `email` (only the latest request works), record the new
    * request as pending and enqueue its send. The task mints the token (see above). */
@@ -686,7 +776,7 @@ export function createMagicLinkAuth(opts: MagicLinkOptions): AuthModule {
     // factory's configured session TTL. Shared implementation with authHandlers: when both
     // are spread into one app, the one spread last serves every caller, which is why both
     // take the same `table`.
-    refreshSession: buildRefreshSession(() => sessionTtl, table),
+    refreshSession: buildRefreshSession(sessionTtl, table),
 
     /** Admin-only: create a passwordless user with the given roles (defaults if omitted)
      * and email them a fresh magic link. Idempotent: inviting an existing user just
@@ -703,10 +793,17 @@ export function createMagicLinkAuth(opts: MagicLinkOptions): AuthModule {
         const now = Date.now();
         // Existence check on username (== email, per magic-link convention); a re-invite
         // MUST NOT overwrite roles; that's setUserRoles's job.
-        const existing = await ctx.db.exec(`SELECT username FROM ${table.sql} WHERE username = ? LIMIT 1`, email);
+        const existing = await ctx.db.exec(`SELECT username, passwordHash, email, emailVerified FROM ${table.sql} WHERE username = ? LIMIT 1`, email);
+        // The link this sends would sign its recipient into that row, together with whoever
+        // set its password without proving the address (see adoptableBy). An admin resolves
+        // it by deleting the row; granting it roles first would hand them to the squatter.
+        if (existing[0] && !adoptableBy(existing[0], email)) {
+          throw new BadRequest("an account with a password already uses this address as its username without having confirmed it; delete it before inviting");
+        }
         if (existing.length === 0) {
           // Same shape as loginWithMagicLink's find-or-create path: username-only, no
-          // `email` column set (it stays a pure contact attribute, set via changeEmail).
+          // `email` column set. The address is unproven until the link is redeemed, which is
+          // when loginWithMagicLink records it.
           await ctx.db.exec(
             `INSERT INTO ${table.sql} (username, passwordHash, roles, active, createdAt) VALUES (?, ?, ?, ?, ?)`,
             email,
@@ -726,7 +823,13 @@ export function createMagicLinkAuth(opts: MagicLinkOptions): AuthModule {
 
     requestMagicLink: mutation(
       async (ctx, input: { email: string }) => {
-        await requestLink(ctx, input.email);
+        // Same answer inside the cooldown: the response must not say whether a link went out.
+        // Only an UNREDEEMED link holds the next one back: a redeemed one proves its recipient
+        // got it (signing in on a second device is not mail-bombing), and whoever floods an
+        // address cannot redeem what lands in it.
+        if (!(await inCooldown(ctx, "auth_magic_links", "email = ? AND consumedAt IS NULL", [input.email], cooldownMs))) {
+          await requestLink(ctx, input.email);
+        }
         return { ok: true };
       },
       { input: parseEmail },
@@ -734,33 +837,39 @@ export function createMagicLinkAuth(opts: MagicLinkOptions): AuthModule {
 
     loginWithMagicLink: mutation(
       async (ctx, input: { token: string }) => {
-        const tokenHash = await sha256Hex(input.token);
-        const rows = await ctx.db.exec(
-          "SELECT email, expiresAt, consumedAt FROM auth_magic_links WHERE tokenHash = ? LIMIT 1",
-          tokenHash,
+        // Single-use: consume with ONE conditional statement and act only on the row it
+        // returns. A SELECT, a check in JS and an unconditional UPDATE let two concurrent
+        // redemptions on D1 (no transaction there, each statement autocommits) both pass.
+        const now = Date.now();
+        const claimed = await ctx.db.exec(
+          "UPDATE auth_magic_links SET consumedAt = ? WHERE tokenHash = ? AND consumedAt IS NULL AND expiresAt >= ? RETURNING email",
+          now,
+          await sha256Hex(input.token),
+          now,
         );
-        const link = rows[0];
-        if (!link || link.consumedAt != null || Number(link.expiresAt) < Date.now()) {
-          throw new Unauthorized("invalid or expired link");
-        }
-        // Single-use: consume before issuing the session.
-        await ctx.db.exec("UPDATE auth_magic_links SET consumedAt = ? WHERE tokenHash = ?", Date.now(), tokenHash);
+        if (!claimed[0]) throw new Unauthorized("invalid or expired link");
 
-        const email = String(link.email);
+        const email = String(claimed[0].email);
         // Key on the USERNAME (the immutable identity = the JWT sub), NOT the mutable
         // `email` column: a magic-link user's username IS their email address, so this
         // both matches existing users and avoids resolving login by a mutable, unverified
         // field (which would let a changeEmail squat another address, and would miss
         // pre-`email`-column users on upgrade, colliding on the username PK).
-        const existing = await ctx.db.exec(`SELECT roles, active FROM ${table.sql} WHERE username = ? LIMIT 1`, email);
+        const existing = await ctx.db.exec(
+          `SELECT roles, active, passwordHash, email, emailVerified FROM ${table.sql} WHERE username = ? LIMIT 1`,
+          email,
+        );
         let roles: string[];
         if (existing.length > 0) {
+          // Refused rather than adopted: see adoptableBy. Not `denySession` either, which is
+          // username-scoped and would also reject the session this would mint for the owner.
+          if (!adoptableBy(existing[0], email)) {
+            throw new Unauthorized("an account with a password already uses this address without having confirmed it; sign in with its password or ask an administrator");
+          }
           if (!isActive(existing[0].active)) throw new Unauthorized("account is deactivated");
           roles = JSON.parse(String(existing[0].roles)) as string[];
         } else {
           roles = defaultRoles;
-          // No email column set: it stays a pure contact attribute (set via changeEmail),
-          // so a new passwordless user can never collide with a password user's contact email.
           await ctx.db.exec(
             `INSERT INTO ${table.sql} (username, passwordHash, roles, createdAt) VALUES (?, ?, ?, ?)`,
             email,
@@ -769,7 +878,26 @@ export function createMagicLinkAuth(opts: MagicLinkOptions): AuthModule {
             Date.now(),
           );
         }
-        const token = await signToken({ sub: email, roles, ...tableClaim(table) }, secretOf(ctx), { ttlSeconds: sessionTtl });
+        // The link just proved the address the row is named after, so record it as the row's
+        // verified contact email when nothing else holds it. That is what keeps the row
+        // adoptable once its owner sets a password (adoptableBy), and what lets them reset it.
+        // Never taken from another row: a new passwordless user must not collide with a
+        // password user's contact email. Best-effort, like the hash upgrade in login: a lost
+        // race on the unique column must not fail a valid sign-in.
+        try {
+          await ctx.db.exec(
+            `UPDATE ${table.sql} SET email = ?, emailVerified = ? WHERE username = ? AND (email IS NULL OR (email = ? AND emailVerified IS NULL)) AND NOT EXISTS (SELECT 1 FROM ${table.sql} WHERE email = ? AND username != ?)`,
+            email,
+            Date.now(),
+            email,
+            email,
+            email,
+            email,
+          );
+        } catch {
+          /* the address stays unrecorded; the next sign-in retries */
+        }
+        const token = await signToken({ sub: email, roles, ...tableClaim(table, ctx.store) }, secretOf(ctx), { ttlSeconds: sessionTtl(ctx) });
         return { token, user: { username: email, roles } };
       },
       { input: parseLinkToken },
@@ -811,9 +939,13 @@ export function createMagicLinkAuth(opts: MagicLinkOptions): AuthModule {
 //    write an `authDenied:<username>` entry via `denySession(ctx.kv, …)`; the core Worker
 //    checks `isSessionDenied` right after resolving identity and fails a revoked token closed
 //    (401), so a deactivate/delete takes effect on the NEXT request, not the next login. The
-//    entry self-expires at the session TTL (the list never grows); reactivation lifts it
-//    (`allowSession`). `denySession`/`allowSession`/`isSessionDenied` are exported from
-//    @pramen/server so an app can revoke on its own compromise signals too.
+//    entry self-expires at the longest session TTL any factory mints (`maxSessionTtlOf`; the
+//    list never grows); reactivation lifts it (`allowSession`). `denySession`/`allowSession`/
+//    `isSessionDenied` are exported from @pramen/server so an app can revoke on its own
+//    compromise signals too.
+//  - Credential epoch (revokes only what came BEFORE): a password reset or change and a
+//    deletion stamp `credentialsChangedAt` and a KV notBefore entry (`setSessionNotBefore`), so
+//    refreshSession and the Worker refuse any token issued earlier while a fresh login works.
 
 /** SQLite has no bool: `active` is stored 0/1 (NULL on a pre-column row = active). */
 function isActive(v: CellValue): boolean {
@@ -851,9 +983,12 @@ const usersDb = (ctx: HandlerContext): UsersDb => ctx.db as UsersDb;
  * handler map and gate it with the matching `authPolicies({ table })`. The table must
  * have a `username` primary key and (for changeEmail/changePassword) `email`/
  * `passwordHash` columns. */
-export function createUserHandlers(opts: { table?: string } = {}) {
+export function createUserHandlers(opts: { table?: string; schema?: SchemaDef } = {}) {
   const users = usersTable(opts.table);
   const table = users.name;
+  // Pass the schema to have a custom table's shape checked here, at app construction, rather
+  // than by a handler failing on a missing column after it has already written something.
+  if (opts.schema) assertUsersTableShape(opts.schema, table);
   return {
     /** Admin: list users (ACL projects out passwordHash). A non-admin caller granted
      * only the self policy sees just their own row; ungranted callers get a 403. */
@@ -886,7 +1021,7 @@ export function createUserHandlers(opts: { table?: string } = {}) {
     /** Admin: activate / deactivate a user. Deactivating blocks future logins AND
      * refreshSession, AND revokes OUTSTANDING tokens immediately via the KV denylist (the
      * Worker fails them closed), so revocation no longer waits out the token TTL. The
-     * denylist entry self-expires at the session TTL. Reactivating LIFTS the entry (it is
+     * denylist entry self-expires at the longest session TTL. Reactivating LIFTS the entry (it is
      * username-scoped, so a stale entry would otherwise lock out even a fresh login). */
     setUserActive: mutation(async (ctx, input: { username: string; active: boolean }) => {
       if (typeof input?.username !== "string" || input.username.length === 0) throw new BadRequest("username is required");
@@ -897,39 +1032,73 @@ export function createUserHandlers(opts: { table?: string } = {}) {
       const updated = await usersDb(ctx).update(table, input.username, { active: input.active });
       if (!updated) throw new BadRequest("user not found");
       // KV is not part of the mutation's transaction, so do it after the update succeeds.
-      if (input.active === false) await denySession(ctx.kv, input.username, sessionTtlOf(ctx));
+      if (input.active === false) await denySession(ctx.kv, input.username, maxSessionTtlOf(ctx.env));
       else await allowSession(ctx.kv, input.username);
       return updated;
     }),
 
-    /** Admin: permanently delete a user. ACL-gated by the admin delete policy; a caller
-     * cannot delete their own account. Deactivation (setUserActive) is usually preferable. */
+    /** Admin: delete a user. A caller cannot delete their own account.
+     *
+     * The row is kept as a TOMBSTONE (inactive, no password, no email, no profile) rather than
+     * removed, because the username IS the identity: the JWT `sub`, the owner value
+     * `$identity("userId")` policies match, the actor in CMS history. A freed username could be
+     * signed up again straight away by anyone, who would then own the deleted user's surviving
+     * rows, and could be handed the deleted user's still-valid sessions by a later reactivation.
+     * The tombstone keeps signup, the magic link, invites and OIDC refusing the name ("username
+     * is taken" / "account is deactivated"), and its email is released for a new account.
+     *
+     * So the write is an UPDATE of `active`: the admin UPDATE policy authorizes it, not the
+     * delete policy (`authPolicies().admin` grants both; a custom ACL must too). */
     deleteUser: mutation(async (ctx, input: { username: string }) => {
       if (typeof input?.username !== "string" || input.username.length === 0) throw new BadRequest("username is required");
       if (input.username === ctx.identity?.userId) throw new BadRequest("cannot delete your own account");
-      const deleted = await usersDb(ctx).delete(table, input.username);
-      if (!deleted) throw new BadRequest("user not found");
-      // Revoke any outstanding tokens for the now-deleted user (self-expires at the TTL).
-      await denySession(ctx.kv, input.username, sessionTtlOf(ctx));
+      const updated = await usersDb(ctx).update(table, input.username, { active: false });
+      if (!updated) throw new BadRequest("user not found");
+      // Revoke at once, before anything else can fail: on D1 the deactivation above has already
+      // committed, and a deactivated user whose sessions still work is the worst place to stop.
+      await denySession(ctx.kv, input.username, maxSessionTtlOf(ctx.env));
+      // Only after the ACL'd write succeeded. Raw because none of these columns is (or should
+      // be) writable through the admin policy; it only ever clears them. Pending reset and
+      // verify links die with the email (both require it to still be the row's address).
+      await ctx.db.exec(`UPDATE ${users.sql} SET passwordHash = '', email = NULL, emailVerified = NULL, profile = NULL WHERE username = ?`, input.username);
+      // Revoke outstanding tokens now (the denylist, lifted again by a reactivation), and for
+      // good (notBefore), so reactivating the tombstone never revives a pre-deletion session.
+      await retireEarlierSessions(ctx, users, input.username);
       return { ok: true };
     }),
 
     /** Self-service: change the caller's contact email. The ACL self policy scopes the
      * write to the caller's own row and permits only the `email` field. Email is unique,
-     * so a clash is reported as a clean 400 rather than surfacing the DB constraint as a 500. */
-    changeEmail: mutation(async (ctx, input: { email: string }) => {
+     * so a clash is reported as a clean 400 rather than surfacing the DB constraint as a 500.
+     *
+     * A CREDENTIAL op when the account has a password: `currentPassword` must verify, the same
+     * rule as changePassword. The email column is the password-reset channel, so rewriting it
+     * from a bare session let that session mail itself a reset link and replace the password
+     * changePassword refuses to replace (verifying the new address is no safeguard: the session
+     * holder controls it). A passwordless account has no password to protect, and its session
+     * may set a first one anyway. */
+    changeEmail: mutation(async (ctx, input: { email: string; currentPassword?: string }) => {
       const userId = requireOwnUser(ctx, users);
-      const { email } = parseEmail(input); // validates + normalizes; 400 on a bad address
+      const { email } = parseEmail(input); // validates + normalizes; 400 on a bad address; only `email` is written
+      const cred = await ctx.db.exec(`SELECT passwordHash FROM ${users.sql} WHERE username = ? LIMIT 1`, userId);
+      if (cred.length === 0) throw new Unauthorized("authentication required");
+      const stored = String(cred[0].passwordHash ?? "");
+      const current = typeof input?.currentPassword === "string" ? input.currentPassword : "";
+      if (stored !== "" && !(await verifyPassword(current, stored))) throw new Unauthorized("current password is incorrect");
       const taken = await ctx.db.exec(`SELECT 1 FROM ${users.sql} WHERE email = ? AND username != ? LIMIT 1`, email, userId);
       if (taken.length > 0) throw new BadRequest("email already in use");
+      // The new address is UNVERIFIED, so clear any prior verification so `emailVerified`
+      // never claims an unconfirmed address. BEFORE the address write, not after: on D1 each
+      // statement commits on its own, and an invocation cut off between the two used to leave
+      // the new address carrying the old one's verification. Cut off now, the row merely loses
+      // its flag (as does a call the ACL refuses below; on the DO both roll back). Raw
+      // (ACL-bypassing) but self-scoped by the verified identity, and it only ever CLEARS the
+      // flag (routing it through the self update policy would instead let a user set their own
+      // verified state). Any pending verify token for the old address is now dead (verifyEmail
+      // stamps only while the row still holds the token's address).
+      await ctx.db.exec(`UPDATE ${users.sql} SET emailVerified = NULL WHERE username = ?`, userId);
       const updated = await usersDb(ctx).update(table, userId, { email });
       if (!updated) throw new Unauthorized("authentication required");
-      // The new address is UNVERIFIED, so clear any prior verification so `emailVerified`
-      // never claims an unconfirmed address. Raw (ACL-bypassing) but self-scoped by the
-      // verified identity, and it only ever CLEARS the flag (routing it through the self
-      // update policy would instead let a user set their own verified state). Any pending
-      // verify token for the old address is now dead (verifyEmail's current-email guard).
-      await ctx.db.exec(`UPDATE ${users.sql} SET emailVerified = NULL WHERE username = ?`, userId);
       return { ...updated, emailVerified: null };
     }),
 
@@ -964,25 +1133,38 @@ export function createUserHandlers(opts: { table?: string } = {}) {
      *   property worth keeping, and it is untouched.
      *
      * A deployment that wants the stricter posture keeps `createPasswordReset` and does not
-     * surface this branch in its UI; the reset flow still works either way. */
+     * surface this branch in its UI; the reset flow still works either way.
+     *
+     * Either way the write is a credential change: every session issued before it stops
+     * working (see retireEarlierSessions), the caller's own included, so the result carries a
+     * fresh `token` the client must switch to. */
     changePassword: mutation(async (ctx, input: { currentPassword: string; newPassword: string }) => {
       const userId = requireOwnUser(ctx, users);
       const current = typeof input?.currentPassword === "string" ? input.currentPassword : "";
       const next = typeof input?.newPassword === "string" ? input.newPassword : "";
       if (next.length < 8) throw new BadRequest("newPassword must be at least 8 characters");
-      const rows = await ctx.db.exec(`SELECT passwordHash FROM ${users.sql} WHERE username = ? LIMIT 1`, userId);
+      const rows = await ctx.db.exec(
+        `SELECT passwordHash, roles, active, createdAt, credentialsChangedAt FROM ${users.sql} WHERE username = ? LIMIT 1`,
+        userId,
+      );
       // No row at all: a token for an account that has since been deleted. Previously this
       // fell into the same `stored === ""` branch as a passwordless user and was rejected as
       // a wrong password, harmless then, but once an empty slot is fillable it would make
-      // the UPDATE a silent no-op that reports success.
-      if (rows.length === 0) throw new Unauthorized("authentication required");
+      // the UPDATE a silent no-op that reports success. A deleted account is now a tombstone
+      // with an EMPTY slot, so the same holds for an inactive row or a token older than it.
+      if (rows.length === 0 || !isActive(rows[0].active) || issuedBeforeAccountState(ctx, rows[0])) {
+        throw new Unauthorized("authentication required");
+      }
       const stored = String(rows[0].passwordHash ?? "");
       const firstPassword = stored === "";
       if (!firstPassword && !(await verifyPassword(current, stored))) {
         throw new Unauthorized("current password is incorrect");
       }
       await ctx.db.exec(`UPDATE ${users.sql} SET passwordHash = ? WHERE username = ?`, await hashPassword(next), userId);
-      return { ok: true, firstPassword };
+      await retireEarlierSessions(ctx, users, userId);
+      const roles = JSON.parse(String(rows[0].roles)) as string[];
+      const token = await signToken({ sub: userId, roles, ...tableClaim(users, ctx.store) }, secretOf(ctx), { ttlSeconds: envSessionTtl(ctx) });
+      return { ok: true, firstPassword, token };
     }),
   };
 }
@@ -1101,15 +1283,19 @@ async function sendEmailToken(
  * the same opaque error for missing / wrong-purpose / expired / already-used, so a caller
  * learns nothing beyond "this token won't work". */
 async function redeemEmailToken(ctx: HandlerContext, purpose: string, token: string): Promise<{ username: string; email: string }> {
-  const tokenHash = await sha256Hex(token);
-  const rows = await ctx.db.exec(
-    "SELECT username, email, expiresAt, consumedAt FROM auth_email_tokens WHERE tokenHash = ? AND purpose = ? LIMIT 1",
-    tokenHash,
+  // One conditional statement, acted on only through the row it returns: a SELECT, a JS check
+  // and an unconditional UPDATE let two concurrent redemptions on D1 (each statement
+  // autocommits there) both pass, resetting the password twice or minting two sessions.
+  const now = Date.now();
+  const claimed = await ctx.db.exec(
+    "UPDATE auth_email_tokens SET consumedAt = ? WHERE tokenHash = ? AND purpose = ? AND consumedAt IS NULL AND expiresAt >= ? RETURNING username, email",
+    now,
+    await sha256Hex(token),
     purpose,
+    now,
   );
-  const row = rows[0];
-  if (!row || row.consumedAt != null || Number(row.expiresAt) < Date.now()) throw new Unauthorized("invalid or expired token");
-  await ctx.db.exec("UPDATE auth_email_tokens SET consumedAt = ? WHERE tokenHash = ?", Date.now(), tokenHash);
+  const row = claimed[0];
+  if (!row) throw new Unauthorized("invalid or expired token");
   return { username: String(row.username), email: String(row.email) };
 }
 
@@ -1131,6 +1317,9 @@ export interface PasswordResetOptions {
   table?: string;
   /** How long the reset link stays valid, in seconds. Default 3600 (1h). */
   linkTtlSeconds?: number;
+  /** Minimum seconds between two reset emails to the same account and address. A request
+   * inside the window still answers `{ ok: true }` and sends nothing. Default 60; 0 turns it off. */
+  resendCooldownSeconds?: number;
 }
 
 /** Build the `requestPasswordReset` / `resetPassword` handler pair + the
@@ -1140,18 +1329,24 @@ export interface PasswordResetOptions {
  * and sets the new password. Spread `emailTokenSchema` into your schema and `.tasks` into
  * your task map. */
 export function createPasswordReset(opts: PasswordResetOptions): AuthModule {
-  const table = usersTable(opts.table).sql;
+  const users = usersTable(opts.table);
+  const table = users.sql;
   const linkTtlMs = (opts.linkTtlSeconds ?? 3600) * 1000;
+  const cooldownMs = resendCooldownMs(opts.resendCooldownSeconds);
 
   const handlers: HandlerMap = {
     /** Anonymous: request a reset link for `email`. Resolves the address to an ACTIVE
      * account and, only then, enqueues the send (which mints the token), but the response is the
-     * same `{ ok: true }` whether or not any account matched (no enumeration). */
+     * same `{ ok: true }` whether or not any account matched (no enumeration), and whether or
+     * not the request fell inside the resend cooldown. */
     requestPasswordReset: mutation(
       async (ctx, input: { email: string }) => {
         const rows = await ctx.db.exec(`SELECT username, active FROM ${table} WHERE email = ? LIMIT 1`, input.email);
         const u = rows[0];
-        if (u && isActive(u.active)) {
+        const cooling = u
+          ? await inCooldown(ctx, "auth_email_tokens", "purpose = ? AND username = ? AND email = ?", [PURPOSE_RESET, String(u.username), input.email], cooldownMs)
+          : false;
+        if (u && isActive(u.active) && !cooling) {
           const username = String(u.username);
           const requestId = await requestEmailToken(ctx, PURPOSE_RESET, username, input.email, Date.now() + linkTtlMs);
           await ctx.tasks.enqueue({ kind: "sendPasswordResetEmail", payload: { email: input.email, username, requestId } });
@@ -1163,7 +1358,8 @@ export function createPasswordReset(opts: PasswordResetOptions): AuthModule {
 
     /** Anonymous: redeem a reset token and set the new password. Single-use (the token is
      * consumed first). The account must still exist + be active. Any other pending reset
-     * tokens for the user are dropped on success. */
+     * tokens for the user are dropped on success, and every session issued before the reset
+     * stops working (a reset is how an owner recovers from a stolen session). */
     resetPassword: mutation(
       async (ctx, input: { token: string; newPassword: string }) => {
         const { username, email } = await redeemEmailToken(ctx, PURPOSE_RESET, input.token);
@@ -1172,8 +1368,20 @@ export function createPasswordReset(opts: PasswordResetOptions): AuthModule {
         // changeEmail, whoever reads the OLD inbox must not be able to take the account.
         if (!rows[0] || rows[0].email !== email) throw new Unauthorized("invalid or expired token");
         if (!isActive(rows[0].active)) throw new Unauthorized("account is deactivated");
-        await ctx.db.exec(`UPDATE ${table} SET passwordHash = ? WHERE username = ?`, await hashPassword(input.newPassword), username);
+        // Guarded on the address again IN the write, so a changeEmail landing between the read
+        // and here (two statements on D1) cannot let the old inbox through. Redeeming the link
+        // proved the address, so it is recorded as verified, which also makes a squatted row
+        // adoptable by its real owner once they have reset it (adoptableBy).
+        const written = await ctx.db.exec(
+          `UPDATE ${table} SET passwordHash = ?, emailVerified = COALESCE(emailVerified, ?) WHERE username = ? AND email = ? RETURNING username`,
+          await hashPassword(input.newPassword),
+          Date.now(),
+          username,
+          email,
+        );
+        if (written.length === 0) throw new Unauthorized("invalid or expired token");
         await ctx.db.exec("DELETE FROM auth_email_tokens WHERE purpose = ? AND username = ?", PURPOSE_RESET, username);
+        await retireEarlierSessions(ctx, users, username);
         return { ok: true };
       },
       { input: parseResetInput },
@@ -1208,6 +1416,9 @@ export interface EmailVerificationOptions {
   table?: string;
   /** How long the verification link stays valid, in seconds. Default 86400 (24h). */
   linkTtlSeconds?: number;
+  /** Minimum seconds between two verification emails to the same account and address. A
+   * request inside the window answers `{ ok: true }` and sends nothing. Default 60; 0 turns it off. */
+  resendCooldownSeconds?: number;
 }
 
 /** Build the `requestEmailVerification` / `verifyEmail` handler pair + the
@@ -1221,6 +1432,7 @@ export function createEmailVerification(opts: EmailVerificationOptions): AuthMod
   const users = usersTable(opts.table);
   const table = users.sql;
   const linkTtlMs = (opts.linkTtlSeconds ?? 86_400) * 1000;
+  const cooldownMs = resendCooldownMs(opts.resendCooldownSeconds);
 
   const handlers: HandlerMap = {
     /** Authenticated: email the caller a verification link for their CURRENT address. A
@@ -1233,6 +1445,11 @@ export function createEmailVerification(opts: EmailVerificationOptions): AuthMod
         const email = u && typeof u.email === "string" ? u.email : "";
         if (!email) throw new BadRequest("no email on file. Set one with changeEmail first");
         if (u.emailVerified != null) return { ok: true, alreadyVerified: true };
+        // Signup lets anyone put any address on a fresh account, so without this one account
+        // per victim address could resend forever. The link already sent stays the live one.
+        if (await inCooldown(ctx, "auth_email_tokens", "purpose = ? AND username = ? AND email = ?", [PURPOSE_VERIFY, userId, email], cooldownMs)) {
+          return { ok: true };
+        }
         const requestId = await requestEmailToken(ctx, PURPOSE_VERIFY, userId, email, Date.now() + linkTtlMs);
         await ctx.tasks.enqueue({ kind: "sendVerificationEmail", payload: { email, username: userId, requestId } });
         return { ok: true };
@@ -1246,10 +1463,16 @@ export function createEmailVerification(opts: EmailVerificationOptions): AuthMod
     verifyEmail: mutation(
       async (ctx, input: { token: string }) => {
         const { username, email } = await redeemEmailToken(ctx, PURPOSE_VERIFY, input.token);
-        const rows = await ctx.db.exec(`SELECT email FROM ${table} WHERE username = ? LIMIT 1`, username);
-        const current = rows[0] && typeof rows[0].email === "string" ? String(rows[0].email) : null;
-        if (current == null || current !== email) throw new Unauthorized("invalid or expired token");
-        await ctx.db.exec(`UPDATE ${table} SET emailVerified = ? WHERE username = ?`, Date.now(), username);
+        // The current-email guard IS the write's condition. As a SELECT, a JS compare and an
+        // UPDATE keyed on username alone, a changeEmail landing in between on D1 (no
+        // transaction there) got the flag stamped onto an address nobody confirmed.
+        const stamped = await ctx.db.exec(
+          `UPDATE ${table} SET emailVerified = ? WHERE username = ? AND email = ? RETURNING username`,
+          Date.now(),
+          username,
+          email,
+        );
+        if (stamped.length === 0) throw new Unauthorized("invalid or expired token");
         // Nothing left to verify: a still-pending request must not mint a link later.
         await ctx.db.exec("DELETE FROM auth_email_tokens WHERE purpose = ? AND username = ?", PURPOSE_VERIFY, username);
         return { ok: true, email };
@@ -1275,6 +1498,10 @@ export function createEmailVerification(opts: EmailVerificationOptions): AuthMod
 
   return { handlers, tasks };
 }
+
+// The TTL an app's own `denySession` / `setSessionNotBefore` call should use: the longest any
+// configured factory mints, so the entry never lapses under a live token.
+export { maxSessionTtlOf } from "./session-ttl.js";
 
 // --- OIDC (authorization code + PKCE) ---------------------------------------
 export { createOidcAuth, defaultOidcProfile, oidcHandlers, OIDC_UPSERT_HANDLER, type OidcOptions } from "./oidc.js";

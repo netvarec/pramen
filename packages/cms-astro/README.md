@@ -52,7 +52,11 @@ of hand-writing a `defineCollection` per type that has to track rows in the stor
 Zero collections would otherwise build green and deploy an empty site. Discovery reads
 `listPublicContentTypes`, which is un-gated: no build-time token needed, and nothing new is
 exposed (a content type's slug already reaches the public through `listPublishedPages`). If
-your deployment does need auth for reads, pass `backend: { token }`.
+your deployment does need auth for reads, pass `backend: { token }`, and give that token a
+role holding **only `cmsPolicies().public` grants**. It is sent on every content call the site
+makes on a visitor's behalf. The CMS's public handlers serve published content only whoever
+calls them, but a token with an editor role is still a credential that can write, sitting in a
+web server.
 
 `createCmsClient` / `cmsLoader` stay exported and are documented below. The integration is
 the front door, not a replacement. A site that wants to define its own collections by hand

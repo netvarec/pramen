@@ -133,8 +133,8 @@ identical reason.
 2. **CPU/memory limits.** DOs relax the Worker CPU cap but aren't a dedicated OS
    thread. Heavy eager-loading needs budgeting.
 3. **D1's role.** D1 is a *first-class alternate store*, not the primary write path
-   (it's over-RPC, not in-process). Selected via `x-pramen-store: d1` or the
-   `PRAMEN_STORE=d1` default; same schema/ACL/read engine over a D1 binding. Its sweet
+   (it's over-RPC, not in-process). Selected by the operator with `PRAMEN_STORE=d1`
+   (the `x-pramen-store` header counts only under `PRAMEN_STORE_HEADER=allow`, local dev); same schema/ACL/read engine over a D1 binding. Its sweet
    spot is **read-scale**: every request opens a D1 **session** (`db.withSession`) so
    reads can fan out to **read replicas** while staying sequentially consistent via the
    session bookmark. A mutation anchors `first-primary` (current data); a query anchors
@@ -178,8 +178,10 @@ separately in `example/inference-check.ts` via `@ts-expect-error` cases.
 
 - [x] ACL: `role()`/`policy()`/`allow()`/`deny()`/`$identity()` in `sdk/acl.ts`; resolution in
       `runtime/acl.ts`. Deny-by-default; grants OR-merge across an identity's roles. Enforced at the
-      `Db` chokepoint: row-level `where` scopes AND-merge into find/update/delete, `fields` restrict
-      read projection and writable columns. Identity is resolved at the edge (`auth.ts`, bearer-token
+      `Db` chokepoint: row-level `where` scopes AND-merge into find/update/delete and bind the
+      candidate row on insert (an update policy's opt-in `check` binds the post-image), `fields`
+      restrict read projection and writable columns, each policy's `fields` only on the rows its
+      own `where` admits. Identity is resolved at the edge (`auth.ts`, bearer-token
       demo map) and forwarded to the DO; for a WebSocket it's fixed at connect time, so live queries
       are per-identity.
 - [x] Dynamic policy resolvers: `resolve(fn)` rules computed once per request in a `warmup()` pass,

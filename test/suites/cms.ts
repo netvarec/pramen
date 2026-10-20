@@ -232,13 +232,13 @@ export async function runCms(base: string): Promise<void> {
 
   // The route must work under the roles an app ACTUALLY configures. The e2e app defines
   // an `admin` role, which masked a bug where the route hardcoded roles:["admin"]: under
-  // the README's own wiring (anonymous + editor, no admin) every link 404'd. Redeeming as
-  // a plain editor exercises the configured-viewer-roles path.
+  // the README's own wiring (anonymous + editor, no admin) every link 404'd. A link now
+  // redeems AS ITS MINTER, so one minted by a plain editor reads with the editor role.
   const plainEditor = await token("cms-editor-only", ["editor"]);
   const editorMint = await call("signPagePreview", { pageId: pageRow.id }, plainEditor);
   assert(editorMint.body.ok, "cms: a plain editor (no admin role) can mint a preview link");
   const editorRedeem = await fetch(`${base}${editorMint.body.result.url}`);
-  assert(editorRedeem.status === 200, "cms: a link minted by a plain editor redeems (the route presents viewer roles, not admin)");
+  assert(editorRedeem.status === 200, "cms: a link minted by a plain editor redeems (the route presents the minter, not admin)");
 
   // The D1 store is the topology an Astro site embeds (no Durable Object to export), so
   // preview has to work there too. `callPrivileged` now dispatches locally on D1 instead
@@ -640,7 +640,8 @@ export async function runCms(base: string): Promise<void> {
 
   // A scheduled publish must NOT resurrect a trashed page. The publish task runs on the
   // SYSTEM context, where the ACL is bypassed, so the read scope does not protect it and
-  // deletePage has to clear the schedule itself.
+  // `cms:publish` checks the tombstone itself (deletePage keeps the schedule, so a
+  // reviewer's takedown survives trash + restore).
   const schedPage = await call("createPage", { typeId: ct.body.result.id, title: "Scheduled", slug: "sched-doomed" }, admin);
   const schedId = schedPage.body.result.id as string;
   await call("schedulePage", { pageId: schedId, publishAt: Date.now() + 800 }, admin);
@@ -752,11 +753,15 @@ export async function runCms(base: string): Promise<void> {
   const reject = await call("reject", { pageId: wfId, note: "needs work" }, admin);
   assert(reject.body.ok && reject.body.result.page.status === "rejected", "cms: reject moves review → rejected");
   // approve only works from review, so a rejected page must be resubmitted
-  const approveRejected = await call("approve", { pageId: wfId }, admin);
+  const wfHash = (await call("getPage", { slug: "policy", preview: true }, admin)).body.result.contentHash as string;
+  const approveRejected = await call("approve", { pageId: wfId, expectedContentHash: wfHash }, admin);
   assert(approveRejected.status === 400, "cms: approve only works from the review state (400)");
   // resubmit → approve (publishes)
   await call("submitForReview", { pageId: wfId }, editorTok);
-  const approve = await call("approve", { pageId: wfId, note: "lgtm" }, admin);
+  // approve is bound to the content the reviewer saw: no hash is a 400, a stale one a 409.
+  assert((await call("approve", { pageId: wfId }, admin)).status === 400, "cms: approve requires expectedContentHash (400)");
+  assert((await call("approve", { pageId: wfId, expectedContentHash: "0".repeat(64) }, admin)).status === 409, "cms: approve refuses content other than what was reviewed (409)");
+  const approve = await call("approve", { pageId: wfId, note: "lgtm", expectedContentHash: wfHash }, admin);
   assert(approve.body.ok && approve.body.result.page.status === "published", "cms: approve publishes a page in review");
   const wfPublic = await call("getPage", { slug: "policy" });
   assert(wfPublic.body.ok && (wfPublic.body.result.regions.content as unknown[]).length === 1, "cms: an approved page is publicly readable");
@@ -778,7 +783,7 @@ export async function runCms(base: string): Promise<void> {
   assert((await call("getContentType", { id: ct.body.result.id }, reviewerTok)).body.ok, "cms: a reviewer can load the content type");
   const revEdit = await call("addBlock", { pageId: revPageId, blockTypeSlug: "rich_text", region: "content", fields: { body: rt("no") } }, reviewerTok);
   assert(revEdit.status === 403, "cms: a reviewer cannot edit (writes stay editor-gated, 403)");
-  const revApprove = await call("approve", { pageId: revPageId }, reviewerTok);
+  const revApprove = await call("approve", { pageId: revPageId, expectedContentHash: revPreview.body.result.contentHash }, reviewerTok);
   assert(revApprove.body.ok && revApprove.body.result.page.status === "published", "cms: a reviewer can approve");
 
   // --- i18n: translations, per-locale slug uniqueness, locale-aware content API ---

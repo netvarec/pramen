@@ -63,6 +63,9 @@ export interface AnalyticsOptions {
   queueBinding?: string | null;
   /** Queue name the consumer is registered under. */
   queueName?: string;
+  /** The tenants the queue consumer may write analytics into. Default `["main"]`. A batch
+   * naming any other tenant is dropped: the name may have come from a visitor's request. */
+  tenants?: readonly string[];
 }
 
 /** The queue producer bound under `name`, or null. Looked up by name and checked with the
@@ -111,9 +114,14 @@ const missingProducer = new Map<string, AnalyticsSink>();
 export function createAnalyticsSink(
   env: EnvBag,
   routeCtx: RouteContext,
-  opts: { tenant?: string; queueBinding?: string | null } = {},
+  opts: { tenant?: string; queueBinding?: string | null; tenants?: readonly string[] } = {},
 ): AnalyticsSink {
   const tenant = opts.tenant ?? "main";
+  // The collector is PRE-AUTH, so whatever picked `tenant` may be the visitor (a header, a
+  // path). A privileged write into an arbitrary tenant instantiates, migrates and registers a
+  // DO for any name an anonymous client sends, so the tenant must be one the deployment
+  // declared. Anything else is dropped here, before it reaches a store or a queue.
+  if (!isAllowedTenant(tenant, opts.tenants)) return refusedTenantSink(tenant);
   const bindingName = opts.queueBinding === undefined ? ANALYTICS_QUEUE_BINDING : opts.queueBinding;
 
   const producer = bindingName ? queueProducer(env, bindingName) : null;
@@ -131,6 +139,23 @@ export function createAnalyticsSink(
     // disappearing with a 204 on the wire.
     if (!res.ok) throw new Error(`analytics ingest failed: ${res.status}`);
   });
+}
+
+/** Whether `tenant` is one the deployment declared for analytics (default: `main` only). */
+function isAllowedTenant(tenant: unknown, tenants: readonly string[] | undefined): tenant is string {
+  return typeof tenant === "string" && (tenants ?? ["main"]).includes(tenant);
+}
+
+const refusedTenants = new Map<string, AnalyticsSink>();
+/** One warning per refused tenant name, not per request: the name is caller-controlled. */
+function refusedTenantSink(tenant: string): AnalyticsSink {
+  let sink = refusedTenants.get(tenant);
+  if (!sink) {
+    if (refusedTenants.size >= 100) refusedTenants.clear(); // caller-chosen keys: never grow without bound
+    sink = new NoopSink(`events for tenant "${tenant}" were dropped: it is not in the sink's \`tenants\` (default ["main"]).`);
+    refusedTenants.set(tenant, sink);
+  }
+  return sink;
 }
 
 /** A sink that reports why it is doing nothing. For a host with neither a queue nor a
@@ -227,7 +252,7 @@ export function createAnalyticsTasks(opts: ScheduledRollupOpts = {}) {
  * names. One message already carries a whole batch of events, because that is what the
  * producer sends: the batching happens at `QueueSink.write`, so this stays one privileged
  * call per message rather than one per pageview. */
-export function createAnalyticsQueues(opts: { queueName?: string } = {}) {
+export function createAnalyticsQueues(opts: { queueName?: string; tenants?: readonly string[] } = {}) {
   const name = opts.queueName ?? ANALYTICS_QUEUE;
   return {
     [name]: async (ctx: QueueContext, message: QueueMessage) => {
@@ -238,6 +263,12 @@ export function createAnalyticsQueues(opts: { queueName?: string } = {}) {
       // a log names better than a retry loop does.
       if (body?.kind !== "analytics.ingest" || !Array.isArray(body.events)) {
         console.warn("@pramen/analytics: ignoring a message that is not an analytics.ingest batch");
+        return;
+      }
+      // The tenant rides on the message, and a producer may have taken it from a visitor's
+      // request. Acked and dropped, not retried, like any message that is not ours to write.
+      if (!isAllowedTenant(body.tenant, opts.tenants)) {
+        console.warn(`@pramen/analytics: dropping a batch for undeclared tenant ${JSON.stringify(body.tenant)} (see \`tenants\`)`);
         return;
       }
       const res = await ctx.callPrivileged({
@@ -267,6 +298,6 @@ export function createAnalytics(opts: AnalyticsOptions & ScheduledRollupOpts = {
   return {
     handlers: createAnalyticsHandlers(opts),
     tasks: createAnalyticsTasks(opts),
-    queues: createAnalyticsQueues({ queueName: opts.queueName }),
+    queues: createAnalyticsQueues({ queueName: opts.queueName, tenants: opts.tenants }),
   };
 }

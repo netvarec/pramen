@@ -4,7 +4,8 @@
 // Model: an Identity carries one or more roles. A policy grants a (role) access
 // to an (entity, action), optionally restricted by a row-level `where` predicate
 // and/or a set of permitted `fields`. Access is deny-by-default; policies only
-// ever grant. Across the identity's roles, grants OR-merge (any role can allow).
+// ever grant. Across the identity's roles, grants OR-merge (any role can allow), and
+// each grant stays paired: its `fields` apply only to the rows its own `where` admits.
 
 import type { CellValue, JsonValue, Row } from "./infer";
 
@@ -53,7 +54,8 @@ export interface InputMarker {
 /** Reference a request-input field in a policy `where`, resolved per request. The
  * grant matches only the row(s) whose column equals the supplied value, so a
  * caller can read a row only by presenting its unguessable key, without being able
- * to enumerate. An absent input value makes the rule match nothing (safe deny). */
+ * to enumerate. An absent, null or non-scalar input value makes the rule match nothing
+ * (safe deny): a JSON `null` never turns the equality into `IS NULL`. */
 export function $input(path: string): InputMarker {
   return { [INPUT_MARKER]: true, path };
 }
@@ -172,8 +174,20 @@ export type SetValue = CellValue | ((identity: Identity | null) => CellValue);
 export type Validator = (args: { identity: Identity | null; values: Row }) => void;
 
 export interface PolicyRules {
-  /** Row-level predicate (AND of equalities). Omit/empty = all rows. */
+  /** Row-level predicate. Omit/empty = all rows. On read/delete it scopes the rows the
+   * grant covers; on update it gates the row as stored BEFORE the write (the pre-image);
+   * on create it must hold on the candidate row (after `set`), else the insert is a 403.
+   * The grant's `fields` apply only to the rows this `where` admits: another policy that
+   * admits more rows does not lend them these fields. */
   where?: WhereRule;
+  /** A predicate the row must satisfy AFTER the write (create/update only; a read or
+   * delete policy declaring one is rejected by compileAcl). On update it is evaluated on
+   * the post-image (the stored row merged with the patch and `set`) before the UPDATE
+   * runs, so e.g. `{ ownerId: $identity("userId") }` stops an owner handing a row to
+   * someone else. Opt-in, because moving a row OUT of the update scope is sometimes the
+   * point (a soft-delete that sets `deletedAt` under a `deletedAt IS NULL` scope). On
+   * create it is simply AND-ed with `where`. */
+  check?: WhereRule;
   /** Permitted fields. Omit = all fields. On read = projection; on write = settable columns. */
   fields?: string[];
   /** Cell-level (per-row) field grants applied only to rows matching `when`.

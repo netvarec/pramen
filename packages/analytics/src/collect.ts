@@ -25,8 +25,46 @@ const MAX_DURATION_MS = 6 * 60 * 60 * 1000;
 const MAX_CLICKS = 10_000;
 
 /** Refuse a body that is too large to be a beacon. The endpoint is public and unauthenticated;
- * without a cap it is a free write amplifier. */
-const MAX_BODY_BYTES = 16 * 1024;
+ * without a cap it is a free write amplifier. Enforced WHILE reading (`readCapped`), not after:
+ * a check on the buffered text bounds nothing, since the whole body is already in memory. */
+export const MAX_BODY_BYTES = 16 * 1024;
+
+/**
+ * The request body as text, or `null` when it is over `max` bytes, reading at most `max`
+ * bytes plus one chunk. A declared `content-length` over the cap is refused without reading
+ * anything; an undeclared (or under-declared) stream is cancelled the moment it passes the cap.
+ */
+export async function readCapped(request: Request, max: number): Promise<string | null> {
+  const declared = request.headers.get("content-length");
+  if (declared !== null) {
+    const n = Number(declared);
+    if (!Number.isFinite(n) || n > max) {
+      await request.body?.cancel().catch(() => {});
+      return null;
+    }
+  }
+  if (!request.body) return "";
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > max) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let at = 0;
+  for (const c of chunks) {
+    bytes.set(c, at);
+    at += c.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
+}
 /** And a cap on how many events one POST may carry. The tracker sends exactly one. */
 const MAX_EVENTS_PER_REQUEST = 20;
 
@@ -128,8 +166,8 @@ export function collectRoute(opts: CollectOptions): PublicRoute[] {
     // collectors so the two can be compared at all.
     if (isBot(ua)) return new Response(null, { status: 204, headers: CORS });
 
-    const raw = await request.text();
-    if (raw.length > MAX_BODY_BYTES) return new Response(null, { status: 204, headers: CORS });
+    const raw = await readCapped(request, MAX_BODY_BYTES);
+    if (raw === null) return new Response(null, { status: 204, headers: CORS });
 
     const beacons = parseBody(raw);
     if (beacons.length === 0) return new Response(null, { status: 204, headers: CORS });

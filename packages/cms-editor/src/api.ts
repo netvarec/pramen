@@ -99,7 +99,29 @@ export class Api {
    * server refuses the token (401 `unauthorized`); the app wires it to redirect to sign-in.
    * The local `exp` check saves a round trip; the 401 covers what `exp` cannot see (a
    * rotated secret or key, a revoked session). */
-  constructor(private cfg: Config, private onExpired?: () => void) {}
+  constructor(private cfg: Config, private onExpired?: () => void) {
+    this.optionSources = new Promise((resolve) => { this.resolveOptionSources = resolve; });
+  }
+
+  /** The handlers a field may call as its `optionsFrom` / `referenceFrom`, as the server
+   * declared them (`listCmsCapabilities().optionSources`). Pending until it answers. */
+  private optionSources: Promise<ReadonlySet<string>>;
+  private resolveOptionSources!: (names: ReadonlySet<string>) => void;
+
+  /** Record the server's declared option sources. An older server (or a failed probe) is
+   * declared as NONE, never as "anything goes". */
+  declareOptionSources(names: readonly string[] | undefined): void {
+    this.resolveOptionSources(new Set(Array.isArray(names) ? names.filter((n) => typeof n === "string") : []));
+  }
+
+  /** Call a field's option source. A stored schema names it, and editors write schemas, while
+   * this call carries the VIEWER's token: so a name the server did not declare as a source is
+   * refused here, never dispatched, whatever role the viewer holds. */
+  async callOptionSource<T = unknown>(name: string, input?: RpcInput): Promise<T> {
+    const allowed = await this.optionSources;
+    if (!allowed.has(name)) throw new ApiError(t("api.undeclaredOptionSource", { name }), "undeclared_option_source", 0);
+    return this.call<T>(name, input);
+  }
 
   setConfig(cfg: Config): void {
     this.cfg = cfg;

@@ -26,7 +26,7 @@ import type { HomeLanding, MediaSource, MediaTile } from "./slots";
 import { useApp, type Me } from "./app-context";
 import { isRichTextDoc, richTextToPlainText } from "./rich-text";
 import { flattenTerms } from "./furniture";
-import type { AccountCapabilities, AssembledPage, AuditEntry, BlockType, CmsCapabilities, CollectionMeta, ContentType, FieldDefinition, FieldValue, FieldValues, Media, MediaKind, MediaSort, Page, RegionDefinition, RenderedBlock, Taxonomy, Term } from "./types";
+import type { AccountCapabilities, AssembledPage, AuditEntry, BlockType, CmsCapabilities, CollectionMeta, ContentType, FieldDefinition, FieldValue, FieldValues, Media, MediaKind, MediaSort, Page, RegionDefinition, RenderedBlock, RpcInput, Taxonomy, Term } from "./types";
 import { MEDIA_KIND_KEYS, MEDIA_KINDS, MEDIA_SORT_KEYS, MEDIA_SORTS } from "./types";
 
 export type InspectorTab = "settings" | "seo" | "i18n" | "terms" | "audit";
@@ -1146,10 +1146,33 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, backLabe
   const act = async (name: string) => {
     setActing(true);
     try {
-      const r = await api.call<{ page?: Page }>(name, { pageId: page.id });
+      // `approve` is bound to the content on screen: the server publishes only if the page
+      // still hashes to what this preview showed, so an edit made while it sat in review
+      // cannot be approved unseen.
+      const input: RpcInput = { pageId: page.id };
+      if (name === "approve") {
+        // The hash from the last load goes stale with every edit made HERE (inline saves,
+        // optimistic adds and reorders patch the screen without a reload), so the first
+        // approve after one used to 409. Take the server's current page instead, and send ITS
+        // hash only if every value that hash covers equals what this screen holds; any
+        // difference (someone else's edit, or a shape this screen can't vouch for) shows the
+        // fresh page for a new review instead. The server still checks the hash either way.
+        const fresh = await api.getPagePreview(page.slug, page.locale);
+        const unchanged = assembled !== null && matchesScreen(fresh, { ...assembled.page, ...page }, assembled.regions);
+        setAssembled(fresh);
+        if (!unchanged) {
+          setErr(t("pageEditor.approveChanged"));
+          return;
+        }
+        input.expectedContentHash = fresh.contentHash;
+      }
+      const r = await api.call<{ page?: Page }>(name, input);
       if (r?.page) onChange(r.page);
     } catch (e) {
       setErr(errMsg(e));
+      // A refused approval means the content moved: show what is there now, so the next
+      // Approve is a decision about it.
+      if (name === "approve") await reload();
     } finally {
       setActing(false);
     }
@@ -2633,6 +2656,36 @@ function InviteUser({ api, onClose, onInvited, onError }: { api: Api; onClose: (
   );
 }
 
+/** Page keys the server's `contentHash` leaves out (`status`, `translations`), plus
+ * `updatedAt`, a timestamp rather than content. Everything else in the fresh page is compared. */
+const UNHASHED_PAGE_KEYS = new Set(["status", "translations", "updatedAt"]);
+
+/** Does the server's current preview hold exactly what this screen holds, for every value its
+ * `contentHash` covers? Driven by the FRESH side's keys, so nothing the hash includes can go
+ * unchecked: a key this screen lacks reads as null and fails unless the server's is null too.
+ * Regions must match in name, order and count, and every property of every fresh block must
+ * equal the screen's. JSON key order does not matter. Exported for tests. */
+export function matchesScreen(fresh: AssembledPage, screenPage: Record<string, unknown>, screenRegions: Record<string, RenderedBlock[]>): boolean {
+  const stable = (v: unknown): unknown =>
+    Array.isArray(v) ? v.map(stable) : v && typeof v === "object" ? Object.fromEntries(Object.keys(v as object).sort().map((k) => [k, stable((v as Record<string, unknown>)[k])])) : (v ?? null);
+  const eq = (a: unknown, b: unknown) => JSON.stringify(stable(a)) === JSON.stringify(stable(b));
+  for (const [k, v] of Object.entries(fresh.page as unknown as Record<string, unknown>)) {
+    if (!UNHASHED_PAGE_KEYS.has(k) && !eq(v, screenPage[k])) return false;
+  }
+  const names = new Set([...Object.keys(fresh.regions), ...Object.keys(screenRegions)]);
+  for (const name of names) {
+    const a = fresh.regions[name] ?? [];
+    const b = screenRegions[name] ?? [];
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      const fb = a[i] as unknown as Record<string, unknown>;
+      const sb = b[i] as unknown as Record<string, unknown>;
+      for (const [k, v] of Object.entries(fb)) if (!eq(v, sb[k])) return false;
+    }
+  }
+  return true;
+}
+
 // --- settings ----------------------------------------------------------------
 
 export function SettingsView({ api, cfg, me, onSignOut, onError }: { api: Api; cfg: Config; me: Me | null; onSignOut: () => void; onError: (s: string) => void }) {
@@ -2672,9 +2725,10 @@ function MyAccountCard({ api, me, onError, onSignOut }: { api: Api; me: Me | nul
   // Which forms the deployment offers (`createCmsHandlers({ account })`). Neither is drawn
   // until the probe answers: a provider-only deployment refuses both, and showing them for a
   // moment and then taking them away is worse than a beat of nothing.
-  const { cms: { account }, cmsReady } = useApp();
+  const { cms: { account }, cmsReady, adoptToken } = useApp();
   const { showEmail, showPassword, managedBy, managedUrl } = accountForms(account, cmsReady);
   const [email, setEmail] = useState("");
+  const [emailPw, setEmailPw] = useState("");
   const [pwCurrent, setPwCurrent] = useState("");
   const [pwNew, setPwNew] = useState("");
   const [msg, setMsg] = useState("");
@@ -2683,7 +2737,9 @@ function MyAccountCard({ api, me, onError, onSignOut }: { api: Api; me: Me | nul
 
   const saveEmail = async () => {
     setBusy(true);
-    try { await api.call("changeEmail", { email }); setEmail(""); flash(t("settings.emailUpdated")); }
+    // The address is the password-reset channel, so moving it needs the current password on an
+    // account that has one (empty for a passwordless account, which the server accepts).
+    try { await api.call("changeEmail", { email, currentPassword: emailPw }); setEmail(""); setEmailPw(""); flash(t("settings.emailUpdated")); }
     catch (e) { onError(errMsg(e)); }
     finally { setBusy(false); }
   };
@@ -2705,8 +2761,10 @@ function MyAccountCard({ api, me, onError, onSignOut }: { api: Api; me: Me | nul
   const savePassword = async () => {
     setBusy(true);
     try {
-      const res = await api.call<{ firstPassword?: boolean }>("changePassword", { currentPassword: pwCurrent, newPassword: pwNew });
+      const res = await api.call<{ firstPassword?: boolean; token?: string }>("changePassword", { currentPassword: pwCurrent, newPassword: pwNew });
       setPwCurrent(""); setPwNew("");
+      // The change retired this session too; carry on with the one the server just minted.
+      if (res?.token) adoptToken(res.token);
       flash(res?.firstPassword ? t("settings.passwordSet") : t("settings.passwordUpdated"));
     }
     catch (e) { onError(errMsg(e)); }
@@ -2738,6 +2796,14 @@ function MyAccountCard({ api, me, onError, onSignOut }: { api: Api; me: Me | nul
         {showEmail ? (
           <>
             <Input label={t("settings.changeEmail")} type="email" value={email} onChange={setEmail} placeholder={t("settings.emailPlaceholder")} />
+            <Input
+              label={t("settings.currentPassword")}
+              description={t("settings.emailPasswordHelp")}
+              type="password"
+              value={emailPw}
+              onChange={setEmailPw}
+              autoComplete="current-password"
+            />
             <Button className="w-full" onPress={saveEmail} isDisabled={busy || !email}>{t("settings.saveEmail")}</Button>
           </>
         ) : null}

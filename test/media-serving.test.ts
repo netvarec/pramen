@@ -139,10 +139,14 @@ describe("byte ranges", () => {
     expect(calls).toEqual({ get: 1, head: 0 });
   });
 
-  // A shared cache keyed by URL alone would otherwise keep two bytes as the object for a year.
-  test("a 206 is private, a whole object is publicly immutable", async () => {
+  // A shared cache keyed by URL alone would otherwise keep two bytes as the object. A whole
+  // object is public but BOUNDED, never `immutable`: `purgeMedia` is a takedown, and a
+  // year-long immutable copy in a shared cache would outlive it.
+  test("a 206 is private, a whole object is publicly cached for a bounded time", async () => {
     expect((await serve({ range: "bytes=0-1" })).headers.get("cache-control")).toStartWith("private");
-    expect((await serve()).headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
+    const cc = (await serve()).headers.get("cache-control")!;
+    expect(cc).toBe("public, max-age=3600");
+    expect(cc).not.toContain("immutable");
   });
 
   test("a huge end is the rest of the object, a huge start is 416", async () => {

@@ -13,6 +13,16 @@
 import type { Identity } from "./sdk/acl";
 import type { JsonObject } from "./sdk/infer";
 
+// `iat` rides the identity like `exp`: the not-before revocation (`setSessionNotBefore`)
+// compares it per request and per socket frame. Declared here by augmentation so the
+// Identity type in sdk/acl.ts names it without this file owning that one.
+declare module "./sdk/acl" {
+  interface Identity {
+    /** The verified token's `iat` (epoch seconds), when present. */
+    iat?: number;
+  }
+}
+
 const STANDARD_CLAIMS = new Set(["exp", "iat", "nbf", "iss", "aud", "jti", "sub", "role", "roles", "userId"]);
 
 function b64urlToBytes(s: string): Uint8Array {
@@ -41,9 +51,12 @@ export interface VerifyStrategy {
 /** Verify a signature over `${header}.${payload}` for the parsed header. */
 type SignatureVerifier = (signingInput: string, signature: Uint8Array, header: JwtHeader) => Promise<boolean>;
 
-/** Optional, opt-in claim validation layered on top of signature + exp/nbf. All
- * default OFF (unset) so existing tokens keep verifying; a deployment turns these on
- * to tighten what it accepts. Shared by every strategy (they all run verifyJwt). */
+/** Claim validation layered on top of signature + exp/nbf. Shared by every strategy (they
+ * all run verifyJwt). Opt-in at THIS level, because a strategy is also used to verify
+ * tokens that are not request sessions (OIDC ID tokens, which pass their own aud/iss).
+ * The Worker is stricter: with `JWKS_URL` it refuses to serve unless both `AUTH_AUDIENCE`
+ * and `AUTH_ISSUER` are set (see `misconfiguration` in worker.ts), since a key set alone
+ * does not bind a token to this service. */
 export interface VerifyOptions {
   /** Reject a token that has no numeric `exp` (RFC 7519 leaves exp optional; a strict
    * deployment can require it so no non-expiring token is ever accepted). */
@@ -263,6 +276,8 @@ function toIdentity(claims: JsonObject): Identity {
   // Carry `exp` (a STANDARD claim, so the passthrough loop skips it) so a WebSocket can
   // re-check expiry per message: its identity is fixed at upgrade and never re-verified.
   if (typeof claims.exp === "number") identity.exp = claims.exp;
+  // `iat` likewise, for the not-before check (a reset revokes tokens issued before it).
+  if (typeof claims.iat === "number") identity.iat = claims.iat;
   for (const [k, v] of Object.entries(claims)) {
     if (!STANDARD_CLAIMS.has(k)) identity[k] = v; // carry custom claims (tier, …)
   }

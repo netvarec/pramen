@@ -184,8 +184,10 @@ The outbox is **substrate-agnostic** (it rides the same `Driver` as your data), 
 the wake-up differs by store:
 
 - **Durable Object store (default)**: the DO **self-drains via an alarm** scheduled
-  for the next due task. Nothing to wire; a backed-off retry re-arms its own alarm.
-- **D1 store** (`x-pramen-store: d1`, no DO/alarm): drain via a **Cron Trigger**.
+  for the next due task. Nothing to wire; a backed-off retry re-arms its own alarm, and
+  an enqueue never pushes an earlier pending alarm back (a steady stream of enqueues
+  cannot postpone the drain).
+- **D1 store** (`PRAMEN_STORE=d1`, no DO/alarm): drain via a **Cron Trigger**.
   `createPramen(app)` returns a `scheduled` handler for exactly this:
 
   ```ts

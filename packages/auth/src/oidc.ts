@@ -30,7 +30,7 @@
 // and the app shows its ordinary sign-in. The same goes for OUR side failing after the
 // provider said yes (a deactivated account, an unverified email, a failed exchange): every
 // failure past the state check of a silent attempt redirects, with a pramen code
-// (`account_deactivated`, `email_not_verified`, `invalid_token`, `server_error`). A provider
+// (`account_deactivated`, `account_conflict`, `email_not_verified`, `invalid_token`, `server_error`). A provider
 // code outside the four that `prompt=none` exists to produce is redirected too, but LOGGED,
 // since it means a misconfigured client or an outage. The app must try silently at most ONCE per visit
 // (a `sessionStorage` flag) and never when the fragment already carries `error=`: otherwise
@@ -42,7 +42,8 @@ import type { PublicRoute, RouteContext } from "@pramen/server/worker";
 // The package's OWN HS256 signer. `@pramen/server`'s `signToken` mints the opaque
 // file/preview token, which the request verifier does not accept as a session.
 import { signToken } from "./index.js";
-import { tableClaim, usersTable } from "./users-table.js";
+import { declareSessionTtl, sessionTtlOf } from "./session-ttl.js";
+import { adoptableBy, tableClaim, usersTable } from "./users-table.js";
 
 /** An OpenID Provider's discovery document: the fields this flow uses. */
 interface Discovery {
@@ -112,6 +113,8 @@ export interface OidcOptions {
    * change, and to the above, but it will not link up with accounts created another way.
    */
   accountKey?: "email" | "sub";
+  /** TTL of the pramen session the callback mints, in seconds. Default AUTH_SESSION_TTL_SECONDS,
+   * else 3600 (1h). Revocation entries are sized to the longest TTL any factory declares. */
   sessionTtlSeconds?: number;
   /** Where the flow is mounted. Defaults `/auth/oidc/start` and `/auth/oidc/callback`. */
   startPath?: string;
@@ -297,7 +300,7 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
   const startPath = opts.startPath ?? "/auth/oidc/start";
   const callbackPath = opts.callbackPath ?? "/auth/oidc/callback";
   const stateTtl = opts.stateTtlSeconds ?? 600;
-  const sessionTtl = opts.sessionTtlSeconds ?? 3600;
+  const configuredTtl = declareSessionTtl(opts.sessionTtlSeconds);
 
   /** `successRedirect`, carrying the path the user was headed for. Only ever a PATH: an
    * absolute or protocol-relative `returnTo` would make this an open redirect. Checked again
@@ -498,11 +501,31 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
         }
         const res = await ctx.callPrivileged({
           name: OIDC_UPSERT_HANDLER,
-          input: { table, username, email: email || null, roles: mapped ? [...mapped] : null, defaultRoles: [...defaultRoles], profile },
+          input: {
+            table,
+            username,
+            // Only an address the provider VERIFIED is ever stored. In email mode an unverified
+            // one was refused above; in `sub` mode it used to be stored AND stamped verified,
+            // squatting the unique column against the address's real owner.
+            email: email && emailVerified ? email : null,
+            emailVerified: !!email && emailVerified,
+            // The username IS the proven address, so an existing row is adopted only on the
+            // terms of adoptableBy.
+            emailKeyed: accountKey === "email",
+            roles: mapped ? [...mapped] : null,
+            defaultRoles: [...defaultRoles],
+            profile,
+          },
           roles: [OIDC_SYSTEM_ROLE],
         });
-        const upserted = (await res.json().catch(() => ({}))) as { ok?: boolean; result?: { roles?: string[]; active?: boolean } };
+        const upserted = (await res.json().catch(() => ({}))) as {
+          ok?: boolean;
+          result?: { roles?: string[]; active?: boolean; refused?: string; store?: string };
+        };
         if (upserted.ok !== true || !upserted.result) return fail(500, "Sign-in could not be completed.", "server_error");
+        if (upserted.result.refused === "account_unverified") {
+          return fail(409, "An account with a password already uses this address without having confirmed it. Sign in with its password, or ask an administrator.", "account_conflict");
+        }
         // A deactivated account must not be revived by logging in through the IdP: the
         // provider knows nothing about pramen's `active` flag.
         if (upserted.result.active === false) return fail(403, "This account is deactivated.", "account_deactivated");
@@ -512,7 +535,12 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
           console.error("pramen/auth: OIDC callback cannot mint a session, because AUTH_SECRET is not configured");
           return fail(500, "Sign-in could not be completed.", "server_error");
         }
-        const token = await signToken({ sub: username, roles: upserted.result.roles ?? [], ...tableClaim(users) }, secret, { ttlSeconds: sessionTtl });
+        // Stamped with the store the upsert ran on, which is the users table this sub names.
+        const token = await signToken(
+          { sub: username, roles: upserted.result.roles ?? [], ...tableClaim(users, upserted.result.store) },
+          secret,
+          { ttlSeconds: sessionTtlOf(env as EnvBag, configuredTtl) },
+        );
         // With `endSession`, the ID token rides along so the browser can hand it back to the
         // logout route. Same fragment, so it stays out of logs and `Referer` like the session.
         return redirect(`token=${encodeURIComponent(token)}${opts.endSession ? `&id_token=${encodeURIComponent(tokens.id_token)}` : ""}`);
@@ -541,7 +569,7 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
   // `sessionTtl`, so a token older than that (plus clock skew) belongs to a session that is
   // already gone. Without the bound, an `exp`-ignoring check would make every ID token ever
   // issued a permanent "sign this person out" capability.
-  const maxTokenAge = sessionTtl + 300;
+  const maxTokenAge = (env: EnvBag): number => sessionTtlOf(env, configuredTtl) + 300;
 
   const logout: PublicRoute = {
     // POST, not GET: the ID token is in the BODY, so it never lands in an access log or a
@@ -549,7 +577,7 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
     // because RP-Initiated Logout defines it that way, and only server to server.
     method: "POST",
     path: opts.logoutPath ?? "/auth/oidc/logout",
-    handler: async (request: Request) => {
+    handler: async (request: Request, env: EnvBag) => {
       // Every answer but `signed_out` is `ok: false`: the page must never read a failure as
       // "the provider session is gone", or it would hand the user to a sign-in page that
       // silently signs them straight back in while claiming they were signed out.
@@ -565,7 +593,7 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
         const claims = await hintVerifier(doc.jwks_uri, doc.issuer).verify(idToken);
         if (!claims) return json(400, { ok: false, error: "invalid_token" });
         const iat = typeof claims.iat === "number" ? claims.iat : null;
-        if (iat === null || Math.floor(Date.now() / 1000) - iat > maxTokenAge) return json(400, { ok: false, error: "stale_token" });
+        if (iat === null || Math.floor(Date.now() / 1000) - iat > maxTokenAge(env)) return json(400, { ok: false, error: "stale_token" });
         if (!doc.end_session_endpoint) return json(501, { ok: false, error: "unsupported" });
 
         const url = new URL(doc.end_session_endpoint);
@@ -616,31 +644,62 @@ export const OIDC_SYSTEM_ROLE = "__oidc_system";
  * cannot be called over `/rpc` by anyone, admins included. */
 export const oidcHandlers: HandlerMap = {
   [OIDC_UPSERT_HANDLER]: mutation(
-    async (ctx: HandlerContext, input: { table: string; username: string; email: string | null; roles: string[] | null; defaultRoles: string[]; profile?: JsonObject | null }) => {
+    async (
+      ctx: HandlerContext,
+      input: {
+        table: string;
+        username: string;
+        email: string | null;
+        emailVerified?: boolean;
+        emailKeyed?: boolean;
+        roles: string[] | null;
+        defaultRoles: string[];
+        profile?: JsonObject | null;
+      },
+    ) => {
+      const t = usersTable(input.table).sql;
       // `undefined` from a caller that predates the profile (it is optional in the input) is
       // treated as "nothing to say", which on this path means clearing it, the same as `null`.
       const profile = input.profile ? JSON.stringify(input.profile) : null;
-      const rows = (await ctx.db.exec(`SELECT username, roles, active FROM ${usersTable(input.table).sql} WHERE username = ? LIMIT 1`, input.username)) as Row[];
+      const rows = (await ctx.db.exec(
+        `SELECT username, roles, active, passwordHash, email, emailVerified FROM ${t} WHERE username = ? LIMIT 1`,
+        input.username,
+      )) as Row[];
       const existing = rows[0];
+      // Which store's users table this ran against: the session the callback mints must name it.
+      const store = ctx.store;
       if (!existing) {
         // First login. `passwordHash` is empty: the column is NOT NULL in `authSchema` and
         // an empty hash never verifies, which is exactly how a magic-link user is created.
         const roles = input.roles ?? input.defaultRoles;
+        // Only a provider-verified address is stored, and it wins over another row's
+        // UNVERIFIED claim to it: signup and changeEmail let anyone write any address into
+        // the unique column, and the INSERT then failed on it, locking the address's owner out
+        // of every OIDC sign-in. A row that VERIFIED it keeps it; this one is stored without.
+        let email = input.emailVerified === true ? input.email : null;
+        if (email) {
+          await ctx.db.exec(`UPDATE ${t} SET email = NULL WHERE email = ? AND emailVerified IS NULL AND username != ?`, email, input.username);
+          const held = await ctx.db.exec(`SELECT 1 FROM ${t} WHERE email = ? LIMIT 1`, email);
+          if (held.length > 0) email = null;
+        }
         await ctx.db.exec(
-          `INSERT INTO ${usersTable(input.table).sql} (username, passwordHash, roles, email, emailVerified, active, createdAt, profile) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO ${t} (username, passwordHash, roles, email, emailVerified, active, createdAt, profile) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
           input.username,
           "",
           JSON.stringify(roles),
-          input.email,
-          // The IdP asserted it (the route refuses an unverified address when keying on
-          // email), so it is verified here in a way a self-service signup never is.
-          input.email ? Date.now() : null,
+          email,
+          // The IdP asserted it, so it is verified here in a way a self-service signup never is.
+          email ? Date.now() : null,
           1,
           Date.now(),
           profile,
         );
-        return { roles, active: true };
+        return { roles, active: true, store };
       }
+      // An email-keyed sign-in names the row by an address the provider proved, so a row whose
+      // password was set without proving it is NOT this person's (see adoptableBy). Refused, and
+      // nothing written: an admin resolves it by deleting the row.
+      if (input.emailKeyed && !adoptableBy(existing, input.username)) return { refused: "account_unverified", store };
       // Returning user. Roles the IdP asserts overwrite the stored ones: that is what
       // "the IdP is authoritative" means, including a role being REMOVED there. With no
       // `mapRoles`, the stored roles stand and pramen owns them.
@@ -648,12 +707,12 @@ export const oidcHandlers: HandlerMap = {
       const roles = input.roles ?? stored;
       const active = existing.active !== 0 && existing.active !== false;
       if (input.roles && JSON.stringify(roles) !== JSON.stringify(stored)) {
-        await ctx.db.exec(`UPDATE ${usersTable(input.table).sql} SET roles = ? WHERE username = ?`, JSON.stringify(roles), input.username);
+        await ctx.db.exec(`UPDATE ${t} SET roles = ? WHERE username = ?`, JSON.stringify(roles), input.username);
       }
       // The provider is authoritative for the profile too: every sign-in rewrites it, so a
       // changed name or picture shows up at the next sign-in and a removed one disappears.
-      await ctx.db.exec(`UPDATE ${usersTable(input.table).sql} SET profile = ? WHERE username = ?`, profile, input.username);
-      return { roles, active };
+      await ctx.db.exec(`UPDATE ${t} SET profile = ? WHERE username = ?`, profile, input.username);
+      return { roles, active, store };
     },
     // Gated on a role NO issued token can carry, because `callPrivileged` does not bypass
     // this check: it sends an ordinary identity (`{ roles: [...] }`) through the same

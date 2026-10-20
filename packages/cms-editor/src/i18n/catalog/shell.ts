@@ -117,6 +117,8 @@ export const en = {
   /** Appended to the server's error on a 403. Starts with a space. */
   "api.forbiddenHint": " (check your token has an editor/reviewer role)",
   "api.uploadFailed": "upload failed (HTTP {status})",
+  /** `{name}` is the handler a field schema named as its option source. */
+  "api.undeclaredOptionSource": "This field's source '{name}' is not declared by the server (optionSources), so it was not called.",
 };
 
 export const cs: Translation<typeof en> = {
@@ -183,4 +185,5 @@ export const cs: Translation<typeof en> = {
   "api.requestFailed": "požadavek selhal (HTTP {status})",
   "api.forbiddenHint": " (ověřte, že má váš token roli editor nebo reviewer)",
   "api.uploadFailed": "nahrání selhalo (HTTP {status})",
+  "api.undeclaredOptionSource": "Zdroj tohoto pole „{name}“ server nedeklaruje (optionSources), proto nebyl zavolán.",
 };

@@ -65,13 +65,14 @@ export async function runAuthEmail(base: string): Promise<void> {
   // --- changeEmail invalidates verification (clears emailVerified) ---
   const newEmail = "moved@example.com";
   // request a fresh verify token, then change the email before redeeming it
-  await call("changeEmail", { email: "still-old@example.com" }, userToken); // sets a (now-old) address, clears verified
+  // changeEmail on a password account needs the current password (the email is the reset channel)
+  await call("changeEmail", { email: "still-old@example.com", currentPassword: password }, userToken); // sets a (now-old) address, clears verified
   const req2 = await call("requestEmailVerification", {}, userToken);
   assert(req2.body.ok, "auth-email: can request verification again after changeEmail cleared the flag");
   await drain(base, admin);
   const staleToken = (await call("__verifyInbox", { email: "still-old@example.com" }, admin)).body.result?.token as string;
   // change the email again; the stale token was minted for the previous address
-  await call("changeEmail", { email: newEmail }, userToken);
+  await call("changeEmail", { email: newEmail, currentPassword: password }, userToken);
   const staleVerify = await call("verifyEmail", { token: staleToken });
   assert(staleVerify.status === 401, "auth-email: a verify token for a since-changed address is rejected (401)");
 

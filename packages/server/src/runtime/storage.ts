@@ -303,6 +303,9 @@ export function createFiles(cfg: FilesConfig): Files {
     async signUpload(opts) {
       if (!isUsableFilesSecret(cfg.secret)) throw filesUnconfigured();
       const ct = opts.contentType || "application/octet-stream";
+      // Signed into the token and served back verbatim, so it must be ONE MIME type: a list
+      // or a malformed value is resolved by the browser, not by `isActiveType`.
+      if (!isSingleMimeType(ct)) throw new BadRequest("contentType must be a single MIME type");
       const seg = opts.prefix ? `${safePrefix(opts.prefix)}/` : "";
       const key = `${prefix}${seg}${randomKeySuffix()}`;
       const exp = Math.floor(Date.now() / 1000) + (opts.expiresIn ?? 900);
@@ -436,7 +439,16 @@ const MEDIA_KEY = /^[^/]+\/media\/[^/][^\0]*$/;
  * `localStorage` there. So without this, "editor uploads an SVG, admin clicks Preview" is
  * an editor-to-admin token theft, and `setUserRoles` is admin-gated precisely because those
  * roles are not meant to be equivalent. */
-const ACTIVE_TYPES = new Set(["text/html", "application/xhtml+xml", "image/svg+xml", "text/xml", "application/xml"]);
+const ACTIVE_TYPES = new Set([
+  "text/html",
+  "application/xhtml+xml",
+  "image/svg+xml",
+  "text/xml",
+  "application/xml",
+  // XSLT runs as a document (and transforms into HTML) when opened top-level.
+  "text/xsl",
+  "application/xslt+xml",
+]);
 
 /** `sandbox` with no tokens is the maximally restrictive form: the response becomes an
  * opaque-origin document with scripts disabled, so it can neither run code nor reach this
@@ -448,11 +460,49 @@ const ACTIVE_TYPES = new Set(["text/html", "application/xhtml+xml", "image/svg+x
  * was never executable. An SVG still RENDERS under this; only its script does not run. */
 const ACTIVE_TYPE_CSP = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
 
-/** Whether a stored content type needs the sandbox above. Parameters after `;` (a charset)
- * are stripped, so `text/html; charset=utf-8` is still html. */
+/** RFC 9110 `token`: the characters a MIME type and subtype are made of. */
+const MIME_TOKEN = "[!#$%&'*+.^_`|~0-9A-Za-z-]+";
+const MIME_ESSENCE = new RegExp(`^(${MIME_TOKEN})/(${MIME_TOKEN})$`);
+/** One MIME type with optional `; name=value` parameters, and no comma: what `signUpload`
+ * accepts. A list (`text/plain, text/html`) is refused rather than parsed, since the browser
+ * resolves it by its own rules and the store keeps it verbatim. */
+const SINGLE_MIME = new RegExp(
+  `^\\s*${MIME_TOKEN}/${MIME_TOKEN}\\s*(;\\s*${MIME_TOKEN}\\s*=\\s*(${MIME_TOKEN}|"[^"\\\\\\r\\n]*")\\s*)*$`,
+);
+
+/** A content type a stored object may be declared with: one MIME type, no list, bounded. */
+export function isSingleMimeType(contentType: string): boolean {
+  return contentType.length <= 255 && SINGLE_MIME.test(contentType);
+}
+
+function isActiveEssence(essence: string): boolean {
+  if (ACTIVE_TYPES.has(essence)) return true;
+  const m = MIME_ESSENCE.exec(essence);
+  // Any `+xml` subtype (rss, atom, mathml, vnd.*) is an XML document, which a browser
+  // renders as one and which can carry XHTML-namespaced script. `multipart/*` covers
+  // `x-mixed-replace`, whose parts are documents of their own.
+  return !!m && (m[2]!.endsWith("+xml") || m[1] === "multipart");
+}
+
+/** Whether a stored content type needs the sandbox above. Fails toward the sandbox:
+ *
+ * - Parameters after `;` (a charset) are stripped, so `text/html; charset=utf-8` is html.
+ * - A comma-separated value is a LIST, which Fetch's "extract a MIME type" resolves to its
+ *   last valid member (`image/svg+xml,` is svg). Rather than replay that algorithm, any
+ *   member that is active makes the whole value active.
+ * - A value that does not parse as a MIME type at all is active too: what a browser does
+ *   with it is not ours to predict, and the sandbox costs an inert file nothing. */
 export function isActiveType(contentType: string | null | undefined): boolean {
-  const base = (contentType ?? "").split(";")[0]?.trim().toLowerCase() ?? "";
-  return ACTIVE_TYPES.has(base);
+  const raw = (contentType ?? "").trim();
+  if (raw === "") return false;
+  let parsed = false;
+  for (const member of raw.split(",")) {
+    const essence = member.split(";")[0]?.trim().toLowerCase() ?? "";
+    if (essence === "") continue;
+    if (isActiveEssence(essence)) return true;
+    if (MIME_ESSENCE.test(essence)) parsed = true;
+  }
+  return !parsed;
 }
 
 /**
@@ -591,6 +641,10 @@ async function serveObject(
   return new Response(obj.body, { status: 200, headers });
 }
 
+/** How long (seconds) a `/media/` answer may be cached, by a browser or a shared cache. This
+ * bounds how long a purged file can outlive its takedown in a cache the origin cannot reach. */
+export const MEDIA_MAX_AGE = 3600;
+
 /** Serve a PUBLIC media blob by key: `GET /media/<key>`. Cache-friendly + nosniff, no
  * auth (published-site assets are public; the random tenant-scoped key is the capability).
  * Returns a Response for any `/media/*` path, or null if not a media request. Restricted
@@ -619,10 +673,14 @@ export async function handleMediaRequest(
     return await serveObject(request, opts.adapter, key, {
       headers,
       notFound: () => fileError(404, "not_found", "media not found"),
-      // Blobs are immutable (random keys), so a whole one caches hard. A 206 is `private`: a
-      // shared cache keyed by URL alone would otherwise keep two bytes as the object for a
-      // year (and the Workers Cache API throws on `put` of a 206).
-      cache: { whole: "public, max-age=31536000, immutable", partial: "private, max-age=31536000, immutable" },
+      // Keys are random, but the blob is NOT immutable in lifecycle terms: `purgeMedia` is
+      // the takedown path and invalidates no cache. So a whole answer is cached for a bounded
+      // MEDIA_MAX_AGE, never `immutable` for a year, which would let any shared cache in
+      // front of /media (Image Resizing variants, a Cache Rule, a CDN) keep serving a purged
+      // file long after the origin 404s. A 206 is `private`: a shared cache keyed by URL
+      // alone would otherwise keep two bytes as the object (and the Workers Cache API throws
+      // on `put` of a 206).
+      cache: { whole: `public, max-age=${MEDIA_MAX_AGE}`, partial: `private, max-age=${MEDIA_MAX_AGE}` },
     });
   } catch (err) {
     // A public, anonymous route: a store failure is a JSON 500 and a log line, not an

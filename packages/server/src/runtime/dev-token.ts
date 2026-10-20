@@ -12,6 +12,10 @@
 /** The scaffolded oblaka.ts dev secret. Used only when AUTH_SECRET is unset. */
 export const DEV_SECRET = "dev-secret-change-me";
 
+/** The scaffolded oblaka.ts dev FILES_SECRET. Public like DEV_SECRET: the Worker refuses to
+ * serve a non-local host while either one is configured (see `misconfiguration` in worker.ts). */
+export const DEV_FILES_SECRET = "dev-files-secret-change-me";
+
 function bytesToB64url(bytes: Uint8Array): string {
   let bin = "";
   for (const b of bytes) bin += String.fromCharCode(b);

@@ -143,6 +143,17 @@ than "unknown country".
    that is one in-process SQLite insert, which is genuinely fine at small scale.
 3. **`NoopSink`**: neither is available. Drops events and says so once.
 
+**The tenant is server-determined and declared.** `/collect` is pre-auth, so a tenant taken
+from the visitor's request (a header, a path) let any anonymous client instantiate, migrate and
+register a tenant Durable Object per name it sent. `createAnalyticsSink(env, ctx, { tenant,
+tenants })` drops events for a tenant outside `tenants` (default `["main"]`), and the queue
+consumer (`createAnalyticsQueues({ tenants })`, or `createAnalytics({ tenants })`) acks and
+drops a batch for any other tenant, since a producer may have taken the name from a request.
+A multi-tenant deployment maps the request's HOST to a known tenant and lists them all.
+
+The beacon body is capped at 16 KiB WHILE it is read: a declared `content-length` over the cap
+is refused without reading, and an undeclared stream is cancelled the moment it passes it.
+
 The privileged ingest handler is gated on `INGEST_ROLE` (`__analytics_ingest`). The `__`
 prefix is load-bearing, not decorative: `@pramen/server` strips such roles from every
 verified token, so the only way to present one is to be the Worker. `auth: []` does **not**

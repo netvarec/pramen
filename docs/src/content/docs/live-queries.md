@@ -37,15 +37,21 @@ tenant via the query string (`?token=...&tenant=...`); the Worker folds them int
 headers for the rest of the flow. The `@pramen/client` library handles this for you:
 see [Clients](/docs/client).
 
-## Token expiry
+## Token expiry and revocation
 
 The token is verified **once, at upgrade**, and the socket's identity is fixed from then
 on. So that a long-lived (or hibernating) connection can't outlive its session, the DO
 re-checks the token's `exp` on every message: an expired socket gets an `unauthorized`
 error frame, is closed with code **4401**, and stops receiving pushes.
 
+Revocation is re-checked the same way. Revoking a user (deactivate/delete, or a
+`setSessionNotBefore` newer than the token's `iat`) blocks the upgrade, and an
+**already-open** socket is refused on its next frame (`unauthorized`, "session revoked")
+and closed **4401** before it receives another push. Waiting for the client to reconnect
+would not be enough: the revoked client is the one that decides when to reconnect. The
+DO reads the same KV entries as the Worker (one lookup per frame, and one per user per
+broadcast), so the usual KV propagation delay applies.
+
 Treat 4401 as "re-authenticate, then reconnect". Calling `setToken` on
 `@pramen/client` with a token from
 [`refreshSession`](/docs/auth-and-tenancy#silent-refresh) resets the socket for you.
-Revoking a user (deactivate/delete) blocks the *upgrade* via the denylist, so a
-revoked client is cut off as soon as it reconnects.

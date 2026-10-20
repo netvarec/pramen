@@ -19,7 +19,8 @@ import { compileAcl } from "./runtime/acl";
 import { Db } from "./runtime/db";
 import { D1Driver, type D1SessionStart, type Driver } from "./runtime/driver";
 import { BadRequest, Forbidden, toResponse } from "./runtime/errors";
-import { Kv, isSessionDenied } from "./runtime/kv";
+import { Kv, isIdentityRevoked } from "./runtime/kv";
+import { DEV_FILES_SECRET, DEV_SECRET } from "./runtime/dev-token";
 import { listDOs, partitionDoName } from "./runtime/registry";
 import { createFiles, handleFileRequest, handleMediaRequest, R2Adapter } from "./runtime/storage";
 import type { Identity } from "./sdk/acl";
@@ -40,21 +41,26 @@ export interface Env {
    * production via `wrangler secret put AUTH_SECRET`. Ignored if JWKS_URL is set. */
   AUTH_SECRET: string;
   /** Optional: a JWKS endpoint. When set, tokens are verified as RS256 against the
-   * fetched public keys (HmacStrategy/AUTH_SECRET is bypassed). */
+   * fetched public keys (HmacStrategy/AUTH_SECRET is bypassed). REQUIRES `AUTH_AUDIENCE`
+   * and `AUTH_ISSUER`: without them the Worker answers every request 500 (see
+   * `misconfiguration`), because a key set alone accepts a token minted for any other
+   * client or directory of the same IdP, roles claim included. */
   JWKS_URL?: string;
   /** "true" to REJECT any bearer token with no numeric `exp` claim. Off by default
    * (a token without exp is accepted) so existing issuers keep working; turn it on to
    * refuse non-expiring tokens. Applies to both the HS256 and JWKS strategies. */
   AUTH_REQUIRE_EXP?: string;
-  /** Optional required audience. When set, a token's `aud` (string or array) must
-   * contain this value or the token is rejected. Unset ⇒ `aud` is not checked. */
+  /** Required audience. When set, a token's `aud` (string or array) must contain this
+   * value or the token is rejected. Mandatory with `JWKS_URL`; optional for HS256 (a
+   * shared secret is already specific to this service). */
   AUTH_AUDIENCE?: string;
-  /** Optional required issuer. When set, a token's `iss` must equal this exactly.
-   * Unset ⇒ `iss` is not checked. */
+  /** Required issuer. When set, a token's `iss` must equal this exactly. Mandatory with
+   * `JWKS_URL`; optional for HS256. */
   AUTH_ISSUER?: string;
   /** D1 binding. Enables the "Worker + D1 (no DO)" path: the same schema/ACL/read
-   * engine over D1 instead of a Durable Object. Selected per-request via
-   * `x-pramen-store: d1`. RPC only (live queries need the DO). */
+   * engine over D1 instead of a Durable Object. Selected by `PRAMEN_STORE=d1` (or, only
+   * with `PRAMEN_STORE_HEADER=allow`, per request via `x-pramen-store: d1`). RPC only
+   * (live queries need the DO). */
   DB?: D1Database;
   /** R2 bucket backing file storage (ctx.files + the /files/* route). */
   FILES: R2Bucket;
@@ -66,11 +72,22 @@ export interface Env {
   CORS_ORIGINS?: string;
   /** "true" to apply destructive schema migrations on the D1 path. Off by default. */
   PRAMEN_ALLOW_DESTRUCTIVE?: string;
-  /** Default store for /rpc when no `x-pramen-store` header is sent: `"d1"` runs the
-   * Worker+D1 path by default (requires DB bound); `"do"` (the default) routes to the
-   * per-tenant Durable Object. The header still overrides per-request. /live always
-   * needs the DO regardless of this setting. */
+  /** The store /rpc runs on: `"d1"` runs the Worker+D1 path (requires DB bound); `"do"`
+   * (the default) routes to the per-tenant Durable Object. /live always needs the DO
+   * regardless of this setting. */
   PRAMEN_STORE?: string;
+  /** `"allow"` lets a request pick its store with `x-pramen-store: d1|do`, overriding
+   * `PRAMEN_STORE`. OFF by default, and meant for local development and tests only: each
+   * store has its own users table while both sign sessions with the same secret, so a
+   * caller choosing the store can sign up a username on the store where it is free and
+   * then have the other store reissue that username's roles. */
+  PRAMEN_STORE_HEADER?: string;
+  /** `"true"` lets the dev-only values serve on private-network hosts too (the dev server
+   * opened from a phone). Set it by hand for that; never in a deployed env. */
+  PRAMEN_DEV_ALLOW_LAN?: string;
+  /** `"true"` seeds the demo account in local dev (example app). The Worker refuses to
+   * serve a non-local host while it is set (see `misconfiguration`). */
+  PRAMEN_DEV_SEED?: string;
   /** "true" to allow the shared D1 store to serve a non-`main` tenant. OFF by default:
    * the D1 proof uses ONE database with no tenant column, so multiple tenants would
    * commingle. Only set this if the app genuinely single-tenants that D1 (or has added
@@ -92,14 +109,86 @@ const D1_BOOKMARK_HEADER = "x-pramen-d1-bookmark";
 
 /** Decide whether an /rpc request runs on the D1 store. **Live queries ALWAYS use the
  * DO** (they need a single writer + a socket host), regardless of header or default,
- * so enabling `PRAMEN_STORE=d1` never silently breaks `/live`. Otherwise an explicit
- * `x-pramen-store` header wins (`d1`/`do`), then the `PRAMEN_STORE` default. Pure +
- * exported for unit testing. */
-export function useD1Store(opts: { storeHeader: string | null; isLive: boolean; defaultStore: string | undefined }): boolean {
+ * so enabling `PRAMEN_STORE=d1` never silently breaks `/live`. Otherwise the operator's
+ * `PRAMEN_STORE` decides. The `x-pramen-store` header (`d1`/`do`) overrides it only when
+ * `allowHeader` is set (`PRAMEN_STORE_HEADER=allow`): each store keeps its own users
+ * table and a session names its user by a bare username, so a caller who could pick the
+ * store could sign up a victim's username on the store where it is free and get the
+ * victim's roles reissued by the other one. Pure + exported for unit testing. */
+export function useD1Store(opts: { storeHeader: string | null; isLive: boolean; defaultStore: string | undefined; allowHeader?: boolean }): boolean {
   if (opts.isLive) return false; // live is DO-only, never the D1 path
-  if (opts.storeHeader === "d1") return true;
-  if (opts.storeHeader === "do") return false;
+  if (opts.allowHeader) {
+    if (opts.storeHeader === "d1") return true;
+    if (opts.storeHeader === "do") return false;
+  }
   return opts.defaultStore === "d1";
+}
+
+/** `useD1Store` for a request, with the opt-in read off env. Every caller-facing entry that
+ * picks a store goes through this, so /rpc and a route's `callPrivileged` cannot disagree. */
+const requestUsesD1 = (request: Request, env: Env, isLive: boolean): boolean =>
+  useD1Store({
+    storeHeader: request.headers.get("x-pramen-store"),
+    isLive,
+    defaultStore: env.PRAMEN_STORE,
+    allowHeader: env.PRAMEN_STORE_HEADER === "allow",
+  });
+
+/** Is `hostname` (a URL's, so IPv6 keeps its brackets) a loopback name: `localhost`,
+ * `*.localhost`, 127.0.0.0/8 or `[::1]`? With `lan`, also the private network names a phone on
+ * the same network would use (10/8, 172.16/12, 192.168/16, 169.254/16, fc00::/7, fe80::/10,
+ * `*.local`, 0.0.0.0). That is an explicit opt-in (`PRAMEN_DEV_ALLOW_LAN=true`), never the
+ * default: a host the request names is no proof of where the Worker runs, and a staging box on
+ * a private network serving the published dev secrets is exactly what the refusal is for. A
+ * tunnel's public hostname is never local, opt-in or not. */
+export function isLocalHost(hostname: string, opts: { lan?: boolean } = {}): boolean {
+  const h = hostname.toLowerCase();
+  if (h === "localhost" || h.endsWith(".localhost") || h === "[::1]") return true;
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
+  if (v4 && Number(v4[1]) === 127) return true;
+  if (!opts.lan) return false;
+  if (h.endsWith(".local") || h === "0.0.0.0") return true;
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254);
+  }
+  if (h.startsWith("[") && h.endsWith("]")) {
+    const v6 = h.slice(1, -1);
+    return /^f[cd][0-9a-f]{0,2}:/.test(v6) || /^fe[89ab][0-9a-f]?:/.test(v6); // unique-local, link-local
+  }
+  return false;
+}
+
+/** A deployment configuration the Worker must refuse to serve, as the log message, or
+ * null when it is fine. Checked first on every request, because a Worker has no startup
+ * hook that sees `env`: answering 500 to everything is the closest thing to refusing to
+ * start, and unlike a per-feature check it cannot be routed around.
+ *
+ *  - Dev-only values on a NON-LOCAL host: `PRAMEN_DEV_SEED=true` (a known admin
+ *    credential), `AUTH_SECRET` equal to the published DEV_SECRET (anyone can forge an
+ *    admin token; moot when JWKS_URL replaces HS256), or `FILES_SECRET` equal to the
+ *    published dev files secret (anyone can sign file urls). The request host is the
+ *    signal, NOT a var such as APP_URL: the failure this guards against is the whole
+ *    local vars block reaching a deployment, `APP_URL=http://localhost:…` included, so a
+ *    var-based gate would pass in exactly the vulnerable deployment. Cloudflare routing
+ *    sets the host, and a deployed route is never `localhost`.
+ *  - `JWKS_URL` without both `AUTH_AUDIENCE` and `AUTH_ISSUER`, on any host: a key set
+ *    alone accepts a token the same IdP minted for another client or directory, and its
+ *    `roles` claim becomes authority here. Exported for tests. */
+export function misconfiguration(env: Env, hostname: string): string | null {
+  if (env.JWKS_URL && (!env.AUTH_AUDIENCE || !env.AUTH_ISSUER)) {
+    return "JWKS_URL is set without AUTH_AUDIENCE and AUTH_ISSUER. Set both, so only tokens issued for this service are accepted.";
+  }
+  if (isLocalHost(hostname, { lan: env.PRAMEN_DEV_ALLOW_LAN === "true" })) return null;
+  const dev: string[] = [];
+  if (env.PRAMEN_DEV_SEED === "true") dev.push("PRAMEN_DEV_SEED=true");
+  if (!env.JWKS_URL && env.AUTH_SECRET === DEV_SECRET) dev.push("AUTH_SECRET is the published dev secret");
+  if (env.FILES_SECRET === DEV_FILES_SECRET) dev.push("FILES_SECRET is the published dev secret");
+  if (dev.length === 0) return null;
+  return (
+    `dev-only configuration on non-local host '${hostname}': ${dev.join(", ")}. ` +
+    `The local env's vars reached a deployment: pass a non-local --env to oblaka and set real secrets on the deployed script.`
+  );
 }
 
 /** How long the D1 boot may go without completing a statement before an awaiter treats it
@@ -184,21 +273,39 @@ function partitionStubFor(env: Env, tenant: string, partition: string = DEFAULT_
   // the DO path). The Worker RPC surface depends on this binding existing.
   if (!env.PRAMEN) {
     throw new Error(
-      "pramen: no Durable Object bound (PRAMEN). Pin the D1 store per request with the " +
-        "'x-pramen-store: d1' header (or set PRAMEN_STORE=d1), or bind the PramenDO.",
+      "pramen: no Durable Object bound (PRAMEN). Set PRAMEN_STORE=d1 to run on the D1 store, " +
+        "or bind the PramenDO.",
     );
   }
   return env.PRAMEN.get(env.PRAMEN.idFromName(partitionDoName(tenant, partition)));
+}
+
+/** Options for a privileged call. `roles` defaults to `["admin"]`; an explicit `[]` stays
+ * `[]` (no roles), it never falls back to admin. `userId` names the user the call acts for
+ * (a handler reading `ctx.identity.userId`, e.g. a redeemed one-time link acting as its
+ * owner); absent, the identity has no user. */
+export interface PrivilegedCallOpts {
+  name: string;
+  input?: JsonValue;
+  tenant?: string;
+  roles?: string[];
+  partition?: string;
+  userId?: string;
+}
+
+/** The synthetic identity a privileged call presents, identical on the DO path (in
+ * `x-pramen-identity`) and the D1 path (dispatched in the Worker). */
+function privilegedIdentity(opts: PrivilegedCallOpts): Identity {
+  const identity: Identity = { roles: opts.roles ?? ["admin"] };
+  if (typeof opts.userId === "string" && opts.userId) identity.userId = opts.userId;
+  return identity;
 }
 
 /** Forward a privileged mutation into a tenant's DO from a public route. The
  * synthetic identity (default `["admin"]`) is trusted because the call originates
  * in the Worker: the same internal mechanism the admin endpoints use. Returns the
  * DO's JSON response (`{ ok, result }` / `{ ok: false, … }`). */
-export async function callPrivileged(
-  env: Env,
-  opts: { name: string; input?: JsonValue; tenant?: string; roles?: string[]; partition?: string },
-): Promise<Response> {
+export async function callPrivileged(env: Env, opts: PrivilegedCallOpts): Promise<Response> {
   const tenant = opts.tenant ?? "main";
   const partition = opts.partition ?? DEFAULT_PARTITION;
   const stub = partitionStubFor(env, tenant, partition);
@@ -209,7 +316,7 @@ export async function callPrivileged(
         "content-type": "application/json",
         "x-pramen-tenant": tenant,
         "x-pramen-partition": partition,
-        "x-pramen-identity": JSON.stringify({ roles: opts.roles ?? ["admin"] }),
+        "x-pramen-identity": JSON.stringify(privilegedIdentity(opts)),
       },
       body: JSON.stringify(opts.input ?? {}),
     }),
@@ -222,8 +329,9 @@ export function makeWorker(app: PramenApp) {
   // JwksStrategy caches fetched public keys, so keep one instance per isolate (keyed
   // by URL) rather than rebuilding it per request. HmacStrategy is stateless.
   let jwks: JwksStrategy | undefined;
-  // Opt-in claim validation from env, default OFF (unset) so existing tokens keep
-  // verifying. Threaded into whichever strategy the deployment uses.
+  // Claim validation from env, threaded into whichever strategy the deployment uses.
+  // Optional for HS256; with JWKS_URL, `misconfiguration` has already refused to serve
+  // unless audience AND issuer are set, so a JwksStrategy built here always checks both.
   const verifyOptsFor = (env: Env): VerifyOptions => ({
     requireExp: env.AUTH_REQUIRE_EXP === "true",
     audience: env.AUTH_AUDIENCE || undefined,
@@ -410,6 +518,8 @@ export function makeWorker(app: PramenApp) {
   // already said it looks missing. See `shouldWarnMissingCron`.
   let cronSeen = false;
   let warnedNoCron = false;
+  /** The last `misconfiguration` reason logged in this isolate. */
+  let loggedMisconfiguration: string | null = null;
 
   const drainD1 = async (env: Env, source: "request" | "cron" | "admin" = "request", ctx?: ExecutionContext): Promise<unknown> => {
     if (!env.DB) throw new Error("D1 store is not configured");
@@ -460,9 +570,44 @@ export function makeWorker(app: PramenApp) {
     return { partition, applied: rows.map((r) => ({ id: r.id, appliedAt: r.appliedAt })) };
   };
 
+  /** A privileged call on the store the caller decided (`onD1`): forwarded to the tenant's
+   * DO, or on the D1 store dispatched HERE, since the engine runs in this Worker and there
+   * is no DO holding the data. Shared by pre-auth routes and the queue consumer, so neither
+   * can land a write in a DO that a D1 deployment never reads. */
+  const privilegedCall = async (env: Env, ectx: ExecutionContext | undefined, opts: PrivilegedCallOpts, onD1: boolean): Promise<Response> => {
+    if (!onD1) return callPrivileged(env, opts);
+    try {
+      const { result } = await dispatchD1(env, ectx, {
+        name: opts.name,
+        input: opts.input ?? null,
+        tenant: opts.tenant ?? "main",
+        // The same synthetic identity the DO path sends in `x-pramen-identity`.
+        identity: privilegedIdentity(opts),
+        // A privileged call may write (a redeemed one-time token), so pin the primary
+        // rather than risk a read-modify-write off a lagging replica.
+        start: "first-primary",
+      });
+      return json({ ok: true, result });
+    } catch (err) {
+      const { status, body } = toResponse(err);
+      return json(body, status);
+    }
+  };
+
   return {
     async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+
+    // Before ANY route (files, media and public routes included): a deployment carrying
+    // dev-only values, or an unbound JWKS verifier, must not serve a single request.
+    const misconfigured = misconfiguration(env, url.hostname);
+    if (misconfigured) {
+      // Once per isolate per reason: every request is refused, and a log line per request
+      // would bury the one that says why.
+      if (loggedMisconfiguration !== misconfigured) console.error(`[pramen] refusing to serve: ${misconfigured}`);
+      loggedMisconfiguration = misconfigured;
+      return json({ ok: false, error: "server misconfigured", code: "internal" }, 500);
+    }
 
     // File upload/download stream through the Worker (bytes never touch the DO),
     // authorized purely by the HMAC token in the url, with no JWT/tenant routing.
@@ -489,26 +634,9 @@ export function makeWorker(app: PramenApp) {
         // route (a signed preview link, the sitemap) was DO-only, and the CMS had to
         // refuse to mint preview links on D1 rather than hand out a dead one.
         const routeCtx = {
-          callPrivileged: async (opts: Parameters<typeof callPrivileged>[1]): Promise<Response> => {
-            const store = useD1Store({ storeHeader: request.headers.get("x-pramen-store"), isLive: false, defaultStore: env.PRAMEN_STORE });
-            if (!store) return callPrivileged(env, opts);
-            try {
-              const { result } = await dispatchD1(env, ctx, {
-                name: opts.name,
-                input: opts.input ?? null,
-                tenant: opts.tenant ?? "main",
-                // The same synthetic identity the DO path sends in `x-pramen-identity`.
-                identity: { roles: opts.roles ?? ["admin"] },
-                // A privileged call may write (a redeemed one-time token), so pin the
-                // primary rather than risk a read-modify-write off a lagging replica.
-                start: "first-primary",
-              });
-              return json({ ok: true, result });
-            } catch (err) {
-              const { status, body } = toResponse(err);
-              return json(body, status);
-            }
-          },
+          // The same store decision as /rpc: the caller's header counts only under the
+          // operator's opt-in, else PRAMEN_STORE alone decides.
+          callPrivileged: (opts: PrivilegedCallOpts): Promise<Response> => privilegedCall(env, ctx, opts, requestUsesD1(request, env, false)),
         };
         return r.handler(request, envBag(env), routeCtx);
       }
@@ -554,9 +682,11 @@ export function makeWorker(app: PramenApp) {
     // time, before the DO proxy AND the D1 store path, and before the admin routes, so it
     // covers HTTP and the WebSocket upgrade alike. A denied token fails CLOSED (401); we do
     // NOT silently downgrade to anonymous: a revoked user should see a clear auth failure.
+    // The same check covers a not-before instant (`setSessionNotBefore`, e.g. a password
+    // reset): a token whose `iat` predates it is revoked, a newer one is not. An open
+    // socket is re-checked by the DO per frame and before each push.
     // Synthetic identities (callPrivileged) never pass through here, so they're unaffected.
-    const sub = typeof identity?.userId === "string" ? identity.userId : undefined;
-    if (sub && (await isSessionDenied(new Kv(env.KV), sub))) {
+    if (await isIdentityRevoked(new Kv(env.KV), identity)) {
       return withCors(json({ ok: false, error: "session revoked", code: "unauthorized" }, 401), cors);
     }
 
@@ -700,6 +830,14 @@ export function makeWorker(app: PramenApp) {
     const isRpc = url.pathname.startsWith("/rpc/");
     const isLive = url.pathname === "/live";
 
+    // Live queries need the Durable Object, and on a D1 deployment (`PRAMEN_STORE=d1`) the
+    // DO holds none of the data: routing /live there would hand every caller a second,
+    // empty store with its own users table and every handler reachable through `call`
+    // frames. So /live does not exist on D1, whatever the header opt-in says.
+    if (isLive && env.PRAMEN_STORE === "d1") {
+      return withCors(new Response("pramen: live queries are not available on the D1 store", { status: 404 }), cors);
+    }
+
     if (!isRpc && !(isLive && isWs)) {
       return new Response(
         "pramen: POST /rpc/<handler> (JSON body), or WebSocket /live for live queries. " +
@@ -717,14 +855,13 @@ export function makeWorker(app: PramenApp) {
     if (!authorizeTenant(identity, tenant)) return withCors(forbidden(`tenant '${tenant}'`), cors);
 
     // --- Worker + D1 (no DO): the same schema/ACL/read engine over a D1 binding.
-    // Selected per-request via `x-pramen-store: d1`, OR as the app-wide default when
-    // PRAMEN_STORE=d1 (the header still overrides: `x-pramen-store: do` forces the DO).
+    // Selected by the operator with PRAMEN_STORE=d1. A per-request `x-pramen-store`
+    // header counts only under PRAMEN_STORE_HEADER=allow (local dev / tests): see
+    // useD1Store for why a caller must not pick the store.
     // RPC only: live queries need the DO (single writer + a socket host). This proof
     // uses ONE shared D1 database across tenants; a real product would add a tenant
     // column or a per-tenant DB.
-    const storeHeader = req.headers.get("x-pramen-store");
-    const useD1 = useD1Store({ storeHeader, isLive, defaultStore: env.PRAMEN_STORE });
-    if (useD1) {
+    if (requestUsesD1(req, env, isLive)) {
       if (!env.DB) return badRequest("D1 store is not configured");
       // COMMINGLING GUARD: this D1 path is ONE shared database with no tenant column, so
       // every tenant's rows live together. Selecting it for a non-`main` tenant (a
@@ -795,15 +932,15 @@ export function makeWorker(app: PramenApp) {
     headers.set("x-pramen-partition", partition);
 
     // Routed to the DO but no DO is bound: return a clear, actionable error instead of
-    // crashing the whole RPC surface. (A D1-only deployment should pin the D1 store with
-    // the `x-pramen-store: d1` header; the `PRAMEN_STORE` env default can be dropped by
-    // some adapters' env proxies, so the header is the reliable way to pin it.)
+    // crashing the whole RPC surface. (A D1-only deployment sets PRAMEN_STORE=d1; an
+    // adapter whose env proxy drops vars must still pass it through, since the request
+    // header no longer selects the store unless PRAMEN_STORE_HEADER=allow.)
     if (!env.PRAMEN) {
       return withCors(
         badRequest(
           isLive
             ? "live queries require a Durable Object, but no PRAMEN binding is configured"
-            : "no Durable Object (PRAMEN) is bound. Pin the D1 store with the 'x-pramen-store: d1' header (or bind the DO)",
+            : "no Durable Object (PRAMEN) is bound. Set PRAMEN_STORE=d1 to run on the D1 store (or bind the DO)",
         ),
         cors,
       );
@@ -823,8 +960,9 @@ export function makeWorker(app: PramenApp) {
 
     // Cloudflare Queues consumer entry: routes a batch to the matching `app.queues`
     // handler (ACK on success / RETRY on throw, per message). A consumer is Worker-level
-    // (no tenant DO): its ctx carries env/kv/mail/queue + callPrivileged to reach a DO.
-    async queue(batch: QueueBatch, env: Env): Promise<void> {
+    // (no tenant DO): its ctx carries env/kv/mail/queue + callPrivileged to reach the
+    // tenant's data, on the operator's store (a message carries no request to pick one).
+    async queue(batch: QueueBatch, env: Env, ectx?: ExecutionContext): Promise<void> {
       const bag = envBag(env);
       const kv = new Kv(env.KV);
       const ctx: QueueContext = {
@@ -832,7 +970,7 @@ export function makeWorker(app: PramenApp) {
         kv,
         mail: createMail(bag, kv),
         queue: createQueue(bag),
-        callPrivileged: (opts) => callPrivileged(env, opts),
+        callPrivileged: (opts) => privilegedCall(env, ectx, opts, env.PRAMEN_STORE === "d1"),
       };
       await dispatchQueueBatch(app.queues ?? {}, ctx, batch);
     },

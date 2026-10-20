@@ -150,6 +150,14 @@ The type builder exposes **Delete type** when `listCmsCapabilities().typeDeletio
 - **RBAC:** `submitForReview` is gated to `editorRoles`; `approve`/`reject`/`publishPage`/
   `schedulePage` to `reviewerRoles` (default `["reviewer","admin"]`), so an editor **can't
   bypass review** by publishing directly. Configure via `createCmsHandlers({ editorRoles, reviewerRoles })`.
+- **Review is bound to content, not to a page id.** `getPage({ slug, preview: true })` returns
+  a `contentHash` of what it shows, and `approve({ pageId, expectedContentHash })` requires it
+  back: a page whose content moved since the reviewer looked (an editor kept writing while it
+  sat in review) is a **409**, and the snapshot that is hashed is the one that is published.
+  `schedulePage` FREEZES the snapshot when it is called (a `scheduled` revision the task later
+  points the page at), so an editor's writes after a reviewer scheduled the page do not go live
+  with the schedule; it accepts the same optional `expectedContentHash`. A required field
+  missing at scheduling time is a 400 then, not a dead-lettered task later.
 - **Audit trail:** every transition writes a `cms_audit` row (`action`, from/to status,
   `actor` = `identity.userId`, note) synchronously in the same transaction. `listPageAudit({ pageId })`
   returns it. Revisions also record the publishing `actor`.
@@ -218,8 +226,17 @@ The type builder exposes **Delete type** when `listCmsCapabilities().typeDeletio
   `{ id, key, url, alt, contentType, filename }` in the snapshot, so the content API returns a
   servable URL, never a bare id.
 - **Serving + transforms:** published media is served by the Worker's **public** `GET
-  /media/<tenant>/media/<key>` route (immutable-cached, `nosniff`; restricted to `media/`-prefixed
-  keys so it can't leak signed-private objects). Put **Cloudflare Image Resizing** in front for
+  /media/<tenant>/media/<key>` route (`nosniff`; restricted to `media/`-prefixed
+  keys so it can't leak signed-private objects). Cached `public, max-age=3600`, deliberately
+  NOT `immutable`: `purgeMedia` is the takedown path and invalidates no cache, so any shared
+  cache in front of `/media` (Image Resizing variants, a Cache Rule, a CDN) can serve a purged
+  file for at most that long. Purge those URLs at the zone too if a takedown must be immediate.
+  `createMedia` accepts only a key under `<tenant>/media/` (what `signMediaUpload` mints), and
+  only once: an app-private upload in the same tenant cannot be registered and re-signed, and
+  two rows can never share (and purge) one blob. `purgeMedia` deletes the bytes FIRST and fails
+  if that fails, leaving the row in the trash to retry. Active document types (HTML, SVG, any
+  `+xml`, XSLT, multipart) are served under a script-free sandbox CSP, and an upload must
+  declare exactly one MIME type (a comma list is refused at signing). Put **Cloudflare Image Resizing** in front for
   on-the-fly resize/format: build URLs with `imageUrl(key, { width, format, origin })`
   (`/cdn-cgi/image/…`). Image Resizing is a **zone setting** (enable it on the Cloudflare zone),
   not a binding.
@@ -266,6 +283,12 @@ Editor flow: `createBlockType` → `createContentType` → `createPage` → `add
 `publishPage`. Public: `getPage({ slug })` returns the published snapshot; editors pass
 `{ slug, preview: true }` to assemble the live draft.
 
+Published-only is enforced IN the public handlers (`getPage` without `preview`,
+`listPagesByTerm`, menu resolution in `getMenu`/`getWidgetArea`), not only by the anonymous
+policy. So a site rendering with a token whose role reads drafts still gets 404 for a draft or
+an unpublished page. Even so, give a site's backend token a role holding only
+`cmsPolicies().public` grants: it is a credential living in a web server.
+
 ### Preview links
 
 `{ preview: true }` is a **role** check, so it only serves people who have an editor
@@ -288,25 +311,28 @@ it should look like. Your site renders it: redeem the same token with `client.ge
 uses, and point the editor's Preview link button at it with `admin.previewUrl`. A working one
 is `example/site/src/pages/preview.astro`.
 
-If you pass custom roles to `createCmsHandlers`, hand `cmsRoutes` the **same options
-object**: it derives the route's identity from them, so the two cannot drift:
+A redeemed link reads **as its minter**. The token carries the minter's `userId` and roles,
+and the route presents exactly those (never a configured role set), so the handler gate and
+every row, field and cell scope decide what they decided for that user: an editor whose role
+cannot read a field or a region cannot read it through a link either. Minting needs an
+identity with a `userId`. The link also dies with the minter's sessions: redemption checks the
+session denylist (`setUserActive(false)`/`deleteUser` write it), and a link's lifetime is
+capped at the session TTL (`AUTH_SESSION_TTL_SECONDS`, default 3600) so it cannot outlive that
+denylist entry. `createCmsHandlers({ maxPreviewTtlSeconds })` raises the cap (to at most 30
+days), at the price that a revoked user's links then live until they expire. The route needs
+the `KV` binding for the denylist check and refuses every link without it.
 
-```ts
-const cms = { editorRoles: ["editor"], reviewerRoles: ["reviewer"] };
-const handlers = { ...createCmsHandlers(cms) };
-const routes = [...cmsRoutes({ handlers: cms })];
-```
-
-That identity must also be granted by your ACL. Preview works on **both stores**. It used to
+Preview works on **both stores**. It used to
 be DO-only: redemption goes through `ctx.callPrivileged`, which only forwarded to the
 Durable Object, so minting on D1 would have handed out a link that 404s forever and
 `signPagePreview` refused instead. `callPrivileged` now dispatches locally in the Worker on
-the D1 store, so the refusal is gone. A browser redeeming a link sends no `x-pramen-store`
-header, so a deployment serving the CMS from D1 needs `PRAMEN_STORE=d1` for the redeem route
-to land on the right store (an embedded topology sets it anyway).
+the D1 store, so the refusal is gone. The redeem route picks its store like `/rpc` does,
+from `PRAMEN_STORE` and never from the request, so a deployment serving the CMS from D1 needs
+`PRAMEN_STORE=d1` (an embedded topology sets it anyway).
 
-The grant is scoped to **one page** and carries its own expiry (default 1 hour, clamped to
-30 days), so a leaked link is not "see all drafts" and stops working on its own. Signing
+The grant is scoped to **one page** and carries its own expiry (default 1 hour, clamped to the
+session TTL unless raised as above), so a leaked link is not "see all drafts" and stops working
+on its own. Signing
 uses `PREVIEW_SECRET`, falling back to `FILES_SECRET` then `AUTH_SECRET`, the same
 machinery as signed file urls. With no usable secret (≥16 chars) minting and verification
 both **fail closed** rather than hand out forgeable links.
@@ -353,9 +379,11 @@ Two caveats about doing it in the ACL:
   `cms_media` alongside `cmsPolicies().editor`, that grant unions the trash filter away and
   trashed rows become visible again. Scope your own grants with `deletedAt: { isNull: true }`.
 - **The task context bypasses the ACL entirely** (it runs SYSTEM-scoped), so scheduled
-  publish/unpublish are not protected by the read scope. `deletePage` clears `scheduledAt`
-  and `unpublishAt` for exactly this reason. Without that, a page trashed before its
-  scheduled time came back publicly live.
+  publish/unpublish are not protected by the read scope. `cms:publish` therefore refuses a
+  trashed page itself, and `deletePage` KEEPS the schedule (clearing it also destroyed a
+  reviewer-scheduled takedown, which trash + restore then silently cancelled). A takedown
+  still archives a trashed page. `restorePage` drops a publish that came due while the page
+  was in the trash and says so (`scheduleCleared: true`, plus a note on the audit row).
 
 Two things worth knowing:
 
@@ -396,7 +424,7 @@ are additive and already ordered by the single writer.
 echo back comes from the same read that loaded the content, including the public
 (snapshot) path, where it is backfilled from the live row rather than the baked snapshot.
 
-On the **D1 store** (`x-pramen-store: d1`) there is no interactive transaction, so two
+On the **D1 store** (`PRAMEN_STORE=d1`) there is no interactive transaction, so two
 requests in the same millisecond can both read the same version and both write. The guard
 still catches the editor race it exists for; it is not a hard mutex there.
 

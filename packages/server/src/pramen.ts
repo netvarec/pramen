@@ -24,9 +24,11 @@ import type { JsonValue } from "./sdk/infer";
 
 /** Injected into a public route's handler: forward a privileged mutation into the
  * tenant's DO without the handler importing any deploy-side code (so app.ts stays
- * authoring-only). The synthetic identity defaults to the admin role. */
+ * authoring-only). The synthetic identity defaults to the admin role; an explicit
+ * `roles: []` stays empty. `userId` puts that user on the identity (`ctx.identity.userId`)
+ * on both stores, for a route acting on behalf of one user (a redeemed one-time link). */
 export interface RouteContext {
-  callPrivileged(opts: { name: string; input?: JsonValue; tenant?: string; roles?: string[] }): Promise<Response>;
+  callPrivileged(opts: { name: string; input?: JsonValue; tenant?: string; roles?: string[]; userId?: string }): Promise<Response>;
 }
 
 /** A public, pre-auth route, matched before identity resolution, so it can host a
@@ -76,7 +78,7 @@ export type { Env, DoEnv };
 export function createPramen(app: PramenApp): {
   fetch: (request: Request, env: Env, ctx: ExecutionContext) => Promise<Response>;
   scheduled: (event: unknown, env: Env, ctx: ExecutionContext) => Promise<void>;
-  queue: (batch: QueueBatch, env: Env) => Promise<void>;
+  queue: (batch: QueueBatch, env: Env, ctx?: ExecutionContext) => Promise<void>;
   PramenDO: ReturnType<typeof pramenDO>;
 } {
   validateTriggerTasks(app.schema, Object.keys(app.tasks ?? {})); // fail fast on a typo'd trigger task

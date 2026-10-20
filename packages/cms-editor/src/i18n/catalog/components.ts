@@ -68,6 +68,7 @@ export const en = {
   /** `window.confirm` before leaving the page editor with unsaved edits. */
   "pageEditor.leaveUnsaved": { one: "You have {count} unsaved change. Leave without saving?", other: "You have {count} unsaved changes. Leave without saving?" },
   "pageEditor.noFieldsOrRegions": "This page's content type defines no fields or regions.",
+  "pageEditor.approveChanged": "Someone else changed this page since you opened it. It now shows the current content: review it and approve again.",
   /** The small confirmation banner after a panel saves. */
   "pageEditor.saved": "saved",
   "pageEditor.titleLabel": "Title",
@@ -265,6 +266,7 @@ export const en = {
   "settings.saveEmail": "Save email",
   "settings.currentPassword": "Current password",
   "settings.currentPasswordHelp": "Leave this empty if you have only ever signed in with a link. Then you have no password yet, and this sets your first one.",
+  "settings.emailPasswordHelp": "Password resets go to this address, so changing it needs your current password. Leave it empty if you have only ever signed in with a link.",
   "settings.newPassword": "New password (at least 8 characters)",
   "settings.savePassword": "Save password",
   "settings.signOut": "Sign out",
@@ -337,6 +339,7 @@ export const cs: Translation<typeof en> = {
     other: "Máte {count} neuložených změn. Odejít bez uložení?",
   },
   "pageEditor.noFieldsOrRegions": "Typ obsahu této stránky nemá žádná pole ani oblasti.",
+  "pageEditor.approveChanged": "Stránku mezitím upravil někdo jiný. Teď ukazuje aktuální obsah: projděte ho a schvalte znovu.",
   "pageEditor.saved": "Uloženo",
   "pageEditor.titleLabel": "Název",
   "pageEditor.slugLabel": "Adresa (slug)",
@@ -518,6 +521,7 @@ export const cs: Translation<typeof en> = {
   "settings.saveEmail": "Uložit e-mail",
   "settings.currentPassword": "Současné heslo",
   "settings.currentPasswordHelp": "Pokud jste se zatím přihlašovali jen odkazem, nechte pole prázdné. Heslo ještě nemáte a tímto si nastavíte první.",
+  "settings.emailPasswordHelp": "Na tuto adresu chodí obnovení hesla, proto její změna vyžaduje současné heslo. Pokud jste se zatím přihlašovali jen odkazem, nechte pole prázdné.",
   "settings.newPassword": "Nové heslo (alespoň 8 znaků)",
   "settings.savePassword": "Uložit heslo",
   "settings.signOut": "Odhlásit se",

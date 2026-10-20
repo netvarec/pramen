@@ -403,6 +403,12 @@ const OBLAKA_TEMPLATE = `import { define, DurableObject, KVNamespace, R2Bucket, 
 const PROJECT = "my-pramen-app"; // unique per project; namespaces all CF resources
 
 export default define(({ env }) => {
+  // oblaka falls back to env "local" when given neither --env nor CLOUDFLARE_ENV, even with
+  // --remote, and the local vars carry a PUBLISHED secret. So a remote run must name its env.
+  const argv = (globalThis as { process?: { argv?: string[] } }).process?.argv ?? [];
+  if (env === "local" && argv.includes("--remote")) {
+    throw new Error("oblaka.ts: refusing to render the local env for --remote; pass --env <name> to oblaka (or set CLOUDFLARE_ENV)");
+  }
   const vars =
     env === "local" ? { AUTH_SECRET: "dev-secret-change-me", FILES_SECRET: "dev-files-secret-change-me" } : {};
   return new Worker({

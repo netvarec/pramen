@@ -45,10 +45,12 @@ const deliver = (kind: string) => async (_c: HandlerContext, a: { email: string;
   }
   outbox.push({ kind, ...a });
 };
-const reset = createPasswordReset({ sendEmail: deliver("reset") });
-const verify = createEmailVerification({ sendEmail: deliver("verify") });
+// No resend cooldown here: these tests re-request back to back on purpose, to pin down which
+// of two requests stays live. The cooldown itself is covered in secfix-auth-email.test.ts.
+const reset = createPasswordReset({ sendEmail: deliver("reset"), resendCooldownSeconds: 0 });
+const verify = createEmailVerification({ sendEmail: deliver("verify"), resendCooldownSeconds: 0 });
 // Jen kvůli `inviteUser`: účet bez hesla se jinak nedá založit tak, jak vzniká v provozu.
-const magic = createMagicLinkAuth({ sendEmail: deliver("magic") });
+const magic = createMagicLinkAuth({ sendEmail: deliver("magic"), resendCooldownSeconds: 0 });
 const tasks = { ...reset.tasks, ...verify.tasks, ...magic.tasks };
 const SECRET = "test-secret-at-least-16-chars";
 
@@ -72,11 +74,16 @@ async function harness() {
   // records the payload and, unless `drain` is off, runs the task right away, so the
   // emailed token shows up in `sent`. With `drain: false` a test runs tasks itself, in
   // whatever order a real outbox could.
+  // A password reset or change writes a KV notBefore entry; an identity carries the token's
+  // `iat` as the Worker sets it, which refreshSession and changePassword compare against.
+  const kvStore = new Map<string, string>();
+  const kv = { get: async (k: string) => kvStore.get(k) ?? null, put: async (k: string, v: string) => void kvStore.set(k, v), delete: async (k: string) => void kvStore.delete(k) };
   const ctx = (identity: { userId: string; roles?: string[] } | null = null, { drain = true } = {}): never => {
     const c = {
       db,
+      kv,
       env: { AUTH_SECRET: SECRET },
-      identity,
+      identity: identity && { iat: Math.floor(Date.now() / 1000), ...identity },
       tasks: {
         enqueue: async (t: Enqueued) => {
           enqueued.push(t);
@@ -432,8 +439,10 @@ describe("první heslo pro účet z magic linku", () => {
     const res = (await h.run(userHandlers.changePassword, h.ctx({ userId: "ada@example.com" }), {
       currentPassword: "",
       newPassword: "correcthorse",
-    })) as { ok: boolean; firstPassword: boolean };
-    expect(res).toEqual({ ok: true, firstPassword: true });
+    })) as { ok: boolean; firstPassword: boolean; token: string };
+    // `token`: the change retires every earlier session, the caller's own included.
+    expect(res).toMatchObject({ ok: true, firstPassword: true });
+    expect(res.token).toBeString();
 
     // A opravdu se tím účet odemkl: `login` je jediný důkaz, který stojí za řeč.
     const login = (await h.run(authHandlers.login, h.ctx(), { username: "ada@example.com", password: "correcthorse" })) as {

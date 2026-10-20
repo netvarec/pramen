@@ -42,8 +42,17 @@ async function harness(table: string) {
   await migrate(driver, schema);
   const db = new Db(driver, { acl: compileAcl([]), identity: null, schema, system: true }, schema);
   const enqueued: { kind: string; payload: JsonValue }[] = [];
+  // An identity carries the token's `iat` as the Worker sets it (refreshSession and
+  // changePassword compare it against the row); a password change writes a KV notBefore entry.
+  const kv = { get: async () => null, put: async () => {}, delete: async () => {} };
   const ctx = (identity: Record<string, unknown> | null = null) =>
-    ({ db, env: { AUTH_SECRET: SECRET }, identity, tasks: { enqueue: async (t: { kind: string; payload: JsonValue }) => void enqueued.push(t) } }) as never;
+    ({
+      db,
+      kv,
+      env: { AUTH_SECRET: SECRET },
+      identity: identity && { iat: Math.floor(Date.now() / 1000), ...identity },
+      tasks: { enqueue: async (t: { kind: string; payload: JsonValue }) => void enqueued.push(t) },
+    }) as never;
   const rowsOf = async (t: string) => (await driver.exec(`SELECT username FROM "${t}"`, [])) as { username: string }[];
   return { ctx, enqueued, rowsOf };
 }

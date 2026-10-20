@@ -36,7 +36,7 @@ example/worker.ts  createPramen(app) -> { fetch, PramenDO }
   one request at a time), per-tenant via `idFromName`.
 - **D1 is NOT the DO's write path**: it's over-RPC, not in-process; the DO's
   SQLite is its transactional store. D1 is instead available as a separate
-  substrate via the Worker (`x-pramen-store: d1`). See the Substrate seam below.
+  substrate via the Worker (`PRAMEN_STORE=d1`). See the Substrate seam below.
 - **SDK (`packages/server/src/sdk/`) is platform-agnostic**, the portable product.
   `packages/server/src/runtime/` is the Cloudflare glue.
 
@@ -48,7 +48,7 @@ bun run dev          # lopata dev (Bun runtime; fast reload + /__dashboard); htt
 bun run dev:wrangler # wrangler dev (miniflare), workerd-parity check before deploy
 bun run typecheck    # tsc --noEmit (server + client + react)
 bun run build        # tsc → dist (JS + .d.ts) for all 3 packages (for published Node consumers)
-bun run deploy       # wrangler deploy
+bun run deploy       # oblaka --remote --env production && wrangler deploy (then: wrangler secret put AUTH_SECRET)
 ```
 
 Prod config: secrets via `wrangler secret put` (AUTH_SECRET; FILES_SECRET ≥16 chars or
@@ -57,6 +57,30 @@ files fail closed). Destructive migrations are OFF unless `PRAMEN_ALLOW_DESTRUCT
 `workerd` conditions resolve to `src` (so in-repo typecheck/tests/dev/deploy need no
 build), while published Node consumers fall through to `dist` (`default`/`types`).
 tsconfigs set `customConditions: ["development"]`.
+
+The Worker REFUSES TO SERVE (500 on every request, files/media/public routes included, logged
+once per isolate) in two configurations, checked first in `makeWorker`'s fetch by
+`misconfiguration(env, hostname)`: dev-only values on a NON-LOCAL host (`PRAMEN_DEV_SEED=true`,
+`AUTH_SECRET === DEV_SECRET` without `JWKS_URL`, or `FILES_SECRET === DEV_FILES_SECRET`; local =
+loopback only: localhost / *.localhost / 127.0.0.0/8 / [::1]; `PRAMEN_DEV_ALLOW_LAN=true`, set by
+hand to open the dev server from a phone, adds the private ranges and *.local, never a tunnel's
+public hostname; it is not inferred from the host because a staging box on a private network
+serving the dev secrets is what this refuses), and `JWKS_URL` without BOTH `AUTH_AUDIENCE` and
+`AUTH_ISSUER` (any host). The request host is the signal, never a var like APP_URL: the failure
+caught is oblaka rendering the whole LOCAL vars block into a deploy, APP_URL=localhost included.
+A Worker has no startup hook that sees env, so a 500 to everything is how it refuses to start.
+
+**The env must reach OBLAKA, not wrangler.** oblaka falls back to env `local` when given neither
+`--env` nor `CLOUDFLARE_ENV`, even with `--remote`, and the local block carries a published
+`AUTH_SECRET`, `CORS_ORIGINS=*`, `PRAMEN_STORE_HEADER=allow` and `PRAMEN_DEV_SEED`. `bun run
+deploy --env x` appends `--env x` to the LAST command of the `&&` chain (wrangler), never to
+oblaka. So `deploy`/`plan` name `--env production` on the oblaka command, and `oblaka.ts` (and
+the `pramen init` template) THROW when asked to render `local` under `--remote` (an argv check,
+so oblaka's programmatic `deploy()` API is not covered). Set secrets AFTER the deploy: oblaka
+names the remote script `${env}-${PROJECT}` and writes that name into `wrangler.jsonc`, which is
+what a plain `wrangler secret put` targets. The dev-account seed (`devUserBootstrap`) is
+registered only by `example/dev-worker.ts`, the `main` of the `local` env; the deployed
+`example/worker.ts` never registers it, so no var can turn it on.
 
 Local dev runs on **lopata** (Bun-based CF runtime; fully emulates DO SQLite +
 WebSocket Hibernation). It reads the oblaka-generated `wrangler.jsonc` unchanged and
@@ -78,8 +102,23 @@ The data layer runs over a `Driver` (async `exec` + `transaction`) + `Dialect`
 
 - **`DoSqliteDriver`**: the DO's in-process SQLite (the default write path).
 - **`D1Driver`**: the SAME engine over a real D1 binding, run **in the Worker**
-  (no DO) and selected per-request with the `x-pramen-store: d1` header. RPC only:
-  live queries need the DO (single writer + socket host). Proven end-to-end in
+  (no DO) and selected by the operator with `PRAMEN_STORE=d1`. The `x-pramen-store: d1|do`
+  request header overrides it ONLY under `PRAMEN_STORE_HEADER=allow` (local dev, e2e: the e2e
+  suite passes `--var PRAMEN_STORE_HEADER:allow` to wrangler dev). Never let a caller pick the
+  store: each store has its own `auth_users`, sessions name the user by a bare `sub` signed with
+  the shared AUTH_SECRET, so signing up a victim's username on the store where it is free and
+  presenting that token to the other store's `refreshSession` reissued the victim's roles
+  (anonymous to admin). Sessions also carry a `store` claim (`@pramen/auth`, below) as the
+  second half of that fix. `useD1Store`/`requestUsesD1` in `worker.ts` is the one decision,
+  shared by /rpc and a route's `callPrivileged`. Admin routes (`/admin/migrations`,
+  `/admin/tasks/*`) still read the header: they are admin-gated and it selects what to inspect.
+  A queue consumer's `callPrivileged` follows `PRAMEN_STORE` too (it used to always forward to a
+  DO, landing a D1 deployment's queue writes in a store nothing reads). RPC only:
+  live queries need the DO (single writer + socket host), and on `PRAMEN_STORE=d1` `/live` is
+  REFUSED (404, by the Worker and again by the DO's upgrade, header opt-in or not): a D1
+  deployment still binds the DO class, whose own store holds none of the data but has its own
+  empty users table and answers every handler over `call` frames, so a reachable socket there is
+  a second store nobody runs. Proven end-to-end in
   miniflare by `test/suites/d1.ts` (ACL, row scope, field/cell-level projection,
   RETURNING writes, aggregates). The D1 binding is declared in `oblaka.ts`.
 - **The D1 boot is a `SharedBoot`, never a bare memoized promise** (`runtime/boot.ts`, #51).
@@ -115,6 +154,11 @@ store is behind a `StorageAdapter` seam (`R2Adapter`/`MemoryAdapter` in
   client resolves them (`@pramen/client` `fileUrl()`/`upload()`).
 - The object↔JSON codec lives at the `Db` chokepoint, so handlers always see/write
   `FileRef` objects. R2 is declared in `oblaka.ts` (`FILES` binding).
+- `/media/` answers are cached `public, max-age=MEDIA_MAX_AGE` (3600), never `immutable`:
+  `purgeMedia` is a takedown and invalidates no cache. `isActiveType` fails toward the sandbox:
+  any `+xml`, `text/xsl`, `application/xslt+xml`, `multipart/*`, any comma-list member that is
+  active, and anything that does not parse as a MIME type. `signUpload` refuses a `contentType`
+  that is not ONE MIME type (`isSingleMimeType`).
 
 The same shape (adapter + `ctx.<service>` facade + Worker glue) is how other
 Cloudflare services should be added (e.g. email via the Send service as `ctx.mail`).
@@ -198,7 +242,24 @@ log) for independent single-writer serialization and storage.
   scheduled publication: `{ publishedAt: { lte: $now() } }`, which `isNull: false`
   can't express since a future timestamp is non-null. Lexicographic TEXT comparison, so
   the column must hold `toISOString()` values, which `expr.now()` now produces, having
-  emitted the `datetime('now')` space form until `isoTimestampBackfill()` landed). Public,
+  emitted the `datetime('now')` space form until `isoTimestampBackfill()` landed).
+  Grants OR-merge on ROWS, but a policy's `fields` stay BOUND to the rows its own `where` admits
+  (`mergeGrants` in `runtime/acl.ts`). Merging `author` (own rows, every column) with `reader`
+  (every row, no `body`) used to collapse to "every row, every column", which no single policy
+  allows, on read, write, the write echo and `directAccess`. Now the scope's base `fields` are
+  only those readable on EVERY row in scope (a field every policy lists, plus the fields of a
+  policy that admits every row); anything a row-restricted policy adds is a per-row `BoundGrant`
+  admitted by that policy's own `where`. Only base fields may be filtered, ordered or aggregated
+  by. A single policy is unchanged (no per-row work). A per-row admission that traverses a
+  relation can't run in `evalExpr`, so it is computed in SQL: a projected `CASE WHEN … END AS
+  "__pramen_acl_N"` flag on stored rows, or a one-row probe over a derived table for a row that
+  isn't stored yet (insert candidate, update post-image, write echo). Flags are stripped before
+  any row is returned. A `directAccess` relation grant reaches only targets linked from parent
+  rows ITS policy's `where` admits. A marker (`$identity`/`$input`) resolves only to a non-null
+  scalar, or a list of them for `in`/`notIn`; null or an object is UNRESOLVED, so
+  `$input("key")` fed `{key: null}` never becomes `IS NULL` (which matched exactly the
+  never-shared rows).
+  Public,
   pre-auth routes go in `app.routes` (matched before auth; use `ctx.callPrivileged`
   to run a privileged handler), for signature-authed webhooks.
 - `ctx.callPrivileged` works on BOTH stores. It used to only forward to the DO, so
@@ -209,28 +270,60 @@ log) for independent single-writer serialization and storage.
   cannot drift, and a privileged call pins `first-primary` because it may write. This is
   what makes D1 a first-class CMS store, which matters because D1 is a BINDING: nothing
   needs exporting from the worker entry, so the CMS can live inside an Astro site's Worker.
-  The store is per-REQUEST and a browser redeeming a link sends no `x-pramen-store`, so a
-  mixed deployment needs `PRAMEN_STORE=d1` (an embedded topology sets it anyway).
+  The store follows the same decision as /rpc (`PRAMEN_STORE`, the header only under
+  `PRAMEN_STORE_HEADER=allow`), so a D1 deployment needs `PRAMEN_STORE=d1` (an embedded topology
+  sets it anyway). Its opts take an optional `userId`, put on the synthetic identity on BOTH
+  paths (`privilegedIdentity` in worker.ts); `roles` defaults to `["admin"]` but an explicit
+  `[]` stays `[]`, never admin.
 - Per-handler call authorization (the ACL only gates `ctx.db`): `query(fn, { auth })` /
   `mutation(fn, { auth })` where `auth` is `"authenticated"` | `string[]` (one-of role) |
   `(identity) => boolean`, enforced in `runtime/dispatch.ts` BEFORE the handler runs
   (throws 403). Gate any handler that touches `ctx.kv`/`ctx.env`/`ctx.mail`/`ctx.tasks`
   directly: those bypass the row-ACL, so un-gated they're callable by anyone. Absent ⇒
   open. `authorizeHandler(auth, identity)` is the pure check. `createApp` forwards `auth`.
+- Write policies bind the WRITTEN row. A create policy's `where` must hold on the candidate
+  (after `set`, omitted columns at their literal default; an expr default reads as NULL and
+  fails closed), else 403; it used to be silently ignored. Evaluated BEFORE the INSERT so it
+  holds on D1. An update policy's `where` gates the PRE-image only; the opt-in `check:
+  WhereRule` is evaluated on the post-image before the UPDATE. Opt-in because the CMS trash flow
+  deliberately moves a row out of its `deletedAt IS NULL` update scope. With merged grants a
+  policy whose check fails contributes nothing and a write no policy still covers is a 403.
+  `check` on create is AND-ed into `where`; `compileAcl` THROWS on a read or delete `check`. The
+  example's `author:update` uses it so an author can't reassign `ownerId` (a `fields` whitelist
+  would have broken `attachToNote`).
+- A per-row-authorized update (cell grants, a bound policy, or a `check`) is decided on a
+  pre-image read, which on D1 is a separate autocommitting statement. The UPDATE therefore
+  re-asserts the stored values the decision read (`preimageGuard`: the inputs of cell
+  `when`s/admissions/checks, EVERY column when a `fieldsFn` is involved, compared raw and
+  null-safely) plus each relation-traversing admission that held. Zero rows re-runs the whole
+  decision (up to 3 times), then 409. Never fires on the DO (single writer).
 - `@pramen/auth` (optional, verify-only core stays BYO-IdP): `authSchema` + `authHandlers`
   (`signup`/`login`/`me`, PBKDF2, server-assigned roles, HS256 tokens via `AUTH_SECRET`).
   `signup` takes an OPTIONAL `email` (validated, unique, stored UNVERIFIED). `auth_users`
   columns: `username` (PK = JWT `sub`), `passwordHash` (`hidden()`), `roles`, unique mutable
   `email`, `emailVerified` (epoch ms the current email was confirmed; NULL = unverified),
-  `active` (deactivation flag, which blocks login). Also:
+  `active` (deactivation flag, which blocks login), `credentialsChangedAt` (epoch SECONDS of the
+  last password reset/change or deletion; NULL = never). A custom users table must have the same
+  shape (`USERS_TABLE_COLUMNS`), `credentialsChangedAt` and `profile` included: pass
+  `createUserHandlers({ table, schema })` to have it checked at app construction
+  (`assertUsersTableShape`), else a missing column is a SQL error mid-handler. `deleteUser`
+  writes the denylist right after the ACL'd deactivation, before anything that could fail. Also:
   `createMagicLinkAuth({ sendEmail })` (passwordless one-time links; transport is the
   app's: Cloudflare Email Sending via the `send_email`/`EMAIL` binding declared in
   `oblaka.ts`; magic-link users keyed on the immutable `username`, never the mutable
   `email`); `createUserHandlers({ table })` + `authPolicies({ table, prefix, adminReadFields, … })`
   for ACL-gated admin (`listUsers`/`setUserRoles`/`setUserActive`/`deleteUser`) + self
   (`changeEmail`/`changePassword`) management, over `auth_users` or your own
-  authSchema-shaped table (`changeEmail` clears `emailVerified`, since the new address is
-  unconfirmed). Session TTL via `AUTH_SESSION_TTL_SECONDS` (default 3600). The stateless
+  authSchema-shaped table (`changeEmail` clears `emailVerified` BEFORE writing the address (on
+  D1 each statement commits alone, so the reverse order left a cut-off call with the new address
+  verified), and on an account WITH a password requires `currentPassword`, like
+  `changePassword`: the email is the reset channel, so a bare session that could move it could
+  mail itself a reset link and replace the password; `changePassword` returns a fresh `token`,
+  because it retires the caller's own session too). Session TTL resolves in ONE place
+  (`packages/auth/src/session-ttl.ts`): a factory's own `sessionTtlSeconds` for the tokens it
+  mints, else `AUTH_SESSION_TTL_SECONDS`, else 3600. Every revocation entry (denylist,
+  notBefore) is sized by `maxSessionTtlOf(env)` = the longest of the env value and every TTL a
+  factory declared at construction, so it never lapses under a live token. The stateless
   verify-only core closes the "roles are baked into the token" gap two ways, no session store:
   **`refreshSession`** (in `authHandlers` + `createMagicLinkAuth`, authenticated) re-reads
   roles/active and reissues a token: a client refreshing at ~half-TTL lets the TTL stay short
@@ -239,9 +332,62 @@ log) for independent single-writer serialization and storage.
   (self-expiring at the session TTL, lifted on reactivation), which the core Worker checks right
   after `resolveIdentity` and fails a revoked token CLOSED (401, not a downgrade to anonymous),
   covering HTTP + the WS upgrade. Helpers `denySession`/`allowSession`/`isSessionDenied` are
-  exported from `@pramen/server` for app-driven revocation. A live WebSocket also re-checks the
-  token's `exp` per message (identity is fixed at upgrade), closing 4401 so a socket can't outlive
-  its TTL.
+  exported from `@pramen/server` for app-driven revocation. A NOT-BEFORE instant is the narrower
+  cut for a password reset / sign-out-everywhere: `setSessionNotBefore(kv, username, atSeconds,
+  ttlSeconds)` revokes tokens whose `iat` is BELOW it (same second survives; no `iat` while an
+  instant is set fails closed), `isIssuedBeforeNotBefore` reads it, and `isIdentityRevoked`
+  (runtime/kv.ts) is the single "denylist OR stale iat" check the Worker and the DO both call.
+  `toIdentity` carries `iat` like `exp` for this (declared on Identity by module augmentation in
+  auth.ts). A live WebSocket re-checks `exp` AND `isIdentityRevoked` per frame and before every
+  push, closing 4401 "session revoked". A broadcast looks revocation up only for the sockets it
+  is about to push to (a subscription reads a written table), once per (user, iat), in
+  parallel. Frames from ONE socket run strictly in arrival order (`frameTail` in the DO): the
+  input gate holds only across the DO's own storage awaits, so the per-frame KV read let a
+  `subscribe` be overtaken by its own `unsubscribe` and leave a zombie subscription. Waiting for a
+  reconnect is not revocation, because the revoked client decides when to reconnect and an
+  exp-less token never forces one. Every failed `verifyPassword` spends one PBKDF2 derivation
+  (empty hash of a passwordless user, unknown scheme, unparseable pbkdf2), so `login` for a
+  passwordless account is no faster than for an unknown one (passwordless users are keyed by
+  their email, so the fast path was an account oracle).
+
+  **Credential epoch** (revokes only what came BEFORE): `resetPassword`, `changePassword` and
+  `deleteUser` stamp `credentialsChangedAt` and write a per-user KV notBefore entry
+  (`setSessionNotBefore`); `refreshSession` refuses a token whose `iat` is below
+  `credentialsChangedAt`, or which predates the row's `createdAt` (an earlier account under the
+  same username), and the Worker refuses one below notBefore. Not `denySession`: that is
+  username-scoped and would lock out the owner's next login. A token with no `iat` is refused by
+  `refreshSession`.
+
+  **`deleteUser` keeps a TOMBSTONE** (inactive; `passwordHash`, `email`, `emailVerified`,
+  `profile` cleared) instead of deleting the row: the username IS the identity (JWT `sub`,
+  `$identity("userId")` owner columns, CMS actor), so a freed one could be signed up again by
+  anyone, inheriting the deleted user's rows. It is an UPDATE of `active`, so the admin UPDATE
+  policy authorizes it, not the delete policy. Tombstones show in `listUsers` as inactive.
+
+  **Email-proven adoption rule** (`adoptableBy` in `users-table.ts`): a magic-link sign-in,
+  `inviteUser` or an email-keyed OIDC sign-in takes an EXISTING row only if it has no password
+  or has proven the same address (`email` equal to it and verified). Anyone can sign up with a
+  victim's address as the username and their own password; adopting that row shared one `sub`
+  between them. Refused, nothing written: OIDC answers `account_conflict` (409).
+  `loginWithMagicLink` records the proven address as the row's verified `email` when no other
+  row holds it (that keeps a magic-link user adoptable after they set a password), and
+  `resetPassword` stamps `emailVerified` (redeeming the link proves the address).
+
+  **Store claim**: a session minted on D1 carries `store: "d1"` (absent = DO); `sessionIsFrom`
+  checks it with the `usersTable` claim, so refreshSession / me / the self handlers honor a
+  session only on the store whose users table minted it. The OIDC upsert returns `ctx.store` and
+  the callback stamps it.
+
+  **Single-use tokens are consumed by ONE conditional statement** (`UPDATE ... WHERE consumedAt
+  IS NULL AND expiresAt >= ? RETURNING`), never SELECT + JS check + UPDATE, which let two
+  concurrent redemptions both pass on D1. `verifyEmail` stamps with `WHERE username = ? AND
+  email = ?`, and `resetPassword` writes with the same address guard, for the same reason.
+
+  **Resend cooldown**: `requestMagicLink`, `requestPasswordReset` and `requestEmailVerification`
+  send at most one email per address per `resendCooldownSeconds` (default 60; 0 = off), read
+  from the token tables' `createdAt`; a request inside the window still answers `{ ok: true }`.
+  For the magic link only an UNREDEEMED link holds the next one back. `inviteUser` is not
+  throttled. A cross-address rate limit belongs at the edge.
 - OIDC login (`@pramen/auth`, opt-in): `createOidcAuth({ issuer, clientId, clientSecret?,
   redirectUri, successRedirect })` → `{ routes }` (spread into `app.routes`, PRE-AUTH) plus
   `oidcHandlers` (spread into handlers). Authorization code + PKCE S256, discovery via
@@ -260,9 +406,13 @@ log) for independent single-writer serialization and storage.
   Auth0/Okta namespaced claim), where it overwrites stored roles on every login, removals
   included, minus any `__`-prefixed system role (filtered out; see below), else the row's
   stored roles (Google Workspace ships none), else `defaultRoles`.
-  Accounts key on the VERIFIED email by default (links with magic-link/password rows); an
-  unverified email is REFUSED, not silently keyed on `sub`. `accountKey: "sub"` namespaces by
-  issuer instead. `active = false` still blocks login. The write goes through
+  Accounts key on the VERIFIED email by default (links with magic-link/password rows, subject to
+  the adoption rule above); an unverified email is REFUSED, not silently keyed on `sub`.
+  `accountKey: "sub"` namespaces by issuer instead, and stores an email only if the provider
+  verified it (it used to store and stamp an unverified one). A first-login insert releases
+  other rows' UNVERIFIED claims on the address and stores NULL if a row VERIFIED it, rather than
+  failing on the unique column (which locked the owner out of every OIDC sign-in). `active =
+  false` still blocks login. The write goes through
   `callPrivileged` → `__oidcUpsertUser`, gated on `OIDC_SYSTEM_ROLE`. NOT `auth: []`, which
   this said until it was found to be unreachable BY ANYONE: `callPrivileged` does not bypass
   the handler gate (it sends an ordinary `{ roles: [...] }` identity through the same
@@ -285,7 +435,11 @@ log) for independent single-writer serialization and storage.
   ATTACKER; sessions themselves stay bearer tokens. The error page escapes centrally and
   echoes only RFC 6749-shaped codes: it is public, pre-auth and reachable with arbitrary
   query params, so raw interpolation was a reflected XSS on the app's own origin.
-  Verify-only (BYO-IdP via `JWKS_URL`) remains the zero-config path.
+  Verify-only (BYO-IdP via `JWKS_URL`) remains the no-login-code path, but it REQUIRES
+  `AUTH_AUDIENCE` + `AUTH_ISSUER` (else the Worker 500s every request): a key set alone also
+  accepts tokens the same IdP minted for other clients or directories, roles claim included.
+  `JwksStrategy`/`VerifyOptions` stay opt-in at the class level because OIDC verifies ID tokens
+  with its own aud/iss; the requirement lives in the Worker.
 - Password reset + email verification (`@pramen/auth`, opt-in): two one-time-email-token
   flows built on the magic-link machinery: mint a random token, store only its SHA-256
   **hash** + expiry in the shared `emailTokenSchema` table (`auth_email_tokens`, discriminated
@@ -316,7 +470,8 @@ log) for independent single-writer serialization and storage.
   mark the FK column `unique()` for the DB guarantee), and
   `manyToMany(target, { through, sourceColumn, targetColumn })` (**logical**: an **explicit
   junction entity** you write to directly: `ctx.db.insert(through, …)` to link, `delete` to
-  unlink; no synthetic tables/write API). All must keep source/junction/target in one partition.
+  unlink; no synthetic tables/write API; its own read policies govern traversal through it).
+  All must keep source/junction/target in one partition.
 - **Real foreign keys** are **opt-in** on an owning relation via `onDelete`:
   `belongsTo(target, column, { onDelete: "cascade" | "setNull" | "restrict" })` (also
   `oneHasOne`) emits a `FOREIGN KEY … REFERENCES … ON DELETE` enforced by the engine on
@@ -329,12 +484,24 @@ log) for independent single-writer serialization and storage.
   `defer_foreign_keys` defers only checks, NOT ON DELETE actions, so without the quarantine a
   parent rebuild would cascade-wipe/null the children or abort on RESTRICT); a
   self-referential FK swaps through a bare FK-less copy for the same reason.
-- `where` can traverse relations: `{ owner: { name: "x" } }` (belongsTo/hasMany) or
-  `{ tags: { name: "x" } }` (manyToMany, via a nested subquery through the junction)
-  compiles to a subquery in both user queries and policy `where`; `with: { tags: true }`
-  eager-loads the target list through the junction. The related entity's read scope is
-  AND-merged (traversal can't widen access; an unreadable target drops out). Cell-`when`
-  predicates stay single-table.
+- `where` can traverse relations: `{ owner: { name: "x" } }` (belongsTo/hasMany) or `{ tags: {
+  name: "x" } }` (manyToMany, via a nested subquery through the junction) compiles to a subquery
+  in both user queries and policy `where`; `with: { tags: true }` eager-loads the target list
+  through the junction. The related entity's read scope is AND-merged (traversal can't widen
+  access; an unreadable target drops out), and so is the JUNCTION's read scope for a manyToMany
+  (a link row the caller can't read directly is invisible to `with` and `where`; grant the
+  junction to whoever traverses). Cell-`when` predicates stay single-table. A caller-supplied
+  `where` (Db's user where, `untrusted` in `compileScopedWhere`) is checked at every hop by
+  `assertReadableWhereKeys`: an undeclared key is a 400, a `hidden()` column a 403 under every
+  scope (allow() and SYSTEM included), a field outside the base `fields` a 403, and the JOIN
+  column must be readable (the parent's FK for belongsTo/oneHasOne, the target's FK for
+  hasMany/oneHasOneInverse, both junction link columns), since filtering through a relation is a
+  filter on it. Policy `where` rules are trusted and not checked. Eager loads follow the same
+  rule per row: a belongsTo attaches only where the parent's FK is readable on that row, a
+  hasMany groups only targets whose FK is readable on that row, and a `hidden()` FK never joins,
+  not even under SYSTEM. Inside a `sub` node every inner column is QUALIFIED with the subquery's
+  table (`compileExpr`'s `table` argument), so an inner name can never bind to the outer row
+  through SQL correlated-name resolution.
 - `where` string ops: `like` (raw `%`/`_` wildcards) plus `contains`/`startsWith`/`endsWith`
   (auto-escape the needle so `%`/`_` are literal; case-insensitive). `NOT: { … }` negates a
   nested clause; `AND`/`OR` take arrays. Composite uniqueness: `Entity(fields, relations,
@@ -348,7 +515,11 @@ log) for independent single-writer serialization and storage.
   payload, delayMs? })` writes to the `_pramen_outbox` table in the SAME transaction
   as the mutation (atomic), and `app.tasks[kind]` runs it after commit, off the write
   path: at-least-once with retry/backoff, dead-letter, and a `meta.id` idempotency key
-  (`runtime/outbox.ts`). The DO self-drains via an alarm scheduled at the next due time;
+  (`runtime/outbox.ts`). The DO self-drains via an alarm scheduled at the next due time.
+  `armDrain` reads `getAlarm()` and keeps an EARLIER pending alarm (it only sets now+50 when
+  none is pending or the pending one is later): setAlarm replaces the single alarm, so an
+  unconditional re-arm was a trailing debounce, and enqueuing requests under 50 ms apart
+  (anonymous magic-link requests) postponed the tenant's only automatic drain indefinitely;
   the D1 store has NO alarm, so a DELAYED task runs only under a Cron trigger. The Worker
   warns once per isolate when a request-tail drain leaves a future-due task and no Cron
   drain has been seen (`shouldWarnMissingCron`), and stops once one fires;
@@ -362,6 +533,47 @@ log) for independent single-writer serialization and storage.
   on an actual value CHANGE; `hidden()` columns are stripped from the payload; raw
   `ctx.db.exec` and task-handler writes (suppressTriggers) don't fire triggers (no
   cascade); `createPramen` rejects a trigger whose `task` has no `app.tasks` handler.
+- CMS public reads are published-only IN THE HANDLER (`getPage` without `preview`,
+  `listPagesByTerm`, menu page resolution), never only through the anonymous policy: a site's
+  deployer token may hold a draft-reading role. `getPage` serves only the current published
+  snapshot (no live fallback).
+- CMS review is bound to CONTENT. `getPage({ preview: true })` returns `contentHash`
+  (`pageContentHash`: page minus `status`/`translations`, plus regions, stable JSON, SHA-256);
+  `approve` REQUIRES it as `expectedContentHash` (409 on mismatch) and publishes the very
+  snapshot it hashed. The editor fetches the current preview right before an approve and sends
+  its hash only if EVERY value that hash covers equals the screen's (`matchesScreen`, driven by
+  the fresh side's keys, so nothing hashed goes unchecked; the editor's own inline saves leave
+  the loaded hash stale), else it shows the new content for a fresh review. `schedulePage` freezes the snapshot into a `scheduled` revision whose id
+  rides in the `cms:publish` payload; the task publishes THAT revision and publishes nothing
+  without one (so a publish queued before this shipped logs and does nothing). `deletePage`
+  keeps `scheduledAt`/`unpublishAt`; `cms:publish` refuses a trashed page itself,
+  `cms:unpublish` archives regardless, and `restorePage` drops a publish that came due while
+  trashed (`scheduleCleared: true`).
+- CMS preview links read AS THE MINTER: `PreviewToken`/`CollectionPreviewToken` carry `u`
+  (userId) and `ro` (non-`__` roles), and the redeem routes pass exactly those to
+  `callPrivileged({ roles, userId })`, never a configured role union. A token without a minter
+  is refused, minting needs an identity with a `userId`, the token also carries the minting
+  session's `iat` (`ia`), redemption runs `isIdentityRevoked` on that (the denylist AND a
+  not-before, so a password reset kills links its retired sessions minted; needs the `KV`
+  binding, fails closed without it, and a link without `ia` fails once a not-before is set), and a link's TTL is
+  capped at the session TTL unless `maxPreviewTtlSeconds` raises it. An app's OWN route over a preview token (one redeeming into its own handler) uses
+  `previewRedeemer(env, payload)` after `verifyToken`, for the same refusal rules. `cmsRoutes` no longer takes
+  `handlers`/`collectionHandlers`/`viewerRoles`.
+- `createMedia` accepts only a key under `${tenant}/media/`, once per key. `purgeMedia` deletes
+  the object FIRST and lets a failure propagate (the row is the only handle on the key).
+- Field option sources are DECLARED: `createCmsHandlers({ optionSources: { name: query(...) }
+  })`. Query handlers only, registered by `createCmsHandlers`, reported as
+  `listCmsCapabilities().optionSources`; editor-authored schemas naming anything else are a 400
+  (`normalizeFieldSchema(raw, path, optionSources)`), `createCollectionHandlers` throws at boot
+  for an undeclared collection source, `cmsBootstrap(defs, { optionSources })` (the same map) does
+  the same for code-defined block and content types (without it, it WARNS naming the unchecked
+  sources: an undeclared one boots and its picker stays empty), and the editor dispatches a field's source only through
+  `Api.callOptionSource`, which refuses undeclared names (the call carries the VIEWER's token,
+  so an arbitrary handler name was a confused deputy).
+- `@pramen/analytics`: `createAnalyticsSink({ tenants })` and `createAnalyticsQueues({ tenants
+  })` (default `["main"]`) drop events for any other tenant: `/collect` is pre-auth and must
+  never let a visitor name the tenant. `/collect` reads its body through `readCapped`
+  (content-length precheck + bounded stream read), never `request.text()`.
 - CMS locales (`@pramen/cms`): a deployment DECLARES what it publishes in,
   `createCmsHandlers({ locales: ["cs", "en"] })`, and the editor renders its i18n surface
   off `listCmsCapabilities` (the pages-side counterpart to a collection's `supports: [...]`),
@@ -578,6 +790,11 @@ log) for independent single-writer serialization and storage.
 - `insert`/`update` echo the persisted row projected to the caller's readable fields
   ∪ the columns they wrote ∪ the PK. Never leaks an unreadable field, never `{}`
   (a write-only caller still gets the generated id). `projectWrite` in `runtime/db.ts`.
+  "Readable" includes the read scope's `where`, judged on the persisted row (post-image):
+  a caller who may update or create rows it cannot READ gets back only the PK and what it
+  wrote. It used to get every readable column of such a row, which a `find` would never
+  have returned. So a trash move (`deletedAt` set, row leaves a `deletedAt IS NULL` read
+  scope) echoes narrowly too; read the row back with a scope that admits it if you need it.
 - SQLite (DO) has no boolean type: booleans are stored as INTEGER 0/1; binding
   coercion lives in `runtime/db.ts` and `read-engine.ts`.
 - CORS for browser clients is opt-in via the `CORS_ORIGINS` var (comma-separated
