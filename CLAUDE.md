@@ -69,6 +69,8 @@ serving the dev secrets is what this refuses), and `JWKS_URL` without BOTH `AUTH
 `AUTH_ISSUER` (any host). The request host is the signal, never a var like APP_URL: the failure
 caught is oblaka rendering the whole LOCAL vars block into a deploy, APP_URL=localhost included.
 A Worker has no startup hook that sees env, so a 500 to everything is how it refuses to start.
+A service binding call (`https://cms/…`) is NOT local (#92): the caller sends the same host on a
+deployment. The local remedy is the callee's `.dev.vars` (docs: auth-and-tenancy).
 
 **The env must reach OBLAKA, not wrangler.** oblaka falls back to env `local` when given neither
 `--env` nor `CLOUDFLARE_ENV`, even with `--remote`, and the local block carries a published

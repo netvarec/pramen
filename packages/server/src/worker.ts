@@ -180,14 +180,22 @@ export function misconfiguration(env: Env, hostname: string): string | null {
     return "JWKS_URL is set without AUTH_AUDIENCE and AUTH_ISSUER. Set both, so only tokens issued for this service are accepted.";
   }
   if (isLocalHost(hostname, { lan: env.PRAMEN_DEV_ALLOW_LAN === "true" })) return null;
-  const dev: string[] = [];
-  if (env.PRAMEN_DEV_SEED === "true") dev.push("PRAMEN_DEV_SEED=true");
-  if (!env.JWKS_URL && env.AUTH_SECRET === DEV_SECRET) dev.push("AUTH_SECRET is the published dev secret");
-  if (env.FILES_SECRET === DEV_FILES_SECRET) dev.push("FILES_SECRET is the published dev secret");
+  // [what is wrong, what to put in .dev.vars instead]
+  const dev = (
+    [
+      [env.PRAMEN_DEV_SEED === "true", "PRAMEN_DEV_SEED=true", "PRAMEN_DEV_SEED=false"],
+      [!env.JWKS_URL && env.AUTH_SECRET === DEV_SECRET, "AUTH_SECRET is the published dev secret", "AUTH_SECRET"],
+      [env.FILES_SECRET === DEV_FILES_SECRET, "FILES_SECRET is the published dev secret", "FILES_SECRET"],
+    ] as const
+  ).filter(([hit]) => hit);
   if (dev.length === 0) return null;
+  // The second remedy is for a Worker called through a service binding in local dev: the
+  // caller names the host (`https://cms/…`), and it names the same one on a deployment, so it
+  // can never count as local (#92). No host test tells the two cases apart, so both are said.
   return (
-    `dev-only configuration on non-local host '${hostname}': ${dev.join(", ")}. ` +
-    `The local env's vars reached a deployment: pass a non-local --env to oblaka and set real secrets on the deployed script.`
+    `dev-only configuration on non-local host '${hostname}': ${dev.map(([, what]) => what).join(", ")}. ` +
+    `If the local env's vars reached a deployment: pass a non-local --env to oblaka and set real secrets on the deployed script. ` +
+    `If this is local dev behind a service binding: set ${dev.map(([, , fix]) => fix).join(", ")} in this Worker's .dev.vars (never deployed), secrets as fresh random values.`
   );
 }
 

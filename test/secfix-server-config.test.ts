@@ -86,6 +86,19 @@ describe("dev-only values on a deployed host", () => {
     expect(misconfiguration({ AUTH_SECRET: "real-secret-xxxxxxxx", FILES_SECRET: DEV_FILES_SECRET } as Env, host)).toContain("FILES_SECRET");
   });
 
+  test("a service binding host is refused like any other, and the message names what .dev.vars must override", async () => {
+    // `env.CMS.fetch("https://cms/…")` names the same host in dev and on a deployment, so it
+    // can't be local (#92). The refusal stands; the message carries the local remedy.
+    const r = await hit(LOCAL_VARS, "https://cms/rpc/anything", { method: "POST", body: "{}" });
+    expect(r.status).toBe(500);
+    expect(misconfiguration(LOCAL_VARS, "cms")).toContain("set PRAMEN_DEV_SEED=false, AUTH_SECRET, FILES_SECRET in this Worker's .dev.vars");
+    expect(misconfiguration({ AUTH_SECRET: "real-secret-xxxxxxxx", FILES_SECRET: DEV_FILES_SECRET } as Env, "cms")).toContain("set FILES_SECRET in");
+    expect(misconfiguration({ AUTH_SECRET: DEV_SECRET, JWKS_URL: "https://idp/jwks", AUTH_AUDIENCE: "a", AUTH_ISSUER: "i", PRAMEN_DEV_SEED: "true" } as Env, "cms")).toContain("set PRAMEN_DEV_SEED=false in");
+    // What the remedy produces is served.
+    const local = { ...LOCAL_VARS, AUTH_SECRET: "dev-local-9f2c", FILES_SECRET: "dev-local-files-41ab", PRAMEN_DEV_SEED: "false" };
+    expect((await hit(local, "https://cms/rpc/anything", { method: "POST", body: "{}" })).status).toBe(200);
+  });
+
   test("APP_URL=localhost in the vars does not make a deployed host local", () => {
     expect(misconfiguration({ AUTH_SECRET: DEV_SECRET, APP_URL: "http://localhost:8787" } as unknown as Env, "app.example.com")).not.toBeNull();
   });

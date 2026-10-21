@@ -45,6 +45,9 @@ through). A forged or unsigned request gets no identity. Verification is pluggab
 The Worker also refuses to serve (`500` on every request, logged once) a non-local host
 while dev-only values are configured: `PRAMEN_DEV_SEED=true`, or the published dev
 `AUTH_SECRET` / `FILES_SECRET`. That catches the local vars block reaching a deployment.
+A Worker behind a service binding sees a non-local host in dev too; see
+[Dev-only values never serve a deployment](docs/src/content/docs/auth-and-tenancy.md) for the
+`.dev.vars` override.
 
 The core only *verifies* (bring your own IdP: Clerk/Auth0/WorkOS/Cloudflare Access
 all work via JWKS). To *issue* logins without a third party, add the optional

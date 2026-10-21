@@ -65,6 +65,27 @@ every request on a non-local host with `500` and logs why. Local means `localhos
 `127.0.0.1`, `[::1]` and `*.localhost`; the request host is the signal, not a var such as
 `APP_URL`, since the failure being caught is the whole local vars block arriving at once.
 
+A Worker called through a **service binding** (a site calling its CMS with
+`env.CMS.fetch("https://cms/…")`) sees the host the caller wrote, here `cms`. That is not
+local, and it can't be: the caller sends the same string on a deployment, and a CMS
+reachable only through a binding still honors tokens the site forwards to it (preview
+links, form tokens), which the published dev secret lets anyone forge. So locally, override
+the dev-only values in a `.dev.vars` next to that Worker's `wrangler.jsonc`. It takes
+precedence over `vars` and is never deployed. The refusal message lists exactly which
+values to override:
+
+```ini
+# .dev.vars of the Worker behind the binding; generate each secret: openssl rand -hex 32
+AUTH_SECRET=dev-<generated>
+FILES_SECRET=dev-<generated>
+# only if the local env sets it: the demo admin can't be offered on a non-local host
+PRAMEN_DEV_SEED=false
+```
+
+Whatever signs dev tokens has to use the new secret too: the `pramen` CLI reads
+`AUTH_SECRET` from its own environment, so run it as
+`AUTH_SECRET=$(sed -n 's/^AUTH_SECRET=//p' .dev.vars) bun run pramen …`.
+
 ## Login with @pramen/auth
 
 `@pramen/auth` is an **optional** package that issues HS256 tokens the core verifier
