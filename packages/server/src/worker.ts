@@ -166,7 +166,8 @@ export function isLocalHost(hostname: string, opts: { lan?: boolean } = {}): boo
  *
  *  - Dev-only values on a NON-LOCAL host: `PRAMEN_DEV_SEED=true` (a known admin
  *    credential), `AUTH_SECRET` equal to the published DEV_SECRET (anyone can forge an
- *    admin token; moot when JWKS_URL replaces HS256), or `FILES_SECRET` equal to the
+ *    admin token; under JWKS_URL it still signs file urls, CMS preview links and OIDC
+ *    sessions wherever no dedicated secret is set), or `FILES_SECRET` equal to the
  *    published dev files secret (anyone can sign file urls). The request host is the
  *    signal, NOT a var such as APP_URL: the failure this guards against is the whole
  *    local vars block reaching a deployment, `APP_URL=http://localhost:…` included, so a
@@ -180,22 +181,22 @@ export function misconfiguration(env: Env, hostname: string): string | null {
     return "JWKS_URL is set without AUTH_AUDIENCE and AUTH_ISSUER. Set both, so only tokens issued for this service are accepted.";
   }
   if (isLocalHost(hostname, { lan: env.PRAMEN_DEV_ALLOW_LAN === "true" })) return null;
-  // [what is wrong, what to put in .dev.vars instead]
-  const dev = (
-    [
-      [env.PRAMEN_DEV_SEED === "true", "PRAMEN_DEV_SEED=true", "PRAMEN_DEV_SEED=false"],
-      [!env.JWKS_URL && env.AUTH_SECRET === DEV_SECRET, "AUTH_SECRET is the published dev secret", "AUTH_SECRET"],
-      [env.FILES_SECRET === DEV_FILES_SECRET, "FILES_SECRET is the published dev secret", "FILES_SECRET"],
-    ] as const
-  ).filter(([hit]) => hit);
+  const dev = [
+    { hit: env.PRAMEN_DEV_SEED === "true", what: "PRAMEN_DEV_SEED=true", fix: "PRAMEN_DEV_SEED=false" },
+    { hit: env.AUTH_SECRET === DEV_SECRET, what: "AUTH_SECRET is the published dev secret", fix: "AUTH_SECRET" },
+    { hit: env.FILES_SECRET === DEV_FILES_SECRET, what: "FILES_SECRET is the published dev secret", fix: "FILES_SECRET" },
+  ].filter((d) => d.hit);
   if (dev.length === 0) return null;
   // The second remedy is for a Worker called through a service binding in local dev: the
   // caller names the host (`https://cms/…`), and it names the same one on a deployment, so it
   // can never count as local (#92). No host test tells the two cases apart, so both are said.
+  // The same reason makes a binding URL that names a localhost host a bypass: the caller
+  // would send it on a deployment too, so the message rules that "fix" out explicitly.
   return (
-    `dev-only configuration on non-local host '${hostname}': ${dev.map(([, what]) => what).join(", ")}. ` +
+    `dev-only configuration on non-local host '${hostname}': ${dev.map((d) => d.what).join(", ")}. ` +
     `If the local env's vars reached a deployment: pass a non-local --env to oblaka and set real secrets on the deployed script. ` +
-    `If this is local dev behind a service binding: set ${dev.map(([, , fix]) => fix).join(", ")} in this Worker's .dev.vars (never deployed), secrets as fresh random values.`
+    `If this is local dev behind a service binding: set ${dev.map((d) => d.fix).join(", ")} in this Worker's .dev.vars (never deployed), secrets as fresh random values, ` +
+    `and never point the binding at a localhost name to get past this check: the deployed caller would send it too.`
   );
 }
 

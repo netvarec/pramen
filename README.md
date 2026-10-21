@@ -46,7 +46,7 @@ The Worker also refuses to serve (`500` on every request, logged once) a non-loc
 while dev-only values are configured: `PRAMEN_DEV_SEED=true`, or the published dev
 `AUTH_SECRET` / `FILES_SECRET`. That catches the local vars block reaching a deployment.
 A Worker behind a service binding sees a non-local host in dev too; see
-[Dev-only values never serve a deployment](docs/src/content/docs/auth-and-tenancy.md) for the
+[Dev-only values never serve a deployment](docs/src/content/docs/auth-and-tenancy.md#dev-only-values-never-serve-a-deployment) for the
 `.dev.vars` override.
 
 The core only *verifies* (bring your own IdP: Clerk/Auth0/WorkOS/Cloudflare Access

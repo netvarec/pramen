@@ -61,7 +61,7 @@ tsconfigs set `customConditions: ["development"]`.
 The Worker REFUSES TO SERVE (500 on every request, files/media/public routes included, logged
 once per isolate) in two configurations, checked first in `makeWorker`'s fetch by
 `misconfiguration(env, hostname)`: dev-only values on a NON-LOCAL host (`PRAMEN_DEV_SEED=true`,
-`AUTH_SECRET === DEV_SECRET` without `JWKS_URL`, or `FILES_SECRET === DEV_FILES_SECRET`; local =
+`AUTH_SECRET === DEV_SECRET` (JWKS_URL or not: it still signs files/previews), or `FILES_SECRET === DEV_FILES_SECRET`; local =
 loopback only: localhost / *.localhost / 127.0.0.0/8 / [::1]; `PRAMEN_DEV_ALLOW_LAN=true`, set by
 hand to open the dev server from a phone, adds the private ranges and *.local, never a tunnel's
 public hostname; it is not inferred from the host because a staging box on a private network
@@ -70,7 +70,8 @@ serving the dev secrets is what this refuses), and `JWKS_URL` without BOTH `AUTH
 caught is oblaka rendering the whole LOCAL vars block into a deploy, APP_URL=localhost included.
 A Worker has no startup hook that sees env, so a 500 to everything is how it refuses to start.
 A service binding call (`https://cms/…`) is NOT local (#92): the caller sends the same host on a
-deployment. The local remedy is the callee's `.dev.vars` (docs: auth-and-tenancy).
+deployment, which also makes a binding URL naming a `*.localhost` host a BYPASS of this guard. The
+local remedy is the callee's `.dev.vars` (docs: auth-and-tenancy).
 
 **The env must reach OBLAKA, not wrangler.** oblaka falls back to env `local` when given neither
 `--env` nor `CLOUDFLARE_ENV`, even with `--remote`, and the local block carries a published

@@ -93,9 +93,9 @@ describe("dev-only values on a deployed host", () => {
     expect(r.status).toBe(500);
     expect(misconfiguration(LOCAL_VARS, "cms")).toContain("set PRAMEN_DEV_SEED=false, AUTH_SECRET, FILES_SECRET in this Worker's .dev.vars");
     expect(misconfiguration({ AUTH_SECRET: "real-secret-xxxxxxxx", FILES_SECRET: DEV_FILES_SECRET } as Env, "cms")).toContain("set FILES_SECRET in");
-    expect(misconfiguration({ AUTH_SECRET: DEV_SECRET, JWKS_URL: "https://idp/jwks", AUTH_AUDIENCE: "a", AUTH_ISSUER: "i", PRAMEN_DEV_SEED: "true" } as Env, "cms")).toContain("set PRAMEN_DEV_SEED=false in");
+    expect(misconfiguration({ AUTH_SECRET: "real-secret-xxxxxxxx", PRAMEN_DEV_SEED: "true" } as Env, "cms")).toContain("set PRAMEN_DEV_SEED=false in");
     // What the remedy produces is served.
-    const local = { ...LOCAL_VARS, AUTH_SECRET: "dev-local-9f2c", FILES_SECRET: "dev-local-files-41ab", PRAMEN_DEV_SEED: "false" };
+    const local = { ...LOCAL_VARS, AUTH_SECRET: "dev-3f9c1a7e5b2d4c6f8a0e1b3d5c7f9a2e", FILES_SECRET: "dev-8b1d3f5a7c9e0b2d4f6a8c1e3b5d7f9a", PRAMEN_DEV_SEED: "false" };
     expect((await hit(local, "https://cms/rpc/anything", { method: "POST", body: "{}" })).status).toBe(200);
   });
 
@@ -122,8 +122,8 @@ describe("dev-only values on a deployed host", () => {
     expect(r.status).toBe(200);
   });
 
-  test("the dev AUTH_SECRET is moot (and not refused) when JWKS_URL replaces HS256", () => {
-    expect(misconfiguration({ AUTH_SECRET: DEV_SECRET, JWKS_URL: "https://idp/jwks", AUTH_AUDIENCE: "a", AUTH_ISSUER: "i" } as Env, "app.example.com")).toBeNull();
+  test("the dev AUTH_SECRET is refused under JWKS_URL too: it still signs file urls and preview links", () => {
+    expect(misconfiguration({ AUTH_SECRET: DEV_SECRET, JWKS_URL: "https://idp/jwks", AUTH_AUDIENCE: "a", AUTH_ISSUER: "i" } as Env, "app.example.com")).toContain("AUTH_SECRET");
   });
 });
 

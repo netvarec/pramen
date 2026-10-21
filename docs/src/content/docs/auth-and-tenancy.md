@@ -64,6 +64,8 @@ The local `oblaka.ts` env carries values that are public by design: the dev
 every request on a non-local host with `500` and logs why. Local means `localhost`,
 `127.0.0.1`, `[::1]` and `*.localhost`; the request host is the signal, not a var such as
 `APP_URL`, since the failure being caught is the whole local vars block arriving at once.
+The dev `AUTH_SECRET` is refused under `JWKS_URL` as well: tokens are then verified against
+the IdP, but file urls and CMS preview links still fall back to `AUTH_SECRET`.
 
 A Worker called through a **service binding** (a site calling its CMS with
 `env.CMS.fetch("https://cms/…")`) sees the host the caller wrote, here `cms`. That is not
@@ -72,7 +74,8 @@ reachable only through a binding still honors tokens the site forwards to it (pr
 links, form tokens), which the published dev secret lets anyone forge. So locally, override
 the dev-only values in a `.dev.vars` next to that Worker's `wrangler.jsonc`. It takes
 precedence over `vars` and is never deployed. The refusal message lists exactly which
-values to override:
+values to override. Don't rename the binding URL to `https://cms.localhost/` instead: the
+deployed site sends that same host, so on a deployment the check would be off.
 
 ```ini
 # .dev.vars of the Worker behind the binding; generate each secret: openssl rand -hex 32
@@ -82,8 +85,10 @@ FILES_SECRET=dev-<generated>
 PRAMEN_DEV_SEED=false
 ```
 
-Whatever signs dev tokens has to use the new secret too: the `pramen` CLI reads
-`AUTH_SECRET` from its own environment, so run it as
+Keep the values unquoted. On `bun run dev` (lopata) a variable exported in your shell still
+beats `.dev.vars`, so don't leave an `AUTH_SECRET` exported there. Whatever signs dev tokens
+has to use the new secret too: the `pramen` CLI reads `AUTH_SECRET` from its own environment,
+so pass it for the one command:
 `AUTH_SECRET=$(sed -n 's/^AUTH_SECRET=//p' .dev.vars) bun run pramen …`.
 
 ## Login with @pramen/auth
