@@ -16,7 +16,7 @@ const handlers = (status: string) => pageWorkflowActions(status).map((a) => a.ac
 describe("what a page can do from where it is", () => {
   test("a draft's primary move is Publish", () => {
     expect(handlers("draft")[0]).toBe("publishPage");
-    expect(labels("draft")).toEqual(["Publish", "Submit for review"]);
+    expect(labels("draft")).toEqual(["Publish", "Submit for review", "Archive", "Delete"]);
   });
 
   test("a page in review is waiting for Approve, not for Publish", () => {
@@ -53,7 +53,19 @@ describe("what a page can do from where it is", () => {
   test("rejected and archived get the draft actions, since they are editable again", () => {
     // The old chain's `default` branch, made explicit: these are the states you fix and
     // resubmit from, so offering nothing (or offering Approve) would strand the page.
-    for (const status of ["rejected", "archived"]) expect(handlers(status)).toEqual(handlers("draft"));
+    expect(handlers("rejected")).toEqual(handlers("draft"));
+    // Archived differs only in not offering Archive again.
+    expect(handlers("archived")).toEqual(handlers("draft").filter((h) => h !== "archivePage"));
+  });
+
+  test("archive and delete are offered from every state, last, and never as the primary button", () => {
+    for (const status of ["draft", "review", "published", "rejected"]) {
+      const h = handlers(status);
+      expect(h.slice(-2)).toEqual(["archivePage", "deletePage"]);
+      expect(h[0]).not.toBe("deletePage");
+    }
+    expect(handlers("archived").at(-1)).toBe("deletePage");
+    expect(handlers("archived")).not.toContain("archivePage");
   });
 
   test("an unknown status still offers a way forward rather than nothing", () => {

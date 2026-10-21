@@ -16,6 +16,14 @@ there are no backward-compatibility guarantees yet.
 
 ### Added
 
+- **Archive and delete a page from the editor (`@pramen/cms`, `@pramen/cms-editor`).** New
+  `archivePage` mutation (editor-gated like `unpublishPage`): takes the page off the site,
+  files it as `archived` (the state a scheduled takedown ends in), cancels pending schedules and
+  writes an `archive` audit row; publishing brings it back. The page toolbar's overflow menu now
+  ends with **Archive** and **Delete** (the existing soft `deletePage`) from every state, both
+  behind a confirmation; after a delete the editor returns to the list. An archived page offers
+  Delete but not Archive again.
+
 - **`account` option: which account forms the editor offers (`@pramen/cms`,
   `@pramen/cms-editor`; #81).** `createCmsHandlers({ account: { changeEmail?, changePassword?,
   managedBy?: { name, url? } } })` is declared in `listCmsCapabilities().account`, and the

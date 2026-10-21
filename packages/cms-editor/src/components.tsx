@@ -86,6 +86,10 @@ export interface PageAction {
  * destructive action belongs anyway.
  */
 export function pageWorkflowActions(status: string): PageAction[] {
+  return [...transitionsFrom(status), ...retireActions(status)];
+}
+
+function transitionsFrom(status: string): PageAction[] {
   switch (status) {
     case "review":
       return [
@@ -108,6 +112,18 @@ export function pageWorkflowActions(status: string): PageAction[] {
         { label: t("workflow.submitForReview"), action: "submitForReview" },
       ];
   }
+}
+
+/**
+ * Putting a page away, from any state, always LAST: they are the destructive end of the menu
+ * and never the toolbar's primary button. Archive (`archivePage`) takes the page off the site
+ * and keeps it as `archived`; an archived page offers only Delete, since Publish already
+ * brings it back. Delete (`deletePage`) is the soft delete: the row stays, every list and the
+ * site stop showing it. Both ask first (`PageEditor`'s `act`).
+ */
+function retireActions(status: string): PageAction[] {
+  const archive = status === "archived" ? [] : [{ label: t("workflow.archive"), action: "archivePage" }];
+  return [...archive, { label: t("workflow.delete"), action: "deletePage" }];
 }
 
 /** The tabs a deployment actually shows. ONE definition, used by the tab bar, the panel
@@ -1144,6 +1160,9 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, backLabe
   const [acting, setActing] = useState(false);
   /** Run a workflow transition from the toolbar. */
   const act = async (name: string) => {
+    // Taking the page away asks first: the toolbar menu is one click from either.
+    if (name === "archivePage" && !window.confirm(t("pageEditor.confirmArchive", { title: page.title }))) return;
+    if (name === "deletePage" && !window.confirm(t("pageEditor.confirmDelete", { title: page.title }))) return;
     setActing(true);
     try {
       // `approve` is bound to the content on screen: the server publishes only if the page
@@ -1167,6 +1186,11 @@ export function PageEditor({ api, page, blockTypes, tab, onTab, onBack, backLabe
         input.expectedContentHash = fresh.contentHash;
       }
       const r = await api.call<{ page?: Page }>(name, input);
+      // A deleted page has no screen left to show: back to the list it was on.
+      if (name === "deletePage") {
+        onBack();
+        return;
+      }
       if (r?.page) onChange(r.page);
     } catch (e) {
       setErr(errMsg(e));
