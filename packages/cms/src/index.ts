@@ -5270,6 +5270,30 @@ export function createCmsHandlers(opts: CmsHandlerOpts = {}) {
       },
     }),
 
+    /** Archive a page by hand: off the site like `unpublishPage`, but filed as `archived`, the
+     * state a scheduled takedown (`cms:unpublish`) already ends in. For "this is over, keep it
+     * for the record" (last year's event), as opposed to `draft`, "not ready yet": the lists
+     * tell the two apart and `listEventOptions`-style pickers skip archived pages. Pending
+     * schedules are cancelled for the same reason `unpublishPage` cancels them. Reversible:
+     * an archived page offers Publish again. Editor-gated like `unpublishPage`, since taking
+     * a page down is not publishing it. */
+    archivePage: mutation(async (ctx, input: { pageId: string }) => {
+      const db = cdb(ctx);
+      const rows = await db.find({ from: "cms_pages", where: { id: input.pageId }, limit: 1 });
+      const from = rows[0] ? String(rows[0].status) : undefined;
+      const updated = await db.update("cms_pages", input.pageId, { status: "archived", scheduledAt: null, unpublishAt: null, updatedAt: nowStamp() });
+      if (!updated) throw notFound("page");
+      await writeAudit(db, { pageId: input.pageId, action: "archive", from, to: "archived", actor: actorOf(ctx) });
+      return { ok: true, page: updated };
+    }, {
+      ...editor,
+      input: (raw): { pageId: string } => {
+        const o = asObj(raw);
+        if (typeof o.pageId !== "string") throw new BadRequest("pageId is required");
+        return o as never;
+      },
+    }),
+
     /** Schedule a page to publish at `publishAt` (epoch ms), and optionally unpublish at
      * `unpublishAt`. Enqueues delayed outbox tasks (atomic with this write).
      *
