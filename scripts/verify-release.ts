@@ -15,8 +15,9 @@
 // tarballs (cms-editor, admin, analytics) still answered 404, and a check that stopped at
 // `npm view` reported the release complete. A consumer bumping in that window gets an
 // install failure. So this checks the install packument lists the version, downloads the
-// tarball, and compares its SHA-1 with the `dist.shasum` the registry published (the same
-// value the run log prints as `shasum:`).
+// tarball it names, and compares the bytes with both digests the packument published: the
+// SHA-1 `dist.shasum` (what the run log prints as `shasum:`) and the sha512 `dist.integrity`
+// installers verify.
 //
 // Polls, because a 404 shortly after publishing is normal. A shasum MISMATCH is not lag
 // and fails at once.
@@ -25,10 +26,11 @@ import { PUBLISH_PKGS } from "./packages";
 
 const REGISTRY = "https://registry.npmjs.org";
 const POLL_MS = 20_000;
-/** Per request. A stalled connection becomes a pending result and is retried next round,
- * instead of holding the whole round (and the deadline check) forever. */
-const REQUEST_MS = 60_000;
-const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+/** Per ROUND, shared by every request in it and capped at the time left, so a stalled
+ * connection becomes a pending result instead of holding the round past the deadline. */
+const ROUND_MS = 60_000;
+/** A version as the tags spell it (`v0.0.93`) or as npm does (`0.0.93`, `0.3.0-beta.1`). */
+const VERSION = /^v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/;
 const SHA1 = /^[0-9a-f]{40}$/;
 
 // --- arguments: one optional version, one optional `--timeout=<s>`, nothing else -----------
@@ -38,10 +40,10 @@ for (const arg of process.argv.slice(2)) {
   if (arg.startsWith("--timeout=")) {
     timeoutSec = Number(arg.slice("--timeout=".length));
     if (!Number.isFinite(timeoutSec) || timeoutSec <= 0) throw new Error(`--timeout must be a positive number of seconds, got ${JSON.stringify(arg)}`);
-  } else if (SEMVER.test(arg) && version === undefined) {
-    version = arg;
+  } else if (VERSION.test(arg) && version === undefined) {
+    version = VERSION.exec(arg)?.[1];
   } else {
-    throw new Error(`unexpected argument ${JSON.stringify(arg)}; usage: verify-release.ts [X.Y.Z] [--timeout=<seconds>]`);
+    throw new Error(`unexpected argument ${JSON.stringify(arg)}; usage: verify-release.ts [X.Y.Z | vX.Y.Z] [--timeout=<seconds>] (no build metadata)`);
   }
 }
 
@@ -60,58 +62,59 @@ if (version === undefined) {
 
 type Check = { ok: true } | { ok: false; reason: string; fatal?: boolean };
 
-/** `dist.shasum`, or `undefined` if the object has no usable one. */
-function shasumOf(entry: { dist?: { shasum?: unknown } } | undefined): string | undefined {
-  const shasum = String(entry?.dist?.shasum ?? "");
-  return SHA1.test(shasum) ? shasum : undefined;
-}
+/** A version's entry in the install packument: the only fields this reads. */
+type DistEntry = { dist?: { tarball?: unknown; shasum?: unknown; integrity?: unknown } };
 
-/** The tarball url, or `undefined` if the object has no usable one. */
-function tarballOf(entry: { dist?: { tarball?: unknown } } | undefined): URL | undefined {
+const SHA512 = /^sha512-[A-Za-z0-9+/]+={0,2}$/;
+
+/** The entry's tarball and digests, or `undefined` while any of them is not usable yet. */
+function distOf(entry: DistEntry): { tarball: URL; shasum: string; integrity: string } | undefined {
+  const shasum = String(entry.dist?.shasum ?? "");
+  const integrity = String(entry.dist?.integrity ?? "");
+  if (!SHA1.test(shasum) || !SHA512.test(integrity)) return undefined;
   try {
-    return new URL(String(entry?.dist?.tarball));
+    return { tarball: new URL(String(entry.dist?.tarball)), shasum, integrity };
   } catch {
     return undefined;
   }
 }
 
-const get = (url: string | URL, headers?: Record<string, string>) => fetch(url, { headers, signal: AbortSignal.timeout(REQUEST_MS) });
-
-/** A non-200 answer's body is never read; release the connection it holds. */
-async function notOk(res: Response, what: string): Promise<Check> {
-  await res.body?.cancel();
+/** A non-200 answer's body is never read; release its connection without letting a failed
+ * cancel replace the status in the report. */
+function notOk(res: Response, what: string): Check {
+  res.body?.cancel().catch(() => {});
   return { ok: false, reason: `${what} ${res.status}` };
 }
 
-async function check(name: string): Promise<Check> {
-  // The packument in the abbreviated form installers request: does a resolve find it?
-  const packument = await get(`${REGISTRY}/${name}`, { accept: "application/vnd.npm.install-v1+json" });
+async function check(name: string, signal: AbortSignal): Promise<Check> {
+  // The packument in the abbreviated form installers request: does a resolve find it? Its
+  // entry also names the tarball and its digests, so no second metadata request is needed.
+  const packument = await fetch(`${REGISTRY}/${name}`, { headers: { accept: "application/vnd.npm.install-v1+json" }, signal });
   if (packument.status !== 200) return notOk(packument, "packument");
-  const listed = ((await packument.json()) as { versions?: Record<string, { dist?: { tarball?: unknown; shasum?: unknown } }> }).versions?.[version as string];
+  const listed = ((await packument.json()) as { versions?: Record<string, DistEntry> }).versions?.[version as string];
   if (!listed) return { ok: false, reason: "packument does not list it yet" };
+  // An incomplete entry is lag, never a mismatch: only well-formed digests are compared.
+  const dist = distOf(listed);
+  if (!dist) return { ok: false, reason: "packument entry has no usable dist.tarball/shasum/integrity yet" };
 
-  const doc = await get(`${REGISTRY}/${name}/${version}`);
-  if (doc.status !== 200) return notOk(doc, "version document");
-  const entry = (await doc.json()) as { dist?: { tarball?: unknown; shasum?: unknown } };
-  const shasum = shasumOf(entry);
-  const tarball = tarballOf(entry);
-  if (!shasum || !tarball) return { ok: false, reason: "version document has no usable dist.tarball/dist.shasum" };
-  if (shasumOf(listed) !== shasum) return { ok: false, fatal: true, reason: `packument shasum ${shasumOf(listed)} != version document shasum ${shasum}` };
-
-  const tgz = await get(tarball);
+  const tgz = await fetch(dist.tarball, { signal });
   if (tgz.status !== 200) return notOk(tgz, "tarball");
-  const sha1 = new Bun.CryptoHasher("sha1").update(await tgz.arrayBuffer()).digest("hex");
-  if (sha1 !== shasum) return { ok: false, fatal: true, reason: `tarball shasum ${sha1} != dist.shasum ${shasum}` };
+  const bytes = await tgz.arrayBuffer();
+  const sha1 = new Bun.CryptoHasher("sha1").update(bytes).digest("hex");
+  if (sha1 !== dist.shasum) return { ok: false, fatal: true, reason: `tarball sha1 ${sha1} != dist.shasum ${dist.shasum}` };
+  const sha512 = `sha512-${new Bun.CryptoHasher("sha512").update(bytes).digest("base64")}`;
+  if (sha512 !== dist.integrity) return { ok: false, fatal: true, reason: `tarball ${sha512} != dist.integrity ${dist.integrity}` };
   return { ok: true };
 }
 
 const deadline = Date.now() + timeoutSec * 1000;
 const pending = new Set(names);
-console.log(`verifying ${names.length} packages at ${version} (packument lists it, tarball 200 + shasum), up to ${timeoutSec}s`);
+console.log(`verifying ${names.length} packages at ${version} (packument lists it, tarball 200 + sha1 + sha512), up to ${timeoutSec}s`);
 for (;;) {
   // Only what is still pending: a verified tarball does not need downloading again.
+  const signal = AbortSignal.timeout(Math.max(1_000, Math.min(ROUND_MS, deadline - Date.now())));
   const results = await Promise.all(
-    [...pending].map(async (name) => ({ name, result: await check(name).catch((e: Error) => ({ ok: false, reason: e?.message ?? String(e) }) as Check) })),
+    [...pending].map(async (name) => ({ name, result: await check(name, signal).catch((e: Error) => ({ ok: false, reason: e?.message ?? String(e) }) as Check) })),
   );
   const stamp = new Date().toISOString().slice(11, 19);
   for (const { name, result } of results) {
@@ -119,12 +122,12 @@ for (;;) {
     else console.log(`${stamp}Z ${name.padEnd(22)} ${result.reason}`);
   }
   if (pending.size === 0) {
-    console.log(`${stamp}Z all ${names.length} packages at ${version} are listed, and their tarballs answer 200 and match their shasum`);
+    console.log(`${stamp}Z all ${names.length} packages at ${version} are listed, and their tarballs answer 200 and match shasum + integrity`);
     process.exit(0);
   }
   const fatal = results.find((r) => !r.result.ok && r.result.fatal);
   if (fatal) {
-    console.error(`${fatal.name}: a shasum mismatch is not publish lag; stop and investigate.`);
+    console.error(`${fatal.name}: a digest mismatch is not publish lag; stop and investigate.`);
     process.exit(1);
   }
   const left = deadline - Date.now();
