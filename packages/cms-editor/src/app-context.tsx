@@ -9,6 +9,7 @@ import { Api, clearConfig, isTokenExpired, loadConfig, saveConfig, type Config }
 import { BRAND, SETUP_TITLE, type BrandConfig } from "./brand";
 import { getI18n, useI18n } from "./i18n";
 import { rich } from "./i18n/rich";
+import { CenteredCard } from "./centered-card";
 import { readBackend, type BackendHost } from "./mount";
 import type { AccountProfile } from "./slots";
 import { DEFAULT_CAPABILITIES, type AdminPageMeta, type CmsCapabilities, type CollectionMeta, type ContentType, type JsonValue } from "./types";
@@ -443,33 +444,31 @@ function Setup({ cfg, onSave }: { cfg: Config; onSave: (c: Config) => void }) {
   const [c, setC] = useState(cfg);
   const { t } = useI18n();
   return (
-    <div className="mx-auto mt-[14vh] w-full max-w-[520px] px-6">
-      <div className="rounded-panel border border-border bg-surface-card px-10 py-8 shadow-[0_24px_60px_rgba(30,20,10,0.08)]">
-        {/* `SETUP_TITLE`, not `BRAND.title`: this screen has always read "… cms editor", and
-            the default has to render byte-identical to before the brand seam existed. */}
-        <h1 className="mb-4 text-display text-fg">
-          {BRAND.name} <span className="text-fg-subtle">{SETUP_TITLE}</span>
-        </h1>
-        {/* Two screens, because there are two things a deployment can leave unanswered. When
-            the shell declared a backend there is nothing to point at: asking for a URL that
-            is already known invites someone to type the mount path instead of the origin and
-            get a stream of "non-JSON response" back. */}
-        <p className="mb-6 text-sm text-fg-muted">
-          {BACKEND ? t("setup.intro") : rich(t("setup.introWithWorker"), { code: (s) => <code>{s}</code> })}
-        </p>
-        <div className="flex flex-col gap-4">
-          {BACKEND ? null : (
-            <>
-              <Input label={t("setup.baseUrl")} value={c.baseUrl} onChange={(baseUrl) => setC({ ...c, baseUrl })} placeholder="https://your-worker.workers.dev" />
-              <Input label={t("setup.tenant")} value={c.tenant} onChange={(tenant) => setC({ ...c, tenant })} placeholder="main" />
-            </>
-          )}
-          <Input label={t("setup.token")} value={c.token} onChange={(token) => setC({ ...c, token })} placeholder="eyJ…" />
-          <Button className="mt-2 w-full" onPress={() => onSave(c)} isDisabled={(!BACKEND && !c.baseUrl) || !c.token}>
-            {t("setup.connect")}
-          </Button>
-        </div>
+    <CenteredCard>
+      {/* `SETUP_TITLE`, not `BRAND.title`: this screen has always read "… cms editor", and
+          the default has to render byte-identical to before the brand seam existed. */}
+      <h1 className="mb-4 text-display text-fg">
+        {BRAND.name} <span className="text-fg-subtle">{SETUP_TITLE}</span>
+      </h1>
+      {/* Two screens, because there are two things a deployment can leave unanswered. When
+          the shell declared a backend there is nothing to point at: asking for a URL that
+          is already known invites someone to type the mount path instead of the origin and
+          get a stream of "non-JSON response" back. */}
+      <p className="mb-6 text-sm text-fg-muted">
+        {BACKEND ? t("setup.intro") : rich(t("setup.introWithWorker"), { code: (s) => <code>{s}</code> })}
+      </p>
+      <div className="flex flex-col gap-4">
+        {BACKEND ? null : (
+          <>
+            <Input label={t("setup.baseUrl")} value={c.baseUrl} onChange={(baseUrl) => setC({ ...c, baseUrl })} placeholder="https://your-worker.workers.dev" />
+            <Input label={t("setup.tenant")} value={c.tenant} onChange={(tenant) => setC({ ...c, tenant })} placeholder="main" />
+          </>
+        )}
+        <Input label={t("setup.token")} value={c.token} onChange={(token) => setC({ ...c, token })} placeholder="eyJ…" />
+        <Button className="mt-2 w-full" onPress={() => onSave(c)} isDisabled={(!BACKEND && !c.baseUrl) || !c.token}>
+          {t("setup.connect")}
+        </Button>
       </div>
-    </div>
+    </CenteredCard>
   );
 }

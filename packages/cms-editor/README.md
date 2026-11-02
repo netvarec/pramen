@@ -31,8 +31,9 @@ allow-lists, and the review/publish gates are all enforced server-side.
   `/pages/:pageId?tab=seo`), the browser Back/Forward buttons work, and a refresh restores the
   current view. Routing state lives in the URL; block selection stays local (a transient overlay).
 - **Browser support**: the router needs the Navigation API (Chrome/Edge 105+, current Firefox,
-  Safari 26.2+). In an older browser the editor shows a notice in its configured language
-  (update Safari to 26.2+, or use Chrome or Edge) instead of a blank page.
+  Safari 26.2+, and iOS/iPadOS 26.2+ for every browser there). In an older browser the editor
+  shows a notice in its configured language (what to update, or which browser to use) instead
+  of a blank page, and loads no panel bundles.
 
 ## Run it
 

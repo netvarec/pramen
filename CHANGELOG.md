@@ -608,6 +608,9 @@ there are no backward-compatibility guarantees yet.
 
 ### Changed
 
+- **`@buzola/*` is now `^0.0.25` (`@pramen/cms-editor`).** It requires React 19, which the
+  editor already uses, and its codegen emits `lazyRoute()` route entries.
+
 - **An invalid bearer token is a 401, not anonymous (`@pramen/server`, `@pramen/client`,
   `@pramen/cms-editor`; #76).** A request that SENDS a token the Worker cannot verify
   (expired, forged, malformed, signed with a rotated `AUTH_SECRET` or JWKS key) is answered
@@ -1019,6 +1022,15 @@ there are no backward-compatibility guarantees yet.
 
 ### Fixed
 
+- **The editor no longer leaves a blank page in a browser without the Navigation API
+  (`@pramen/cms-editor`).** Safari before 26.2 (and every browser on iOS/iPadOS before 26.2)
+  has no Navigation API, so buzola's browser adapter threw as the router was built and the
+  editor rendered nothing after sign-in. It now checks with buzola's `isNavigationApiSupported()`
+  before anything else, loads no panel bundles, and shows a notice in the editor's language
+  (Czech or English) saying what to update or which browser to use. The editor builds its own
+  router (scoped adapter, `basePath`), so `BuzolaProvider`'s `unsupportedBrowser` notice does
+  not apply to it.
+
 - **Video would not play in Safari, nor seek anywhere (`@pramen/server`).** Both `/media/` and
   the signed `/files/download` answered every request with the whole object and a 200, and
   Safari will not play a video unless `Range: bytes=0-1` comes back as a 206. Both routes now
@@ -1207,16 +1219,6 @@ there are no backward-compatibility guarantees yet.
   step already tolerated a second runner (lease-claimed ledger, diff-based migrate, upsert
   bootstrap), so a false positive costs a redundant boot, not correctness. `SharedBoot` +
   `observeDriver` in `runtime/boot.ts`, platform-agnostic and unit-tested.
-
-### Fixed
-
-- **The editor no longer leaves a blank page in a browser without the Navigation API
-  (`@pramen/cms-editor`).** Safari before 26.2 has no Navigation API, so buzola's browser
-  adapter threw as the router was built and the editor rendered nothing after sign-in. It now
-  checks with buzola's `isNavigationApiSupported()` before anything else and shows a notice in
-  the editor's language (Czech or English) advising an update to Safari 26.2+ or Chrome/Edge.
-  The editor builds its own router (scoped adapter, `basePath`), so `BuzolaProvider`'s
-  `unsupportedBrowser` notice does not apply to it. `@buzola/*` is now `^0.0.25` (React 19).
 
 ## [0.0.59] - 2026-09-02
 

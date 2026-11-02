@@ -14,19 +14,18 @@
 import { isNavigationApiSupported } from "@buzola/router";
 import type { ReactNode } from "react";
 import { BRAND } from "./brand";
+import { CenteredCard } from "./centered-card";
 import { useI18n } from "./i18n";
 
 /** The notice itself, in the editor's language. */
 export function UnsupportedBrowser() {
   const { t } = useI18n();
   return (
-    <div className="mx-auto mt-[14vh] w-full max-w-[520px] px-6">
-      <div role="alert" className="rounded-panel border border-border bg-surface-card px-10 py-8 shadow-[0_24px_60px_rgba(30,20,10,0.08)]">
-        <p className="mb-2 text-sm text-fg-subtle">{BRAND.name}</p>
-        <h1 className="mb-4 text-display text-fg">{t("unsupported.title")}</h1>
-        <p className="text-sm text-fg-muted">{t("unsupported.body")}</p>
-      </div>
-    </div>
+    <CenteredCard role="alert">
+      <p className="mb-2 text-sm text-fg-subtle">{BRAND.name}</p>
+      <h1 className="mb-4 text-display text-fg">{t("unsupported.title")}</h1>
+      <p className="text-sm text-fg-muted">{t("unsupported.body")}</p>
+    </CenteredCard>
   );
 }
 
@@ -35,8 +34,8 @@ export function UnsupportedBrowser() {
  *
  * `supported` defaults to buzola's own detection, so the editor and the router agree on what
  * "supported" means (it also rules out the Chromium releases whose Navigation API lacked
- * `NavigateEvent.intercept`). Support cannot change while the page is open, so it is read on
- * every render rather than remembered.
+ * `NavigateEvent.intercept`). `main.tsx` passes the answer it already has, because the same
+ * answer decides whether panel bundles are loaded at all.
  */
 export function RequireNavigationApi({ children, supported = isNavigationApiSupported() }: { children: ReactNode; supported?: boolean }) {
   return supported ? children : <UnsupportedBrowser />;
