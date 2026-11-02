@@ -19,9 +19,9 @@
 // SHA-1 `dist.shasum` (what the run log prints as `shasum:`) and the sha512 `dist.integrity`
 // installers verify.
 //
-// Polls, because a 404 shortly after publishing is normal. A digest MISMATCH is not lag and
-// fails at once (a body cut short of its Content-Length already fails the fetch, as an error
-// that is retried, so a mismatch is the bytes themselves).
+// Polls, because a 404 shortly after publishing is normal. A digest MISMATCH is not lag: the
+// tarball is downloaded once more on the spot (a close-delimited response cut short by a proxy
+// resolves truncated instead of failing), and two mismatching downloads fail the run.
 
 import { PUBLISH_PKGS } from "./packages";
 
@@ -68,7 +68,8 @@ type Check = { ok: true } | { ok: false; reason: string; fatal?: boolean };
 /** A version's entry in the install packument: the only fields this reads. */
 type DistEntry = { dist?: { tarball?: unknown; shasum?: unknown; integrity?: unknown } };
 
-const SHA512 = /^sha512-[A-Za-z0-9+/]+={0,2}$/;
+/** A whole sha512 digest: 64 bytes are 88 base64 characters, the last two padding. */
+const SHA512 = /^sha512-[A-Za-z0-9+/]{86}==$/;
 
 /** The sha512 members of an SRI string. SRI allows several space-separated hashes, each with
  * optional `?options`, and a match against ANY member of the algorithm is a match; npm
@@ -110,14 +111,24 @@ async function check(name: string, signal: AbortSignal): Promise<Check> {
   const dist = distOf(listed);
   if (!dist) return { ok: false, reason: "packument entry has no usable dist.tarball/shasum/integrity yet" };
 
-  const tgz = await fetch(dist.tarball, { signal });
-  if (tgz.status !== 200) return notOk(tgz, "tarball");
-  const bytes = await tgz.arrayBuffer();
+  // A mismatching download is retried once, at once: two in a row are the bytes, not the wire.
+  let mismatch = "";
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const tgz = await fetch(dist.tarball, { signal });
+    if (tgz.status !== 200) return notOk(tgz, "tarball");
+    mismatch = digestMismatch(await tgz.arrayBuffer(), dist);
+    if (!mismatch) return { ok: true };
+  }
+  return { ok: false, fatal: true, reason: mismatch };
+}
+
+/** Why `bytes` do not match the published digests, or `""` when they do. */
+function digestMismatch(bytes: ArrayBuffer, dist: { shasum: string; integrity: string[] }): string {
   const sha1 = new Bun.CryptoHasher("sha1").update(bytes).digest("hex");
-  if (sha1 !== dist.shasum) return { ok: false, fatal: true, reason: `tarball sha1 ${sha1} != dist.shasum ${dist.shasum}` };
+  if (sha1 !== dist.shasum) return `tarball sha1 ${sha1} != dist.shasum ${dist.shasum} (twice)`;
   const sha512 = `sha512-${new Bun.CryptoHasher("sha512").update(bytes).digest("base64")}`;
-  if (!dist.integrity.includes(sha512)) return { ok: false, fatal: true, reason: `tarball ${sha512} matches no sha512 in dist.integrity (${dist.integrity.join(" ")})` };
-  return { ok: true };
+  if (!dist.integrity.includes(sha512)) return `tarball ${sha512} matches no sha512 in dist.integrity (${dist.integrity.join(" ")}) (twice)`;
+  return "";
 }
 
 const deadline = Date.now() + timeoutSec * 1000;
@@ -139,7 +150,7 @@ for (;;) {
   }
   const mismatched = results.filter((r) => !r.result.ok && r.result.fatal).map((r) => r.name);
   if (mismatched.length > 0) {
-    console.error(`${mismatched.join(", ")}: the tarball failed its digest check, which is not publish lag; stop and investigate.`);
+    console.error(`${mismatched.join(", ")}: two downloads of the tarball failed its digest check, which is not publish lag; stop and investigate.`);
     process.exit(1);
   }
   const left = deadline - Date.now();

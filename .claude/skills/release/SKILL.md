@@ -90,7 +90,7 @@ It **refuses a dirty working tree**, because the bump must be its own commit.
    On success, confirm **every** package is INSTALLABLE at the new version. A partial
    publish leaves the registry out of lockstep, and checking just one hides it:
    ```bash
-   bun scripts/verify-release.ts        # polls for 15 min (+ up to 60 s for the last round); --timeout=<s>
+   bun scripts/verify-release.ts        # polls until --timeout=<s> (default 900) plus one last round
    ```
    It is driven off `PUBLISH_PKGS` (so it cannot check a stale subset). For each package it
    checks that the install packument (`/<name>`, what `bun add` resolves against) lists the
@@ -111,7 +111,9 @@ It **refuses a dirty working tree**, because the bump must be its own commit.
    **Tell lag from a failed publish by the RUN LOG, never by the registry alone**: a real gap
    shows an `npm error` for that package, a lag shows `+ @pramen/<name>@<version>`. In 0.0.62
    the two looked identical from outside and only the log distinguished them. A digest
-   MISMATCH is neither: the script stops on it at once and names every package that failed.
+   MISMATCH is neither: the script downloads a mismatching tarball once more on the spot
+   (a proxy can cut a response short without an error), and stops when both downloads
+   mismatch, naming the packages that did in that round.
 
    Compare times in UTC. The run log and npm's headers are UTC; reading them against local
    time once made a six-minute lag look like an hour and a half.
