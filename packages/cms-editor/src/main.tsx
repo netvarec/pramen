@@ -1,8 +1,9 @@
-import { BuzolaProvider, Router, createBrowserNavigationAdapter } from "@buzola/router";
+import { BuzolaProvider, Router, createBrowserNavigationAdapter, isNavigationApiSupported } from "@buzola/router";
 import { StrictMode, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import { pageRegistry, routes } from "virtual:buzola/routes";
 import { AppProvider } from "./app-context";
+import { RequireNavigationApi } from "./browser-support";
 import { DOCUMENT_TITLE } from "./brand";
 import { isWithinBasePath, readBasePath, scopeToBasePath } from "./mount";
 import { publishPanelRuntime, type PanelRuntimeHost } from "./panel-runtime";
@@ -39,16 +40,21 @@ chromeAttr(document.documentElement, CHROME_LAYOUT);
 const i18n = getI18n();
 document.documentElement.lang = i18n.tag ?? i18n.locale;
 
+// Decided once, before any work that only matters to a running editor: where the router
+// cannot run, the page is a static notice and fetching third-party panel bundles for it is
+// wasted requests (and code that may itself reach for the Navigation API).
+const supported = isNavigationApiSupported();
+
 // The shared React, published FIRST: a panel bundle's very first `import "react"` resolves
 // through the shell's import map to a shim that reads this back out, so the global has to
 // exist before any bundle is imported. See `panel-runtime.ts`.
-publishPanelRuntime(globalThis as PanelRuntimeHost);
+if (supported) publishPanelRuntime(globalThis as PanelRuntimeHost);
 
 // …then the bundles themselves, NOT awaited. Every other fact the chrome is built from
 // arrives a round trip late too (`listAdminPages` is what puts a panel in the nav at all),
 // and awaiting a third-party fetch here would mean one hanging request is a blank admin.
 // A panel's route re-reads the registry as registrations land. See `panels.ts`.
-void loadPanelBundles(readPanelUrls(globalThis as PanelHost, typeof location === "undefined" ? "" : location.href));
+if (supported) void loadPanelBundles(readPanelUrls(globalThis as PanelHost, typeof location === "undefined" ? "" : location.href));
 
 const el = document.getElementById("app");
 const basePath = readBasePath(el);
@@ -65,10 +71,9 @@ if (!isWithinBasePath(location.pathname, basePath)) {
 /** The router, built lazily so it exists only once there is a session to route.
  *
  * `AppProvider` renders the Setup screen (or hands off to sign-in) WITHOUT its children
- * when there is no valid session, and `createBrowserNavigationAdapter()` throws outright on
- * a browser with no Navigation API. Constructing at module scope would turn that into a
- * blank page before `createRoot` ever ran; here it stays what it was, the Setup screen,
- * where a first admin can still paste a JWT.
+ * when there is no valid session. `createBrowserNavigationAdapter()` throws outright on a
+ * browser with no Navigation API; `RequireNavigationApi` below keeps such a browser from ever
+ * getting here, and shows it a notice instead.
  */
 function EditorRouter({ basePath }: { basePath: string }) {
   const router = useRef<Router | null>(null);
@@ -85,8 +90,10 @@ function EditorRouter({ basePath }: { basePath: string }) {
 if (el)
   createRoot(el).render(
     <StrictMode>
-      <AppProvider>
-        <EditorRouter basePath={basePath} />
-      </AppProvider>
+      <RequireNavigationApi supported={supported}>
+        <AppProvider>
+          <EditorRouter basePath={basePath} />
+        </AppProvider>
+      </RequireNavigationApi>
     </StrictMode>,
   );

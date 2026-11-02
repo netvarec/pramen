@@ -5,7 +5,7 @@
     "": {
       "name": "pramen",
       "devDependencies": {
-        "@buzola/router": "^0.0.20",
+        "@buzola/router": "^0.0.25",
         "@cloudflare/workers-types": "^5.20260925.1",
         "@oxlint/plugins": "1.85.0",
         "@pramen/admin": "workspace:*",
@@ -52,7 +52,7 @@
     },
     "packages/admin": {
       "name": "@pramen/admin",
-      "version": "0.0.88",
+      "version": "0.0.92",
       "dependencies": {
         "@podoba/react": "^0.0.50",
         "@podoba/tailwind": "^0.0.50",
@@ -70,7 +70,7 @@
     },
     "packages/analytics": {
       "name": "@pramen/analytics",
-      "version": "0.0.88",
+      "version": "0.0.92",
       "dependencies": {
         "@pramen/server": "workspace:*",
       },
@@ -87,18 +87,18 @@
     },
     "packages/auth": {
       "name": "@pramen/auth",
-      "version": "0.0.88",
+      "version": "0.0.92",
       "dependencies": {
         "@pramen/server": "workspace:*",
       },
     },
     "packages/client": {
       "name": "@pramen/client",
-      "version": "0.0.88",
+      "version": "0.0.92",
     },
     "packages/cms": {
       "name": "@pramen/cms",
-      "version": "0.0.88",
+      "version": "0.0.92",
       "bin": {
         "pramen-cms": "./dist/cli.js",
       },
@@ -117,7 +117,7 @@
     },
     "packages/cms-astro": {
       "name": "@pramen/cms-astro",
-      "version": "0.0.88",
+      "version": "0.0.92",
       "devDependencies": {
         "@pramen/cms-editor": "workspace:*",
       },
@@ -131,9 +131,9 @@
     },
     "packages/cms-editor": {
       "name": "@pramen/cms-editor",
-      "version": "0.0.88",
+      "version": "0.0.92",
       "dependencies": {
-        "@buzola/router": "^0.0.20",
+        "@buzola/router": "^0.0.25",
         "@phosphor-icons/react": "^2.1.10",
         "@podoba/react": "^0.0.50",
         "@podoba/tailwind": "^0.0.50",
@@ -150,8 +150,8 @@
         "react-dom": "^19.0.0",
       },
       "devDependencies": {
-        "@buzola/bun-plugin": "^0.0.20",
-        "@buzola/codegen": "^0.0.20",
+        "@buzola/bun-plugin": "^0.0.25",
+        "@buzola/codegen": "^0.0.25",
         "@tailwindcss/cli": "^4.0.0",
         "@tailwindcss/typography": "^0.5.16",
         "@types/react": "^19.0.0",
@@ -161,7 +161,7 @@
     },
     "packages/cms-theme-gs": {
       "name": "@pramen/cms-theme-gs",
-      "version": "0.0.88",
+      "version": "0.0.92",
       "devDependencies": {
         "@podoba/react": "0.0.50",
         "@podoba/tailwind": "0.0.50",
@@ -180,7 +180,7 @@
     },
     "packages/react": {
       "name": "@pramen/react",
-      "version": "0.0.88",
+      "version": "0.0.92",
       "dependencies": {
         "@pramen/client": "workspace:*",
       },
@@ -190,7 +190,7 @@
     },
     "packages/server": {
       "name": "@pramen/server",
-      "version": "0.0.88",
+      "version": "0.0.92",
       "bin": {
         "pramen": "./dist/cli.js",
       },
@@ -202,8 +202,6 @@
   },
   "packages": {
     "@astrojs/astro2tsx": ["@astrojs/astro2tsx@0.1.2", "", { "dependencies": { "@emnapi/core": "1.11.3", "@napi-rs/wasm-runtime": "1.2.4" } }, "sha512-Uj/M9zbrhu5cIZEvWAGTbQJRKSxXWJ/E59BZwt7F+chrKhbfttW+9rkS/l+1QxoJP1KU3UnpM62M7yszfAI0WA=="],
-
-    "@astrojs/check": ["@astrojs/check@0.9.10", "", { "dependencies": { "@astrojs/language-server": "^2.16.7", "chokidar": "^4.0.3", "kleur": "^4.1.5", "yargs": "^18.0.0" }, "peerDependencies": { "typescript": "^5.0.0 || ^6.0.0" }, "bin": { "astro-check": "./bin/astro-check.js" } }, "sha512-zgx/UQMozdjOa3bOxjgeCFdtpE3c9rRX6xHwa+2QXvy8z8Akifu2AtubHyv/zzC2znO8dl8fFWL4K+Ba9kS8HQ=="],
 
     "@astrojs/compiler-binding": ["@astrojs/compiler-binding@0.5.1", "", { "optionalDependencies": { "@astrojs/compiler-binding-android-arm64": "0.5.1", "@astrojs/compiler-binding-darwin-arm64": "0.5.1", "@astrojs/compiler-binding-darwin-x64": "0.5.1", "@astrojs/compiler-binding-linux-arm64-gnu": "0.5.1", "@astrojs/compiler-binding-linux-arm64-musl": "0.5.1", "@astrojs/compiler-binding-linux-x64-gnu": "0.5.1", "@astrojs/compiler-binding-linux-x64-musl": "0.5.1", "@astrojs/compiler-binding-wasm32-wasi": "0.5.1", "@astrojs/compiler-binding-win32-arm64-msvc": "0.5.1", "@astrojs/compiler-binding-win32-x64-msvc": "0.5.1" } }, "sha512-oczyolLUl9mNrtuBuNjuvn5thpHrFLXAHAWGTRg0JDHQ8cGVsVeFekOu2uSoQGgainJIi+A3/9m0DyYwz3Nlnw=="],
 
@@ -269,11 +267,11 @@
 
     "@bruits/satteri-win32-x64-msvc": ["@bruits/satteri-win32-x64-msvc@0.10.5", "", { "os": "win32", "cpu": "x64" }, "sha512-C3IfPvfvMXmlzBxaMPKFS1XiuV9pu2mC7YqkPk7PSvTgPZ8gbdASIpHpztDLvTTQjqZ0z1Ol8tK5X+V6XXC0wQ=="],
 
-    "@buzola/bun-plugin": ["@buzola/bun-plugin@0.0.20", "", { "dependencies": { "@buzola/codegen": "^0.0.20", "@buzola/router": "^0.0.20" } }, "sha512-Qu+DaI+PJff2z+8PNYmnsde63MtCB8er2dyYQGGgKJTEwBDHFN89gwFnzoH6jYMc/C3FJiGpUobda5pdcyXHvA=="],
+    "@buzola/bun-plugin": ["@buzola/bun-plugin@0.0.25", "", { "dependencies": { "@buzola/codegen": "^0.0.25", "@buzola/router": "^0.0.25" } }, "sha512-3Ql1vZtj9bkY8li3zEngrmJcOXf4a20qNwmWaOepsfkfH5yxeRuDpkaLqbKTWFyWUTi1CQEV7ZglqYwNo6eE7w=="],
 
-    "@buzola/codegen": ["@buzola/codegen@0.0.20", "", { "dependencies": { "@buzola/router": "^0.0.20" }, "bin": { "buzola": "dist/cli.js" } }, "sha512-IzG6N6myzjJn8QFd1yJw403pMeBhG4qeMrMxOdoJBz/yjcLcmON3qrf8OkT/RfV9266BoiktByeBPL3Um2vXMw=="],
+    "@buzola/codegen": ["@buzola/codegen@0.0.25", "", { "dependencies": { "@buzola/router": "^0.0.25" }, "bin": { "buzola": "dist/cli.js" } }, "sha512-vRW4HTf02X7VOscXeCFGBvq+gV9FB0dNRce73phbAPeujyr4GZ5WaHAszWcKWhCr4809PKOTrOGSa87LHaTXRA=="],
 
-    "@buzola/router": ["@buzola/router@0.0.20", "", { "peerDependencies": { "react": "^18.0.0 || ^19.0.0" } }, "sha512-eALcZN+bSSJELnqqLvqCOmwYIZkr6JNxJh8ecd50JPCReyhjDIurUDYS4D4QRXxSsIwbKP8GEp2xwpcVzDr6iQ=="],
+    "@buzola/router": ["@buzola/router@0.0.25", "", { "peerDependencies": { "react": "^19.0.0" } }, "sha512-STbtrButqysx7+u0L7RG/hdq4neA0sOqtMmSJBNaNvN+uwOcCOjIW2iFtL9v+66mNt+a4qH+eMjxMFK8DU1YDA=="],
 
     "@capsizecss/unpack": ["@capsizecss/unpack@4.0.1", "", { "dependencies": { "fontkitten": "^1.0.3" } }, "sha512-CuNiSqg7+e1cO/GjffyMOm5Tt2jUF9CWHHnvQ/UkqvtkGfHdgwEC0wpmq7fkN3gxwpRnrAN0WzO3vREKmNolMQ=="],
 
@@ -1400,6 +1398,8 @@
     "cliui/string-width": ["string-width@7.2.0", "", { "dependencies": { "emoji-regex": "^10.3.0", "get-east-asian-width": "^1.0.0", "strip-ansi": "^7.1.0" } }, "sha512-tsaTIkKW9b4N+AEj+SVA+WhJzV7/zMhcSu78mLKWSk7cXMOSHsBKFWUs0fWwq8QyK3MgJBQRX6Gbi4kYbdvGkQ=="],
 
     "csso/css-tree": ["css-tree@2.2.1", "", { "dependencies": { "mdn-data": "2.0.28", "source-map-js": "^1.0.1" } }, "sha512-OA0mILzGc1kCOCSJerOeqDxDQ4HOh+G8NbOJFOTgOCzpw7fCBubk0fEyxp8AgOL/jvLgYA/uV0cMbe43ElF1JA=="],
+
+    "example-site/@astrojs/check": ["@astrojs/check@0.9.10", "", { "dependencies": { "@astrojs/language-server": "^2.16.7", "chokidar": "^4.0.3", "kleur": "^4.1.5", "yargs": "^18.0.0" }, "peerDependencies": { "typescript": "^5.0.0 || ^6.0.0" }, "bin": { "astro-check": "./bin/astro-check.js" } }, "sha512-zgx/UQMozdjOa3bOxjgeCFdtpE3c9rRX6xHwa+2QXvy8z8Akifu2AtubHyv/zzC2znO8dl8fFWL4K+Ba9kS8HQ=="],
 
     "example-site/typescript": ["typescript@6.0.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw=="],
 
