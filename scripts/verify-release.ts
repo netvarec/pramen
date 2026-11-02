@@ -19,8 +19,9 @@
 // SHA-1 `dist.shasum` (what the run log prints as `shasum:`) and the sha512 `dist.integrity`
 // installers verify.
 //
-// Polls, because a 404 shortly after publishing is normal. A digest MISMATCH is not lag:
-// it fails as soon as the same package mismatches on two rounds in a row.
+// Polls, because a 404 shortly after publishing is normal. A digest MISMATCH is not lag and
+// fails at once (a body cut short of its Content-Length already fails the fetch, as an error
+// that is retried, so a mismatch is the bytes themselves).
 
 import { PUBLISH_PKGS } from "./packages";
 
@@ -69,20 +70,21 @@ type DistEntry = { dist?: { tarball?: unknown; shasum?: unknown; integrity?: unk
 
 const SHA512 = /^sha512-[A-Za-z0-9+/]+={0,2}$/;
 
-/** The sha512 member of an SRI string. SRI allows several space-separated hashes, each with
- * optional `?options`; npm publishes one sha512, but a list must not read as "not yet". */
-function sha512Of(sri: string): string | undefined {
+/** The sha512 members of an SRI string. SRI allows several space-separated hashes, each with
+ * optional `?options`, and a match against ANY member of the algorithm is a match; npm
+ * publishes one sha512, but a list must not read as "not yet". */
+function sha512sOf(sri: string): string[] {
   return sri
     .split(/\s+/)
     .map((token) => token.split("?")[0] ?? "")
-    .find((token) => SHA512.test(token));
+    .filter((token) => SHA512.test(token));
 }
 
 /** The entry's tarball and digests, or `undefined` while any of them is not usable yet. */
-function distOf(entry: DistEntry): { tarball: URL; shasum: string; integrity: string } | undefined {
+function distOf(entry: DistEntry): { tarball: URL; shasum: string; integrity: string[] } | undefined {
   const shasum = String(entry.dist?.shasum ?? "");
-  const integrity = sha512Of(String(entry.dist?.integrity ?? ""));
-  if (!SHA1.test(shasum) || !integrity) return undefined;
+  const integrity = sha512sOf(String(entry.dist?.integrity ?? ""));
+  if (!SHA1.test(shasum) || integrity.length === 0) return undefined;
   try {
     return { tarball: new URL(String(entry.dist?.tarball)), shasum, integrity };
   } catch {
@@ -114,15 +116,12 @@ async function check(name: string, signal: AbortSignal): Promise<Check> {
   const sha1 = new Bun.CryptoHasher("sha1").update(bytes).digest("hex");
   if (sha1 !== dist.shasum) return { ok: false, fatal: true, reason: `tarball sha1 ${sha1} != dist.shasum ${dist.shasum}` };
   const sha512 = `sha512-${new Bun.CryptoHasher("sha512").update(bytes).digest("base64")}`;
-  if (sha512 !== dist.integrity) return { ok: false, fatal: true, reason: `tarball ${sha512} != dist.integrity ${dist.integrity}` };
+  if (!dist.integrity.includes(sha512)) return { ok: false, fatal: true, reason: `tarball ${sha512} matches no sha512 in dist.integrity (${dist.integrity.join(" ")})` };
   return { ok: true };
 }
 
 const deadline = Date.now() + timeoutSec * 1000;
 const pending = new Set(names);
-/** Packages whose tarball did not match on the previous round. A mismatch is fatal only when
- * it repeats: a truncated or proxy-mangled 200 body is a transport fault, not a bad publish. */
-let mismatched = new Set<string>();
 console.log(`verifying ${names.length} packages at ${version} (packument lists it, tarball 200 + sha1 + sha512), up to ${timeoutSec}s`);
 for (;;) {
   // Only what is still pending: a verified tarball does not need downloading again.
@@ -138,13 +137,11 @@ for (;;) {
     console.log(`${stamp}Z all ${names.length} packages at ${version} are listed, and their tarballs answer 200 and match shasum + integrity`);
     process.exit(0);
   }
-  const nowMismatched = new Set(results.filter((r) => !r.result.ok && r.result.fatal).map((r) => r.name));
-  const repeated = [...nowMismatched].find((name) => mismatched.has(name));
-  if (repeated) {
-    console.error(`${repeated}: the tarball failed its digest check twice in a row, which is not publish lag; stop and investigate.`);
+  const mismatched = results.filter((r) => !r.result.ok && r.result.fatal).map((r) => r.name);
+  if (mismatched.length > 0) {
+    console.error(`${mismatched.join(", ")}: the tarball failed its digest check, which is not publish lag; stop and investigate.`);
     process.exit(1);
   }
-  mismatched = nowMismatched;
   const left = deadline - Date.now();
   if (left <= 0) {
     console.error(`still pending after ${timeoutSec}s: ${[...pending].join(", ")}. Check the run log for an \`npm error\` on those packages.`);
