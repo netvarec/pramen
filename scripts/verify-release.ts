@@ -19,16 +19,18 @@
 // SHA-1 `dist.shasum` (what the run log prints as `shasum:`) and the sha512 `dist.integrity`
 // installers verify.
 //
-// Polls, because a 404 shortly after publishing is normal. A shasum MISMATCH is not lag
-// and fails at once.
+// Polls, because a 404 shortly after publishing is normal. A digest MISMATCH is not lag:
+// it fails as soon as the same package mismatches on two rounds in a row.
 
 import { PUBLISH_PKGS } from "./packages";
 
 const REGISTRY = "https://registry.npmjs.org";
 const POLL_MS = 20_000;
-/** Per ROUND, shared by every request in it and capped at the time left, so a stalled
- * connection becomes a pending result instead of holding the round past the deadline. */
-const ROUND_MS = 60_000;
+/** Per package per round, shared by that package's requests. A stalled connection becomes a
+ * pending result instead of holding the round forever; one package's stall aborts only its
+ * own downloads. `--timeout` bounds when the LAST round may start, so the run can end up to
+ * this much after it, and that last round gets the full budget rather than a sliver. */
+const CHECK_MS = 60_000;
 /** A version as the tags spell it (`v0.0.93`) or as npm does (`0.0.93`, `0.3.0-beta.1`). */
 const VERSION = /^v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/;
 const SHA1 = /^[0-9a-f]{40}$/;
@@ -40,8 +42,8 @@ for (const arg of process.argv.slice(2)) {
   if (arg.startsWith("--timeout=")) {
     timeoutSec = Number(arg.slice("--timeout=".length));
     if (!Number.isFinite(timeoutSec) || timeoutSec <= 0) throw new Error(`--timeout must be a positive number of seconds, got ${JSON.stringify(arg)}`);
-  } else if (VERSION.test(arg) && version === undefined) {
-    version = VERSION.exec(arg)?.[1];
+  } else if (version === undefined && VERSION.test(arg)) {
+    version = arg.replace(/^v/, "");
   } else {
     throw new Error(`unexpected argument ${JSON.stringify(arg)}; usage: verify-release.ts [X.Y.Z | vX.Y.Z] [--timeout=<seconds>] (no build metadata)`);
   }
@@ -67,11 +69,20 @@ type DistEntry = { dist?: { tarball?: unknown; shasum?: unknown; integrity?: unk
 
 const SHA512 = /^sha512-[A-Za-z0-9+/]+={0,2}$/;
 
+/** The sha512 member of an SRI string. SRI allows several space-separated hashes, each with
+ * optional `?options`; npm publishes one sha512, but a list must not read as "not yet". */
+function sha512Of(sri: string): string | undefined {
+  return sri
+    .split(/\s+/)
+    .map((token) => token.split("?")[0] ?? "")
+    .find((token) => SHA512.test(token));
+}
+
 /** The entry's tarball and digests, or `undefined` while any of them is not usable yet. */
 function distOf(entry: DistEntry): { tarball: URL; shasum: string; integrity: string } | undefined {
   const shasum = String(entry.dist?.shasum ?? "");
-  const integrity = String(entry.dist?.integrity ?? "");
-  if (!SHA1.test(shasum) || !SHA512.test(integrity)) return undefined;
+  const integrity = sha512Of(String(entry.dist?.integrity ?? ""));
+  if (!SHA1.test(shasum) || !integrity) return undefined;
   try {
     return { tarball: new URL(String(entry.dist?.tarball)), shasum, integrity };
   } catch {
@@ -109,12 +120,14 @@ async function check(name: string, signal: AbortSignal): Promise<Check> {
 
 const deadline = Date.now() + timeoutSec * 1000;
 const pending = new Set(names);
+/** Packages whose tarball did not match on the previous round. A mismatch is fatal only when
+ * it repeats: a truncated or proxy-mangled 200 body is a transport fault, not a bad publish. */
+let mismatched = new Set<string>();
 console.log(`verifying ${names.length} packages at ${version} (packument lists it, tarball 200 + sha1 + sha512), up to ${timeoutSec}s`);
 for (;;) {
   // Only what is still pending: a verified tarball does not need downloading again.
-  const signal = AbortSignal.timeout(Math.max(1_000, Math.min(ROUND_MS, deadline - Date.now())));
   const results = await Promise.all(
-    [...pending].map(async (name) => ({ name, result: await check(name, signal).catch((e: Error) => ({ ok: false, reason: e?.message ?? String(e) }) as Check) })),
+    [...pending].map(async (name) => ({ name, result: await check(name, AbortSignal.timeout(CHECK_MS)).catch((e: Error) => ({ ok: false, reason: e?.message ?? String(e) }) as Check) })),
   );
   const stamp = new Date().toISOString().slice(11, 19);
   for (const { name, result } of results) {
@@ -125,16 +138,19 @@ for (;;) {
     console.log(`${stamp}Z all ${names.length} packages at ${version} are listed, and their tarballs answer 200 and match shasum + integrity`);
     process.exit(0);
   }
-  const fatal = results.find((r) => !r.result.ok && r.result.fatal);
-  if (fatal) {
-    console.error(`${fatal.name}: a digest mismatch is not publish lag; stop and investigate.`);
+  const nowMismatched = new Set(results.filter((r) => !r.result.ok && r.result.fatal).map((r) => r.name));
+  const repeated = [...nowMismatched].find((name) => mismatched.has(name));
+  if (repeated) {
+    console.error(`${repeated}: the tarball failed its digest check twice in a row, which is not publish lag; stop and investigate.`);
     process.exit(1);
   }
+  mismatched = nowMismatched;
   const left = deadline - Date.now();
   if (left <= 0) {
     console.error(`still pending after ${timeoutSec}s: ${[...pending].join(", ")}. Check the run log for an \`npm error\` on those packages.`);
     process.exit(1);
   }
-  // Sleep the remainder when less than a full interval is left, so the last poll still runs.
+  // Sleep the remainder when less than a full interval is left, so the last poll still runs
+  // (with its full CHECK_MS budget).
   await Bun.sleep(Math.min(POLL_MS, left));
 }

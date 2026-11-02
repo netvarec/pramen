@@ -110,8 +110,9 @@ It **refuses a dirty working tree**, because the bump must be its own commit.
 
    **Tell lag from a failed publish by the RUN LOG, never by the registry alone**: a real gap
    shows an `npm error` for that package, a lag shows `+ @pramen/<name>@<version>`. In 0.0.62
-   the two looked identical from outside and only the log distinguished them. A shasum
-   MISMATCH is neither: the script stops on it at once.
+   the two looked identical from outside and only the log distinguished them. A digest
+   MISMATCH is neither: the script stops when a package mismatches on two rounds in a row
+   (once could be a truncated download).
 
    Compare times in UTC. The run log and npm's headers are UTC; reading them against local
    time once made a six-minute lag look like an hour and a half.
