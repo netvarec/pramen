@@ -92,9 +92,10 @@ It **refuses a dirty working tree**, because the bump must be its own commit.
    ```bash
    bun scripts/verify-release.ts        # polls up to 15 min; --timeout=<s> to change
    ```
-   It is driven off `PUBLISH_PKGS` (so it cannot check a stale subset), downloads each
-   package's tarball and compares its SHA-1 with the `dist.shasum` the registry published,
-   and exits 0 only when all of them answer 200 and match. Report done only after it does.
+   It is driven off `PUBLISH_PKGS` (so it cannot check a stale subset). For each package it
+   checks that the install packument (`/<name>`, what `bun add` resolves against) lists the
+   version, downloads the tarball and compares its SHA-1 with the published `dist.shasum`,
+   and exits 0 only when every package passes. Report done only after it does.
 
    **Why the tarball and not `npm view`.** Under npm's ASYNC publish path (the log says
    `npm notice Your package is being processed and may take a few minutes to become
