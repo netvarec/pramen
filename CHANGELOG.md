@@ -1208,6 +1208,16 @@ there are no backward-compatibility guarantees yet.
   bootstrap), so a false positive costs a redundant boot, not correctness. `SharedBoot` +
   `observeDriver` in `runtime/boot.ts`, platform-agnostic and unit-tested.
 
+### Fixed
+
+- **The editor no longer leaves a blank page in a browser without the Navigation API
+  (`@pramen/cms-editor`).** Safari before 26.2 has no Navigation API, so buzola's browser
+  adapter threw as the router was built and the editor rendered nothing after sign-in. It now
+  checks with buzola's `isNavigationApiSupported()` before anything else and shows a notice in
+  the editor's language (Czech or English) advising an update to Safari 26.2+ or Chrome/Edge.
+  The editor builds its own router (scoped adapter, `basePath`), so `BuzolaProvider`'s
+  `unsupportedBrowser` notice does not apply to it. `@buzola/*` is now `^0.0.25` (React 19).
+
 ## [0.0.59] - 2026-09-02
 
 ### Added

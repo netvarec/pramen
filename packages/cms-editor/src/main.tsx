@@ -3,6 +3,7 @@ import { StrictMode, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import { pageRegistry, routes } from "virtual:buzola/routes";
 import { AppProvider } from "./app-context";
+import { RequireNavigationApi } from "./browser-support";
 import { DOCUMENT_TITLE } from "./brand";
 import { isWithinBasePath, readBasePath, scopeToBasePath } from "./mount";
 import { publishPanelRuntime, type PanelRuntimeHost } from "./panel-runtime";
@@ -65,10 +66,9 @@ if (!isWithinBasePath(location.pathname, basePath)) {
 /** The router, built lazily so it exists only once there is a session to route.
  *
  * `AppProvider` renders the Setup screen (or hands off to sign-in) WITHOUT its children
- * when there is no valid session, and `createBrowserNavigationAdapter()` throws outright on
- * a browser with no Navigation API. Constructing at module scope would turn that into a
- * blank page before `createRoot` ever ran; here it stays what it was, the Setup screen,
- * where a first admin can still paste a JWT.
+ * when there is no valid session. `createBrowserNavigationAdapter()` throws outright on a
+ * browser with no Navigation API; `RequireNavigationApi` below keeps such a browser from ever
+ * getting here, and shows it a notice instead.
  */
 function EditorRouter({ basePath }: { basePath: string }) {
   const router = useRef<Router | null>(null);
@@ -85,8 +85,10 @@ function EditorRouter({ basePath }: { basePath: string }) {
 if (el)
   createRoot(el).render(
     <StrictMode>
-      <AppProvider>
-        <EditorRouter basePath={basePath} />
-      </AppProvider>
+      <RequireNavigationApi>
+        <AppProvider>
+          <EditorRouter basePath={basePath} />
+        </AppProvider>
+      </RequireNavigationApi>
     </StrictMode>,
   );

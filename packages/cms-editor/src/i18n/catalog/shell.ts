@@ -77,6 +77,13 @@ export const en = {
   "setup.token": "Bearer token (editor or reviewer)",
   "setup.connect": "Connect",
 
+  // --- unsupported browser: shown INSTEAD of the editor where the router cannot run ---------
+  //
+  // The router needs the Navigation API, which Safari has only since 26.2. The advice names
+  // browsers that have it, so a reader on an older Safari knows what to do next.
+  "unsupported.title": "This browser can't run the editor",
+  "unsupported.body": "The editor needs a newer browser. Update Safari to version 26.2 or later, or open the editor in Chrome or Edge.",
+
   // --- session ------------------------------------------------------------------------------
   /** The default prompt before leaving a screen with unsaved edits. */
   "session.unsavedChanges": "You have unsaved changes. Leave anyway?",
@@ -156,6 +163,8 @@ export const cs: Translation<typeof en> = {
   "theme.dark": "Tmavý režim",
   "theme.light": "Světlý režim",
 
+  "unsupported.title": "V tomto prohlížeči editor nepoběží",
+  "unsupported.body": "Editor potřebuje novější prohlížeč. Aktualizujte Safari na verzi 26.2 nebo novější, nebo editor otevřete v Chrome či Edge.",
   "setup.intro": "Pro přihlášení vložte JWT token s rolí editor nebo reviewer.",
   "setup.introWithWorker": "Zadejte adresu svého Workeru a vložte JWT token s rolí editor nebo reviewer. CORS musí tento původ povolovat (<code>CORS_ORIGINS</code>).",
   "setup.baseUrl": "Základní URL Workeru",
