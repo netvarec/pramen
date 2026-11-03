@@ -1022,6 +1022,27 @@ there are no backward-compatibility guarantees yet.
 
 ### Fixed
 
+- **OIDC sign-in sends the client secret the way the provider expects (`@pramen/auth`).** The
+  code exchange always put `client_secret` in the request body (`client_secret_post`). A strict
+  provider accepts only the method the client is registered with, and Better Auth from 1.7
+  refuses the body secret of a client registered for `client_secret_basic`, its default, with
+  `invalid_client`, so sign-in ended in "Sign-in could not be completed". The exchange now reads
+  `token_endpoint_auth_methods_supported` from discovery and sends an `Authorization: Basic`
+  header (id and secret form-urlencoded before base64, RFC 6749 §2.3.1) when the list includes
+  `client_secret_basic` or is absent (the default per OpenID Connect Discovery and RFC 8414),
+  with neither the secret nor the id in the body. Only a provider listing `client_secret_post`
+  without basic gets the body first. Discovery describes the provider, not how this client is
+  registered (Auth0 lists both and enforces one per application), so when the provider answers
+  `invalid_client`, or a 401 that names an error or challenges with `WWW-Authenticate` (how some
+  providers refuse a client), the exchange tries the other method once. Client authentication is checked
+  before the code is redeemed, so that second try can still sign in, and a client registered
+  for post keeps working. When the second try succeeds, the isolate keeps that method (one
+  refused request per isolate, not per sign-in) and a warning names it. A new
+  `tokenEndpointAuthMethod` option pins one method with no second try; an unknown value throws
+  at construction, like a bad `sessionTtlSeconds`. A public client (no `clientSecret`) is unchanged. A refused exchange now
+  logs the method, the provider's `error_description` next to its `error` (capped, control,
+  format and separator characters replaced, joiners kept) and, after a second try, both answers.
+
 - **The editor no longer leaves a blank page in a browser without the Navigation API
   (`@pramen/cms-editor`).** Safari before 26.2 (and every browser on iOS/iPadOS before 26.2)
   has no Navigation API, so buzola's browser adapter threw as the router was built and the

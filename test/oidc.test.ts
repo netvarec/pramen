@@ -39,7 +39,7 @@ function harness(opts: { tokenResponse?: (nonce: string) => Promise<unknown> } =
     put: async (k: string, v: string) => { store.set(k, v); },
     delete: async (k: string) => { store.delete(k); },
   };
-  const seen: { tokenBody?: URLSearchParams } = {};
+  const seen: { tokenBody?: URLSearchParams; authorization?: string | null } = {};
   const jwk = crypto.subtle.exportKey("jwk", keys.publicKey);
   const original = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -50,6 +50,7 @@ function harness(opts: { tokenResponse?: (nonce: string) => Promise<unknown> } =
     if (url.endsWith("/jwks")) return Response.json({ keys: [{ ...(await jwk), kid: "k1", alg: "RS256", use: "sig" }] });
     if (url.endsWith("/token")) {
       seen.tokenBody = new URLSearchParams(String(init?.body));
+      seen.authorization = new Headers(init?.headers).get("authorization");
       return Response.json(await (opts.tokenResponse ?? (async (n: string) => ({ id_token: await idToken({ sub: "idp-sub-1", email: "ada@acme.com", email_verified: true, nonce: n }) })))(asked.nonce));
     }
     return new Response("unexpected", { status: 500 });
@@ -124,7 +125,10 @@ describe("createOidcAuth: the callback", () => {
     expect(target.search).toBe("");
     expect(h.seen.tokenBody?.get("code_verifier")).toBeTruthy();
     expect(h.seen.tokenBody?.get("grant_type")).toBe("authorization_code");
-    expect(h.seen.tokenBody?.get("client_secret")).toBe("s3cret");
+    // Discovery lists no token_endpoint_auth_methods_supported, so the secret goes as Basic
+    // (the spec default) and not in the body: oidc-client-auth.test.ts covers the choice.
+    expect(h.seen.authorization).toBe(`Basic ${btoa(`${CLIENT_ID}:s3cret`)}`);
+    expect(h.seen.tokenBody?.has("client_secret")).toBe(false);
   });
 
   test("the minted token is a pramen session, not the provider's", async () => {
