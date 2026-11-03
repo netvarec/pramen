@@ -53,7 +53,13 @@ interface Discovery {
   jwks_uri: string;
   /** RP-Initiated Logout 1.0. Optional: a provider without it cannot end its session for us. */
   end_session_endpoint?: string;
+  /** How the token endpoint lets a client authenticate. Optional: absent means
+   * `client_secret_basic` (OpenID Connect Discovery 1.0 §3, RFC 8414 §2). */
+  token_endpoint_auth_methods_supported?: unknown;
 }
+
+/** The two ways a confidential client proves its secret at the token endpoint. */
+export type TokenEndpointAuthMethod = "client_secret_basic" | "client_secret_post";
 
 export interface OidcOptions {
   /** The provider's issuer URL. `/.well-known/openid-configuration` is fetched from it, so
@@ -63,6 +69,19 @@ export interface OidcOptions {
   /** Confidential clients only. Omit for a public client: the exchange then relies on
    * PKCE alone, which is the correct configuration for a SPA. */
   clientSecret?: string;
+  /**
+   * How `clientSecret` is sent to the token endpoint. It must be the method the client is
+   * REGISTERED with at the provider: a strict provider refuses any other with
+   * `invalid_client` (Better Auth from 1.7 does).
+   *
+   * Default: read from the provider's discovery document. `client_secret_basic` (an
+   * `Authorization: Basic` header, RFC 6749 §2.3.1) when the document lists it or says
+   * nothing, since that is the default both specs give and the method every provider must
+   * support; `client_secret_post` (the secret in the request body) only when that is the one
+   * listed. Set this when a client was registered for `client_secret_post` at a provider
+   * that also offers basic. Ignored without `clientSecret`.
+   */
+  tokenEndpointAuthMethod?: TokenEndpointAuthMethod;
   /** Must match the redirect URI registered with the provider, exactly. */
   redirectUri: string;
   /** Where to send the browser after a successful login. The session token arrives in the
@@ -177,6 +196,27 @@ const randomB64 = (bytes = 32): string => b64url(crypto.getRandomValues(new Uint
  * intercepted authorization code cannot be redeemed by whoever intercepted it. */
 async function challengeFor(verifier: string): Promise<string> {
   return b64url(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)));
+}
+
+/**
+ * The method {@link OidcOptions.tokenEndpointAuthMethod} resolves to. A provider that lists
+ * neither secret method (only `private_key_jwt`, say) still gets basic: it is the specs'
+ * default, and the provider's `invalid_client` then names the mismatch.
+ */
+export function tokenEndpointAuthMethodFor(advertised: unknown, override?: TokenEndpointAuthMethod): TokenEndpointAuthMethod {
+  if (override) return override;
+  const methods = Array.isArray(advertised) ? advertised : [];
+  return methods.includes("client_secret_post") && !methods.includes("client_secret_basic") ? "client_secret_post" : "client_secret_basic";
+}
+
+/** `application/x-www-form-urlencoded` of one value, as RFC 6749 §2.3.1 requires of the client
+ * id and secret BEFORE they are joined and base64-encoded: a `:` in the id, or a `%`, `+` or
+ * space in the secret, would otherwise be read back as something else. */
+const formUrlEncode = (value: string): string => new URLSearchParams({ v: value }).toString().slice(2);
+
+/** The `Authorization` header of `client_secret_basic`. Form-encoding leaves only ASCII. */
+export function basicClientAuthorization(clientId: string, clientSecret: string): string {
+  return `Basic ${btoa(`${formUrlEncode(clientId)}:${formUrlEncode(clientSecret)}`)}`;
 }
 
 /** Discovery, cached per issuer for the isolate's life. The document is static in practice,
@@ -445,18 +485,27 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
           grant_type: "authorization_code",
           code,
           redirect_uri: opts.redirectUri,
-          client_id: opts.clientId,
           code_verifier: pending.verifier,
         });
-        if (opts.clientSecret) body.set("client_secret", opts.clientSecret);
-        const tokenRes = await fetch(doc.token_endpoint, {
-          method: "POST",
-          headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
-          body,
-        });
-        const tokens = (await tokenRes.json().catch(() => ({}))) as { id_token?: string; error?: string };
+        const headers: Record<string, string> = { "content-type": "application/x-www-form-urlencoded", accept: "application/json" };
+        // ONE client authentication method per request (RFC 6749 §2.3): with the Basic header
+        // the body carries neither the secret nor the id, which the header already names.
+        if (!opts.clientSecret) {
+          body.set("client_id", opts.clientId); // a public client: PKCE is the proof
+        } else if (tokenEndpointAuthMethodFor(doc.token_endpoint_auth_methods_supported, opts.tokenEndpointAuthMethod) === "client_secret_post") {
+          body.set("client_id", opts.clientId);
+          body.set("client_secret", opts.clientSecret);
+        } else {
+          headers.authorization = basicClientAuthorization(opts.clientId, opts.clientSecret);
+        }
+        const tokenRes = await fetch(doc.token_endpoint, { method: "POST", headers, body });
+        const tokens = (await tokenRes.json().catch(() => ({}))) as { id_token?: string; error?: unknown; error_description?: unknown };
         if (!tokenRes.ok || typeof tokens.id_token !== "string") {
-          console.error(`pramen/auth: OIDC token exchange failed (HTTP ${tokenRes.status}${tokens.error ? `, ${tokens.error}` : ""})`);
+          // The description is what tells a misregistered client from a dead code (`client
+          // registered for client_secret_basic cannot use client_secret_post`). Provider text,
+          // so it is capped and goes only to the log, never to the page.
+          const detail = [tokens.error, tokens.error_description].filter((v): v is string => typeof v === "string" && v !== "").map((v) => v.slice(0, 300));
+          console.error(`pramen/auth: OIDC token exchange failed (HTTP ${tokenRes.status}${detail.length ? `, ${detail.join(": ")}` : ""})`);
           return fail(502, "Sign-in could not be completed. Try again.", "server_error");
         }
 

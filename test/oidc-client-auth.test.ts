@@ -1,0 +1,219 @@
+// @pramen/auth: how the OIDC code exchange authenticates the client at the token endpoint.
+//
+// A strict provider accepts only the method a client is REGISTERED with: Better Auth from 1.7
+// answers `invalid_client` ("client registered for client_secret_basic cannot use
+// client_secret_post") to a secret in the body, and refuses a request carrying both the Basic
+// header and a body secret. So the exchange sends the secret ONE way, picked from the
+// provider's discovery document: basic when it lists basic or lists nothing (the spec default),
+// post only when post is all it lists. Same fake-provider technique as oidc.test.ts; each test
+// gets its own issuer because discovery is cached per issuer for the isolate's life.
+
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { basicClientAuthorization, createOidcAuth, tokenEndpointAuthMethodFor, type OidcOptions } from "../packages/auth/src/oidc";
+
+const CLIENT_ID = "pramen-app";
+const SECRET = "s3cret";
+const b64url = (b: ArrayBuffer | Uint8Array) => {
+  const u = b instanceof Uint8Array ? b : new Uint8Array(b);
+  return btoa(String.fromCharCode(...u)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+};
+const keys = await crypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["sign", "verify"]);
+
+async function idToken(claims: Record<string, unknown>): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
+  const header = b64url(new TextEncoder().encode(JSON.stringify({ alg: "RS256", typ: "JWT", kid: "k1" })));
+  const body = b64url(new TextEncoder().encode(JSON.stringify({ exp: now + 300, iat: now, ...claims })));
+  const sig = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", keys.privateKey, new TextEncoder().encode(`${header}.${body}`));
+  return `${header}.${body}.${b64url(sig)}`;
+}
+
+/** What the token endpoint received. */
+interface Seen {
+  body: URLSearchParams;
+  authorization: string | null;
+}
+
+let issuers = 0;
+/** A fake provider at a fresh issuer, advertising `methods` (omitted from the document when
+ * `undefined`), answering the token request with `answer`, else an ID token for `aud`. */
+function provider(methods: unknown, answer?: () => Response, aud = CLIENT_ID) {
+  const issuer = `https://idp-${++issuers}.client-auth.example.com`;
+  const store = new Map<string, string>();
+  const asked = { nonce: "" };
+  const seen: Seen[] = [];
+  const KV = {
+    get: async (k: string, type?: string) => { const v = store.get(k) ?? null; return v !== null && type === "json" ? JSON.parse(v) : v; },
+    put: async (k: string, v: string) => { store.set(k, v); },
+    delete: async (k: string) => { store.delete(k); },
+  };
+  const jwk = crypto.subtle.exportKey("jwk", keys.publicKey);
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (url === `${issuer}/.well-known/openid-configuration`) {
+      return Response.json({
+        issuer, authorization_endpoint: `${issuer}/authorize`, token_endpoint: `${issuer}/token`, jwks_uri: `${issuer}/jwks`,
+        ...(methods === undefined ? {} : { token_endpoint_auth_methods_supported: methods }),
+      });
+    }
+    if (url === `${issuer}/jwks`) return Response.json({ keys: [{ ...(await jwk), kid: "k1", alg: "RS256", use: "sig" }] });
+    if (url === `${issuer}/token`) {
+      seen.push({ body: new URLSearchParams(String(init?.body)), authorization: new Headers(init?.headers).get("authorization") });
+      if (answer) return answer();
+      return Response.json({ id_token: await idToken({ iss: issuer, aud, sub: "s1", email: "ada@acme.com", email_verified: true, nonce: asked.nonce }) });
+    }
+    return new Response("unexpected", { status: 500 });
+  }) as typeof fetch;
+  return { issuer, KV: KV as unknown as KVNamespace, asked, seen, restore: () => { globalThis.fetch = original; } };
+}
+
+let active: { restore: () => void } | null = null;
+afterEach(() => { active?.restore(); active = null; });
+
+const env = (KV: KVNamespace) => ({ KV, AUTH_SECRET: "a-sufficiently-long-test-secret" }) as never;
+const upsert = { callPrivileged: async () => Response.json({ ok: true, result: { roles: ["user"], active: true } }) } as never;
+
+/** One whole sign-in against `p`; returns the callback's answer. */
+async function signIn(p: ReturnType<typeof provider>, over: Partial<OidcOptions> = {}): Promise<Response> {
+  const [start, callback] = createOidcAuth({
+    issuer: p.issuer, clientId: CLIENT_ID, clientSecret: SECRET,
+    redirectUri: "https://app.example.com/auth/oidc/callback", successRedirect: "https://app.example.com/signed-in", ...over,
+  }).routes;
+  const started = await start!.handler(new Request("https://app.example.com/auth/oidc/start"), env(p.KV), {} as never);
+  const authUrl = new URL(started.headers.get("location")!);
+  p.asked.nonce = authUrl.searchParams.get("nonce")!;
+  const cookie = (started.headers.get("set-cookie") ?? "").split(";")[0]!;
+  const state = encodeURIComponent(authUrl.searchParams.get("state")!);
+  return callback!.handler(new Request(`https://app.example.com/auth/oidc/callback?state=${state}&code=c`, { headers: { cookie } }), env(p.KV), upsert);
+}
+
+/** The inverse of RFC 6749 §2.3.1, the way a provider reads the header (Better Auth 1.7's
+ * `decodeBasicCredentials`): base64, split on the FIRST `:`, form-url-decode each half. */
+function decodeBasic(authorization: string): { id: string; secret: string } {
+  const decoded = atob(authorization.replace(/^Basic +/, ""));
+  const at = decoded.indexOf(":");
+  const formDecode = (v: string) => new URLSearchParams(`v=${v}`).get("v")!;
+  return { id: formDecode(decoded.slice(0, at)), secret: formDecode(decoded.slice(at + 1)) };
+}
+
+/** The sent request used basic, and ONLY basic: no credential of the client in the body. */
+function expectBasic(seen: Seen | undefined, id = CLIENT_ID, secret = SECRET) {
+  expect(seen?.authorization).toMatch(/^Basic [A-Za-z0-9+/]+=*$/);
+  expect(decodeBasic(seen!.authorization!)).toEqual({ id, secret });
+  expect(seen!.body.has("client_secret")).toBe(false);
+  expect(seen!.body.has("client_id")).toBe(false);
+  expect(seen!.body.get("code_verifier")).toBeTruthy();
+  expect(seen!.body.get("grant_type")).toBe("authorization_code");
+}
+
+function expectPost(seen: Seen | undefined) {
+  expect(seen?.authorization).toBeNull();
+  expect(seen!.body.get("client_id")).toBe(CLIENT_ID);
+  expect(seen!.body.get("client_secret")).toBe(SECRET);
+}
+
+describe("the token request's client authentication", () => {
+  test("uses client_secret_basic when the provider lists it", async () => {
+    const p = provider(["client_secret_basic", "client_secret_post", "private_key_jwt"]); active = p;
+    expect((await signIn(p)).status).toBe(302);
+    expectBasic(p.seen[0]);
+  });
+
+  test("uses client_secret_basic when discovery says nothing (the spec default)", async () => {
+    const p = provider(undefined); active = p;
+    expect((await signIn(p)).status).toBe(302);
+    expectBasic(p.seen[0]);
+  });
+
+  test("sends the secret in the body when client_secret_post is the only method listed", async () => {
+    const p = provider(["client_secret_post"]); active = p;
+    expect((await signIn(p)).status).toBe(302);
+    expectPost(p.seen[0]);
+  });
+
+  test("the option overrides discovery, both ways", async () => {
+    const both = provider(["client_secret_basic", "client_secret_post"]); active = both;
+    await signIn(both, { tokenEndpointAuthMethod: "client_secret_post" });
+    expectPost(both.seen[0]);
+    both.restore();
+
+    const postOnly = provider(["client_secret_post"]); active = postOnly;
+    await signIn(postOnly, { tokenEndpointAuthMethod: "client_secret_basic" });
+    expectBasic(postOnly.seen[0]);
+  });
+
+  test("a public client sends its id in the body and no secret anywhere", async () => {
+    const p = provider(["client_secret_basic"]); active = p;
+    expect((await signIn(p, { clientSecret: undefined, tokenEndpointAuthMethod: "client_secret_basic" })).status).toBe(302);
+    expect(p.seen[0]?.authorization).toBeNull();
+    expect(p.seen[0]?.body.get("client_id")).toBe(CLIENT_ID);
+    expect(p.seen[0]?.body.has("client_secret")).toBe(false);
+  });
+
+  test("form-encodes the id and secret before base64, so reserved characters survive", async () => {
+    const id = "app:one/two";
+    const secret = "p+a ss%2B:wörd&=!'()*~";
+    const p = provider(["client_secret_basic"], undefined, id); active = p;
+    expect((await signIn(p, { clientId: id, clientSecret: secret })).status).toBe(302);
+    expectBasic(p.seen[0], id, secret);
+  });
+});
+
+describe("basicClientAuthorization", () => {
+  test("is RFC 6749 §2.3.1: form-urlencode each half, join with ':', base64", () => {
+    // Space is `+`, and `:` inside the id is escaped so the provider splits on the right one.
+    expect(atob(basicClientAuthorization("a:b", "c d+e%f").slice("Basic ".length))).toBe("a%3Ab:c+d%2Be%25f");
+    expect(basicClientAuthorization("pramen-app", "s3cret")).toBe(`Basic ${btoa("pramen-app:s3cret")}`);
+  });
+
+  test("non-ASCII is UTF-8 percent-encoded, so the header stays ASCII", () => {
+    const header = basicClientAuthorization("id", "žluťoučký");
+    expect(atob(header.slice("Basic ".length))).toBe(`id:${encodeURIComponent("žluťoučký")}`);
+    expect(decodeBasic(header)).toEqual({ id: "id", secret: "žluťoučký" });
+  });
+});
+
+describe("tokenEndpointAuthMethodFor", () => {
+  test("basic unless post is the only secret method listed", () => {
+    expect(tokenEndpointAuthMethodFor(undefined)).toBe("client_secret_basic");
+    expect(tokenEndpointAuthMethodFor(["client_secret_basic"])).toBe("client_secret_basic");
+    expect(tokenEndpointAuthMethodFor(["client_secret_post", "client_secret_basic"])).toBe("client_secret_basic");
+    expect(tokenEndpointAuthMethodFor(["client_secret_post"])).toBe("client_secret_post");
+    expect(tokenEndpointAuthMethodFor(["client_secret_post", "private_key_jwt"])).toBe("client_secret_post");
+    // Neither secret method: the spec default, and the provider's invalid_client names it.
+    expect(tokenEndpointAuthMethodFor(["private_key_jwt"])).toBe("client_secret_basic");
+    // A malformed document is read as silent, not as a reason to fail the sign-in.
+    expect(tokenEndpointAuthMethodFor("client_secret_post")).toBe("client_secret_basic");
+    expect(tokenEndpointAuthMethodFor({ 0: "client_secret_post" })).toBe("client_secret_basic");
+  });
+
+  test("an explicit method wins", () => {
+    expect(tokenEndpointAuthMethodFor(["client_secret_basic"], "client_secret_post")).toBe("client_secret_post");
+    expect(tokenEndpointAuthMethodFor(["client_secret_post"], "client_secret_basic")).toBe("client_secret_basic");
+  });
+});
+
+describe("a refused exchange", () => {
+  test("logs the provider's error_description next to its error", async () => {
+    const description = "client registered for client_secret_basic cannot use client_secret_post";
+    const p = provider(["client_secret_post"], () => Response.json({ error: "invalid_client", error_description: description }, { status: 401 })); active = p;
+    const logged = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect((await signIn(p)).status).toBe(502);
+      expect(logged.mock.calls.map((c) => String(c[0]))).toContain(`pramen/auth: OIDC token exchange failed (HTTP 401, invalid_client: ${description})`);
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
+  test("still logs the status alone when the body has neither", async () => {
+    const p = provider(undefined, () => new Response("bad gateway", { status: 502 })); active = p;
+    const logged = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect((await signIn(p)).status).toBe(502);
+      expect(logged.mock.calls.map((c) => String(c[0]))).toContain("pramen/auth: OIDC token exchange failed (HTTP 502)");
+    } finally {
+      logged.mockRestore();
+    }
+  });
+});

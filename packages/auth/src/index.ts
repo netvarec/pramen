@@ -1504,4 +1504,4 @@ export function createEmailVerification(opts: EmailVerificationOptions): AuthMod
 export { maxSessionTtlOf } from "./session-ttl.js";
 
 // --- OIDC (authorization code + PKCE) ---------------------------------------
-export { createOidcAuth, defaultOidcProfile, oidcHandlers, OIDC_UPSERT_HANDLER, type OidcOptions } from "./oidc.js";
+export { createOidcAuth, defaultOidcProfile, oidcHandlers, OIDC_UPSERT_HANDLER, type OidcOptions, type TokenEndpointAuthMethod } from "./oidc.js";

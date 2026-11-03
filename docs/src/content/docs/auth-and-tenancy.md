@@ -142,6 +142,18 @@ const oidc = createOidcAuth({
   redirectUri: "https://app.example.com/auth/oidc/callback",
   successRedirect: "https://app.example.com/signed-in",
 });
+```
+
+**How the secret reaches the provider.** The code exchange sends `clientSecret` as an
+`Authorization: Basic` header (`client_secret_basic`) unless the provider's discovery document
+lists `client_secret_post` and not basic; then it goes in the request body. A provider that
+says nothing gets basic, the default both specs give. It has to be the method the client is
+registered with: a strict provider (Better Auth from 1.7, for one) answers any other with
+`invalid_client`, and the sign-in ends in "Sign-in could not be completed". When the client is
+registered for the method the provider does not prefer, say which:
+
+```ts
+createOidcAuth({ /* … */ tokenEndpointAuthMethod: "client_secret_post" });
 
 export const app = {
   schema: defineSchema({ ...authSchema /* … */ }),
