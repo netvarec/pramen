@@ -401,8 +401,10 @@ log) for independent single-writer serialization and storage.
   role-in-token ACL working. The exchange authenticates with ONE method: an `Authorization:
   Basic` header (form-urlencoded halves, RFC 6749 §2.3.1, nothing of the client in the body)
   unless discovery's `token_endpoint_auth_methods_supported` lists `client_secret_post` without
-  basic, or `tokenEndpointAuthMethod` says otherwise. It always sent the body secret, and Better
-  Auth 1.7 refuses that from a client registered for basic (its default) with `invalid_client`.
+  basic. On `invalid_client` (or a 401) it tries the OTHER method once: discovery describes the
+  provider, not this client's registration, and client auth fails before the code is spent.
+  `tokenEndpointAuthMethod` pins one, no retry. It always sent the body secret, and Better Auth
+  1.7 refuses that from a client registered for basic (its default) with `invalid_client`.
   The session lands in the redirect's URL FRAGMENT (never sent to
   a server). `start?prompt=none` is a silent attempt: a provider error answer (`login_required`
   etc.) lands on `successRedirect#error=<code>` with no token instead of an error page, but only

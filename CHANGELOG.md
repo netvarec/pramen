@@ -1031,12 +1031,15 @@ there are no backward-compatibility guarantees yet.
   header (id and secret form-urlencoded before base64, RFC 6749 §2.3.1) when the list includes
   `client_secret_basic` or is absent (the default per OpenID Connect Discovery and RFC 8414),
   with neither the secret nor the id in the body. Only a provider listing `client_secret_post`
-  without basic still gets the body. A new `tokenEndpointAuthMethod` option forces either one
-  for a client registered against the provider's preference. A public client (no
-  `clientSecret`) is unchanged. A refused exchange now logs the provider's
-  `error_description` next to its `error`. **Check before upgrading:** a client registered as
-  `client_secret_post` at a provider that also offers basic now needs
-  `tokenEndpointAuthMethod: "client_secret_post"`.
+  without basic gets the body first. Discovery describes the provider, not how this client is
+  registered (Auth0 lists both and enforces one per application), so when the provider answers
+  `invalid_client` the exchange tries the other method once. Client authentication is checked
+  before the code is redeemed, so that second try can still sign in, and a client registered
+  for post keeps working. When the second try succeeds, a warning names the method. A new
+  `tokenEndpointAuthMethod` option pins one method with no second try, and an unknown value
+  throws at construction. A public client (no `clientSecret`) is unchanged. A refused exchange
+  now logs the method, the provider's `error_description` next to its `error` (capped, control
+  characters replaced) and, after a second try, both answers.
 
 - **The editor no longer leaves a blank page in a browser without the Navigation API
   (`@pramen/cms-editor`).** Safari before 26.2 (and every browser on iOS/iPadOS before 26.2)

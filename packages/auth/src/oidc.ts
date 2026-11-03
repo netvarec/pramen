@@ -70,16 +70,20 @@ export interface OidcOptions {
    * PKCE alone, which is the correct configuration for a SPA. */
   clientSecret?: string;
   /**
-   * How `clientSecret` is sent to the token endpoint. It must be the method the client is
-   * REGISTERED with at the provider: a strict provider refuses any other with
-   * `invalid_client` (Better Auth from 1.7 does).
+   * How `clientSecret` is sent to the token endpoint. A strict provider accepts only the
+   * method the client is REGISTERED with and answers any other with `invalid_client`
+   * (Better Auth from 1.7 does, and so does Auth0, per application).
    *
-   * Default: read from the provider's discovery document. `client_secret_basic` (an
+   * Default: start with what the provider's discovery document suggests, and if the provider
+   * answers `invalid_client`, try the other method once. That is `client_secret_basic` (an
    * `Authorization: Basic` header, RFC 6749 §2.3.1) when the document lists it or says
-   * nothing, since that is the default both specs give and the method every provider must
-   * support; `client_secret_post` (the secret in the request body) only when that is the one
-   * listed. Set this when a client was registered for `client_secret_post` at a provider
-   * that also offers basic. Ignored without `clientSecret`.
+   * nothing, since that is the default both specs give, and `client_secret_post` (the secret
+   * in the request body) when that is the only one listed. Discovery describes the provider,
+   * not this client's registration, so it can only be a first guess. The second try works
+   * because client authentication is checked before the code is redeemed. When it succeeds,
+   * a warning names the method to set here.
+   *
+   * Set: exactly that method, with no second try. Ignored without `clientSecret`.
    */
   tokenEndpointAuthMethod?: TokenEndpointAuthMethod;
   /** Must match the redirect URI registered with the provider, exactly. */
@@ -208,6 +212,12 @@ export function tokenEndpointAuthMethodFor(advertised: unknown, override?: Token
   const methods = Array.isArray(advertised) ? advertised : [];
   return methods.includes("client_secret_post") && !methods.includes("client_secret_basic") ? "client_secret_post" : "client_secret_basic";
 }
+
+const TOKEN_ENDPOINT_AUTH_METHODS: readonly TokenEndpointAuthMethod[] = ["client_secret_basic", "client_secret_post"];
+
+/** Provider text bound for the log: capped, and with control characters (CR/LF included)
+ * replaced, so a token endpoint cannot forge log lines. */
+const forLog = (v: string): string => v.slice(0, 300).replace(/\p{Cc}/gu, " ");
 
 /** `application/x-www-form-urlencoded` of one value, as RFC 6749 §2.3.1 requires of the client
  * id and secret BEFORE they are joined and base64-encoded: a `:` in the id, or a `%`, `+` or
@@ -341,6 +351,11 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
   const callbackPath = opts.callbackPath ?? "/auth/oidc/callback";
   const stateTtl = opts.stateTtlSeconds ?? 600;
   const configuredTtl = declareSessionTtl(opts.sessionTtlSeconds);
+  // Typed, but a config-driven caller can pass anything, and every unknown value would
+  // otherwise act as a silent `client_secret_basic`.
+  if (opts.tokenEndpointAuthMethod !== undefined && !TOKEN_ENDPOINT_AUTH_METHODS.includes(opts.tokenEndpointAuthMethod)) {
+    throw new Error(`@pramen/auth: createOidcAuth tokenEndpointAuthMethod must be one of ${TOKEN_ENDPOINT_AUTH_METHODS.join(", ")}, got ${JSON.stringify(opts.tokenEndpointAuthMethod)}`);
+  }
 
   /** `successRedirect`, carrying the path the user was headed for. Only ever a PATH: an
    * absolute or protocol-relative `returnTo` would make this an open redirect. Checked again
@@ -481,31 +496,44 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
       // would otherwise surface as a bare 500 and strand a silent attempt all the same.
       const complete = async (): Promise<Response> => {
         const doc = await discover(opts.issuer);
-        const body = new URLSearchParams({
-          grant_type: "authorization_code",
-          code,
-          redirect_uri: opts.redirectUri,
-          code_verifier: pending.verifier,
-        });
-        const headers: Record<string, string> = { "content-type": "application/x-www-form-urlencoded", accept: "application/json" };
         // ONE client authentication method per request (RFC 6749 §2.3): with the Basic header
         // the body carries neither the secret nor the id, which the header already names.
-        if (!opts.clientSecret) {
-          body.set("client_id", opts.clientId); // a public client: PKCE is the proof
-        } else if (tokenEndpointAuthMethodFor(doc.token_endpoint_auth_methods_supported, opts.tokenEndpointAuthMethod) === "client_secret_post") {
-          body.set("client_id", opts.clientId);
-          body.set("client_secret", opts.clientSecret);
-        } else {
-          headers.authorization = basicClientAuthorization(opts.clientId, opts.clientSecret);
-        }
-        const tokenRes = await fetch(doc.token_endpoint, { method: "POST", headers, body });
-        const tokens = (await tokenRes.json().catch(() => ({}))) as { id_token?: string; error?: unknown; error_description?: unknown };
-        if (!tokenRes.ok || typeof tokens.id_token !== "string") {
+        const exchange = async (method: TokenEndpointAuthMethod | "none") => {
+          const body = new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri: opts.redirectUri, code_verifier: pending.verifier });
+          const headers: Record<string, string> = { "content-type": "application/x-www-form-urlencoded", accept: "application/json" };
+          if (method === "client_secret_basic") headers.authorization = basicClientAuthorization(opts.clientId, opts.clientSecret ?? "");
+          else body.set("client_id", opts.clientId); // post, or a public client whose proof is PKCE
+          if (method === "client_secret_post") body.set("client_secret", opts.clientSecret ?? "");
+          const res = await fetch(doc.token_endpoint, { method: "POST", headers, body });
+          const tokens = (await res.json().catch(() => ({}))) as { id_token?: string; error?: unknown; error_description?: unknown };
           // The description is what tells a misregistered client from a dead code (`client
           // registered for client_secret_basic cannot use client_secret_post`). Provider text,
-          // so it is capped and goes only to the log, never to the page.
-          const detail = [tokens.error, tokens.error_description].filter((v): v is string => typeof v === "string" && v !== "").map((v) => v.slice(0, 300));
-          console.error(`pramen/auth: OIDC token exchange failed (HTTP ${tokenRes.status}${detail.length ? `, ${detail.join(": ")}` : ""})`);
+          // so it goes only to the log, never to the page.
+          const detail = [tokens.error, tokens.error_description].filter((v): v is string => typeof v === "string" && v !== "").map(forLog);
+          const summary = `${method === "none" ? "" : `${method}, `}HTTP ${res.status}${detail.length ? `, ${detail.join(": ")}` : ""}`;
+          // 401 at a token endpoint is a refused client (RFC 6749 §5.2), whatever the body says.
+          const clientRefused = tokens.error === "invalid_client" || res.status === 401;
+          return { ok: res.ok && typeof tokens.id_token === "string", tokens, summary, clientRefused };
+        };
+
+        let attempt;
+        if (!opts.clientSecret) {
+          attempt = await exchange("none");
+        } else {
+          const first = tokenEndpointAuthMethodFor(doc.token_endpoint_auth_methods_supported, opts.tokenEndpointAuthMethod);
+          attempt = await exchange(first);
+          // See `tokenEndpointAuthMethod`: discovery cannot say how this client is registered.
+          if (!attempt.ok && attempt.clientRefused && !opts.tokenEndpointAuthMethod) {
+            const second: TokenEndpointAuthMethod = first === "client_secret_basic" ? "client_secret_post" : "client_secret_basic";
+            const refused = attempt.summary;
+            attempt = await exchange(second);
+            if (attempt.ok) console.warn(`pramen/auth: the OIDC token endpoint refused ${first} (${refused}) and accepted ${second}; set createOidcAuth's tokenEndpointAuthMethod: "${second}" to skip the refused attempt`);
+            else attempt = { ...attempt, summary: `${attempt.summary}; first ${refused}` };
+          }
+        }
+        const tokens = attempt.tokens;
+        if (!attempt.ok || typeof tokens.id_token !== "string") {
+          console.error(`pramen/auth: OIDC token exchange failed (${attempt.summary})`);
           return fail(502, "Sign-in could not be completed. Try again.", "server_error");
         }
 

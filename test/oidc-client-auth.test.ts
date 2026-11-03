@@ -9,7 +9,7 @@
 // gets its own issuer because discovery is cached per issuer for the isolate's life.
 
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { basicClientAuthorization, createOidcAuth, tokenEndpointAuthMethodFor, type OidcOptions } from "../packages/auth/src/oidc";
+import { basicClientAuthorization, createOidcAuth, tokenEndpointAuthMethodFor, type OidcOptions, type TokenEndpointAuthMethod } from "../packages/auth/src/oidc";
 
 const CLIENT_ID = "pramen-app";
 const SECRET = "s3cret";
@@ -35,8 +35,9 @@ interface Seen {
 
 let issuers = 0;
 /** A fake provider at a fresh issuer, advertising `methods` (omitted from the document when
- * `undefined`), answering the token request with `answer`, else an ID token for `aud`. */
-function provider(methods: unknown, answer?: () => Response, aud = CLIENT_ID) {
+ * `undefined`). The token request gets `answer`'s response, or an ID token for `aud` when
+ * there is none. */
+function provider(methods: unknown, answer?: (req: Seen) => Response | undefined, aud = CLIENT_ID) {
   const issuer = `https://idp-${++issuers}.client-auth.example.com`;
   const store = new Map<string, string>();
   const asked = { nonce: "" };
@@ -58,14 +59,24 @@ function provider(methods: unknown, answer?: () => Response, aud = CLIENT_ID) {
     }
     if (url === `${issuer}/jwks`) return Response.json({ keys: [{ ...(await jwk), kid: "k1", alg: "RS256", use: "sig" }] });
     if (url === `${issuer}/token`) {
-      seen.push({ body: new URLSearchParams(String(init?.body)), authorization: new Headers(init?.headers).get("authorization") });
-      if (answer) return answer();
+      const req = { body: new URLSearchParams(String(init?.body)), authorization: new Headers(init?.headers).get("authorization") };
+      seen.push(req);
+      const answered = answer?.(req);
+      if (answered) return answered;
       return Response.json({ id_token: await idToken({ iss: issuer, aud, sub: "s1", email: "ada@acme.com", email_verified: true, nonce: asked.nonce }) });
     }
     return new Response("unexpected", { status: 500 });
   }) as typeof fetch;
   return { issuer, KV: KV as unknown as KVNamespace, asked, seen, restore: () => { globalThis.fetch = original; } };
 }
+
+/** A provider strict the way Better Auth 1.7 is: the client is registered for ONE method, and
+ * the other one is refused with its `invalid_client`, before the code is looked at. */
+const registeredFor = (method: TokenEndpointAuthMethod) => (req: Seen): Response | undefined => {
+  const used: TokenEndpointAuthMethod = req.authorization ? "client_secret_basic" : "client_secret_post";
+  if (used === method) return undefined;
+  return Response.json({ error: "invalid_client", error_description: `client registered for ${method} cannot use ${used}` }, { status: 401 });
+};
 
 let active: { restore: () => void } | null = null;
 afterEach(() => { active?.restore(); active = null; });
@@ -116,6 +127,7 @@ describe("the token request's client authentication", () => {
   test("uses client_secret_basic when the provider lists it", async () => {
     const p = provider(["client_secret_basic", "client_secret_post", "private_key_jwt"]); active = p;
     expect((await signIn(p)).status).toBe(302);
+    expect(p.seen).toHaveLength(1);
     expectBasic(p.seen[0]);
   });
 
@@ -128,6 +140,7 @@ describe("the token request's client authentication", () => {
   test("sends the secret in the body when client_secret_post is the only method listed", async () => {
     const p = provider(["client_secret_post"]); active = p;
     expect((await signIn(p)).status).toBe(302);
+    expect(p.seen).toHaveLength(1);
     expectPost(p.seen[0]);
   });
 
@@ -193,27 +206,98 @@ describe("tokenEndpointAuthMethodFor", () => {
   });
 });
 
-describe("a refused exchange", () => {
-  test("logs the provider's error_description next to its error", async () => {
-    const description = "client registered for client_secret_basic cannot use client_secret_post";
-    const p = provider(["client_secret_post"], () => Response.json({ error: "invalid_client", error_description: description }, { status: 401 })); active = p;
-    const logged = spyOn(console, "error").mockImplementation(() => {});
-    try {
-      expect((await signIn(p)).status).toBe(502);
-      expect(logged.mock.calls.map((c) => String(c[0]))).toContain(`pramen/auth: OIDC token exchange failed (HTTP 401, invalid_client: ${description})`);
-    } finally {
-      logged.mockRestore();
-    }
+/** Run `fn` with console.error and console.warn captured; returns what each received. */
+async function capture(fn: () => Promise<void>): Promise<{ errors: string[]; warnings: string[] }> {
+  const error = spyOn(console, "error").mockImplementation(() => {});
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    await fn();
+    return { errors: error.mock.calls.map((c) => String(c[0])), warnings: warn.mock.calls.map((c) => String(c[0])) };
+  } finally {
+    error.mockRestore();
+    warn.mockRestore();
+  }
+}
+
+describe("when the provider refuses the client", () => {
+  // Discovery describes the PROVIDER. Auth0 and Better Auth list both methods and enforce the
+  // one each client is registered with, so a client registered for post at such a provider
+  // must still sign in, as it did before basic became the first choice.
+  test("a client registered for post at a provider listing both signs in on the second try", async () => {
+    const p = provider(["client_secret_basic", "client_secret_post"], registeredFor("client_secret_post")); active = p;
+    const { warnings } = await capture(async () => { expect((await signIn(p)).status).toBe(302); });
+    expect(p.seen).toHaveLength(2);
+    expectBasic(p.seen[0]);
+    expectPost(p.seen[1]);
+    expect(warnings.join("\n")).toContain('refused client_secret_basic');
+    expect(warnings.join("\n")).toContain('tokenEndpointAuthMethod: "client_secret_post"');
   });
 
-  test("still logs the status alone when the body has neither", async () => {
+  test("a client registered for basic at a post-only provider signs in on the second try", async () => {
+    const p = provider(["client_secret_post"], registeredFor("client_secret_basic")); active = p;
+    await capture(async () => { expect((await signIn(p)).status).toBe(302); });
+    expect(p.seen).toHaveLength(2);
+    expectPost(p.seen[0]);
+    expectBasic(p.seen[1]);
+  });
+
+  test("a bare 401 with no JSON body is a refused client too", async () => {
+    const p = provider(undefined, (req) => (req.authorization ? new Response("Unauthorized", { status: 401 }) : undefined)); active = p;
+    await capture(async () => { expect((await signIn(p)).status).toBe(302); });
+    expect(p.seen).toHaveLength(2);
+  });
+
+  test("a pinned method gets no second try", async () => {
+    const p = provider(["client_secret_basic", "client_secret_post"], registeredFor("client_secret_post")); active = p;
+    const { errors } = await capture(async () => { expect((await signIn(p, { tokenEndpointAuthMethod: "client_secret_basic" })).status).toBe(502); });
+    expect(p.seen).toHaveLength(1);
+    expect(errors).toContain("pramen/auth: OIDC token exchange failed (client_secret_basic, HTTP 401, invalid_client: client registered for client_secret_post cannot use client_secret_basic)");
+  });
+
+  test("an error that is not about the client (a spent code) gets no second try", async () => {
+    const p = provider(undefined, () => Response.json({ error: "invalid_grant", error_description: "code already used" }, { status: 400 })); active = p;
+    const { errors } = await capture(async () => { expect((await signIn(p)).status).toBe(502); });
+    expect(p.seen).toHaveLength(1);
+    expect(errors).toContain("pramen/auth: OIDC token exchange failed (client_secret_basic, HTTP 400, invalid_grant: code already used)");
+  });
+
+  test("a public client gets no second try", async () => {
+    const p = provider(undefined, () => Response.json({ error: "invalid_client" }, { status: 401 })); active = p;
+    const { errors } = await capture(async () => { expect((await signIn(p, { clientSecret: undefined })).status).toBe(502); });
+    expect(p.seen).toHaveLength(1);
+    expect(errors).toContain("pramen/auth: OIDC token exchange failed (HTTP 401, invalid_client)");
+  });
+
+  test("when both are refused, the log carries both answers", async () => {
+    const p = provider(["client_secret_post"], () => Response.json({ error: "invalid_client", error_description: "unknown client" }, { status: 401 })); active = p;
+    const { errors } = await capture(async () => { expect((await signIn(p)).status).toBe(502); });
+    expect(p.seen).toHaveLength(2);
+    expect(errors).toContain("pramen/auth: OIDC token exchange failed (client_secret_basic, HTTP 401, invalid_client: unknown client; first client_secret_post, HTTP 401, invalid_client: unknown client)");
+  });
+});
+
+describe("a refused exchange's log line", () => {
+  test("carries the status alone when the body has neither error nor description", async () => {
     const p = provider(undefined, () => new Response("bad gateway", { status: 502 })); active = p;
-    const logged = spyOn(console, "error").mockImplementation(() => {});
-    try {
-      expect((await signIn(p)).status).toBe(502);
-      expect(logged.mock.calls.map((c) => String(c[0]))).toContain("pramen/auth: OIDC token exchange failed (HTTP 502)");
-    } finally {
-      logged.mockRestore();
-    }
+    const { errors } = await capture(async () => { expect((await signIn(p)).status).toBe(502); });
+    expect(errors).toContain("pramen/auth: OIDC token exchange failed (client_secret_basic, HTTP 502)");
+  });
+
+  test("cannot be split by provider text: control characters are replaced, length is capped", async () => {
+    const forged = `bad\r\npramen/auth: forged line\u0000${"x".repeat(400)}`;
+    const p = provider(undefined, () => Response.json({ error: "invalid_grant", error_description: forged }, { status: 400 })); active = p;
+    const { errors } = await capture(async () => { expect((await signIn(p)).status).toBe(502); });
+    const line = errors.find((e) => e.startsWith("pramen/auth: OIDC token exchange failed"))!;
+    expect(line).not.toMatch(/[\r\n\u0000]/);
+    expect(line).toContain("invalid_grant: bad  pramen/auth: forged line ");
+    expect(line.length).toBeLessThan(400);
+  });
+});
+
+describe("createOidcAuth options", () => {
+  test("an unknown tokenEndpointAuthMethod is refused at construction, not read as basic", () => {
+    const base = { issuer: "https://idp.example.com", clientId: CLIENT_ID, clientSecret: SECRET, redirectUri: "https://app.example.com/cb", successRedirect: "https://app.example.com/" };
+    expect(() => createOidcAuth({ ...base, tokenEndpointAuthMethod: "client_secret_Post" as TokenEndpointAuthMethod })).toThrow(/tokenEndpointAuthMethod must be one of client_secret_basic, client_secret_post/);
+    expect(() => createOidcAuth({ ...base, tokenEndpointAuthMethod: "client_secret_post" })).not.toThrow();
   });
 });
