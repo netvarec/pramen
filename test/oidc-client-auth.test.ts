@@ -90,10 +90,9 @@ const configure = (p: ReturnType<typeof provider>, over: Partial<OidcOptions> = 
     redirectUri: "https://app.example.com/auth/oidc/callback", successRedirect: "https://app.example.com/signed-in", ...over,
   });
 
-/** One whole sign-in against `p`, through `oidc` when given (an instance is what lives for an
- * isolate), else a fresh one; returns the callback's answer. */
-async function signIn(p: ReturnType<typeof provider>, over: Partial<OidcOptions> = {}, oidc = configure(p, over)): Promise<Response> {
-  const [start, callback] = oidc.routes;
+/** One whole sign-in against `p` through a fresh `createOidcAuth`; returns the callback's answer. */
+async function signIn(p: ReturnType<typeof provider>, over: Partial<OidcOptions> = {}): Promise<Response> {
+  const [start, callback] = configure(p, over).routes;
   const started = await start!.handler(new Request("https://app.example.com/auth/oidc/start"), env(p.KV), {} as never);
   const authUrl = new URL(started.headers.get("location")!);
   p.asked.nonce = authUrl.searchParams.get("nonce")!;
@@ -240,16 +239,43 @@ describe("when the provider refuses the client", () => {
     expectBasic(p.seen[1]);
   });
 
+  // Kept module-wide per issuer + client id, so an app that builds `createOidcAuth` per request
+  // (to read the secret from env, say) gets it too: each signIn here is a fresh instance.
   test("the method that worked is kept: the next sign-in sends no refused attempt and no warning", async () => {
     const p = provider(["client_secret_basic", "client_secret_post"], registeredFor("client_secret_post")); active = p;
-    const oidc = configure(p);
     const { warnings } = await capture(async () => {
-      expect((await signIn(p, {}, oidc)).status).toBe(302);
-      expect((await signIn(p, {}, oidc)).status).toBe(302);
+      expect((await signIn(p)).status).toBe(302);
+      expect((await signIn(p)).status).toBe(302);
     });
     expect(p.seen).toHaveLength(3); // basic refused, post, post
     expectPost(p.seen[2]);
     expect(warnings).toHaveLength(1);
+  });
+
+  test("a remembered method that is refused later is replaced by the other one", async () => {
+    let registered: TokenEndpointAuthMethod = "client_secret_post";
+    const p = provider(["client_secret_basic", "client_secret_post"], (req) => registeredFor(registered)(req)); active = p;
+    const { warnings } = await capture(async () => {
+      expect((await signIn(p)).status).toBe(302); // basic refused, post remembered
+      registered = "client_secret_basic";
+      expect((await signIn(p)).status).toBe(302); // post refused, basic remembered
+      expect((await signIn(p)).status).toBe(302);
+    });
+    expect(p.seen.map((r) => (r.authorization ? "basic" : "post"))).toEqual(["basic", "post", "post", "basic", "basic"]);
+    expect(warnings).toHaveLength(2);
+  });
+
+  // Older Keycloak refuses a client with 401 `unauthorized_client`; some providers send only a
+  // `WWW-Authenticate` challenge. Both are the provider saying the CLIENT was refused.
+  test("a 401 that says why, or challenges, is a refused client too", async () => {
+    const keycloak = provider(undefined, (req) => (req.authorization ? Response.json({ error: "unauthorized_client" }, { status: 401 }) : undefined)); active = keycloak;
+    await capture(async () => { expect((await signIn(keycloak)).status).toBe(302); });
+    expect(keycloak.seen).toHaveLength(2);
+    keycloak.restore();
+
+    const challenge = provider(undefined, (req) => (req.authorization ? new Response(null, { status: 401, headers: { "www-authenticate": 'Basic realm="token"' } }) : undefined)); active = challenge;
+    await capture(async () => { expect((await signIn(challenge)).status).toBe(302); });
+    expect(challenge.seen).toHaveLength(2);
   });
 
   // A gateway or rate limiter in front of the provider can answer 401 for its own reasons; only
@@ -297,11 +323,18 @@ describe("a refused exchange's log line", () => {
     expect(errors).toContain("pramen/auth: OIDC token exchange failed (client_secret_basic, HTTP 502)");
   });
 
-  test("cannot be split or reordered by provider text: control, format and separator characters are replaced", async () => {
-    const forged = "bad\r\npramen/auth: forged\u0000\u2028line\u2029\u202Eend";
+  test("cannot be split or reordered by provider text: control, separator and bidi characters are replaced", async () => {
+    const forged = "bad\r\npramen/auth: forged\u0000\u2028line\u2029\u202Eend\u2066x";
     const p = provider(undefined, () => Response.json({ error: "invalid_grant", error_description: forged }, { status: 400 })); active = p;
     const { errors } = await capture(async () => { expect((await signIn(p)).status).toBe(502); });
-    expect(errors).toContain("pramen/auth: OIDC token exchange failed (client_secret_basic, HTTP 400, invalid_grant: bad  pramen/auth: forged  line  end)");
+    expect(errors).toContain("pramen/auth: OIDC token exchange failed (client_secret_basic, HTTP 400, invalid_grant: bad  pramen/auth: forged  line  end x)");
+  });
+
+  test("leaves joiners in legitimate text alone", async () => {
+    const text = "می\u200Cخواهم 👩\u200D💻";
+    const p = provider(undefined, () => Response.json({ error: "invalid_grant", error_description: text }, { status: 400 })); active = p;
+    const { errors } = await capture(async () => { expect((await signIn(p)).status).toBe(502); });
+    expect(errors).toContain(`pramen/auth: OIDC token exchange failed (client_secret_basic, HTTP 400, invalid_grant: ${text})`);
   });
 
   test("caps provider text at 300 code points, never splitting a surrogate pair", async () => {
@@ -316,15 +349,10 @@ describe("a refused exchange's log line", () => {
 });
 
 describe("createOidcAuth options", () => {
-  // Construction runs at the Worker entry's module scope: a throw there fails every request in
-  // the deployment. Ignored, the exchange still finds the method through its second try.
-  test("an unknown tokenEndpointAuthMethod is logged and ignored, not thrown and not read as a pin", async () => {
-    const p = provider(["client_secret_basic", "client_secret_post"], registeredFor("client_secret_post")); active = p;
-    const { errors } = await capture(async () => {
-      const oidc = configure(p, { tokenEndpointAuthMethod: "client_secret_Post" as TokenEndpointAuthMethod });
-      expect((await signIn(p, {}, oidc)).status).toBe(302);
-    });
-    expect(errors.join("\n")).toContain('tokenEndpointAuthMethod must be one of client_secret_basic, client_secret_post, got "client_secret_Post"; ignoring it');
-    expect(p.seen).toHaveLength(2); // unpinned: basic refused, then post
+  // Like a bad `sessionTtlSeconds`: a typo is never deliberate, and must not read as "unpinned".
+  test("an unknown tokenEndpointAuthMethod throws at construction", () => {
+    const base = { issuer: "https://idp.example.com", clientId: CLIENT_ID, clientSecret: SECRET, redirectUri: "https://app.example.com/cb", successRedirect: "https://app.example.com/" };
+    expect(() => createOidcAuth({ ...base, tokenEndpointAuthMethod: "client_secret_basic " as TokenEndpointAuthMethod })).toThrow('tokenEndpointAuthMethod must be one of client_secret_basic, client_secret_post, got "client_secret_basic "');
+    expect(() => createOidcAuth({ ...base, tokenEndpointAuthMethod: "client_secret_post" })).not.toThrow();
   });
 });

@@ -85,8 +85,8 @@ export interface OidcOptions {
    * a warning names the method to set here, and the isolate keeps using it, so the refused
    * attempt happens once per isolate rather than on every sign-in.
    *
-   * Set: exactly that method, with no second try. An unknown value is logged and ignored.
-   * Ignored without `clientSecret`.
+   * Set: exactly that method, with no second try. Ignored without `clientSecret`; an unknown
+   * value throws at construction, as a bad `sessionTtlSeconds` does.
    */
   tokenEndpointAuthMethod?: TokenEndpointAuthMethod;
   /** Must match the redirect URI registered with the provider, exactly. */
@@ -217,10 +217,21 @@ export function tokenEndpointAuthMethodFor(advertised: unknown): TokenEndpointAu
 
 const otherMethod = (m: TokenEndpointAuthMethod): TokenEndpointAuthMethod => (m === "client_secret_basic" ? "client_secret_post" : "client_secret_basic");
 
-/** Provider text bound for the log: capped at 300 code points (never half a surrogate pair),
- * with control, format and line/paragraph separator characters (CR, LF, U+2028, U+202E …)
- * replaced, so a token endpoint cannot forge or reorder log lines. */
-const forLog = (v: string): string => Array.from(v).slice(0, 300).join("").replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ");
+/** Provider text bound for the log: capped at 300 code points (never half a surrogate pair;
+ * 600 UTF-16 units always hold them, so a huge string is never expanded whole), with control
+ * characters, line/paragraph separators and bidi controls (CR, LF, U+2028, U+202E …) replaced,
+ * so a token endpoint cannot forge or reorder log lines. Other format characters (ZWJ in an
+ * emoji or a Persian word) are left alone. */
+const forLog = (v: string): string =>
+  Array.from(v.slice(0, 600))
+    .slice(0, 300)
+    .join("")
+    .replace(/[\p{Cc}\p{Zl}\p{Zp}\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/gu, " ");
+
+/** The method a provider accepted after refusing discovery's guess, per issuer and client id.
+ * Module-wide like the discovery cache, so a client registered the other way costs one refused
+ * request per isolate, wherever `createOidcAuth` is called. */
+const learnedMethods = new Map<string, TokenEndpointAuthMethod>();
 
 /** `application/x-www-form-urlencoded` of one value, as RFC 6749 §2.3.1 requires of the client
  * id and secret BEFORE they are joined and base64-encoded: a `:` in the id, or a `%`, `+` or
@@ -354,18 +365,13 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
   const callbackPath = opts.callbackPath ?? "/auth/oidc/callback";
   const stateTtl = opts.stateTtlSeconds ?? 600;
   const configuredTtl = declareSessionTtl(opts.sessionTtlSeconds);
-  // Typed, but a config-driven caller can pass anything. Logged and IGNORED rather than thrown:
-  // this runs at the Worker entry's module scope, where a throw fails every request in the
-  // deployment, while an unpinned exchange still signs in through its second try.
-  let pinned = opts.tokenEndpointAuthMethod;
+  // Typed, but a config-driven caller can pass anything, and an unknown value must not read as
+  // "unpinned". Thrown like a bad `sessionTtlSeconds` above: a typo is never deliberate.
+  const pinned = opts.tokenEndpointAuthMethod;
   if (pinned !== undefined && !TOKEN_ENDPOINT_AUTH_METHODS.includes(pinned)) {
-    console.error(`pramen/auth: createOidcAuth tokenEndpointAuthMethod must be one of ${TOKEN_ENDPOINT_AUTH_METHODS.join(", ")}, got ${JSON.stringify(pinned)}; ignoring it`);
-    pinned = undefined;
+    throw new Error(`@pramen/auth: createOidcAuth tokenEndpointAuthMethod must be one of ${TOKEN_ENDPOINT_AUTH_METHODS.join(", ")}, got ${JSON.stringify(pinned)}`);
   }
-  /** The method the provider accepted after refusing discovery's guess. Kept for the isolate's
-   * life, like discovery, so a client registered the other way costs one refused request per
-   * isolate, not one per sign-in. */
-  let learned: TokenEndpointAuthMethod | undefined;
+  const learnedKey = `${opts.issuer.replace(/\/+$/, "")}\n${opts.clientId}`;
 
   /** `successRedirect`, carrying the path the user was headed for. Only ever a PATH: an
    * absolute or protocol-relative `returnTo` would make this an open redirect. Checked again
@@ -522,9 +528,12 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
           const detail = [tokens.error, tokens.error_description].filter((v): v is string => typeof v === "string" && v !== "").map(forLog);
           const summary = `${method === "none" ? "" : `${method}, `}HTTP ${res.status}${detail.length ? `, ${detail.join(": ")}` : ""}`;
           const idToken = res.ok && typeof tokens.id_token === "string" ? tokens.id_token : undefined;
-          // Only the provider's own word: a bare 401 can come from a gateway or a rate limiter
-          // in front of it, and must not send the code and the secret a second time.
-          return { idToken, summary, clientRefused: tokens.error === "invalid_client" };
+          // A refused CLIENT, in the provider's own words: `invalid_client`, or a 401 (RFC 6749
+          // §5.2) that says why (older Keycloak answers `unauthorized_client`) or challenges
+          // with `WWW-Authenticate`. An opaque 401 can come from a gateway or a rate limiter in
+          // front of the provider and must not send the code and the secret a second time.
+          const clientRefused = tokens.error === "invalid_client" || (res.status === 401 && (typeof tokens.error === "string" || res.headers.has("www-authenticate")));
+          return { idToken, summary, clientRefused };
         };
 
         let attempt;
@@ -537,14 +546,14 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
           // The second try relies on the provider authenticating the client BEFORE it redeems
           // the code (Better Auth does). One that did not would answer it `invalid_grant`,
           // which is where this sign-in had ended anyway.
-          const first = learned ?? tokenEndpointAuthMethodFor(doc.token_endpoint_auth_methods_supported);
+          const first = learnedMethods.get(learnedKey) ?? tokenEndpointAuthMethodFor(doc.token_endpoint_auth_methods_supported);
           attempt = await exchange(first);
           if (!attempt.idToken && attempt.clientRefused) {
             const second = otherMethod(first);
             const refused = attempt.summary;
             attempt = await exchange(second);
             if (attempt.idToken) {
-              learned = second;
+              learnedMethods.set(learnedKey, second);
               console.warn(`pramen/auth: the OIDC token endpoint refused ${first} (${refused}) and accepted ${second}, which this isolate now uses; set createOidcAuth's tokenEndpointAuthMethod: "${second}" to skip the refused attempt`);
             } else {
               attempt = { ...attempt, summary: `${attempt.summary}; refused before it: ${refused}` };
