@@ -265,8 +265,8 @@ describe("when the provider refuses the client", () => {
     expect(warnings).toHaveLength(2);
   });
 
-  // Older Keycloak refuses a client with 401 `unauthorized_client`; some providers send only a
-  // `WWW-Authenticate` challenge. Both are the provider saying the CLIENT was refused.
+  // Some providers refuse a client with a 401 and an error other than `invalid_client`, or with
+  // only a `WWW-Authenticate` challenge. Both get the second try.
   test("a 401 that says why, or challenges, is a refused client too", async () => {
     const keycloak = provider(undefined, (req) => (req.authorization ? Response.json({ error: "unauthorized_client" }, { status: 401 }) : undefined)); active = keycloak;
     await capture(async () => { expect((await signIn(keycloak)).status).toBe(302); });
@@ -278,9 +278,9 @@ describe("when the provider refuses the client", () => {
     expect(challenge.seen).toHaveLength(2);
   });
 
-  // A gateway or rate limiter in front of the provider can answer 401 for its own reasons; only
-  // the provider's `invalid_client` says the CLIENT was refused.
-  test("a bare 401 without invalid_client gets no second try", async () => {
+  // An OPAQUE 401 (no error, no challenge) is a gateway or rate limiter in front of the
+  // provider, not the provider refusing the client.
+  test("an opaque 401 (no error, no challenge) gets no second try", async () => {
     const p = provider(undefined, () => new Response("Unauthorized", { status: 401 })); active = p;
     const { errors } = await capture(async () => { expect((await signIn(p)).status).toBe(502); });
     expect(p.seen).toHaveLength(1);
@@ -323,11 +323,11 @@ describe("a refused exchange's log line", () => {
     expect(errors).toContain("pramen/auth: OIDC token exchange failed (client_secret_basic, HTTP 502)");
   });
 
-  test("cannot be split or reordered by provider text: control, separator and bidi characters are replaced", async () => {
-    const forged = "bad\r\npramen/auth: forged\u0000\u2028line\u2029\u202Eend\u2066x";
+  test("cannot be split or reordered by provider text: control, format and separator characters are replaced", async () => {
+    const forged = "bad\r\npramen/auth: forged\u0000\u2028line\u2029\u202Eend\u2066x\uFFF9y";
     const p = provider(undefined, () => Response.json({ error: "invalid_grant", error_description: forged }, { status: 400 })); active = p;
     const { errors } = await capture(async () => { expect((await signIn(p)).status).toBe(502); });
-    expect(errors).toContain("pramen/auth: OIDC token exchange failed (client_secret_basic, HTTP 400, invalid_grant: bad  pramen/auth: forged  line  end x)");
+    expect(errors).toContain("pramen/auth: OIDC token exchange failed (client_secret_basic, HTTP 400, invalid_grant: bad  pramen/auth: forged  line  end x y)");
   });
 
   test("leaves joiners in legitimate text alone", async () => {

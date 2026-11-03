@@ -1033,15 +1033,15 @@ there are no backward-compatibility guarantees yet.
   with neither the secret nor the id in the body. Only a provider listing `client_secret_post`
   without basic gets the body first. Discovery describes the provider, not how this client is
   registered (Auth0 lists both and enforces one per application), so when the provider answers
-  `invalid_client` (or a 401 that names an error or challenges, as older Keycloak's
-  `unauthorized_client` does) the exchange tries the other method once. Client authentication is checked
+  `invalid_client`, or a 401 that names an error or challenges with `WWW-Authenticate` (how some
+  providers refuse a client), the exchange tries the other method once. Client authentication is checked
   before the code is redeemed, so that second try can still sign in, and a client registered
   for post keeps working. When the second try succeeds, the isolate keeps that method (one
   refused request per isolate, not per sign-in) and a warning names it. A new
   `tokenEndpointAuthMethod` option pins one method with no second try; an unknown value throws
   at construction, like a bad `sessionTtlSeconds`. A public client (no `clientSecret`) is unchanged. A refused exchange now
   logs the method, the provider's `error_description` next to its `error` (capped, control,
-  separator and bidi characters replaced) and, after a second try, both answers.
+  format and separator characters replaced, joiners kept) and, after a second try, both answers.
 
 - **The editor no longer leaves a blank page in a browser without the Navigation API
   (`@pramen/cms-editor`).** Safari before 26.2 (and every browser on iOS/iPadOS before 26.2)

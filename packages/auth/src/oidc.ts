@@ -218,15 +218,15 @@ export function tokenEndpointAuthMethodFor(advertised: unknown): TokenEndpointAu
 const otherMethod = (m: TokenEndpointAuthMethod): TokenEndpointAuthMethod => (m === "client_secret_basic" ? "client_secret_post" : "client_secret_basic");
 
 /** Provider text bound for the log: capped at 300 code points (never half a surrogate pair;
- * 600 UTF-16 units always hold them, so a huge string is never expanded whole), with control
- * characters, line/paragraph separators and bidi controls (CR, LF, U+2028, U+202E …) replaced,
- * so a token endpoint cannot forge or reorder log lines. Other format characters (ZWJ in an
- * emoji or a Persian word) are left alone. */
+ * 600 UTF-16 units always hold them, so a huge string is never expanded whole), with control,
+ * format and line/paragraph separator characters (CR, LF, U+2028, U+202E, U+FFF9 …) replaced,
+ * so a token endpoint cannot forge or reorder log lines. The joiners ZWNJ and ZWJ are kept:
+ * they hold a Persian word or an emoji together and move nothing. */
 const forLog = (v: string): string =>
   Array.from(v.slice(0, 600))
     .slice(0, 300)
     .join("")
-    .replace(/[\p{Cc}\p{Zl}\p{Zp}\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/gu, " ");
+    .replace(/(?![\u200C\u200D])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ");
 
 /** The method a provider accepted after refusing discovery's guess, per issuer and client id.
  * Module-wide like the discovery cache, so a client registered the other way costs one refused
@@ -528,10 +528,11 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
           const detail = [tokens.error, tokens.error_description].filter((v): v is string => typeof v === "string" && v !== "").map(forLog);
           const summary = `${method === "none" ? "" : `${method}, `}HTTP ${res.status}${detail.length ? `, ${detail.join(": ")}` : ""}`;
           const idToken = res.ok && typeof tokens.id_token === "string" ? tokens.id_token : undefined;
-          // A refused CLIENT, in the provider's own words: `invalid_client`, or a 401 (RFC 6749
-          // §5.2) that says why (older Keycloak answers `unauthorized_client`) or challenges
-          // with `WWW-Authenticate`. An opaque 401 can come from a gateway or a rate limiter in
-          // front of the provider and must not send the code and the secret a second time.
+          // Possibly a refused CLIENT: `invalid_client`, or a 401 (RFC 6749 §5.2) that names an
+          // error or challenges with `WWW-Authenticate`, which is how some providers refuse a
+          // client. For any other cause the second try costs one wasted request, and the secret
+          // goes nowhere the first request did not take it. An opaque 401 (no error, no
+          // challenge) is a gateway or rate limiter, not the provider, and gets no second try.
           const clientRefused = tokens.error === "invalid_client" || (res.status === 401 && (typeof tokens.error === "string" || res.headers.has("www-authenticate")));
           return { idToken, summary, clientRefused };
         };
