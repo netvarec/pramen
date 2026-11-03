@@ -87,29 +87,36 @@ It **refuses a dirty working tree**, because the bump must be its own commit.
    ```bash
    gh run watch $(gh run list --workflow=release.yml --limit=1 --json databaseId -q '.[0].databaseId') --exit-status
    ```
-   On success, confirm **every** package is live at the new version. A partial publish
-   leaves the registry out of lockstep, and checking just one hides it:
+   On success, confirm **every** package is INSTALLABLE at the new version. A partial
+   publish leaves the registry out of lockstep, and checking just one hides it:
    ```bash
-   bun -e 'import { PUBLISH_PKGS } from "./scripts/packages";
-   for (const dir of PUBLISH_PKGS) {
-     const { name } = await Bun.file(`${dir}/package.json`).json();
-     const r = await Bun.$`npm view ${name} version`.quiet().nothrow();
-     console.log(`${name.padEnd(22)} ${r.stdout.toString().trim() || "(not published)"}`);
-   }'
+   bun scripts/verify-release.ts        # polls until --timeout=<s> (default 900) plus one last round
    ```
-   Driven off `PUBLISH_PKGS` so it cannot check a stale subset.
+   It is driven off `PUBLISH_PKGS` (so it cannot check a stale subset). For each package it
+   checks that the install packument (`/<name>`, what `bun add` resolves against) lists the
+   version, downloads the tarball that entry names and compares it with both published
+   digests (`dist.shasum`, `dist.integrity`), and exits 0 only when every package passes.
+   Report done only after it does.
 
-   **A package reading one version behind is not necessarily a failed publish.**
-   `@pramen/cms-astro` in particular takes npm's ASYNC publish path: the log says
+   **Why the tarball and not `npm view`.** Under npm's ASYNC publish path (the log says
    `npm notice Your package is being processed and may take a few minutes to become
-   available` and `+ @pramen/cms-astro@X`, and the registry 404s for up to a few minutes
-   after. Poll before concluding anything:
-   ```bash
-   curl -s -o /dev/null -w '%{http_code}\n' https://registry.npmjs.org/@pramen%2Fcms-astro/<X.Y.Z>
-   ```
-   Tell the two apart by the RUN LOG, never by the registry alone: a real gap shows an
-   `npm error` for that package, a lag shows `+ @pramen/<name>@<version>`. In 0.0.62 the
-   two looked identical from outside and only the log distinguished them.
+   available`) a version shows up in three stages: the run log's `+ @pramen/<name>@<version>`,
+   then the version document `npm view` reads, then the tarball it points at. The last one
+   can trail the second by minutes. In 0.0.93 all ten version documents were up while the
+   `cms-editor`, `admin` and `analytics` tarballs still answered 404 for about three more
+   minutes, so a check that stopped at `npm view` declared a release complete that a
+   consumer could not yet install. That 404 is the origin's, not a cached one (no
+   `cf-cache-status`/`age` header), and a cache-busting query does not change it: waiting does.
+
+   **Tell lag from a failed publish by the RUN LOG, never by the registry alone**: a real gap
+   shows an `npm error` for that package, a lag shows `+ @pramen/<name>@<version>`. In 0.0.62
+   the two looked identical from outside and only the log distinguished them. A digest
+   MISMATCH is neither: the script downloads a mismatching tarball once more on the spot
+   (a proxy can cut a response short without an error), and stops when both downloads
+   mismatch, naming the packages that did in that round.
+
+   Compare times in UTC. The run log and npm's headers are UTC; reading them against local
+   time once made a six-minute lag look like an hour and a half.
 
 ## Notes & gotchas
 
