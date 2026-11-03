@@ -156,8 +156,9 @@ way the client is registered with it (Better Auth from 1.7 and Auth0 both answer
 with `invalid_client`). Discovery describes the provider, not your client, so the code exchange
 starts with what it suggests: an `Authorization: Basic` header (`client_secret_basic`) unless
 the document lists `client_secret_post` and not basic, in which case the secret goes in the
-request body. If the provider answers `invalid_client`, the exchange tries the other method once,
-and when that works it logs a warning naming it. Pin the method to skip the refused attempt:
+request body. If the provider answers `invalid_client`, the exchange tries the other method once;
+when that works, the Worker keeps using it and logs a warning naming it. Pin the method to skip
+the refused attempt:
 
 ```ts
 createOidcAuth({ /* … */ tokenEndpointAuthMethod: "client_secret_post" });   // exactly this, no retry

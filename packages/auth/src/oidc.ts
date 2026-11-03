@@ -59,7 +59,8 @@ interface Discovery {
 }
 
 /** The two ways a confidential client proves its secret at the token endpoint. */
-export type TokenEndpointAuthMethod = "client_secret_basic" | "client_secret_post";
+const TOKEN_ENDPOINT_AUTH_METHODS = ["client_secret_basic", "client_secret_post"] as const;
+export type TokenEndpointAuthMethod = (typeof TOKEN_ENDPOINT_AUTH_METHODS)[number];
 
 export interface OidcOptions {
   /** The provider's issuer URL. `/.well-known/openid-configuration` is fetched from it, so
@@ -80,10 +81,12 @@ export interface OidcOptions {
    * nothing, since that is the default both specs give, and `client_secret_post` (the secret
    * in the request body) when that is the only one listed. Discovery describes the provider,
    * not this client's registration, so it can only be a first guess. The second try works
-   * because client authentication is checked before the code is redeemed. When it succeeds,
-   * a warning names the method to set here.
+   * because a provider authenticates the client before it redeems the code. When it succeeds,
+   * a warning names the method to set here, and the isolate keeps using it, so the refused
+   * attempt happens once per isolate rather than on every sign-in.
    *
-   * Set: exactly that method, with no second try. Ignored without `clientSecret`.
+   * Set: exactly that method, with no second try. An unknown value is logged and ignored.
+   * Ignored without `clientSecret`.
    */
   tokenEndpointAuthMethod?: TokenEndpointAuthMethod;
   /** Must match the redirect URI registered with the provider, exactly. */
@@ -203,21 +206,21 @@ async function challengeFor(verifier: string): Promise<string> {
 }
 
 /**
- * The method {@link OidcOptions.tokenEndpointAuthMethod} resolves to. A provider that lists
- * neither secret method (only `private_key_jwt`, say) still gets basic: it is the specs'
- * default, and the provider's `invalid_client` then names the mismatch.
+ * The first method to try, from what discovery's `token_endpoint_auth_methods_supported` says.
+ * A provider that lists neither secret method (only `private_key_jwt`, say) still gets basic:
+ * it is the specs' default, and the provider's `invalid_client` then names the mismatch.
  */
-export function tokenEndpointAuthMethodFor(advertised: unknown, override?: TokenEndpointAuthMethod): TokenEndpointAuthMethod {
-  if (override) return override;
+export function tokenEndpointAuthMethodFor(advertised: unknown): TokenEndpointAuthMethod {
   const methods = Array.isArray(advertised) ? advertised : [];
   return methods.includes("client_secret_post") && !methods.includes("client_secret_basic") ? "client_secret_post" : "client_secret_basic";
 }
 
-const TOKEN_ENDPOINT_AUTH_METHODS: readonly TokenEndpointAuthMethod[] = ["client_secret_basic", "client_secret_post"];
+const otherMethod = (m: TokenEndpointAuthMethod): TokenEndpointAuthMethod => (m === "client_secret_basic" ? "client_secret_post" : "client_secret_basic");
 
-/** Provider text bound for the log: capped, and with control characters (CR/LF included)
- * replaced, so a token endpoint cannot forge log lines. */
-const forLog = (v: string): string => v.slice(0, 300).replace(/\p{Cc}/gu, " ");
+/** Provider text bound for the log: capped at 300 code points (never half a surrogate pair),
+ * with control, format and line/paragraph separator characters (CR, LF, U+2028, U+202E …)
+ * replaced, so a token endpoint cannot forge or reorder log lines. */
+const forLog = (v: string): string => Array.from(v).slice(0, 300).join("").replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ");
 
 /** `application/x-www-form-urlencoded` of one value, as RFC 6749 §2.3.1 requires of the client
  * id and secret BEFORE they are joined and base64-encoded: a `:` in the id, or a `%`, `+` or
@@ -351,11 +354,18 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
   const callbackPath = opts.callbackPath ?? "/auth/oidc/callback";
   const stateTtl = opts.stateTtlSeconds ?? 600;
   const configuredTtl = declareSessionTtl(opts.sessionTtlSeconds);
-  // Typed, but a config-driven caller can pass anything, and every unknown value would
-  // otherwise act as a silent `client_secret_basic`.
-  if (opts.tokenEndpointAuthMethod !== undefined && !TOKEN_ENDPOINT_AUTH_METHODS.includes(opts.tokenEndpointAuthMethod)) {
-    throw new Error(`@pramen/auth: createOidcAuth tokenEndpointAuthMethod must be one of ${TOKEN_ENDPOINT_AUTH_METHODS.join(", ")}, got ${JSON.stringify(opts.tokenEndpointAuthMethod)}`);
+  // Typed, but a config-driven caller can pass anything. Logged and IGNORED rather than thrown:
+  // this runs at the Worker entry's module scope, where a throw fails every request in the
+  // deployment, while an unpinned exchange still signs in through its second try.
+  let pinned = opts.tokenEndpointAuthMethod;
+  if (pinned !== undefined && !TOKEN_ENDPOINT_AUTH_METHODS.includes(pinned)) {
+    console.error(`pramen/auth: createOidcAuth tokenEndpointAuthMethod must be one of ${TOKEN_ENDPOINT_AUTH_METHODS.join(", ")}, got ${JSON.stringify(pinned)}; ignoring it`);
+    pinned = undefined;
   }
+  /** The method the provider accepted after refusing discovery's guess. Kept for the isolate's
+   * life, like discovery, so a client registered the other way costs one refused request per
+   * isolate, not one per sign-in. */
+  let learned: TokenEndpointAuthMethod | undefined;
 
   /** `successRedirect`, carrying the path the user was headed for. Only ever a PATH: an
    * absolute or protocol-relative `returnTo` would make this an open redirect. Checked again
@@ -511,28 +521,38 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
           // so it goes only to the log, never to the page.
           const detail = [tokens.error, tokens.error_description].filter((v): v is string => typeof v === "string" && v !== "").map(forLog);
           const summary = `${method === "none" ? "" : `${method}, `}HTTP ${res.status}${detail.length ? `, ${detail.join(": ")}` : ""}`;
-          // 401 at a token endpoint is a refused client (RFC 6749 §5.2), whatever the body says.
-          const clientRefused = tokens.error === "invalid_client" || res.status === 401;
-          return { ok: res.ok && typeof tokens.id_token === "string", tokens, summary, clientRefused };
+          const idToken = res.ok && typeof tokens.id_token === "string" ? tokens.id_token : undefined;
+          // Only the provider's own word: a bare 401 can come from a gateway or a rate limiter
+          // in front of it, and must not send the code and the secret a second time.
+          return { idToken, summary, clientRefused: tokens.error === "invalid_client" };
         };
 
         let attempt;
         if (!opts.clientSecret) {
           attempt = await exchange("none");
+        } else if (pinned) {
+          attempt = await exchange(pinned);
         } else {
-          const first = tokenEndpointAuthMethodFor(doc.token_endpoint_auth_methods_supported, opts.tokenEndpointAuthMethod);
-          attempt = await exchange(first);
           // See `tokenEndpointAuthMethod`: discovery cannot say how this client is registered.
-          if (!attempt.ok && attempt.clientRefused && !opts.tokenEndpointAuthMethod) {
-            const second: TokenEndpointAuthMethod = first === "client_secret_basic" ? "client_secret_post" : "client_secret_basic";
+          // The second try relies on the provider authenticating the client BEFORE it redeems
+          // the code (Better Auth does). One that did not would answer it `invalid_grant`,
+          // which is where this sign-in had ended anyway.
+          const first = learned ?? tokenEndpointAuthMethodFor(doc.token_endpoint_auth_methods_supported);
+          attempt = await exchange(first);
+          if (!attempt.idToken && attempt.clientRefused) {
+            const second = otherMethod(first);
             const refused = attempt.summary;
             attempt = await exchange(second);
-            if (attempt.ok) console.warn(`pramen/auth: the OIDC token endpoint refused ${first} (${refused}) and accepted ${second}; set createOidcAuth's tokenEndpointAuthMethod: "${second}" to skip the refused attempt`);
-            else attempt = { ...attempt, summary: `${attempt.summary}; first ${refused}` };
+            if (attempt.idToken) {
+              learned = second;
+              console.warn(`pramen/auth: the OIDC token endpoint refused ${first} (${refused}) and accepted ${second}, which this isolate now uses; set createOidcAuth's tokenEndpointAuthMethod: "${second}" to skip the refused attempt`);
+            } else {
+              attempt = { ...attempt, summary: `${attempt.summary}; refused before it: ${refused}` };
+            }
           }
         }
-        const tokens = attempt.tokens;
-        if (!attempt.ok || typeof tokens.id_token !== "string") {
+        const idToken = attempt.idToken;
+        if (!idToken) {
           console.error(`pramen/auth: OIDC token exchange failed (${attempt.summary})`);
           return fail(502, "Sign-in could not be completed. Try again.", "server_error");
         }
@@ -540,7 +560,7 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
         // Signature, issuer, audience and expiry, then the nonce, which is what binds this
         // ID token to the authorization request WE started. Without it a token minted for a
         // different session of the same client would be accepted here.
-        const claims = await idTokenVerifier(doc.jwks_uri, doc.issuer).verify(tokens.id_token);
+        const claims = await idTokenVerifier(doc.jwks_uri, doc.issuer).verify(idToken);
         if (!claims) return fail(401, "Sign-in token could not be verified.", "invalid_token");
         if (claims.nonce !== pending.nonce) return fail(401, "Sign-in token does not match this sign-in attempt.", "invalid_token");
 
@@ -620,7 +640,7 @@ export function createOidcAuth(opts: OidcOptions): { routes: PublicRoute[] } {
         );
         // With `endSession`, the ID token rides along so the browser can hand it back to the
         // logout route. Same fragment, so it stays out of logs and `Referer` like the session.
-        return redirect(`token=${encodeURIComponent(token)}${opts.endSession ? `&id_token=${encodeURIComponent(tokens.id_token)}` : ""}`);
+        return redirect(`token=${encodeURIComponent(token)}${opts.endSession ? `&id_token=${encodeURIComponent(idToken)}` : ""}`);
       };
       try {
         return await complete();
