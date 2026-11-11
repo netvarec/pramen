@@ -596,18 +596,26 @@ log) for independent single-writer serialization and storage.
   hidden, so "show i18n once a 2nd locale exists" can never become true. `listLocales` stays
   a DATA query (what is authored), distinct from what is declared.
 - **Boot fingerprint (#100): an unchanged store boots with ONE read.** The D1 isolate boot and a
-  DO's first fetch (`runtime/boot-fingerprint.ts`) digest what the boot converges FROM CODE (the
-  `migrate()` schema hash over the same subset, the data-migration ids that boot runs, the source
-  of `ensureOutbox`, each reconciler's `BootstrapFn.fingerprint`) and store it in `_pramen_meta`
-  (`boot_fingerprint`, `boot_fingerprint:<partition>` on a partition DO) only after a boot that
-  converged fully: migrate skipped nothing, every reconciler finished. While it matches, the boot
-  is that one SELECT, plus the reconcilers that declare no fingerprint (they can't be proven
-  unchanged, e.g. env-gated seeds, so they run every boot as before). Before it, a CMS app paid 41
-  sequential D1 statements (5 writes) per cold isolate, ~600 ms wall in production. It does NOT
-  see the data: a code-defined row deleted by hand comes back only when its code changes, or
-  after deleting the `boot_fingerprint` row. A reconciler that declares a fingerprint must THROW
-  when it could not converge (`cmsBootstrap` does, after its per-definition pass) or the
-  half-converged store gets vouched for.
+  DO's first fetch (`runtime/boot-fingerprint.ts`) SHA-256 what the boot converges FROM CODE (the
+  schema canon `migrate()` hashes, over the same subset; the data-migration ids that boot runs;
+  the source of `ensureOutbox`; each reconciler's `BootstrapFn.fingerprint`) and keep it in
+  `_pramen_meta` (`boot_fingerprint`, `boot_fingerprint:<partition>` on a partition DO). The fast
+  path is one SELECT of that row AND `schema_hash` (on D1 through a `first-primary` session); both
+  must match, because pre-#100 code rewrites `schema_hash` but never the fingerprint. Then only
+  reconcilers that declare no fingerprint run (env-gated seeds can't be proven unchanged). A full
+  boot CLAIMS the key with `pending:<uuid>` after migrate and finishes with a conditional UPDATE,
+  so of two releases booting one store at once the later claim wins and the other records
+  nothing. It records only after a boot that converged fully: migrate skipped nothing, every
+  reconciler finished without throwing or calling `ctx.markIncomplete`. A reconciler that
+  declares a fingerprint must report a partial pass with `markIncomplete`, NOT a throw: on the
+  DO each reconciler runs in a transaction and a throw rolls back what did converge (`cmsBootstrap`
+  does this). Before it, a CMS app paid 41 sequential D1 statements (5 writes) per cold isolate,
+  ~600 ms wall in production. It does NOT see the data: a code-defined row deleted by hand, a
+  `_pramen_migrations` row deleted to re-run a migration, an editor-owned row that blocked a
+  declared slug and was then deleted: none is acted on until the code changes. Escape hatch:
+  `PRAMEN_FULL_BOOT=true` for one deploy (works on DO stores, where there is no per-tenant row to
+  delete by hand), or delete the `boot_fingerprint` row(s). Do the same after rolling back across
+  #100 and forward again (older code can rewrite bootstrap rows without touching `schema_hash`).
 - Bootstrap (code-defined reference data): `app.bootstrap: BootstrapFn[]` runs once after
   schema migration on each boot (DO first-fetch / D1 isolate init) with a privileged system
   `Db`, to converge code-declared reference data (content types, block types, roles, flags)

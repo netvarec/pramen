@@ -21,8 +21,8 @@ import { dispatch, tasksFacade, bindTasks } from "./runtime/dispatch";
 import { createMail } from "./runtime/mail";
 import { createQueue } from "./runtime/queue";
 import { ensureOutbox, drainOutbox, listTasks } from "./runtime/outbox";
-import { bootFingerprint, readBootFingerprint, writeBootFingerprint } from "./runtime/boot-fingerprint";
-import { appliedMigrations, runDataMigrations as runPendingDataMigrations } from "./runtime/data-migrations";
+import { bootFingerprint, bootFingerprintMatches, claimFullBoot, forceFullBoot, recordBootFingerprint } from "./runtime/boot-fingerprint";
+import { appliedMigrations, migrationsForPartition, runDataMigrations as runPendingDataMigrations } from "./runtime/data-migrations";
 import { Db } from "./runtime/db";
 import { digest } from "./runtime/digest";
 import { compileAcl, type AclContext, type CompiledAcl } from "./runtime/acl";
@@ -69,6 +69,9 @@ export interface DoEnv {
   /** "true" to apply destructive schema migrations (drop/rebuild/type-change). Off by
    * default, since data-loss is gated behind this explicit opt-in. */
   PRAMEN_ALLOW_DESTRUCTIVE?: string;
+  /** "true" ignores a matching boot fingerprint and runs the full boot (#100): the escape hatch
+   * after a rollback across #100 or a hand edit the fingerprint cannot see. */
+  PRAMEN_FULL_BOOT?: string;
   /** `"d1"` = the deployment's data lives in D1 and this DO serves no sockets (see the upgrade). */
   PRAMEN_STORE?: string;
 }
@@ -154,22 +157,23 @@ export class PramenDOBase extends DurableObject<DoEnv> {
       if (this.migrated) return; // a concurrent first request already migrated
       // Same fast path as the D1 boot (#100), scoped like everything else here: this
       // partition's tables and migrations, reconcilers only on the default partition.
-      const fp = bootFingerprint({
+      const fp = await bootFingerprint({
         schema: this.app.schema,
         partition,
-        migrations: (this.app.migrations ?? []).filter((m) => (m.partition ?? DEFAULT_PARTITION) === partition),
+        migrations: migrationsForPartition(this.app.migrations ?? [], partition),
         bootstrap: partition === DEFAULT_PARTITION ? (this.app.bootstrap ?? []) : [],
       });
-      if ((await readBootFingerprint(this.driver, fp.key)) === fp.value) {
+      if (!forceFullBoot(this.env) && (await bootFingerprintMatches(this.driver, fp))) {
         await this.runBootstrap(fp.alwaysRun);
         this.migrated = true;
         return;
       }
       const report = await this.driver.transaction(() => migrate(this.driver, this.app.schema, { allowDestructive, partition }));
+      const claim = await claimFullBoot(this.driver, fp);
       await this.runDataMigrations(); // imperative, recorded backfills for THIS partition
       await ensureOutbox(this.driver); // the deferred-tasks table (internal, all partitions)
       const converged = await this.runBootstrap(); // converge code-defined reference data (default partition only)
-      if (converged && report.skipped.length === 0) await writeBootFingerprint(this.driver, fp);
+      if (converged && report.skipped.length === 0) await recordBootFingerprint(this.driver, fp, claim);
       this.migrated = true;
     });
   }
@@ -216,9 +220,13 @@ export class PramenDOBase extends DurableObject<DoEnv> {
       this.app.schema,
     );
     let ok = true;
+    const markIncomplete = (reason: string) => {
+      ok = false;
+      console.warn(`[pramen] bootstrap incomplete (partition=${this.partition}): ${reason}`);
+    };
     for (const fn of fns) {
       try {
-        await this.driver.transaction(() => Promise.resolve(fn({ db, driver: this.driver, schema: this.app.schema, partition: this.partition, env: this.envBag })));
+        await this.driver.transaction(() => Promise.resolve(fn({ db, driver: this.driver, schema: this.app.schema, partition: this.partition, env: this.envBag, markIncomplete })));
       } catch (e) {
         ok = false;
         console.error(`[pramen] bootstrap failed (partition=${this.partition}):`, e);

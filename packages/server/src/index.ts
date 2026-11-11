@@ -34,9 +34,9 @@ export type {
 // --- app + handlers ---
 export { createApp } from "./sdk/app";
 export { query, mutation, authorizeHandler, validateHandlerAuth, validateHandlerTasks } from "./sdk/handlers";
-// Canonical-JSON digest (FNV-1a over sorted keys): what a `BootstrapFn.fingerprint` is made of,
-// the same function the schema hash and the boot fingerprint use (#100).
-export { digest as fingerprintOf } from "./runtime/digest";
+// Canonical JSON (sorted keys): a deterministic text for a `BootstrapFn.fingerprint`. Any length
+// is fine, the boot digests it with SHA-256 along with the rest (#100).
+export { canonical as fingerprintOf } from "./runtime/digest";
 export type { EnvBag, Handler, HandlerContext, HandlerKind, HandlerMap, HandlerOpts, HandlerAuth, Tasks, TaskHandler, AppTaskMap, BootstrapContext, BootstrapFn, MigrationContext, DataMigration } from "./sdk/handlers";
 
 // --- ACL ---

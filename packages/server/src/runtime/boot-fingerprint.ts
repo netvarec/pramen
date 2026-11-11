@@ -1,20 +1,33 @@
 // The steady-state boot is one read (#100).
 //
-// Every cold isolate (D1 path) and every DO's first fetch runs the full boot: `migrate()`,
-// the data-migration ledger, the outbox DDL and every `app.bootstrap` reconciler. On a store
-// where nothing changed that is pure overhead, and on D1 each statement is a network round
-// trip: a CMS app paid ~41 sequential queries (5 of them writes to the primary), ~600 ms of
-// wall time and ~30 ms CPU on the first request of every isolate, which with little traffic
-// is most requests.
+// Every cold isolate (D1 path) and every DO's first fetch ran the full boot: `migrate()`, the
+// data-migration ledger, the outbox DDL and every `app.bootstrap` reconciler. On a store where
+// nothing changed that is pure overhead, and on D1 each statement is a network round trip: a
+// CMS app paid 41 sequential statements (5 of them writes to the primary), ~600 ms of wall
+// time and ~30 ms CPU on the first request of every isolate, which with little traffic is
+// most requests.
 //
-// The fingerprint is a digest of everything the boot converges FROM CODE: the schema hash
-// (the same one `migrate()` records), the declared data-migration ids, the outbox DDL, and
-// the fingerprint each bootstrap reconciler declares. After a boot that converged fully it
-// is written to `_pramen_meta`; the next boot reads it, and when it matches, skips the lot.
+// The fingerprint is a SHA-256 over everything the boot converges FROM CODE: the schema (the
+// same subset `migrate()` hashes), the data-migration ids that boot runs, the outbox DDL, and
+// the fingerprint each bootstrap reconciler declares. A full boot that converged writes it to
+// `_pramen_meta`; a later boot reads it together with `schema_hash` and, when BOTH match,
+// skips the lot.
 //
-// What it deliberately does NOT see: the DATA. A code-defined row deleted by hand is not
-// re-created until the next change to the code that defines it. That is the trade, and the
-// escape hatch is deleting the `boot_fingerprint` meta row (the next boot then runs in full).
+// Why `schema_hash` too: code that predates the fingerprint (a rollback across #100) still
+// migrates and rewrites `schema_hash` but never touches the fingerprint, so a matching
+// fingerprint alone could vouch for a store an older release reshaped. Checking the hash
+// `migrate()` itself keeps catches every schema change, whoever made it. What an older release
+// does to bootstrap rows is NOT caught that way: after rolling back across #100 and forward
+// again, delete the `boot_fingerprint` rows or boot once with `PRAMEN_FULL_BOOT=true`.
+//
+// Why the `pending:` marker: two releases that both know the fingerprint can boot the same
+// store at once (a gradual rollout). Each full boot first claims the key with a nonce and
+// finishes with a conditional UPDATE, so the boot that started LAST owns the result; the
+// other's write matches nothing, and its isolates fall back to full boots until one wins.
+//
+// What it deliberately does NOT see: the DATA. A code-defined row deleted by hand, a ledger
+// row deleted to re-run a migration, an editor-owned row that blocked a declared slug and was
+// then deleted: none of them is acted on until the code changes or a full boot is forced.
 //
 // A reconciler without a declared fingerprint cannot be skipped (its inputs, e.g. `env`, are
 // invisible here), so it runs on every boot as before, but it no longer drags migrate, the
@@ -23,24 +36,32 @@
 import type { BootstrapFn, DataMigration } from "../sdk/handlers";
 import type { SchemaDef } from "../sdk/schema";
 import { DEFAULT_PARTITION } from "../sdk/schema";
-import { digest } from "./digest";
+import { canonical } from "./digest";
 import type { Driver } from "./driver";
-import { schemaHashFor } from "./migrate";
+import { schemaCanon, schemaHash, schemaSubset } from "./migrate";
 import { ensureOutbox } from "./outbox";
 
 /** Bump when the boot's own semantics change in a way the inputs below can't see (what a
  * matching fingerprint promises about the store). */
-const BOOT_FINGERPRINT_REV = 1;
+const BOOT_FINGERPRINT_REV = 2;
 
 export interface BootFingerprint {
   /** `_pramen_meta` key: `boot_fingerprint`, or `boot_fingerprint:<partition>` on a partition DO. */
   readonly key: string;
+  /** The `schema_hash` key `migrate()` keeps for the same scope, and the value it must hold. */
+  readonly schemaKey: string;
+  readonly schemaHash: string;
   readonly value: string;
   /** Reconcilers with no declared fingerprint: they run on every boot, matching or not. */
   readonly alwaysRun: readonly BootstrapFn[];
 }
 
-export function bootFingerprint(input: {
+const sha256 = async (text: string): Promise<string> => {
+  const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)));
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+};
+
+export async function bootFingerprint(input: {
   schema: SchemaDef;
   /** Unset = the whole schema (the D1 store); set = a partition DO. */
   partition?: string;
@@ -48,33 +69,61 @@ export function bootFingerprint(input: {
   migrations: readonly Pick<DataMigration, "id" | "partition">[];
   /** The reconcilers THIS boot runs (none on a non-default partition DO). */
   bootstrap: readonly BootstrapFn[];
-}): BootFingerprint {
+}): Promise<BootFingerprint> {
   const alwaysRun = input.bootstrap.filter((fn) => typeof fn.fingerprint !== "string");
-  const value = digest({
-    rev: BOOT_FINGERPRINT_REV,
-    schema: schemaHashFor(input.schema, input.partition),
-    migrations: input.migrations.map((m) => `${m.partition ?? DEFAULT_PARTITION}:${m.id}`),
-    // The DDL itself, not a version someone has to remember to bump: changing ensureOutbox
-    // changes its source, and one full boot per isolate after that deploy is the whole cost.
-    outbox: digest(ensureOutbox.toString()),
-    bootstrap: input.bootstrap.map((fn) => (typeof fn.fingerprint === "string" ? fn.fingerprint : null)),
-  });
-  return { key: input.partition === undefined ? "boot_fingerprint" : `boot_fingerprint:${input.partition}`, value, alwaysRun };
+  const subset = schemaSubset(input.schema, input.partition);
+  const value = await sha256(
+    canonical({
+      rev: BOOT_FINGERPRINT_REV,
+      // The declared shape itself (not migrate's 32-bit hash of it): a collision here would
+      // skip a migration, so this one digest is SHA-256 over the full text.
+      schema: schemaCanon(subset),
+      migrations: input.migrations.map((m) => `${m.partition ?? DEFAULT_PARTITION}:${m.id}`),
+      // The DDL itself, not a version someone has to remember to bump: changing ensureOutbox
+      // changes its source, and one full boot per isolate after that deploy is the whole cost.
+      outbox: ensureOutbox.toString(),
+      bootstrap: input.bootstrap.map((fn) => (typeof fn.fingerprint === "string" ? fn.fingerprint : null)),
+    }),
+  );
+  const scoped = (base: string) => (input.partition === undefined ? base : `${base}:${input.partition}`);
+  return {
+    key: scoped("boot_fingerprint"),
+    schemaKey: scoped("schema_hash"),
+    schemaHash: schemaHash(subset),
+    value,
+    alwaysRun,
+  };
 }
 
-/** The stored fingerprint, or `undefined` (none yet, or a store so fresh `_pramen_meta`
- * does not exist: the full boot creates it). */
-export async function readBootFingerprint(driver: Driver, key: string): Promise<string | undefined> {
+/** Does the store vouch for this exact boot? Both the fingerprint and `migrate()`'s own schema
+ * hash must match. One statement. A store so fresh that `_pramen_meta` does not exist is
+ * "no" (the full boot creates it), not a throw. */
+export async function bootFingerprintMatches(driver: Driver, fp: BootFingerprint): Promise<boolean> {
   try {
-    const rows = (await driver.exec(`SELECT value FROM _pramen_meta WHERE key = ?`, [key])) as { value: string }[];
-    return rows[0]?.value;
+    const rows = (await driver.exec(`SELECT key, value FROM _pramen_meta WHERE key IN (?, ?)`, [fp.key, fp.schemaKey])) as { key: string; value: string }[];
+    const got = new Map(rows.map((r) => [r.key, r.value]));
+    return got.get(fp.key) === fp.value && got.get(fp.schemaKey) === fp.schemaHash;
   } catch {
-    return undefined;
+    return false;
   }
 }
 
-/** Record the fingerprint. Call ONLY after a boot that converged fully: migrate skipped
- * nothing, every data migration applied, every reconciler finished without throwing. */
-export async function writeBootFingerprint(driver: Driver, fp: BootFingerprint): Promise<void> {
-  await driver.exec(`INSERT OR REPLACE INTO _pramen_meta (key, value) VALUES (?, ?)`, [fp.key, fp.value]);
+/** Start a full boot: claim the fingerprint key with a nonce, so a concurrent full boot of
+ * other code cannot be vouched for by this one's result (see the header). Returns the claim. */
+export async function claimFullBoot(driver: Driver, fp: BootFingerprint): Promise<string> {
+  const claim = `pending:${crypto.randomUUID()}`;
+  await driver.exec(`CREATE TABLE IF NOT EXISTS _pramen_meta (key TEXT PRIMARY KEY, value TEXT)`, []);
+  await driver.exec(`INSERT OR REPLACE INTO _pramen_meta (key, value) VALUES (?, ?)`, [fp.key, claim]);
+  return claim;
 }
+
+/** Finish a full boot that converged fully (migrate skipped nothing, every data migration
+ * applied, every reconciler finished). Writes only if this boot still holds the claim. */
+export async function recordBootFingerprint(driver: Driver, fp: BootFingerprint, claim: string): Promise<void> {
+  await driver.exec(`UPDATE _pramen_meta SET value = ? WHERE key = ? AND value = ?`, [fp.value, fp.key, claim]);
+}
+
+/** `PRAMEN_FULL_BOOT=true` ignores a matching fingerprint: the escape hatch after a rollback
+ * across #100 or a hand edit the fingerprint can't see, usable on a DO store too (no per-tenant
+ * meta row to delete by hand). */
+export const forceFullBoot = (env: { PRAMEN_FULL_BOOT?: unknown }): boolean => env.PRAMEN_FULL_BOOT === "true";

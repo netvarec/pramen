@@ -5,7 +5,7 @@
 // Re-running the query is cheap (in-process SQLite); the digest gates the
 // expensive part, the network push and the client re-render.
 
-function canonical(v: unknown): string {
+export function canonical(v: unknown): string {
   if (v === null || typeof v !== "object") return JSON.stringify(v) ?? "null";
   if (Array.isArray(v)) return "[" + v.map(canonical).join(",") + "]";
   const obj = v as Record<string, unknown>;

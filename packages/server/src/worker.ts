@@ -9,7 +9,7 @@ import { dispatch, tasksFacade, bindTasks } from "./runtime/dispatch";
 import type { BootstrapFn, EnvBag } from "./sdk/handlers";
 import type { JsonValue } from "./sdk/infer";
 import { ensureOutbox, drainOutbox, listTasks } from "./runtime/outbox";
-import { bootFingerprint, readBootFingerprint, writeBootFingerprint, type BootFingerprint } from "./runtime/boot-fingerprint";
+import { bootFingerprint, bootFingerprintMatches, claimFullBoot, forceFullBoot, recordBootFingerprint, type BootFingerprint } from "./runtime/boot-fingerprint";
 import { appliedMigrations, runDataMigrations } from "./runtime/data-migrations";
 import { createMail } from "./runtime/mail";
 import { createQueue, type QueueProducerBinding } from "./runtime/queue";
@@ -73,6 +73,9 @@ export interface Env {
   CORS_ORIGINS?: string;
   /** "true" to apply destructive schema migrations on the D1 path. Off by default. */
   PRAMEN_ALLOW_DESTRUCTIVE?: string;
+  /** "true" ignores a matching boot fingerprint and runs the full boot (#100): the escape hatch
+   * after a rollback across #100 or a hand edit the fingerprint cannot see. */
+  PRAMEN_FULL_BOOT?: string;
   /** The store /rpc runs on: `"d1"` runs the Worker+D1 path (requires DB bound); `"do"`
    * (the default) routes to the per-tenant Durable Object. /live always needs the DO
    * regardless of this setting. */
@@ -370,9 +373,13 @@ export function makeWorker(app: PramenApp) {
     if (!fns.length) return true;
     const db = new Db(driver, { acl: d1Acl, identity: { roles: ["admin"] }, system: true, schema: app.schema, suppressTriggers: true }, app.schema);
     let ok = true;
+    const markIncomplete = (reason: string) => {
+      ok = false;
+      console.warn(`[pramen] bootstrap incomplete (d1): ${reason}`);
+    };
     for (const fn of fns) {
       try {
-        await driver.transaction(() => Promise.resolve(fn({ db, driver, schema: app.schema, partition: DEFAULT_PARTITION, env: envBag(env) })));
+        await driver.transaction(() => Promise.resolve(fn({ db, driver, schema: app.schema, partition: DEFAULT_PARTITION, env: envBag(env), markIncomplete })));
       } catch (e) {
         ok = false;
         console.error("[pramen] bootstrap failed (d1):", e);
@@ -383,8 +390,8 @@ export function makeWorker(app: PramenApp) {
 
   // What the D1 boot converges from code, computed once per isolate (the app is static).
   // The D1 store runs EVERY data migration and every reconciler, so the fingerprint covers all.
-  let d1FingerprintCache: BootFingerprint | undefined;
-  const d1Fingerprint = (): BootFingerprint =>
+  let d1FingerprintCache: Promise<BootFingerprint> | undefined;
+  const d1Fingerprint = (): Promise<BootFingerprint> =>
     (d1FingerprintCache ??= bootFingerprint({ schema: app.schema, migrations: app.migrations ?? [], bootstrap: app.bootstrap ?? [] }));
 
   // The mirror of the DO's runDataMigrations() for the D1 store, run once per isolate after
@@ -508,22 +515,25 @@ export function makeWorker(app: PramenApp) {
     d1Boot.ensure(
       (progress) => {
         const d = observeDriver(driver, progress);
-        const fp = d1Fingerprint();
         return (async () => {
+          const fp = await d1Fingerprint();
           // Steady state (#100): nothing the boot converges from code has changed since the
-          // last full boot, so one read replaces ~40 statements. Reconcilers that declare no
-          // fingerprint still run, they can't be proven unchanged.
-          if ((await readBootFingerprint(d, fp.key)) === fp.value) {
+          // last full boot, so one read replaces ~40 statements. Read on the PRIMARY: the
+          // request's session may be a replica, and a lagging one could still show a
+          // fingerprint an operator just deleted or a concurrent boot just claimed. Reconcilers
+          // that declare no fingerprint still run, they can't be proven unchanged.
+          if (!forceFullBoot(env) && env.DB && (await bootFingerprintMatches(observeDriver(new D1Driver(env.DB, { start: "first-primary" }), progress), fp))) {
             await runBootstrapD1(d, env, fp.alwaysRun);
             return;
           }
           const report = await migrate(d, app.schema, { allowDestructive: env.PRAMEN_ALLOW_DESTRUCTIVE === "true" });
+          const claim = await claimFullBoot(d, fp); // after migrate: _pramen_meta exists by now
           await runDataMigrationsD1(d); // imperative, recorded backfills (fail closed)
           await ensureOutbox(d); // the deferred-tasks table also lives in D1
           const converged = await runBootstrapD1(d, env); // converge code-defined reference data
           // Only a boot that left nothing behind may vouch for the store: a skipped destructive
           // diff or a failed reconciler must run again on the next cold isolate.
-          if (converged && report.skipped.length === 0) await writeBootFingerprint(d, fp);
+          if (converged && report.skipped.length === 0) await recordBootFingerprint(d, fp, claim);
         })();
       },
       ctx ? (p) => ctx.waitUntil(p) : undefined,

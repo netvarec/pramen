@@ -611,7 +611,7 @@ export function cmsBootstrap(
   const sweepBlockTypes = "blockTypes" in defs;
   const sweepContentTypes = "contentTypes" in defs;
 
-  const reconciler: (ctx: Parameters<BootstrapFn>[0]) => Promise<void> = async ({ db }) => {
+  const reconciler: (ctx: Parameters<BootstrapFn>[0]) => Promise<void> = async ({ db, markIncomplete }) => {
     const sys = db as unknown as ReconcileDb;
     let failed = 0;
     // Per-definition, so one failure does not skip every later type AND both sweeps. The
@@ -634,10 +634,11 @@ export function cmsBootstrap(
     if (sweepBlockTypes) await releaseUndeclared(sys, "cms_block_types", owner, new Set(blockTypes.map((bt) => String(bt.slug))));
     for (const ct of contentTypes) await reconcile("cms_content_types", ct);
     if (sweepContentTypes) await releaseUndeclared(sys, "cms_content_types", owner, new Set(contentTypes.map((ct) => String(ct.slug))));
-    // Everything that could converge did (per definition, above). Throwing NOW tells the boot
-    // the store is not fully converged, so it records no fingerprint and the next cold boot
-    // retries instead of skipping this reconciler (#100). The boot runner only logs it.
-    if (failed > 0) throw new Error(`@pramen/cms: ${failed} definition(s) failed to reconcile, see the errors above`);
+    // Everything that could converge did (per definition, above). Tell the boot the store is
+    // not fully converged, so it records no fingerprint and the next cold boot retries this
+    // reconciler instead of skipping it (#100). NOT a throw: on the DO store the reconciler
+    // runs in a transaction, and a throw would roll back every definition that did converge.
+    if (failed > 0) markIncomplete?.(`@pramen/cms: ${failed} definition(s) failed to reconcile, see the errors above`);
   };
   // Everything the reconcile writes is a function of these (and of this code): the validated,
   // canonicalized definitions, the owner and which tables are swept. The functions' source

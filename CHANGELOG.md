@@ -17,18 +17,19 @@ there are no backward-compatibility guarantees yet.
 ### Changed
 
 - **A cold isolate on an unchanged store boots with one read (`@pramen/server`, `@pramen/cms`;
-  #100).** The D1 boot and a DO's first fetch now record a **boot fingerprint** in
-  `_pramen_meta` (schema hash, declared data-migration ids, the outbox DDL and each bootstrap
-  reconciler's `fingerprint`) after a boot that converged fully, and skip migrate, the ledger,
-  the outbox DDL and the reconcilers while it matches. A CMS app went from 41 sequential D1
-  statements (5 writes) per cold isolate to 1: about 600 ms less latency and 20–30 ms less CPU
-  on the first request of every isolate in production. `BootstrapFn` gains an optional
-  `fingerprint`; `cmsBootstrap` declares one (its definitions, owner, sweep flags and code) and
-  now throws after the pass when a definition failed, so no fingerprint is recorded over a
-  half-converged store. A reconciler without a fingerprint runs on every boot as before.
-  `fingerprintOf` (the canonical digest) is exported for app reconcilers. The trade: a
-  code-defined row deleted by hand is not re-created until the code that defines it changes;
-  delete the `boot_fingerprint` meta row to force a full boot.
+  #100).** The D1 boot and a DO's first fetch now keep a **boot fingerprint** in `_pramen_meta`
+  (SHA-256 of the schema, the declared data-migration ids, the outbox DDL and each bootstrap
+  reconciler's `fingerprint`) and skip migrate, the ledger, the outbox DDL and the reconcilers
+  while it and `schema_hash` match. A CMS app went from 41 sequential D1 statements (5 writes)
+  per cold isolate to 1: about 600 ms less latency and 20–30 ms less CPU on the first request of
+  every isolate in production. A full boot claims the key first (`pending:<uuid>`), so a
+  concurrent boot of other code cannot be vouched for, and records only when it converged fully.
+  `BootstrapFn` gains an optional `fingerprint` and `BootstrapContext` a `markIncomplete`;
+  `cmsBootstrap` declares one and reports a failed definition through it (not a throw, which
+  would roll back the converged ones on a DO). `fingerprintOf` (canonical JSON) is exported for
+  app reconcilers. New env flag `PRAMEN_FULL_BOOT=true` forces the full boot. The trade: the
+  fingerprint does not see hand edits to data or the migration ledger; force a full boot after
+  one, and after rolling back across this release and forward again.
 
 ### Added
 
