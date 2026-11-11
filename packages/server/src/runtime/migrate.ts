@@ -88,6 +88,12 @@ function isInternalTable(name: string): boolean {
 }
 
 export function schemaHash(schema: SchemaDef): string {
+  return digest(schemaCanon(schema));
+}
+
+/** What `schemaHash` digests: the part of each entity's declaration the store's shape
+ * depends on. The boot fingerprint SHA-256s the same thing (#100). */
+export function schemaCanon(schema: SchemaDef): Record<string, unknown> {
   const canon: Record<string, unknown> = {};
   for (const [table, def] of Object.entries(schema)) {
     // Keep the bare-`fields` shape when there are no composite uniques AND no FKs so
@@ -99,7 +105,7 @@ export function schemaHash(schema: SchemaDef): string {
     if (fks.size) extra.fks = Object.fromEntries([...fks].map(([c, s]) => [c, `${s.target}:${s.onDelete}`]));
     canon[table] = Object.keys(extra).length ? { fields: def.fields, ...extra } : def.fields;
   }
-  return digest(canon);
+  return canon;
 }
 
 /** Live columns of a table -> their declared SQL type (uppercased). Empty if the
@@ -381,6 +387,12 @@ async function fkColumnHasOrphans(driver: Driver, table: string, col: string, ta
     [],
   );
   return rows.length > 0;
+}
+
+/** The in-scope subset `migrate()` works on: the whole schema, or one partition's entities. */
+export function schemaSubset(schema: SchemaDef, partition?: string): SchemaDef {
+  const tables = partition === undefined ? Object.keys(schema) : entitiesInPartition(schema, partition);
+  return Object.fromEntries(tables.map((table) => [table, schema[table]!]));
 }
 
 export async function migrate(driver: Driver, schema: SchemaDef, opts: MigrateOptions = {}): Promise<MigrationReport> {

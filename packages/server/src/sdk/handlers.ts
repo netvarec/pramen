@@ -80,13 +80,32 @@ export interface BootstrapContext<S extends SchemaDef = SchemaDef> {
    * says which it is, and a boot-time reconciler has no request to carry one. Without this
    * the only gates available were "always" and "never". */
   readonly env: EnvBag;
+  /** Say that this pass did NOT fully converge (some definition failed), WITHOUT throwing.
+   * The boot then records no fingerprint (#100) and the next boot runs this reconciler again.
+   * Prefer it to a throw once anything was written: on the DO store each reconciler runs in a
+   * transaction and a throw rolls back everything it did converge. */
+  readonly markIncomplete?: (reason: string) => void;
 }
 
 /** An idempotent reconcile run once after `migrate()` on each boot (a DO's first fetch, or a
  * Worker/D1 isolate init). It MUST be safe to run repeatedly: upsert by a stable key, never
  * blind-insert. A thrown error is logged and swallowed so a broken reconcile can't brick a
  * tenant's boot; it simply retries on the next boot. Set as `app.bootstrap`. */
-export type BootstrapFn = (ctx: BootstrapContext) => void | Promise<void>;
+export type BootstrapFn = ((ctx: BootstrapContext) => void | Promise<void>) & {
+  /**
+   * A digest of everything this reconciler converges from (its definitions, its own code).
+   * Declare it and the boot may SKIP the reconciler while the stored boot fingerprint matches
+   * (`runtime/boot-fingerprint.ts`, #100): an unchanged store then boots with one read
+   * instead of re-reading every row it owns. It must change whenever what the reconciler
+   * would write changes. Leave it out when the outcome depends on something it can't cover
+   * (`env`, the time, rows someone else edits): such a reconciler runs on every boot.
+   *
+   * A reconciler that declares one must report when it could not converge, with
+   * `ctx.markIncomplete` (or a throw before it wrote anything), so the boot does not record a
+   * fingerprint over a half-converged store.
+   */
+  readonly fingerprint?: string;
+};
 
 /** Context handed to a data migration's `up()`. Same privileged, SYSTEM-scoped shape as
  * `BootstrapContext` (ACL bypassed, triggers suppressed) but scoped to the migration's

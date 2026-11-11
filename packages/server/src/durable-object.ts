@@ -21,7 +21,8 @@ import { dispatch, tasksFacade, bindTasks } from "./runtime/dispatch";
 import { createMail } from "./runtime/mail";
 import { createQueue } from "./runtime/queue";
 import { ensureOutbox, drainOutbox, listTasks } from "./runtime/outbox";
-import { appliedMigrations, runDataMigrations as runPendingDataMigrations } from "./runtime/data-migrations";
+import { bootFingerprint, bootFingerprintMatches, claimFullBoot, forceFullBoot, recordBootFingerprint } from "./runtime/boot-fingerprint";
+import { appliedMigrations, migrationsForPartition, runDataMigrations as runPendingDataMigrations } from "./runtime/data-migrations";
 import { Db } from "./runtime/db";
 import { digest } from "./runtime/digest";
 import { compileAcl, type AclContext, type CompiledAcl } from "./runtime/acl";
@@ -35,7 +36,7 @@ import type { Identity } from "./sdk/acl";
 import type { HandlerContext } from "./sdk/handlers";
 import type { PramenApp } from "./pramen";
 import type { ClientMsg, ServerMsg, Subscription } from "./runtime/protocol";
-import type { EnvBag } from "./sdk/handlers";
+import type { BootstrapFn, EnvBag } from "./sdk/handlers";
 import type { JsonValue } from "./sdk/infer";
 
 /** Durable per-socket state, kept SMALL and stable, since it rides the WebSocket
@@ -68,6 +69,9 @@ export interface DoEnv {
   /** "true" to apply destructive schema migrations (drop/rebuild/type-change). Off by
    * default, since data-loss is gated behind this explicit opt-in. */
   PRAMEN_ALLOW_DESTRUCTIVE?: string;
+  /** "true" ignores a matching boot fingerprint and runs the full boot (#100): the escape hatch
+   * after a rollback across #100 or a hand edit the fingerprint cannot see. */
+  PRAMEN_FULL_BOOT?: string;
   /** `"d1"` = the deployment's data lives in D1 and this DO serves no sockets (see the upgrade). */
   PRAMEN_STORE?: string;
 }
@@ -151,12 +155,25 @@ export class PramenDOBase extends DurableObject<DoEnv> {
     const partition = this.partition;
     await this.ctx.blockConcurrencyWhile(async () => {
       if (this.migrated) return; // a concurrent first request already migrated
-      await this.driver.transaction(() =>
-        migrate(this.driver, this.app.schema, { allowDestructive, partition }).then(() => {}),
-      );
+      // Same fast path as the D1 boot (#100), scoped like everything else here: this
+      // partition's tables and migrations, reconcilers only on the default partition.
+      const fp = await bootFingerprint({
+        schema: this.app.schema,
+        partition,
+        migrations: migrationsForPartition(this.app.migrations ?? [], partition),
+        bootstrap: partition === DEFAULT_PARTITION ? (this.app.bootstrap ?? []) : [],
+      });
+      if (!forceFullBoot(this.env) && (await bootFingerprintMatches(this.driver, fp))) {
+        await this.runBootstrap(fp.alwaysRun);
+        this.migrated = true;
+        return;
+      }
+      const report = await this.driver.transaction(() => migrate(this.driver, this.app.schema, { allowDestructive, partition }));
+      const claim = await claimFullBoot(this.driver, fp);
       await this.runDataMigrations(); // imperative, recorded backfills for THIS partition
       await ensureOutbox(this.driver); // the deferred-tasks table (internal, all partitions)
-      await this.runBootstrap(); // converge code-defined reference data (default partition only)
+      const converged = await this.runBootstrap(); // converge code-defined reference data (default partition only)
+      if (converged && report.skipped.length === 0) await recordBootFingerprint(this.driver, fp, claim);
       this.migrated = true;
     });
   }
@@ -194,21 +211,30 @@ export class PramenDOBase extends DurableObject<DoEnv> {
   // and swallowed, unlike migrate(), it must never brick a tenant's boot; it retries next
   // boot. Uses a SYSTEM-scoped Db (ACL bypassed) with triggers suppressed (a boot-time seed
   // shouldn't fan out reactive side-effects).
-  private async runBootstrap(): Promise<void> {
-    const fns = this.app.bootstrap;
-    if (!fns?.length || this.partition !== DEFAULT_PARTITION) return;
+  // Returns whether every reconciler finished (the boot records its fingerprint only then).
+  private async runBootstrap(fns: readonly BootstrapFn[] = this.app.bootstrap ?? []): Promise<boolean> {
+    if (!fns.length || this.partition !== DEFAULT_PARTITION) return true;
     const db = new Db(
       this.driver,
       { acl: this.acl, identity: { roles: ["admin"] }, system: true, partition: this.partition, schema: this.app.schema, suppressTriggers: true },
       this.app.schema,
     );
+    // Only reconcilers the fingerprint vouches for decide it (see the D1 runner).
+    let ok = true;
     for (const fn of fns) {
+      const counts = typeof fn.fingerprint === "string";
+      const markIncomplete = (reason: string) => {
+        if (counts) ok = false;
+        console.warn(`[pramen] bootstrap incomplete (partition=${this.partition}): ${reason}`);
+      };
       try {
-        await this.driver.transaction(() => Promise.resolve(fn({ db, driver: this.driver, schema: this.app.schema, partition: this.partition, env: this.envBag })));
+        await this.driver.transaction(() => Promise.resolve(fn({ db, driver: this.driver, schema: this.app.schema, partition: this.partition, env: this.envBag, markIncomplete })));
       } catch (e) {
+        if (counts) ok = false;
         console.error(`[pramen] bootstrap failed (partition=${this.partition}):`, e);
       }
     }
+    return ok;
   }
 
   override async fetch(request: Request): Promise<Response> {
