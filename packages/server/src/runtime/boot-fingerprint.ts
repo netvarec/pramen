@@ -21,9 +21,13 @@
 // again, delete the `boot_fingerprint` rows or boot once with `PRAMEN_FULL_BOOT=true`.
 //
 // Why the `pending:` marker: two releases that both know the fingerprint can boot the same
-// store at once (a gradual rollout). Each full boot first claims the key with a nonce and
-// finishes with a conditional UPDATE, so the boot that started LAST owns the result; the
-// other's write matches nothing, and its isolates fall back to full boots until one wins.
+// store at once (a gradual rollout). Each full boot first claims the key with
+// `pending:<its fingerprint>:<nonce>` and finishes with a conditional UPDATE that succeeds only
+// over a claim (or a record) of the SAME fingerprint: boots of the same code write identical
+// rows, so either may record. A boot that finds the key claimed or recorded by OTHER code
+// writes a fresh claim instead. It ran its reconcilers after the other release may have
+// recorded, so the store can no longer vouch for that release's rows either; the next cold
+// isolate of each runs in full, and whichever finishes last without being overtaken records.
 //
 // What it deliberately does NOT see: the DATA. A code-defined row deleted by hand, a ledger
 // row deleted to re-run a migration, an editor-owned row that blocked a declared slug and was
@@ -111,16 +115,21 @@ export async function bootFingerprintMatches(driver: Driver, fp: BootFingerprint
 /** Start a full boot: claim the fingerprint key with a nonce, so a concurrent full boot of
  * other code cannot be vouched for by this one's result (see the header). Returns the claim. */
 export async function claimFullBoot(driver: Driver, fp: BootFingerprint): Promise<string> {
-  const claim = `pending:${crypto.randomUUID()}`;
+  const claim = `pending:${fp.value}:${crypto.randomUUID()}`;
   await driver.exec(`CREATE TABLE IF NOT EXISTS _pramen_meta (key TEXT PRIMARY KEY, value TEXT)`, []);
   await driver.exec(`INSERT OR REPLACE INTO _pramen_meta (key, value) VALUES (?, ?)`, [fp.key, claim]);
   return claim;
 }
 
 /** Finish a full boot that converged fully (migrate skipped nothing, every data migration
- * applied, every reconciler finished). Writes only if this boot still holds the claim. */
-export async function recordBootFingerprint(driver: Driver, fp: BootFingerprint, claim: string): Promise<void> {
-  await driver.exec(`UPDATE _pramen_meta SET value = ? WHERE key = ? AND value = ?`, [fp.value, fp.key, claim]);
+ * applied, every reconciler finished). Records over a claim or record of the same fingerprint;
+ * if other code claimed or recorded meanwhile, re-claims instead (see the header). */
+export async function recordBootFingerprint(driver: Driver, fp: BootFingerprint, _claim: string): Promise<void> {
+  const recorded = await driver.exec(
+    `UPDATE _pramen_meta SET value = ? WHERE key = ? AND (value = ? OR substr(value, 1, ?) = ?) RETURNING key`,
+    [fp.value, fp.key, fp.value, `pending:${fp.value}:`.length, `pending:${fp.value}:`],
+  );
+  if (recorded.length === 0) await claimFullBoot(driver, fp);
 }
 
 /** `PRAMEN_FULL_BOOT=true` ignores a matching fingerprint: the escape hatch after a rollback

@@ -22,7 +22,7 @@ there are no backward-compatibility guarantees yet.
   reconciler's `fingerprint`) and skip migrate, the ledger, the outbox DDL and the reconcilers
   while it and `schema_hash` match. A CMS app went from 41 sequential D1 statements (5 writes)
   per cold isolate to 1: about 600 ms less latency and 20–30 ms less CPU on the first request of
-  every isolate in production. A full boot claims the key first (`pending:<uuid>`), so a
+  every isolate in production. A full boot claims the key first (`pending:<fingerprint>:<uuid>`), so a
   concurrent boot of other code cannot be vouched for, and records only when it converged fully.
   `BootstrapFn` gains an optional `fingerprint` and `BootstrapContext` a `markIncomplete`;
   `cmsBootstrap` declares one and reports a failed definition through it (not a throw, which

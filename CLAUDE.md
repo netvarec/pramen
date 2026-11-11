@@ -603,10 +603,14 @@ log) for independent single-writer serialization and storage.
   path is one SELECT of that row AND `schema_hash` (on D1 through a `first-primary` session); both
   must match, because pre-#100 code rewrites `schema_hash` but never the fingerprint. Then only
   reconcilers that declare no fingerprint run (env-gated seeds can't be proven unchanged). A full
-  boot CLAIMS the key with `pending:<uuid>` after migrate and finishes with a conditional UPDATE,
-  so of two releases booting one store at once the later claim wins and the other records
-  nothing. It records only after a boot that converged fully: migrate skipped nothing, every
-  reconciler finished without throwing or calling `ctx.markIncomplete`. A reconciler that
+  boot CLAIMS the key with `pending:<its fingerprint>:<uuid>` after migrate and finishes with an
+  UPDATE that succeeds only over a claim or record of the SAME fingerprint (same-code boots write
+  identical rows); finding other code's claim or record, it re-claims instead, because its
+  reconcilers may have landed after that release recorded. So two releases booting one store
+  at once never leave either fingerprint vouching for the other's rows. It records only after a
+  boot that converged fully: migrate skipped nothing, and every FINGERPRINTED reconciler finished
+  without throwing or calling `ctx.markIncomplete` (an un-fingerprinted one runs every boot
+  anyway, so its failure does not block recording). A reconciler that
   declares a fingerprint must report a partial pass with `markIncomplete`, NOT a throw: on the
   DO each reconciler runs in a transaction and a throw rolls back what did converge (`cmsBootstrap`
   does this). Before it, a CMS app paid 41 sequential D1 statements (5 writes) per cold isolate,

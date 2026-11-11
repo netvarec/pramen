@@ -79,17 +79,46 @@ describe("bootFingerprint", () => {
     expect(await bootFingerprintMatches(driver, fp)).toBe(false);
   });
 
-  test("a boot whose claim was taken over by a later boot records nothing", async () => {
+  test("boots of the same code may record over each other's claim", async () => {
     const driver = bunSqliteDriver(new Database(":memory:"));
     await migrate(driver, notesA);
-    const v2 = await bootFingerprint(base);
-    const v1 = await bootFingerprint({ ...base, bootstrap: [tagged("old")] });
-    const c2 = await claimFullBoot(driver, v2);
-    const c1 = await claimFullBoot(driver, v1); // the other release starts its full boot later
-    await recordBootFingerprint(driver, v2, c2); // v2 finishes first: its claim is gone
-    expect(await bootFingerprintMatches(driver, v2)).toBe(false);
-    await recordBootFingerprint(driver, v1, c1);
-    expect(await bootFingerprintMatches(driver, v1)).toBe(true);
+    const fp = await bootFingerprint(base);
+    const a = await claimFullBoot(driver, fp);
+    const b = await claimFullBoot(driver, fp);
+    await recordBootFingerprint(driver, fp, a); // over b's claim: same fingerprint, same rows
+    expect(await bootFingerprintMatches(driver, fp)).toBe(true);
+    await recordBootFingerprint(driver, fp, b); // over a's record
+    expect(await bootFingerprintMatches(driver, fp)).toBe(true);
+  });
+
+  test("other code claiming later wins only if nothing of the first release lands after it", async () => {
+    // X claims first and is slow; Y claims, converges and records; then X's reconcilers land.
+    // X must not leave Y's record vouching for X-shaped rows.
+    const driver = bunSqliteDriver(new Database(":memory:"));
+    await migrate(driver, notesA);
+    const x = await bootFingerprint({ ...base, bootstrap: [tagged("old")] });
+    const y = await bootFingerprint(base);
+    const cx = await claimFullBoot(driver, x);
+    const cy = await claimFullBoot(driver, y);
+    await recordBootFingerprint(driver, y, cy);
+    expect(await bootFingerprintMatches(driver, y)).toBe(true);
+    await recordBootFingerprint(driver, x, cx);
+    expect(await bootFingerprintMatches(driver, y)).toBe(false);
+    expect(await bootFingerprintMatches(driver, x)).toBe(false);
+    // The next full boot of either release records again.
+    await recordBootFingerprint(driver, y, await claimFullBoot(driver, y));
+    expect(await bootFingerprintMatches(driver, y)).toBe(true);
+  });
+
+  test("the first release finishing first is overtaken by the later claim the same way", async () => {
+    const driver = bunSqliteDriver(new Database(":memory:"));
+    await migrate(driver, notesA);
+    const x = await bootFingerprint({ ...base, bootstrap: [tagged("old")] });
+    const y = await bootFingerprint(base);
+    const cx = await claimFullBoot(driver, x);
+    await claimFullBoot(driver, y);
+    await recordBootFingerprint(driver, x, cx); // Y's claim is there: X re-claims, records nothing
+    expect(await bootFingerprintMatches(driver, x)).toBe(false);
   });
 });
 
@@ -130,13 +159,14 @@ describe("cmsBootstrap declares a fingerprint", () => {
 // --- The real Worker boot, over a fake D1 backed by bun:sqlite ----------------------------
 
 function sqliteD1(sqlite: Database, log: string[], sessions: unknown[] = []) {
-  const prepare = (sql: string) => {
+  const prepare = (sql: string, start?: unknown) => {
     let params: unknown[] = [];
     const stmt = {
       sql,
       bind: (...p: unknown[]) => ((params = p), stmt),
       all: async () => {
         log.push(sql);
+        sessions.push([start, sql]);
         const q = sqlite.prepare(sql);
         try {
           return { results: q.all(...(params as never[])) };
@@ -149,14 +179,14 @@ function sqliteD1(sqlite: Database, log: string[], sessions: unknown[] = []) {
     };
     return stmt;
   };
-  const session = {
-    prepare,
+  const session = (start: unknown) => ({
+    prepare: (sql: string) => prepare(sql, start),
     getBookmark: () => null,
     batch: async (stmts: { all: () => Promise<unknown> }[]) => {
       for (const s of stmts) await s.all();
     },
-  };
-  return { withSession: (start: unknown) => (sessions.push(start), session), prepare, batch: session.batch } as unknown as D1Database;
+  });
+  return { withSession: (start: unknown) => session(start), prepare, batch: session(undefined).batch } as unknown as D1Database;
 }
 
 function makeKv() {
@@ -192,7 +222,8 @@ describe("Worker D1 boot (#100)", () => {
     expect((await coldIsolate(sqlite, app)).length).toBeGreaterThan(20);
     const sessions: unknown[] = [];
     expect(await coldIsolate(sqlite, app, { sessions })).toEqual([FP_READ]);
-    expect(sessions).toContain("first-primary");
+    // The read itself went to the primary, whatever session the request runs on.
+    expect(sessions).toEqual([["first-primary", FP_READ]]);
     expect(sqlite.prepare(`SELECT slug FROM cms_block_types`).all()).toEqual([{ slug: "rich_text" }]);
   });
 
@@ -231,6 +262,16 @@ describe("Worker D1 boot (#100)", () => {
       expect((await coldIsolate(sqlite, { bootstrap: [flaky] })).length).toBeGreaterThan(1);
       expect(await coldIsolate(sqlite, { bootstrap: [flaky] })).toEqual([FP_READ]);
     }
+  });
+
+  test("a failing reconciler WITHOUT a fingerprint does not keep the store from recording", async () => {
+    const sqlite = new Database(":memory:");
+    const broken: BootstrapFn = async () => {
+      throw new Error("depends on env, always fails here");
+    };
+    const app = { bootstrap: [cmsBootstrap({ blockTypes: [rich] }), broken] };
+    await coldIsolate(sqlite, app);
+    expect(await coldIsolate(sqlite, app)).toEqual([FP_READ]);
   });
 
   test("a new data migration runs the full boot (and applies it once)", async () => {

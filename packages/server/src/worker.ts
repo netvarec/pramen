@@ -372,16 +372,19 @@ export function makeWorker(app: PramenApp) {
   const runBootstrapD1 = async (driver: Driver, env: Env, fns: readonly BootstrapFn[] = app.bootstrap ?? []): Promise<boolean> => {
     if (!fns.length) return true;
     const db = new Db(driver, { acl: d1Acl, identity: { roles: ["admin"] }, system: true, schema: app.schema, suppressTriggers: true }, app.schema);
+    // Only reconcilers the fingerprint vouches for decide it: one without a fingerprint runs
+    // on every boot anyway, so its failure must not keep the store from ever recording.
     let ok = true;
-    const markIncomplete = (reason: string) => {
-      ok = false;
-      console.warn(`[pramen] bootstrap incomplete (d1): ${reason}`);
-    };
     for (const fn of fns) {
+      const counts = typeof fn.fingerprint === "string";
+      const markIncomplete = (reason: string) => {
+        if (counts) ok = false;
+        console.warn(`[pramen] bootstrap incomplete (d1): ${reason}`);
+      };
       try {
         await driver.transaction(() => Promise.resolve(fn({ db, driver, schema: app.schema, partition: DEFAULT_PARTITION, env: envBag(env), markIncomplete })));
       } catch (e) {
-        ok = false;
+        if (counts) ok = false;
         console.error("[pramen] bootstrap failed (d1):", e);
       }
     }

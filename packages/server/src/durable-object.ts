@@ -219,16 +219,18 @@ export class PramenDOBase extends DurableObject<DoEnv> {
       { acl: this.acl, identity: { roles: ["admin"] }, system: true, partition: this.partition, schema: this.app.schema, suppressTriggers: true },
       this.app.schema,
     );
+    // Only reconcilers the fingerprint vouches for decide it (see the D1 runner).
     let ok = true;
-    const markIncomplete = (reason: string) => {
-      ok = false;
-      console.warn(`[pramen] bootstrap incomplete (partition=${this.partition}): ${reason}`);
-    };
     for (const fn of fns) {
+      const counts = typeof fn.fingerprint === "string";
+      const markIncomplete = (reason: string) => {
+        if (counts) ok = false;
+        console.warn(`[pramen] bootstrap incomplete (partition=${this.partition}): ${reason}`);
+      };
       try {
         await this.driver.transaction(() => Promise.resolve(fn({ db, driver: this.driver, schema: this.app.schema, partition: this.partition, env: this.envBag, markIncomplete })));
       } catch (e) {
-        ok = false;
+        if (counts) ok = false;
         console.error(`[pramen] bootstrap failed (partition=${this.partition}):`, e);
       }
     }
