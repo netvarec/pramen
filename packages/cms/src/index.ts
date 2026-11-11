@@ -51,6 +51,7 @@ import {
   isIdentityRevoked,
   resolveSecret,
   authorizeHandler,
+  fingerprintOf,
 } from "@pramen/server";
 import type { HandlerContext, HandlerMap, Policy, FileRef, BootstrapFn, DataMigration, MigrationContext, JsonValue, SchemaDef, FieldDef, FieldType, WhereClause } from "@pramen/server";
 import type { EnvBag } from "@pramen/server";
@@ -610,8 +611,9 @@ export function cmsBootstrap(
   const sweepBlockTypes = "blockTypes" in defs;
   const sweepContentTypes = "contentTypes" in defs;
 
-  return async ({ db }) => {
+  const reconciler: (ctx: Parameters<BootstrapFn>[0]) => Promise<void> = async ({ db }) => {
     const sys = db as unknown as ReconcileDb;
+    let failed = 0;
     // Per-definition, so one failure does not skip every later type AND both sweeps. The
     // boot runner only logs a throwing reconciler, so an aborted pass leaves the store half
     // converged for that isolate's whole lifetime with nothing to retry it. A UNIQUE
@@ -623,6 +625,7 @@ export function cmsBootstrap(
           console.warn(`@pramen/cms: ${table}.${String(values.slug)} already exists and is not owned by '${owner}', leaving it alone (code-defined types cannot take over a row someone else authored)`);
         }
       } catch (e) {
+        failed++;
         console.error(`@pramen/cms: failed to reconcile ${table}.${String(values.slug)}:`, e);
       }
     };
@@ -631,7 +634,27 @@ export function cmsBootstrap(
     if (sweepBlockTypes) await releaseUndeclared(sys, "cms_block_types", owner, new Set(blockTypes.map((bt) => String(bt.slug))));
     for (const ct of contentTypes) await reconcile("cms_content_types", ct);
     if (sweepContentTypes) await releaseUndeclared(sys, "cms_content_types", owner, new Set(contentTypes.map((ct) => String(ct.slug))));
+    // Everything that could converge did (per definition, above). Throwing NOW tells the boot
+    // the store is not fully converged, so it records no fingerprint and the next cold boot
+    // retries instead of skipping this reconciler (#100). The boot runner only logs it.
+    if (failed > 0) throw new Error(`@pramen/cms: ${failed} definition(s) failed to reconcile, see the errors above`);
   };
+  // Everything the reconcile writes is a function of these (and of this code): the validated,
+  // canonicalized definitions, the owner and which tables are swept. The functions' source
+  // stands in for "this code", so a pramen release that changes how a type is reconciled
+  // re-runs it once per store instead of trusting a fingerprint taken by the old logic.
+  // A row the editor owns under a declared slug is left alone ("not adopted") and is NOT a
+  // failure, so it does not keep the store from ever recording a fingerprint.
+  return Object.assign(reconciler, {
+    fingerprint: fingerprintOf({
+      owner,
+      blockTypes,
+      contentTypes,
+      sweepBlockTypes,
+      sweepContentTypes,
+      code: [reconciler.toString(), upsertBySlug.toString(), releaseUndeclared.toString()],
+    }),
+  });
 }
 
 // --- codegen: emit .ts field interfaces from DB-stored block schemas ------------------

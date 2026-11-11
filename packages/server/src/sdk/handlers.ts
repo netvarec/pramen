@@ -86,7 +86,20 @@ export interface BootstrapContext<S extends SchemaDef = SchemaDef> {
  * Worker/D1 isolate init). It MUST be safe to run repeatedly: upsert by a stable key, never
  * blind-insert. A thrown error is logged and swallowed so a broken reconcile can't brick a
  * tenant's boot; it simply retries on the next boot. Set as `app.bootstrap`. */
-export type BootstrapFn = (ctx: BootstrapContext) => void | Promise<void>;
+export type BootstrapFn = ((ctx: BootstrapContext) => void | Promise<void>) & {
+  /**
+   * A digest of everything this reconciler converges from (its definitions, its own code).
+   * Declare it and the boot may SKIP the reconciler while the stored boot fingerprint matches
+   * (`runtime/boot-fingerprint.ts`, #100): an unchanged store then boots with one read
+   * instead of re-reading every row it owns. It must change whenever what the reconciler
+   * would write changes. Leave it out when the outcome depends on something it can't cover
+   * (`env`, the time, rows someone else edits): such a reconciler runs on every boot.
+   *
+   * A reconciler that declares one must THROW when it could not converge (after doing what it
+   * could), so the boot does not record a fingerprint over a half-converged store.
+   */
+  readonly fingerprint?: string;
+};
 
 /** Context handed to a data migration's `up()`. Same privileged, SYSTEM-scoped shape as
  * `BootstrapContext` (ACL bypassed, triggers suppressed) but scoped to the migration's

@@ -6,9 +6,10 @@
 
 import { authenticate, authorizeTenant, HmacStrategy, isAdmin, JwksStrategy, type VerifyOptions, type VerifyStrategy } from "./auth";
 import { dispatch, tasksFacade, bindTasks } from "./runtime/dispatch";
-import type { EnvBag } from "./sdk/handlers";
+import type { BootstrapFn, EnvBag } from "./sdk/handlers";
 import type { JsonValue } from "./sdk/infer";
 import { ensureOutbox, drainOutbox, listTasks } from "./runtime/outbox";
+import { bootFingerprint, readBootFingerprint, writeBootFingerprint, type BootFingerprint } from "./runtime/boot-fingerprint";
 import { appliedMigrations, runDataMigrations } from "./runtime/data-migrations";
 import { createMail } from "./runtime/mail";
 import { createQueue, type QueueProducerBinding } from "./runtime/queue";
@@ -364,18 +365,27 @@ export function makeWorker(app: PramenApp) {
   // runBootstrap(), run once per isolate after migration. D1 is a single shared store (no
   // partition split), so every reconciler runs under the default partition. SYSTEM-scoped
   // Db (ACL bypassed), triggers suppressed; a failing reconciler is logged, never fatal.
-  const runBootstrapD1 = async (driver: Driver, env: Env): Promise<void> => {
-    const fns = app.bootstrap;
-    if (!fns?.length) return;
+  // Returns whether EVERY reconciler finished: the boot records its fingerprint only then.
+  const runBootstrapD1 = async (driver: Driver, env: Env, fns: readonly BootstrapFn[] = app.bootstrap ?? []): Promise<boolean> => {
+    if (!fns.length) return true;
     const db = new Db(driver, { acl: d1Acl, identity: { roles: ["admin"] }, system: true, schema: app.schema, suppressTriggers: true }, app.schema);
+    let ok = true;
     for (const fn of fns) {
       try {
         await driver.transaction(() => Promise.resolve(fn({ db, driver, schema: app.schema, partition: DEFAULT_PARTITION, env: envBag(env) })));
       } catch (e) {
+        ok = false;
         console.error("[pramen] bootstrap failed (d1):", e);
       }
     }
+    return ok;
   };
+
+  // What the D1 boot converges from code, computed once per isolate (the app is static).
+  // The D1 store runs EVERY data migration and every reconciler, so the fingerprint covers all.
+  let d1FingerprintCache: BootFingerprint | undefined;
+  const d1Fingerprint = (): BootFingerprint =>
+    (d1FingerprintCache ??= bootFingerprint({ schema: app.schema, migrations: app.migrations ?? [], bootstrap: app.bootstrap ?? [] }));
 
   // The mirror of the DO's runDataMigrations() for the D1 store, run once per isolate after
   // migration. It diverges in one deliberate way: it runs EVERY declared migration whatever
@@ -498,11 +508,23 @@ export function makeWorker(app: PramenApp) {
     d1Boot.ensure(
       (progress) => {
         const d = observeDriver(driver, progress);
-        return migrate(d, app.schema, { allowDestructive: env.PRAMEN_ALLOW_DESTRUCTIVE === "true" })
-          .then(() => runDataMigrationsD1(d)) // imperative, recorded backfills (fail closed)
-          .then(() => ensureOutbox(d)) // the deferred-tasks table also lives in D1
-          .then(() => runBootstrapD1(d, env)) // converge code-defined reference data
-          .then(() => undefined);
+        const fp = d1Fingerprint();
+        return (async () => {
+          // Steady state (#100): nothing the boot converges from code has changed since the
+          // last full boot, so one read replaces ~40 statements. Reconcilers that declare no
+          // fingerprint still run, they can't be proven unchanged.
+          if ((await readBootFingerprint(d, fp.key)) === fp.value) {
+            await runBootstrapD1(d, env, fp.alwaysRun);
+            return;
+          }
+          const report = await migrate(d, app.schema, { allowDestructive: env.PRAMEN_ALLOW_DESTRUCTIVE === "true" });
+          await runDataMigrationsD1(d); // imperative, recorded backfills (fail closed)
+          await ensureOutbox(d); // the deferred-tasks table also lives in D1
+          const converged = await runBootstrapD1(d, env); // converge code-defined reference data
+          // Only a boot that left nothing behind may vouch for the store: a skipped destructive
+          // diff or a failed reconciler must run again on the next cold isolate.
+          if (converged && report.skipped.length === 0) await writeBootFingerprint(d, fp);
+        })();
       },
       ctx ? (p) => ctx.waitUntil(p) : undefined,
     );

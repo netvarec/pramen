@@ -383,6 +383,14 @@ async function fkColumnHasOrphans(driver: Driver, table: string, col: string, ta
   return rows.length > 0;
 }
 
+/** The schema hash `migrate()` records for a store, over the same in-scope subset it migrates:
+ * the whole schema, or one partition's entities. The boot fingerprint (`boot-fingerprint.ts`)
+ * builds on it, so the two can never disagree about what "this schema" means. */
+export function schemaHashFor(schema: SchemaDef, partition?: string): string {
+  const tables = partition === undefined ? Object.keys(schema) : entitiesInPartition(schema, partition);
+  return schemaHash(Object.fromEntries(tables.map((table) => [table, schema[table]!])));
+}
+
 export async function migrate(driver: Driver, schema: SchemaDef, opts: MigrateOptions = {}): Promise<MigrationReport> {
   // Static schema invariants (relation targets exist, no cross-partition relations),
   // checked before any DDL so a bad schema fails fast on boot / the D1 path, not mid-migration.
